@@ -1,6 +1,6 @@
 'use strict';
 // The build gates inside `scripts/carve-probe.mjs`: the daily "can clode carve newer
-// upstream than the pin yet?" instrument, and the two refusals it is made of.
+// upstream than the pin yet?" instrument, and the refusals it is made of.
 //
 // WHY THIS FILE EXISTS. The probe's whole product is a report of CHANGE — it compares what
 // it just measured against the outcome UPSTREAM_PIN records and refuses (exit 1) when they
@@ -15,6 +15,13 @@
 // then never fire is precisely the one BACKLOG.md asked for: "red if it started working
 // (absorb now)". So the direction table below IS the guard, and its control is a
 // one-way comparator: a stand-in that always answers `ok`, which MUST be reported.
+//
+// AND A COMPARATOR THAT CANNOT SEE ITS OWN SUBJECT (review FINDING 5). `compare()` originally
+// read only `outcome` — never `modules`, never `merge` — so a run that carved THREE modules,
+// or one in which the SCC merge never ran at all, reported "carves, as recorded". The last of
+// those is not a silly hypothetical: one upstream re-chunk that removes the final cyclic
+// require gets it, and the probe would then go green for the rest of its life while watching
+// nothing. Three rows of the direction table and the floor tests below are that distinction.
 //
 // The network half — install `next`, carve 200MB, merge, compile ~1950 modules — is CI's
 // job (upstream-drift.yml's `carve` job). Everything here runs offline, except the two
@@ -32,7 +39,8 @@ const path = require('node:path');
 const { test } = require('node:test');
 const assert = require('node:assert');
 const { defineGuard, guardTests } = require('../guard.cjs');
-const { STAGES, CARVES, BLOCKED, parsePinFile, compare, measure, compileStagedGraph } = require('../../scripts/carve-probe.mjs');
+const { STAGES, CARVES, BLOCKED, MODULE_FLOOR, MEASURED, SKIPPED, CHANGED, parsePinFile, compare,
+  floorShortfalls, announce, measure, compileStagedGraph } = require('../../scripts/carve-probe.mjs');
 
 const REPO = path.resolve(__dirname, '..', '..');
 const PIN = path.join(REPO, 'UPSTREAM_PIN');
@@ -108,10 +116,18 @@ const BLOCKED_COMPILE = { outcome: BLOCKED, stage: 'compile',
 const RECORD_CARVES = { version: '2.1.278', outcome: CARVES, stage: null, reason: null };
 const RECORD_BLOCKED = { version: '2.1.257', outcome: BLOCKED, stage: 'compile',
   reason: 'invalid property name' };
+// THE THREE WAYS A RUN CAN REPORT "carves" WITHOUT HAVING MEASURED ANYTHING (review FINDING
+// 5). The first is the one that matters and it is not hypothetical: if upstream removes its
+// last cyclic require, `doc.sccMerge` is never set, the SCC merge NEVER RUNS, and a probe
+// whose entire job is to watch the merger reports "carves, as recorded" — green while
+// watching nothing. `merge` was write-only data before this; now it is evidence.
+const CARVED_NO_MERGE = { outcome: CARVES, modules: 1958, merge: null };
+const CARVED_TINY = { outcome: CARVES, modules: 3, merge: { groups: [2] } };
+const CARVED_NO_GROUPS = { outcome: CARVES, modules: 1958, merge: { groups: [] } };
 
 // Every direction the comparator can be asked to move, with the answer it OWES. Two of
-// these are greens and five are reds; a comparator that has lost either polarity fails
-// here by name rather than by being quietly agreeable.
+// these are greens and the rest are reds; a comparator that has lost either polarity — or
+// its floor — fails here by name rather than by being quietly agreeable.
 const DIRECTIONS = [
   { name: 'recorded carves, and it carves', expectation: RECORD_CARVES, measured: CARVED, red: false },
   { name: 'recorded blocked, and it CARVES — absorb now', expectation: RECORD_BLOCKED, measured: CARVED, red: true },
@@ -121,6 +137,9 @@ const DIRECTIONS = [
     measured: { outcome: BLOCKED, stage: 'compile', message: 'graph-meta: compiling x failed: unexpected token' }, red: true },
   { name: 'blocked at the recorded stage for the recorded reason', expectation: RECORD_BLOCKED, measured: BLOCKED_COMPILE, red: false },
   { name: 'no record at all', expectation: null, measured: CARVED, red: true },
+  { name: 'carves, but the SCC merge never ran', expectation: RECORD_CARVES, measured: CARVED_NO_MERGE, red: true },
+  { name: 'carves, but almost nothing was staged', expectation: RECORD_CARVES, measured: CARVED_TINY, red: true },
+  { name: 'carves, but ZERO groups were merged', expectation: RECORD_CARVES, measured: CARVED_NO_GROUPS, red: true },
 ];
 
 function scanDirections({ cmp, directions }) {
@@ -147,6 +166,104 @@ guardTests(defineGuard({
   control: () => ({ cmp: () => ({ ok: true, headline: 'always fine', detail: '' }),
     directions: DIRECTIONS }),
 }));
+
+
+// ---- the floor: "carves" must be a statement about a measurement ------------------------
+
+test('carve-probe: the floor names each way a run can have measured nothing', () => {
+  // The rows above prove the COMPARATOR refuses them. This proves the floor itself says WHY,
+  // which is what a reader of the daily log gets instead of a bare red.
+  assert.deepStrictEqual(floorShortfalls({ outcome: CARVES, modules: 1958,
+    merge: { groups: [8, 4, 61, 4] } }), [], 'a real carve clears the floor');
+  const noMerge = floorShortfalls({ outcome: CARVES, modules: 1958, merge: null });
+  assert.strictEqual(noMerge.length, 1);
+  assert.match(noMerge[0], /never ran/,
+    'the case that matters must say the SCC merge did not run, not merely "too little"');
+  assert.strictEqual(floorShortfalls({ outcome: CARVES, modules: 3, merge: { groups: [2] } }).length, 1);
+  assert.strictEqual(floorShortfalls({ outcome: CARVES, modules: 1958, merge: { groups: [] } }).length, 1);
+  // Both halves at once, and neither swallows the other.
+  assert.strictEqual(floorShortfalls({ outcome: CARVES, modules: 0, merge: null }).length, 2);
+  // AND THE FLOOR COMES FIRST, before either polarity. A run under the floor is red on both
+  // paths, so the DIRECTIONS table cannot tell them apart — but WHICH red matters enormously:
+  // "ABSORB NOW" on the strength of a merge that never ran is the exact mistake this probe
+  // exists to prevent, so the headline is asserted here rather than left to the `ok` bit.
+  assert.match(compare(RECORD_BLOCKED, CARVED_NO_MERGE).headline, /MEASURED TOO LITTLE/,
+    'a run with no merge evidence must never read as "it started working — absorb now"');
+  assert.match(compare(RECORD_CARVES, CARVED_NO_MERGE).headline, /MEASURED TOO LITTLE/);
+});
+
+test('carve-probe: the floor sits BELOW every module count ever measured', () => {
+  // 1839 / 1839 / 1680 / 1958 across .251/.252/.257/.278. An equality floor would be a daily
+  // red that means nothing; a floor above the smallest real carve would be a daily red that
+  // means the instrument is wrong. This is the one assertion that keeps it honest as upstream
+  // re-chunks, and it names the measurements it is derived from.
+  for (const measuredCount of [1839, 1680, 1958]) {
+    assert.ok(MODULE_FLOOR < measuredCount,
+      `MODULE_FLOOR ${MODULE_FLOOR} must sit below the real carve of ${measuredCount} modules`);
+  }
+  assert.ok(MODULE_FLOOR > 100, 'and far enough above zero to mean "a real bundle was staged"');
+});
+
+// ---- a run that measured NOTHING must not look like a run that measured success ---------
+
+test('carve-probe: every exit path announces WHICH of the three it was', () => {
+  // A skip exits 0 on purpose (a persistently broken network must not be a permanent red).
+  // But exit 0 is also what success returns, so at the layer that notifies they are the same
+  // colour unless the run says otherwise. Outside CI: the machine-readable line, nothing else.
+  const lines = [];
+  const write = (s) => lines.push(s);
+  const priorCI = process.env.GITHUB_ACTIONS;
+  const priorSummary = process.env.GITHUB_STEP_SUMMARY;
+  delete process.env.GITHUB_ACTIONS;
+  delete process.env.GITHUB_STEP_SUMMARY;
+  try {
+    assert.strictEqual(announce(SKIPPED, 'no engine', write), SKIPPED);
+    assert.deepStrictEqual(lines, ['carve-probe: outcome=skipped\n'],
+      'outside CI, exactly the one machine-readable line and no annotations');
+    // In CI, the three outcomes must be three DIFFERENT annotation severities — the whole
+    // point is that the notification layer can tell them apart without reading prose.
+    process.env.GITHUB_ACTIONS = 'true';
+    const seen = {};
+    for (const outcome of [SKIPPED, MEASURED, CHANGED]) {
+      const buf = [];
+      announce(outcome, 'a headline\nwith a newline in it', (s) => buf.push(s));
+      const ann = buf.find((l) => l.startsWith('::'));
+      assert.ok(ann, `${outcome} must emit an annotation under GITHUB_ACTIONS`);
+      assert.doesNotMatch(ann.slice(0, -1), /\n/, 'an annotation is one line or it is dropped');
+      seen[outcome] = ann.slice(0, ann.indexOf(' '));
+    }
+    assert.strictEqual(seen[SKIPPED], '::warning',
+      'a run that measured NOTHING is a warning, not a notice — that is the whole finding');
+    assert.strictEqual(seen[MEASURED], '::notice');
+    assert.strictEqual(seen[CHANGED], '::error');
+    assert.strictEqual(new Set(Object.values(seen)).size, 3,
+      'three outcomes, three distinguishable severities');
+  } finally {
+    if (priorCI === undefined) delete process.env.GITHUB_ACTIONS;
+    else process.env.GITHUB_ACTIONS = priorCI;
+    if (priorSummary === undefined) delete process.env.GITHUB_STEP_SUMMARY;
+    else process.env.GITHUB_STEP_SUMMARY = priorSummary;
+  }
+});
+
+test('carve-probe: a SKIPPED run says so in the step summary a notification carries', () => {
+  const summary = path.join(os.tmpdir(), `carve-probe-summary-${process.pid}`);
+  const priorCI = process.env.GITHUB_ACTIONS;
+  const priorSummary = process.env.GITHUB_STEP_SUMMARY;
+  process.env.GITHUB_ACTIONS = 'true';
+  process.env.GITHUB_STEP_SUMMARY = summary;
+  try {
+    fs.writeFileSync(summary, '');
+    announce(SKIPPED, 'no tjs engine', () => {});
+    assert.match(fs.readFileSync(summary, 'utf8'), /carve-probe: skipped.*no tjs engine/);
+  } finally {
+    try { fs.rmSync(summary, { force: true }); } catch { /* best effort */ }
+    if (priorCI === undefined) delete process.env.GITHUB_ACTIONS;
+    else process.env.GITHUB_ACTIONS = priorCI;
+    if (priorSummary === undefined) delete process.env.GITHUB_STEP_SUMMARY;
+    else process.env.GITHUB_STEP_SUMMARY = priorSummary;
+  }
+});
 
 // ---- the substring rule, which is deliberate and must not be "tightened" --------------
 

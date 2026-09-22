@@ -27,7 +27,13 @@
 // AND IT DISTINGUISHES "DID NOT RUN" FROM "RAN AND WAS BLOCKED". A probe whose infra
 // failure reads as "still blocked" is the same green-that-hides it exists to remove, so
 // every precondition (no provider, no engine, upstream not past the pin, a bundle shape
-// with no module graph) is a named SKIP, printed as such, never folded into a verdict.
+// with no module graph) is a named SKIP, printed as such, never folded into a verdict —
+// and, since a skip exits 0 exactly as a success does, announced to the layer that
+// notifies (see `announce`) rather than only to whoever opens the log.
+//
+// AND IT HAS A FLOOR. "Carves" is a claim about a measurement, so the run has to have made
+// one: enough modules to be Claude Code, and evidence that the SCC merge actually ran. See
+// MODULE_FLOOR/floorShortfalls below for the case that forced it.
 //
 // NODE, DELIBERATELY, AND NOT ON THE BUILD PATH. This is a CI helper in the shape
 // upstream-drift.yml already uses (`node scripts/upstream-drift-check.mjs`), not something
@@ -53,6 +59,47 @@ const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const STAGES = Object.freeze(['stage', 'compile']);
 export const CARVES = 'carves';
 export const BLOCKED = 'blocked';
+
+// THE FLOOR, and why a probe of this shape needs one at all.
+//
+// `measure()` returns `{outcome, modules, merge}`. The first cut of `compare()` read only
+// `outcome`, so `{carves, modules: 3, merge: null}` and `{carves, modules: 1958, merge:
+// {groups:[8,4,61,4]}}` were the SAME green — and `merge` was write-only data nothing read.
+// The case that matters is not the silly one: if an upstream re-chunk removes the last cyclic
+// require, `doc.sccMerge` is never set, THE SCC MERGE DOES NOT RUN, and the probe reports
+// "carves, as recorded" — a watchdog going green while watching nothing, for the one step its
+// whole existence is about. This repo's own doctrine everywhere else is that "found nothing"
+// and "examined nothing" are opposite results; this is that distinction, for the probe.
+//
+// MODULE_FLOOR is not an equality check on purpose. The recorded evidence — 1839 / 1839 / 1680
+// / 1958 modules across .251/.252/.257/.278 — shows the count already swings 15% between
+// upstream releases, so an equality floor would be a daily red that means nothing. It is set
+// well below the smallest count ever measured and well above "this bundle staged almost
+// nothing": a carve that produces fewer than this many modules is not a carve of Claude Code.
+export const MODULE_FLOOR = 1000;
+
+// Has this run actually MEASURED the thing it exists to measure? Pure, and exported so the
+// gate next door can drive every row of it without a provider.
+export function floorShortfalls(measured) {
+  const out = [];
+  const m = measured || {};
+  if (!Number.isInteger(m.modules) || m.modules < MODULE_FLOOR) {
+    out.push(`staged ${m.modules === undefined ? 'no' : m.modules} module(s), floor is `
+      + `${MODULE_FLOOR} — a carve this small is not a carve of Claude Code, so "it carves" `
+      + 'would be a statement about nothing');
+  }
+  const groups = m.merge && Array.isArray(m.merge.groups) ? m.merge.groups : null;
+  if (!groups) {
+    out.push('the staged graph carries NO sccMerge record, so the SCC merge — the step '
+      + 'UPSTREAM_PIN exists because of, and the only step this probe can tell you anything '
+      + 'about — never ran. Either upstream has no cyclic requires left (say so on the record, '
+      + 'deliberately) or staging took a path that skips the merger');
+  } else if (groups.length === 0) {
+    out.push('the SCC merge ran and merged ZERO groups, so nothing this probe watches was '
+      + 'exercised');
+  }
+  return out;
+}
 
 // ---- the recorded expectation -------------------------------------------------------
 //
@@ -100,9 +147,29 @@ export function compare(expectation, measured) {
         + 'to compare this run against. A probe with no record cannot report a CHANGE, '
         + `which is its only product. Measured: ${describe(measured)}` };
   }
+  // THE FLOOR COMES FIRST, before either polarity, because "it carves" is a claim about a
+  // measurement and this is the test of whether a measurement happened. A run under the floor
+  // is neither "carves" nor "blocked" — it is a run that cannot support either word, so it
+  // gets its own verdict and its own red rather than being folded into one of them. (In
+  // particular it must NOT read as "IT STARTED WORKING — ABSORB NOW": absorbing on the
+  // strength of a merge that never ran is exactly the failure this whole probe exists for.)
+  if (measured.outcome === CARVES) {
+    const short = floorShortfalls(measured);
+    if (short.length) {
+      return { ok: false, headline: 'MEASURED TOO LITTLE — this is not a green',
+        detail: 'the run reported that it carved, but it did not examine enough for that word '
+          + 'to mean anything:\n' + short.map((s) => `    ${s}`).join('\n')
+          + `\n${describe(measured)}` };
+    }
+  }
   if (measured.outcome === CARVES && expectation.outcome === CARVES) {
+    // The evidence is printed on the GREEN too, not only on the red: "carves" is a claim
+    // about a measurement, and a reader of the daily log should be able to see the
+    // measurement without perturbing anything. Read through `describe`, which tolerates a
+    // missing merge record — the floor above is what refuses one, and a green path that
+    // CRASHES on a shape the floor was supposed to catch would hide which of the two broke.
     return { ok: true, headline: 'carves, as recorded',
-      detail: 'newer-than-pin upstream still carves, merges and compiles.' };
+      detail: `newer-than-pin upstream still carves, merges and compiles.\n${describe(measured)}` };
   }
   if (measured.outcome === CARVES) {
     return { ok: false, headline: 'IT STARTED WORKING — ABSORB NOW',
@@ -137,7 +204,11 @@ function describeExpectation(e) {
 }
 
 function describe(m) {
-  if (m.outcome === CARVES) return `  carves (${m.modules} modules compiled)`;
+  if (m.outcome === CARVES) {
+    const g = m.merge && Array.isArray(m.merge.groups) ? m.merge.groups : null;
+    return `  carves (${m.modules} modules compiled; `
+      + `${g ? `${g.length} merged group(s): ${g.join(', ')}` : 'NO SCC MERGE RECORD'})`;
+  }
   return `  blocked at \`${m.stage}\`:\n`
     + String(m.message).split('\n').map((l) => `    ${l}`).join('\n');
 }
@@ -224,6 +295,45 @@ function parseArgv(argv) {
   return out;
 }
 
+// ---- what this run MEASURED, said where a notification can see it -----------------------
+//
+// A SKIP EXITS 0, and that stays true on purpose: a persistently broken network turning the
+// daily job permanently red is the "light nobody reads" failure this whole workflow rejects.
+// But exit 0 is ALSO what a successful measurement returns, so at the layer that actually
+// notifies — the run's conclusion — a month of skips and a month of greens are the same
+// colour, and the "Do not read it as a green" sentence only reaches whoever opens the log.
+//
+// So every exit path says which of the three it was, in a form the notification layer
+// carries: a GitHub annotation (which shows on the run and in the job list, in a colour green
+// does not have) and a line in the step summary. Outside CI both env vars are absent, nothing
+// is emitted, and the stdout sentences are exactly as before — one implementation, no
+// per-platform branch.
+export const MEASURED = 'measured';   // upstream was carved; the verdict is about upstream
+export const SKIPPED = 'skipped';     // a precondition was absent; nothing was measured
+export const CHANGED = 'changed';     // upstream was carved and the recorded outcome is stale
+
+export function announce(outcome, headline, write = process.stdout.write.bind(process.stdout)) {
+  // The machine-readable last word, always printed, so a human or a later step can grep one
+  // line instead of parsing prose.
+  write(`carve-probe: outcome=${outcome}\n`);
+  if (!process.env.GITHUB_ACTIONS) return outcome;
+  const one = String(headline).replace(/[\r\n]+/g, ' ');
+  if (outcome === SKIPPED) {
+    write(`::warning title=carve-probe measured NOTHING::${one}\n`);
+  } else if (outcome === CHANGED) {
+    write(`::error title=carve-probe: the recorded outcome is stale::${one}\n`);
+  } else {
+    write(`::notice title=carve-probe measured upstream::${one}\n`);
+  }
+  const summary = process.env.GITHUB_STEP_SUMMARY;
+  if (summary) {
+    try {
+      fs.appendFileSync(summary, `- **carve-probe: ${outcome}** — ${one}\n`);
+    } catch { /* a summary that cannot be written must not fail the probe */ }
+  }
+  return outcome;
+}
+
 export function main(argv) {
   const a = parseArgv(argv);
   const pinText = fs.readFileSync(path.join(REPO, 'UPSTREAM_PIN'), 'utf8');
@@ -248,6 +358,7 @@ export function main(argv) {
     process.stdout.write('carve-probe: SKIPPED — upstream\'s current version could not be '
       + 'determined (no answer from the registry), so this run measured NOTHING. Do not '
       + 'read it as a green.\n');
+    announce(SKIPPED, 'upstream\'s current version could not be determined — nothing was measured');
     return 0;
   }
 
@@ -256,6 +367,7 @@ export function main(argv) {
     process.stdout.write(`carve-probe: SKIPPED — ${version} is not newer than the pin `
       + `(${pin}). This probe's question ("can we carve newer than the pin yet?") has no\n`
       + '  subject today; it is not a statement that anything works.\n');
+    announce(SKIPPED, `${version} is not newer than the pin (${pin}) — no subject to measure`);
     return 0;
   }
 
@@ -274,6 +386,7 @@ export function main(argv) {
     // blocked" is how the day it starts working passes unnoticed.
     process.stdout.write(`carve-probe: SKIPPED — ${measured.skip}.\n`
       + '  NOTHING about upstream was measured by this run. Do not read it as a green.\n');
+    announce(SKIPPED, measured.skip);
     return 0;
   }
 
@@ -287,6 +400,7 @@ export function main(argv) {
       + `  stages ${pin}. The pin is now a CHOICE, not a limitation; the gap is ${pin} -> ${version}.\n`
       + '  What it does NOT prove: that a quaude built from it boots, or passes a live turn.\n');
   }
+  announce(v.ok ? MEASURED : CHANGED, v.headline);
   return v.ok ? 0 : 1;
 }
 
