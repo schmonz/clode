@@ -72,15 +72,23 @@ guardTests(defineGuard({
         + `survivable. Reviewed today: ${[...KNOWN_BUN_ANT.keys()].join(', ')}.`),
     };
   },
-  // The control is the real regression, spelled out: a bundle that reaches for a new
-  // private member. `CellSegmenter` is not hypothetical — it is what 2.1.278 added and
-  // what this guard exists to have caught. The three reviewed members ride along so the
+  // The control is the real regression, spelled out: a bundle that reaches for a
+  // private member nobody has reviewed. The three reviewed members ride along so the
   // control also clears the floor, which is the point: a control that tripped the floor
   // instead of the finding would prove the wrong thing.
+  //
+  // THE CONTROL'S MEMBER MUST BE ONE `KNOWN_BUN_ANT` WILL NEVER HOLD. It used to be
+  // `CellSegmenter`, on the sound reasoning that it was not hypothetical — it is exactly
+  // what 2.1.278 added and what this guard exists to have caught. Then CellSegmenter was
+  // reviewed (the decision to implement it is recorded in the table), the control stopped
+  // producing a finding, and this guard reported CANNOT_FAIL — correctly. A control
+  // spelled with a REAL member is a control with an expiry date: it dies the day someone
+  // does the reviewing this guard exists to demand. So the control names something
+  // upstream cannot plausibly ship, and says so.
   control() {
     return {
       text: 'if(typeof Bun.ant?.getPeerPid==="function"){}Bun.ant.getPeerUid(1);'
-        + 'Bun.ant.memoryPressureLevel();new Bun.ant.CellSegmenter({});',
+        + 'Bun.ant.memoryPressureLevel();Bun.ant.__clodeControlNeverReviewed(1);',
     };
   },
 }));

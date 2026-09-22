@@ -128,6 +128,18 @@ const KNOWN_BUN_ANT = new Map([
   ['getPeerPid', 'the same capability probe as getPeerUid; see bun-shim\'s Bun.ant note.'],
   ['memoryPressureLevel', 'macOS memory-pressure level; read for telemetry, absence is '
     + 'a missing datapoint and nothing else.'],
+  ['CellSegmenter', 'the native grapheme->cell segmenter 2.1.278 moved Ink\'s screen '
+    + 'model onto. UNLIKE every other entry here, absent is NOT an acceptable answer: '
+    + 'the bundle constructs it unconditionally from a class-field initialiser with no '
+    + 'flag and no fallback, so without it there is no TUI at all -- every frame throws '
+    + 'from onRender. This entry does not accept its absence; it records that the '
+    + 'decision was made (2026-09-22, user) to IMPLEMENT it, that the contract is '
+    + 'derived in BACKLOG.md from its three call sites, and that the frame-differential '
+    + 'oracle that will judge the implementation exists (test/frame-diff.cjs). It is '
+    + 'here so this gate keeps reporting members nobody has looked at yet, instead of '
+    + 'holding main red on a question already answered. REMOVE THIS ENTRY the day '
+    + 'bun-shim provides CellSegmenter, so a future upstream change to its shape '
+    + 'surfaces as a new finding rather than a silence.'],
   ['waitForUrlEvent', 'macOS claude-cli:// deep-link handoff. Called only when '
     + '__CFBundleIdentifier is the Claude app bundle (so never under quaude) and wrapped '
     + 'in try/catch returning null.'],
