@@ -117,3 +117,46 @@ test('Intl.RelativeTimeFormat / Segmenter / Collator / DisplayNames / Locale exi
   assert.strictEqual(out.loc, 'en-US');
   assert.strictEqual(out.types, true);
 });
+
+// ECMA-402 gives %SegmentsPrototype% TWO members: [Symbol.iterator] and
+// containing(). This polyfill shipped only the iterator for a year, and the gap
+// read as ABSENCE rather than as an error — `segments.containing` was plain
+// `undefined`, so a caller got a NAMELESS quickjs "TypeError: not a function"
+// from a line that never mentions Intl. That is how it surfaced: npm slice-ansi
+// (which backs Bun.sliceAnsi, new in upstream 2.1.278) tokenises with
+// `graphemeSegments.containing(index)`, so every Ink layout pass that truncated
+// a string threw, upstream caught it and logged "frame dropped", and the
+// interactive TUI emitted 518 bytes of pure control sequences without one
+// printable cell — while `-p` stayed completely green.
+//
+// Asserted against HOST NODE, not against our own past output: node has the real
+// ICU implementation, so a parity diff is a real answer rather than a
+// characterisation of whatever we happened to emit.
+const CONTAINING_FIXTURE = `
+  const seg = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+  const out = [];
+  const shape = (s) => (s === undefined ? null : { segment: s.segment, index: s.index });
+  for (const input of ['abc', 'a\\u0300bc', '\\u65e5\\u672c\\u8a9e']) {
+    const segments = seg.segment(input);
+    const row = [];
+    for (let i = -1; i <= input.length; i++) row.push(shape(segments.containing(i)));
+    out.push(row);
+  }
+  console.log(JSON.stringify(out));
+`;
+
+test('Intl.Segmenter segments.containing() matches host node (the dead-TUI gap)', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const f = fixture(CONTAINING_FIXTURE);
+  const tjsOut = runTjs(f);
+  const nodeOut = runNode(f);
+  assert.strictEqual(tjsOut, nodeOut, `tjs=${tjsOut} node=${nodeOut}`);
+  const rows = JSON.parse(tjsOut);
+  // Out-of-range indices are undefined at BOTH ends, and every in-range index
+  // maps to the cluster that covers it — a combining sequence answers with the
+  // whole cluster from either of its two code-unit positions.
+  assert.strictEqual(rows[0][0], null, 'containing(-1) must be undefined');
+  assert.strictEqual(rows[0][rows[0].length - 1], null, 'containing(length) must be undefined');
+  assert.deepStrictEqual(rows[1][1], { segment: 'à', index: 0 });
+  assert.deepStrictEqual(rows[1][2], { segment: 'à', index: 0 });
+});

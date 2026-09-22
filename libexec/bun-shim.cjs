@@ -231,14 +231,37 @@ function _extResolve(pkg){ try { const m = require(pkg); return (m && m.default)
 const _stringWidthFn = _extResolve('string-width');
 const _stripAnsiFn   = _extResolve('strip-ansi');
 const _wrapAnsiFn    = _extResolve('wrap-ansi');
+// Bun.sliceAnsi -- NEW IN 2.1.278, and it is the ONLY Bun member the bundle
+// gained between the pin (2.1.251) and .278 (measured: `Bun\.[A-Za-z_$]\w*`
+// over both carves; the two sets differ by this one name). Upstream uses it in
+// Ink's text-truncation helper:
+//
+//     function vo(n,s,u){ let f=Bun.sliceAnsi(n,s,u);
+//                         while(u>s && se(f)>u-s) u--, f=Bun.sliceAnsi(n,s,u);
+//                         return f }
+//
+// so EVERY layout pass that truncates a string called it. Undefined here meant a
+// nameless quickjs TypeError inside runLayoutPass, which upstream catches, logs
+// as "ink layout pass threw ... frame dropped", and swallows -- the TUI then
+// paints NOTHING while the process stays alive, answers keystrokes and runs a
+// full turn. `-p` never touches this code, which is why every headless floor row
+// stayed green.
+//
+// Backed by npm slice-ansi, same as the three above: the indices are DISPLAY
+// COLUMNS (slice-ansi advances its cursor by each token's visibleWidth, so a
+// fullwidth CJK cell counts 2), which is what upstream's width-derived arguments
+// and its own `se(f) > u-s` correction loop expect.
+const _sliceAnsiFn   = _extResolve('slice-ansi');
 function stringWidth(...a){ return _stringWidthFn ? _stringWidthFn(...a) : _extFatal(_extMissing('string-width', 'text rendering (display width)')); }
 function stripANSI(...a){ return _stripAnsiFn ? _stripAnsiFn(...a) : _extFatal(_extMissing('strip-ansi', 'text rendering (ANSI stripping)')); }
 function wrapAnsi(...a){ return _wrapAnsiFn ? _wrapAnsiFn(...a) : _extFatal(_extMissing('wrap-ansi', 'text rendering (line wrapping)')); }
+function sliceAnsi(...a){ return _sliceAnsiFn ? _sliceAnsiFn(...a) : _extFatal(_extMissing('slice-ansi', 'text rendering (ANSI-aware slicing)')); }
 // Without the real module these are fail-loud stubs, not implementations -- tag so
 // inspect-claude-bundle coverage reports them honestly (see Bun.YAML).
 if (!_stringWidthFn) stringWidth.__bunShimStub = true;
 if (!_stripAnsiFn) stripANSI.__bunShimStub = true;
 if (!_wrapAnsiFn) wrapAnsi.__bunShimStub = true;
+if (!_sliceAnsiFn) sliceAnsi.__bunShimStub = true;
 
 // --- rewriteSnapshot: rewrite Claude Code's grep/find/rg shell-snapshot shadows
 // to exec the REAL host applet instead of the upstream native multiplexer (which
@@ -982,7 +1005,7 @@ const Bun = {
   argv: process.argv,
   stdin: process.stdin, stdout: process.stdout, stderr: process.stderr,
 
-  stripANSI, stringWidth, wrapAnsi,
+  stripANSI, stringWidth, wrapAnsi, sliceAnsi,
   hash, which, spawn, semver, JSONL, YAML,
   deepEquals: (a,b)=> require('util').isDeepStrictEqual(a,b),
   gc: ()=> { if (global.gc) global.gc(); },
@@ -1051,6 +1074,38 @@ const Bun = {
   // is the CORRECT answer. Explicit (not a stub) so the value is honest and the
   // bundle's `Bun.isStandaloneExecutable===true` feature-detect resolves cleanly.
   isStandaloneExecutable: false,
+
+  // Bun.sleepSync(ms) — NEW IN 2.1.278 and ON THE TTY PATH, which is why it is
+  // implemented rather than accepted-missing. Upstream's owed-reply drain reads
+  // /dev/tty non-blocking in a bounded loop and pauses 2ms between empty reads:
+  //
+  //     for (let R = 0; R < 64; R++) { ... if (A > 0) {...; continue}
+  //                                    if (A < 0 || M <= 0 || now >= deadline) break;
+  //                                    Bun.sleepSync(2) }
+  //
+  // The whole block is inside `try{...}catch{}`, so a missing sleepSync does not
+  // crash — it ABANDONS the drain on the first empty read, and the terminal
+  // replies nobody consumed then land in the user's shell after quaude exits.
+  // Silent, cosmetic, and exactly the kind of "guarded, therefore fine" reasoning
+  // that let Bun.ant's accepted-missing note go stale (see inspect-claude-bundle).
+  //
+  // ONE implementation, two engines, no platform branch: Atomics.wait on a
+  // SharedArrayBuffer is a real blocking sleep and is what Node gives us; under
+  // tjs it is unavailable on the main thread ([[tjs-atomics-cant-block-main]] —
+  // it THROWS rather than blocking), so the catch falls through to a bounded
+  // spin. Spinning is acceptable here and only here because the caller's own
+  // deadline caps the total at a quarter of a second.
+  sleepSync(ms) {
+    const want = Number(ms);
+    const dur = Number.isFinite(want) && want > 0 ? want : 0;
+    if (dur === 0) return;
+    const end = Date.now() + dur;
+    try {
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, dur);
+      return;
+    } catch (_) { /* tjs main thread: Atomics.wait throws — spin instead */ }
+    while (Date.now() < end) { /* bounded by the caller's own deadline */ }
+  },
 
   // Bun.unsafe — an EMPTY NAMESPACE, deliberately, and it has to EXIST.
   //

@@ -44,6 +44,7 @@ function req(pkg) {
 const stringWidth = req('string-width');
 const stripAnsi   = req('strip-ansi');
 const wrapAnsi    = req('wrap-ansi');
+const sliceAnsi   = req('slice-ansi');
 const YAML        = req('yaml');
 const semver      = req('semver');
 
@@ -100,6 +101,23 @@ const SEMVER_SORT_INPUTS = [
   ['1.0.0', '1.0.0-alpha', '1.0.0-beta', '1.0.0-alpha.1', '2.1.70', '2.1.179', '1.2.3'],
 ];
 
+// [string, start, end] — Bun.sliceAnsi's indices are DISPLAY COLUMNS, so a
+// fullwidth cell counts two. New to the corpus with slice-ansi itself (upstream
+// 2.1.278's Bun.sliceAnsi); these cases are the ones Ink's truncation helper
+// actually produces: slice inside a colour run, across a style boundary, and
+// through fullwidth text.
+const SLICE_INPUTS = [
+  ['hello world', 0, 5],
+  ['hello world', 6, 11],
+  ['\x1b[31mred text\x1b[39m', 0, 3],
+  ['\x1b[31mred text\x1b[39m', 4, 8],
+  ['\x1b[1m\x1b[31mbold red\x1b[39m\x1b[22m', 2, 6],
+  ['日本語テスト', 0, 4],
+  ['日本語テスト', 2, 8],
+  ['a\u0300bc', 0, 2],
+  ['', 0, 4],
+];
+
 // [version, range]
 const SEMVER_SATISFIES_INPUTS = [
   ['1.2.3', '^1.0.0'],
@@ -120,6 +138,8 @@ function compute() {
     stripAnsi:   STRIP_INPUTS.map((s) => ({ in: s, out: stripAnsi(s) })),
     wrapAnsi:    WRAP_INPUTS.map(([s, c, o]) =>
       ({ in: s, cols: c, opts: o || null, out: wrapAnsi(s, c, o) })),
+    sliceAnsi:   SLICE_INPUTS.map(([s, a, b]) =>
+      ({ in: s, start: a, end: b, out: sliceAnsi(s, a, b) })),
     yamlParse:   YAML_PARSE_INPUTS.map((s) => ({ in: s, out: YAML.parse(s) })),
     yamlStringify: YAML_STRINGIFY_INPUTS.map((v) => ({ in: v, out: YAML.stringify(v) })),
     semverSort:  SEMVER_SORT_INPUTS.map((arr) => ({ in: arr, out: semver.sort(arr.slice()) })),
@@ -128,4 +148,4 @@ function compute() {
   };
 }
 
-module.exports = { compute, fns: { stringWidth, stripAnsi, wrapAnsi, YAML, semver } };
+module.exports = { compute, fns: { stringWidth, stripAnsi, wrapAnsi, sliceAnsi, YAML, semver } };

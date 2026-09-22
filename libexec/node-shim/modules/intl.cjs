@@ -32,7 +32,30 @@ class Segmenter {
       }
       clusters.push({ segment: seg, index, input: str }); index += seg.length;
     }
-    return { [Symbol.iterator]() { return clusters[Symbol.iterator](); } };
+    // ECMA-402 %SegmentsPrototype% has TWO members: [Symbol.iterator] and
+    // containing(). This polyfill shipped only the iterator, which is a gap that
+    // reads as absence rather than as an error — `segments.containing` is plain
+    // `undefined`, so a caller gets a NAMELESS quickjs "TypeError: not a
+    // function" from a line that never mentions Intl. That is exactly how it was
+    // found: slice-ansi (which backs Bun.sliceAnsi, below) tokenises text with
+    // `graphemeSegments.containing(index)`, every Ink layout pass that truncates
+    // a string threw, upstream caught it, logged "frame dropped" and rendered
+    // NOTHING. The TUI emitted 518 bytes of pure control sequences.
+    //
+    // containing(index): the segment whose code-unit range covers `index`, or
+    // undefined when `index` is outside [0, input.length). Linear scan — the
+    // clusters are already materialised and the bundle's strings are line-sized.
+    return {
+      [Symbol.iterator]() { return clusters[Symbol.iterator](); },
+      containing(index) {
+        const n = Math.trunc(Number(index)) || 0;
+        if (n < 0 || n >= str.length) return undefined;
+        for (const c of clusters) {
+          if (n >= c.index && n < c.index + c.segment.length) return c;
+        }
+        return undefined;
+      },
+    };
   }
   resolvedOptions() { return { granularity: this._granularity }; }
 }

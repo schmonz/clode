@@ -127,6 +127,62 @@
       "out": "\u001b[31mred text\u001b[39m\n\u001b[31mthat\u001b[39m\n\u001b[31mwraps\u001b[0m"
     }
   ],
+  "sliceAnsi": [
+    {
+      "in": "hello world",
+      "start": 0,
+      "end": 5,
+      "out": "hello"
+    },
+    {
+      "in": "hello world",
+      "start": 6,
+      "end": 11,
+      "out": "world"
+    },
+    {
+      "in": "\u001b[31mred text\u001b[39m",
+      "start": 0,
+      "end": 3,
+      "out": "\u001b[31mred\u001b[39m"
+    },
+    {
+      "in": "\u001b[31mred text\u001b[39m",
+      "start": 4,
+      "end": 8,
+      "out": "\u001b[31mtext\u001b[39m"
+    },
+    {
+      "in": "\u001b[1m\u001b[31mbold red\u001b[39m\u001b[22m",
+      "start": 2,
+      "end": 6,
+      "out": "\u001b[1m\u001b[31mld r\u001b[39m\u001b[22m"
+    },
+    {
+      "in": "日本語テスト",
+      "start": 0,
+      "end": 4,
+      "out": "日本"
+    },
+    {
+      "in": "日本語テスト",
+      "start": 2,
+      "end": 8,
+      "out": "本語テ"
+    },
+    {
+      "in": "àbc",
+      "start": 0,
+      "end": 2,
+      "out": "àb"
+    },
+    {
+      "in": "",
+      "start": 0,
+      "end": 4,
+      "out": ""
+    }
+  ],
   "yamlParse": [
     {
       "in": "a: 1\nb: two\n",
