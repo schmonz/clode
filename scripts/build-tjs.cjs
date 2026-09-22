@@ -482,7 +482,7 @@ const TXIKI_PATCH_ORDER = [
   'txiki-sync-fs.patch',                      // shared vm.c/CMakeLists/private.h registration — before sync-spawn + vm-context
   'txiki-sync-spawn.patch',                   // registers after sync-fs
   'txiki-wurl-url.patch',
-  'txiki-unhandledrejection-no-abort.patch',
+  'txiki-unhandledrejection-drain.patch',      // the deferred unhandled-rejection drain in tjs__execute_jobs: do not SIGABRT when the PromiseRejectionEvent ctor throws, AND detach each entry before dispatching it (list_for_each_safe cached a `next` that the handler's own JS could js_free -- a use-after-free six lines of JavaScript could reach). vm.c only, one region; order-independent of sync-fs/sync-spawn/vm-context, which touch vm.c elsewhere
   'txiki-vm-context.patch',                   // registers after sync-fs + sync-spawn: new mod_vm.c + shared-file wiring
   'txiki-ws-root-path.patch',                 // WebSocket to a ROOT url asked for "//": lws_parse_uri strips the slash for "mcp" but yields "/" for ws://host/, and ws.c prepended unconditionally (ws.c only; order-independent)
   'txiki-custom-event-detail.patch',          // CustomEvent.detail returned Boolean(detail), so every payload became true/false; node returns the value (event-target.js only; order-independent)

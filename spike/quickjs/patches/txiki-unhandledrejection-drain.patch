@@ -1,0 +1,121 @@
+diff --git a/src/vm.c b/src/vm.c
+--- a/src/vm.c
++++ b/src/vm.c
+@@ -698,6 +698,30 @@
+             if (err < 0) {
+                 TJSRuntime *qrt = TJS_GetRuntime(ctx);
+                 CHECK_NOT_NULL(qrt);
++                /* clode: SAY WHAT KILLED THE RUNTIME. A job that throws stops the
++                 * whole process here, and in a real application the exception is
++                 * GONE before TJS_Run's closing JS_HasException() check can report
++                 * it: every exit/beforeunload listener that runs JavaScript and
++                 * catches anything internally calls JS_GetException() and clears
++                 * it. The program then simply ENDS -- status 0, nothing on stderr.
++                 * That silence is what an upstream bundle looks like when it needs
++                 * a host API we do not have: the TUI wrote its boot escapes,
++                 * unwound and vanished, and the message that said exactly why
++                 * ("This build of @anthropic-ai/bun-internal has no
++                 * Bun.ant.CellSegmenter") reached nobody. Print it HERE, where it
++                 * still exists, then hand it straight back so TJS_Run's exit status
++                 * is unchanged -- dump1() does not consume, and the JS_Throw()
++                 * below restores exactly what JS_GetException() took.
++                 *
++                 * The cost, deliberately accepted: a script with no exit listeners
++                 * (where the exception DID survive) now prints the same fatal error
++                 * twice, once here and once from TJS_Run. Printing a
++                 * process-ending error twice is a wart; losing it entirely is the
++                 * bug this exists to end. Reaching here is never routine -- it
++                 * always ends the process. */
++                JSValue exc = JS_GetException(ctx);
++                tjs_dump_error1(ctx, exc);
++                JS_Throw(ctx, exc);
+                 TJS_Stop(qrt);
+             }
+ 
+@@ -715,9 +739,31 @@
+      * (e.g. Promise.reject(x).catch(fn)) don't spuriously fire events. */
+     TJSRuntime *qrt = TJS_GetRuntime(ctx);
+     CHECK_NOT_NULL(qrt);
+-    struct list_head *el, *el1;
+-    list_for_each_safe(el, el1, &qrt->pending_rejections) {
+-        TJSPendingRejection *pr = list_entry(el, TJSPendingRejection, link);
++    /* clode: DETACH, THEN DISPATCH. The loop below used to be a
++     * list_for_each_safe() over qrt->pending_rejections with the dispatch
++     * INSIDE it, and that is a use-after-free: tjs__dispatch_event() runs
++     * JavaScript, that JavaScript can attach a handler to ANOTHER pending
++     * rejected promise, and the rejection tracker then calls
++     * tjs__pending_rejections_remove(), which js_free()s that entry -- which
++     * is exactly the `next` pointer list_for_each_safe() cached before the
++     * dispatch. It is also a DOUBLE free when the handler settles the entry
++     * being dispatched, since the tail of the body list_del()s and frees it
++     * again. Six lines of JavaScript SIGSEGV the engine:
++     *
++     *     const ps = [];
++     *     for (let i = 0; i < 8; i++) ps.push(Promise.reject(new Error('r'+i)));
++     *     addEventListener('unhandledrejection', (e) => {
++     *       e.preventDefault();
++     *       for (const p of ps) p.catch(() => {});   // frees the cached next
++     *     });
++     *
++     * Taking the head and unlinking it BEFORE any JavaScript runs removes the
++     * cached pointer entirely: removals can no longer touch the entry in
++     * flight, and additions still land at the tail, where this loop picks them
++     * up on a later turn -- same drain order as before. */
++    while (!list_empty(&qrt->pending_rejections)) {
++        TJSPendingRejection *pr = list_entry(qrt->pending_rejections.next, TJSPendingRejection, link);
++        list_del(&pr->link);
+ 
+         JSValue event_name = JS_NewString(ctx, "unhandledrejection");
+         JSValue args[3];
+@@ -726,7 +772,20 @@
+         args[2] = pr->reason;
+ 
+         JSValue event = JS_CallConstructor(ctx, qrt->builtins.promise_event_ctor, countof(args), args);
+-        CHECK_EQ(JS_IsException(event), 0);
++        if (JS_IsException(event)) {
++            /* clode: the PromiseRejectionEvent constructor threw. Do NOT SIGABRT the
++             * whole process (the old CHECK_EQ). Degrade like Node: dump the ctor
++             * error AND the underlying rejection reason (so it is visible), drop this
++             * rejection, and keep draining the rest. */
++            tjs_dump_error(ctx);
++            JS_Throw(ctx, JS_DupValue(ctx, pr->reason));
++            tjs_dump_error(ctx);
++            JS_FreeValue(ctx, event_name);
++            JS_FreeValue(ctx, pr->promise);
++            JS_FreeValue(ctx, pr->reason);
++            js_free(ctx, pr);
++            continue;
++        }
+         JSValue ret = tjs__dispatch_event(ctx, &event);
+ 
+         JS_FreeValue(ctx, event);
+@@ -747,15 +806,17 @@
+         JS_FreeValue(ctx, ret);
+ 
+         if (should_abort) {
++            /* `reason` is handed to JS_Throw below, so it is NOT freed here;
++             * everything else this entry owns is. */
+             JSValue reason = pr->reason;
+-            /* Free all pending rejections. */
++            JS_FreeValue(ctx, pr->promise);
++            js_free(ctx, pr);
++            /* Free all still-pending rejections. */
+             struct list_head *el2, *el3;
+             list_for_each_safe(el2, el3, &qrt->pending_rejections) {
+                 TJSPendingRejection *pr2 = list_entry(el2, TJSPendingRejection, link);
+                 JS_FreeValue(ctx, pr2->promise);
+-                if (pr2 != pr) {
+-                    JS_FreeValue(ctx, pr2->reason);
+-                }
++                JS_FreeValue(ctx, pr2->reason);
+                 list_del(&pr2->link);
+                 js_free(ctx, pr2);
+             }
+@@ -764,7 +825,6 @@
+             return;
+         }
+ 
+-        list_del(&pr->link);
+         JS_FreeValue(ctx, pr->promise);
+         JS_FreeValue(ctx, pr->reason);
+         js_free(ctx, pr);
