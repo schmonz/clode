@@ -8,6 +8,73 @@ Concrete clode-under-Node divergences from native Claude Code, to triage and fix
 That page is GENERATED from `scripts/build-graph.cjs` — the one declaration of the build — so it
 cannot drift from it; it is also where the honest answer to "does this need node?" lives.
 
+## `Bun.ant.CellSegmenter` — the 2.1.278 TUI's real blocker, and it is NOT small (2026-09-22)
+
+**Status: OPEN, and it is what stands between this repo and moving the pin.** Everything
+else in the 2.1.278 interactive chain is fixed and driven; this is the remainder.
+
+Upstream 2.1.278 moved Ink's screen model onto a NATIVE cell segmenter in Anthropic's own
+private Bun namespace. The bundle asks for it once, unconditionally, and refuses to
+degrade:
+
+```js
+function vs(n){ if (typeof Bun.ant?.CellSegmenter !== "function")
+                  throw Error("This build of @anthropic-ai/bun-internal has no "
+                            + "Bun.ant.CellSegmenter; src/ink needs bun-internal >= "
+                            + "the version pinned in package.json.");
+                return new Bun.ant.CellSegmenter({ ambiguousIsNarrow: !0, substitute: n,
+                  screen: { widthMask: 3, narrow: 0, wide: 1, spacerTail: 2, spacerHead: 3,
+                            emptyCharIndex: 0, spacerCharIndex: 1, emptyWord: jn(0,0,0),
+                            tabWidth: cwt } }) }
+```
+
+`vs()` is a CLASS FIELD initialiser on the object the screen painter builds
+(`class Mf { native = vs(qot); ... }`), and the painter (`cOe`) constructs one in its
+constructor with no flag, no env lever and no fallback branch. So on a host without it
+every frame throws from `onRender`, which is a microtask — the runtime stops, and before
+today's engine patch it stopped in total silence.
+
+**Measured surface** (from `chunk-rp2p2mxd.js` in the 2.1.278 carve, so this is what an
+implementation has to satisfy — not a guess):
+
+| member | shape |
+| --- | --- |
+| `segment(text, cells, runs, reordered)` | fills two caller-owned `Int32Array`s, returns the cell count, or a NEGATIVE number meaning "your buffers are this small, grow and call again" |
+| `paint(cells, width, x, y, segCells, count, undefined, charIndices, runWords)` | composites a segmented run into the screen grid; returns a packed damage rect the caller unpacks with `Math.floor(u/1048576)%65536` and `Math.floor(u/68719476736)` — a 64-bit value handed back as a double |
+| `setCell(cells, width, x, y, charIndex, word)` | one cell; same packed-damage return |
+| `graphemes` | grow-only intern pool of grapheme strings, indexed by the cell words |
+| `sgrKeys` / `sgrCloseKeys` | NUL-joined SGR open/close code strings, indexed the same way |
+| `uris` | OSC-8 hyperlink pool |
+
+Cell words are packed `style << 17 | link << 2 | width`, widths are
+`narrow/wide/spacerTail/spacerHead` under a 2-bit mask, and the whole thing is
+re-created (`resetNative()`) whenever a pool crosses 16384 entries. None of that is
+documented anywhere; all of it has to match, or the screen corrupts rather than fails.
+
+**Why this is not a shim-sized job.** It is a full text -> grapheme -> terminal-cell
+pipeline with an undocumented binary contract, and the only oracle is native Claude Code
+on macOS/Linux — which means frame-differential testing, not unit tests. It is the same
+class of work as `Bun.Transpiler`, and considerably more load-bearing: without it there is
+no TUI at all on any target quaude exists to serve.
+
+**What is already done, so nobody redoes it:** `Bun.sliceAnsi` (npm slice-ansi),
+`Intl.Segmenter`'s missing `segments.containing()`, `Bun.sleepSync`, and the engine's
+unhandled-rejection-drain use-after-free are all fixed and driven on darwin-arm64 and on
+the live NetBSD/arm64 guest; the pinned 2.1.251 build still passes D1 on both. The gate
+that would have named this on the day .278 appeared now exists
+(`test/build-gates/bun-ant-surface-gate.test.cjs`), and it is RED against .278 on purpose.
+
+**Two smaller things found alongside it, both open:**
+
+- `[uds-messaging] Failed to create server: TypeError: not a function` at startup on both
+  legs, in both 2.1.251 and 2.1.278 — a nameless throw, so the missing member is not
+  named. Pre-existing, non-fatal (upstream logs and continues), never investigated.
+- A teardown SIGSEGV after the runtime stops with work still in the libuv threadpool:
+  `TJS_FreeRuntime -> uv_run -> uv__work_done -> tjs__readfile_after_work_cb ->
+  tjs_new_error -> <null>`. Only reachable on the abrupt-stop path, so it follows a
+  fatal error rather than causing one — but it turns a clean exit code into a signal, and
+  a probe that reads exit status will report the wrong thing about the wrong event.
+
 ## The SCC merger's mask: four residuals recorded, not fixed (2026-09-22)
 
 Filed out of the review of `0689837..a41df80` and the fix pass that followed it. None is
