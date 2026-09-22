@@ -529,6 +529,16 @@ test('the controlled set is EXACTLY the modules a guard was deliberately written
   // test/build-gates/build-runner-gates.test.cjs controls both refusals (plus the new one),
   // which returned the count to 29 — the baseline did not move. An exclusion entry would
   // have been the wrong answer here: the shape matched because the shape is real.
+  //
+  // scripts/carve-probe.mjs ADDED 2026-09-21, the mechanism a FOURTH time, and the first
+  // one that was gate-shaped on the day it was written rather than on the day the
+  // classifier caught up. The probe answers "can clode carve newer upstream than the pin
+  // yet?" by comparing what it measured against the outcome UPSTREAM_PIN records, and
+  // REFUSES (exit 1) when they differ — derives a verdict, then refuses, exactly. It
+  // pushed uncontrolled to 30 against the baseline of 29 and went red at authoring time.
+  // test/build-gates/carve-probe-gates.test.cjs controls both of its refusals — an
+  // unreadable recorded expectation, and a comparator that has lost one of its two
+  // directions — which returned the count to 29. The baseline did not move.
   assert.deepStrictEqual([...controlledProductionModules().keys()].sort(), [
     'libexec/clode-build.cjs',
     'libexec/host-provision.cjs',
@@ -536,6 +546,7 @@ test('the controlled set is EXACTLY the modules a guard was deliberately written
     'libexec/target-update-check.cjs',
     'scripts/build-graph.cjs',
     'scripts/build-runner.cjs',
+    'scripts/carve-probe.mjs',
     'scripts/render-build-graph.cjs',
   ].sort(),
   'the set of production modules counted as CONTROLLED changed. If a successor phase wrote '

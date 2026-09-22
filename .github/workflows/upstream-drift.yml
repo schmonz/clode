@@ -95,6 +95,74 @@ jobs:
           VER="$(cat "$RUNNER_TEMP/upstream-version" 2>/dev/null || true)"
           node scripts/upstream-release-notes.mjs --from "0.0.0-no-last-green-recorded" ${VER:+--to "$VER"}
 
+  # THE THIRD DAILY QUESTION, and the one nothing was asking: CAN CLODE CARVE NEWER
+  # UPSTREAM THAN THE PIN YET?
+  #
+  # The `anchors` job above checks hook sites and CLI reachability; `boots` below builds
+  # from the PIN. Neither reaches the SCC merge, which is the step UPSTREAM_PIN exists
+  # because of — so "we cannot build from newer" went 22 days and 27 versions without
+  # anyone re-testing it. This is the engine-backed carve probe BACKLOG.md filed, built
+  # once the "cannot be proven without a runner" premise stopped being true:
+  # scripts/bootstrap-engine.sh range-fetches a published engine slice in seconds, so a
+  # plain ubuntu runner can do the whole carve + merge + compile.
+  #
+  # HAIKU-PROBE DOCTRINE, one question over. It asserts the RECORDED outcome — the
+  # `carve-probe` line in UPSTREAM_PIN, which is where this repo already keeps measured
+  # facts about upstream — and goes red on EITHER change: it started working (absorb now),
+  # or it fails somewhere/something new (the recorded reason is stale). Neither direction
+  # is spelled in this file, so neither can be lost by editing the job.
+  #
+  # IT NEEDS THE NETWORK, twice: the upstream install and the engine slice. Both are
+  # tolerated explicitly and turn into a NAMED SKIP that says nothing about upstream was
+  # measured — because an infra failure reading as "still blocked" is the same
+  # green-that-hides this whole workflow's newer jobs exist to remove.
+  #
+  # Independent of `anchors` on purpose (attribution: a different question, a different
+  # red), which costs one more upstream download and buys a light that says what broke.
+  carve:
+    name: can clode carve newer than the pin yet?
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version-file: .tool-versions
+      # `next`, unpinned, for the same reason the anchors job uses it: it is the leading
+      # channel, and this job's only reason to exist is to look PAST the pin.
+      - name: Install the `next` Claude Code (a failure here is a skip, not a verdict)
+        id: upstream
+        run: |
+          set -uo pipefail
+          if ! npm i -g @anthropic-ai/claude-code@next 2>&1 | tail -3; then
+            echo "carve-probe: could not install upstream — this run measures nothing" >&2
+          fi
+          echo "version=$(npm view @anthropic-ai/claude-code@next version 2>/dev/null || true)" >> "$GITHUB_OUTPUT"
+          echo "provider=$(node scripts/find-provider.mjs 2>/dev/null || true)" >> "$GITHUB_OUTPUT"
+      # A PUBLISHED ENGINE SLICE, not a build. One range request out of the templates
+      # pack; scripts/bootstrap-engine.sh verifies the sha256 from the committed manifest
+      # AND makes the candidate print engine-api-floor's token before handing it over, so
+      # a stale slice is refused here rather than mis-read downstream as a carve failure.
+      - name: Resolve a tjs engine (a failure here is a skip, not a verdict)
+        id: engine
+        run: echo "tjs=$(scripts/bootstrap-engine.sh || true)" >> "$GITHUB_OUTPUT"
+      - name: Carve, merge and compile it — and compare against the recorded outcome
+        run: |
+          node scripts/carve-probe.mjs \
+            --provider "${{ steps.upstream.outputs.provider }}" \
+            --version "${{ steps.upstream.outputs.version }}" \
+            --engine "${{ steps.engine.outputs.tjs }}"
+      # Same lead-not-a-cause posture as the anchors job: when the carve outcome CHANGED,
+      # upstream's own notes usually name the area before anyone byte-diffs anything.
+      - name: What did upstream say? (context only — a LEAD, never a cause)
+        if: failure()
+        run: |
+          node scripts/upstream-release-notes.mjs --from "0.0.0-no-last-green-recorded" \
+            ${{ steps.upstream.outputs.version && format('--to "{0}"', steps.upstream.outputs.version) || '' }}
+
   # THE SECOND DAILY QUESTION: does a quaude built from the PINNED bundle still BOOT?
   #
   # READ THIS BEFORE TRUSTING THIS JOB'S GREEN (corrected 2026-09-12). It used to say

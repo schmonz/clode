@@ -27,9 +27,42 @@
 #            needs an engine, and nothing in CI currently attempts it against newer
 #            than the pin. Filed in BACKLOG.md as an engine-backed carve probe.
 #
+#   2.1.278  CARVES, MERGES AND COMPILES (2026-09-21, darwin-arm64, real engine): staging
+#            produced 4 merged groups (8, 4, 61, 4) and all 1958 staged modules compiled
+#            under tjs. Not luck we control — see the root cause below. Nothing is claimed
+#            here about booting it; only that the step the pin exists for now passes.
+#
+# WHAT ACTUALLY BREAKS, measured 2026-09-21 on this box with a real engine, because
+# "QuickJS rejects the merged file" was true and told nobody where to look. The merged
+# file is not valid ES in ANY engine — node rejects it too ("Invalid or unexpected token")
+# — so this was never a QuickJS parser gap. scc-merge.cjs renames colliding top-level
+# bindings over a mask that calls these bytes ordinary code, and on 2.1.257 upstream's
+# re-chunking put a module carrying BOTH of these into a strongly connected group for the
+# first time (group 1 grew 99 -> 114 members):
+#
+#   \u{b5}s:1000n        ->  \__m28_u{b5}s:1000n        (a unicode escape in an IDENTIFIER;
+#                                                        the `u` was renamed inside it)
+#   static get rules(){  ->  static __m28_get rules(){   (a getter's member modifier)
+#
+# Both live in ONE carved module, chunk-1kg58a1a.js, which also declares a genuine
+# top-level `function get(...)` and a top-level `u`. The first is what QuickJS reaches
+# first, and it is exactly "invalid property name"; the second is caught at merge time
+# today by assertNoRenamedFixedNames, which is why a 2.1.257 carve now refuses with the
+# ratchet's message instead of the one recorded above. On 2.1.251 and 2.1.278 those two
+# sites sit in modules that are NOT in any merged group, so the merger never touches them
+# — the defects are LATENT, not fixed, and upstream's next re-chunk can re-trigger them.
+#
 # So: the versions between .252 and .269 have never been tried, and "we cannot build
-# from newer" is measured at .257 and .261 — not at .270. Say that, rather than
-# rounding it to "everything after the pin is broken".
+# from newer" is measured at .257 and .261 — not at .270, and NOT at .278.
+#
+# THE STANDING ANSWER, kept honest by scripts/carve-probe.mjs (upstream-drift.yml's
+# `carve` job). This is the outcome someone MEASURED for newer-than-pin upstream; the
+# probe compares each day's real carve+merge+compile against it and goes red on either
+# change — it started working, or it fails somewhere/something new. The version is
+# context for a reader; the OUTCOME is what is compared. Grammar:
+#     carve-probe <version> carves
+#     carve-probe <version> blocked <stage> <reason substring>
+carve-probe 2.1.278 carves
 #
 # Bump or drop the pin by editing the version below — one line, one file.
 claude-code 2.1.251

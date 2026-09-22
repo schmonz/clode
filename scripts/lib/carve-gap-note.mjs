@@ -7,8 +7,14 @@
 //
 // Neither reaches the step that is broken TODAY. `clode build` on 2.1.257+ dies in
 // the SCC merge, with QuickJS rejecting the merged file ("invalid property name"),
-// and the merge needs an engine to run at all — so nothing in a plain drift run
-// exercises it. UPSTREAM_PIN is held behind upstream for exactly that reason.
+// and the merge needs an engine to run at all — so nothing in THIS job exercises it.
+// UPSTREAM_PIN is held behind upstream for exactly that reason.
+//
+// Since 2026-09-21 the workflow's `carve` job (scripts/carve-probe.mjs) does reach it,
+// on a bootstrap engine. That does not retire this note: the two jobs are separate reds
+// on separate runners, and a reader looking at THIS one's green still has to be told
+// which question it answered. It changes the note from "nobody checks" to "someone else
+// checks, over there" — which is a pointer, not a reprieve.
 //
 // Left unsaid, the green reads as "newest Claude Code is fine". That is how a
 // capability gap becomes something we remember rather than something CI states, and
@@ -25,5 +31,7 @@ export function carveGapNote({ pin, checked } = {}) {
     '  Anchors and CLI extraction are checked above; the SCC MERGE is not — it needs',
     '  an engine, and it is where 2.1.257 broke (QuickJS: "invalid property name").',
     `  ${versions}, deliberately behind for that reason — see UPSTREAM_PIN and BACKLOG.md.`,
+    '  The `carve` job in this same workflow (scripts/carve-probe.mjs) is what does',
+    '  reach the merge. Read ITS verdict for that question; this one cannot answer it.',
   ].join('\n') + '\n';
 }

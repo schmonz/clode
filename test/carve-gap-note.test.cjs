@@ -20,6 +20,17 @@ test('the carve-gap note says what a green does NOT prove', async () => {
   assert.doesNotMatch(note, /merge (is )?(ok|fine|works)/i);
 });
 
+// The note used to end at "nothing exercises the merge", which stopped being true the day
+// the carve probe landed. A caveat that names no owner is where a reader stops: this
+// asserts the pointer, so deleting the probe's name goes red rather than quietly leaving
+// the drift green sounding like the last word on the question.
+test('the carve-gap note points at the job that DOES reach the merge', async () => {
+  const { carveGapNote } = await import('../scripts/lib/carve-gap-note.mjs');
+  const note = carveGapNote({ pin: '2.1.251', checked: '2.1.278' });
+  assert.match(note, /carve-probe\.mjs/, 'must name the probe a reader should go read');
+  assert.match(note, /carve/, 'must name the job');
+});
+
 test('the carve-gap note names the distance when the checked version is known', async () => {
   const { carveGapNote } = await import('../scripts/lib/carve-gap-note.mjs');
   const note = carveGapNote({ pin: '2.1.251', checked: '2.1.270' });
