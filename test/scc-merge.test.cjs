@@ -598,6 +598,38 @@ test('the merge is re-checked for renamed fixed names, and says so by name', () 
     'for (const x of __m0_ys) if (__m0_a instanceof B && __m0_k in o) g(x);\n', 0));
   assert.doesNotThrow(() => assertNoRenamedFixedNames(
     'class __m1_C extends Error {}\nexport { __m0_shared as __m0_export_ay };\n', 0));
+
+  // AND THE THREE SHAPES WHERE THE MEMBER NAME IS NOT A PLAIN IDENTIFIER (2026-09-22). The
+  // check above needs whitespace and a following identifier, so it was blind to all three,
+  // and all three are live in the pinned carve — two inside groups that are ALREADY merged.
+  // Each `node --check`s as a SyntaxError, so the build must refuse them here rather than
+  // three tools downstream at the compile step.
+  assert.throws(
+    () => assertNoRenamedFixedNames('const o = { __m0_get[Symbol.toStringTag](){ return 1; } };\n', 4),
+    /scc-merge: group 4 renamed __m0_get into a member-modifier position/);
+  assert.throws(
+    () => assertNoRenamedFixedNames('class C { __m0_async*iterPages(){ yield 1; } }\n', 5),
+    /scc-merge: group 5 renamed __m0_async into a member-modifier position/);
+  assert.throws(
+    () => assertNoRenamedFixedNames('class C extends Error { __m0_static{ Object.seal(this); } }\n', 6),
+    /scc-merge: group 6 renamed __m0_static into a member-modifier position/);
+  // A computed generator name, and a private one — both real shapes in the carve.
+  assert.throws(
+    () => assertNoRenamedFixedNames('class C { __m0_async*[Symbol.asyncIterator](){ yield 1; } }\n', 7),
+    /renamed __m0_async into a member-modifier position/);
+  assert.throws(
+    () => assertNoRenamedFixedNames('class C { __m0_async*#g(){ yield 1; } }\n', 8),
+    /renamed __m0_async into a member-modifier position/);
+
+  // AND THE CONVERSE, which is why this check is narrowed to the modifier WORDS and confirms a
+  // member-shaped tail: `[` and `*` after a renamed binding are ordinary code, and a ratchet
+  // that failed the build on them would refuse correct merges. Each of these is a real merge.
+  assert.doesNotThrow(() => assertNoRenamedFixedNames('const y = __m0_get[0] * __m0_async*2;\n', 0));
+  assert.doesNotThrow(() => assertNoRenamedFixedNames('__m0_static[k](a);\n', 0));
+  assert.doesNotThrow(() => assertNoRenamedFixedNames('const __m0_async = { a: 1 };\n', 0));
+  // `get*`/`set*` is multiplication wherever it appears — a getter can never be a generator.
+  assert.doesNotThrow(() => assertNoRenamedFixedNames('const y = __m0_get*f(x);\n', 0));
+  assert.doesNotThrow(() => assertNoRenamedFixedNames('const s = "__m0_get[x](){";\n', 0));
 });
 
 // A `{` right after a `:` is normally a nested object literal — but it is a BLOCK when the `:`

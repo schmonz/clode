@@ -33,12 +33,22 @@
 // BUMP THIS whenever an edit to this file could change the bytes mergeGroup emits. Forgetting to
 // is not a cosmetic slip: every machine that has already built once keeps serving the OLD merge
 // from its cache, so the edit appears to do literally nothing, on that machine only, forever.
+// BUMPED to '15': three more positions where an identifier-looking token is not an identifier —
+// a member modifier in front of a computed name (`get[Symbol.toStringTag](){}`), a generator
+// star (`async*iterPages(){}`), and a class static-initialization block (`static{…}`) — plus two
+// brace-opening contexts `braceKind` could not read (`...{` and `${{`). Not invariant either:
+// 416 bytes across 87 spans of the pinned 2.1.251 carve flip 1 -> 0 against '14', in 4 distinct
+// tokens (`async` 34, `static` 29, `get` 21, `set` 3), and 0 bytes flip the other way.
 // BUMPED to '14': the mask stopped calling two positions renameable that never were — a
 // `\u{…}`/`\uXXXX` escape inside an identifier, and a class/object member's modifier (chained,
 // private-named, or in an `export default {…}` literal). Unlike the '13' bump this one is NOT
-// invariant on today's corpus and was never expected to be: the pinned 2.1.251 carve has 55
-// escape bytes and 69 modifier bytes whose mask flips 1 -> 0, so any group containing one of
-// those modules AND a collision on one of those names merges to different — correct — bytes.
+// invariant on today's corpus and was never expected to be: MEASURED against 6032f77's mask over
+// all 1,839 pinned module sources, 2,250 bytes in 333 spans flip 1 -> 0 and 0 bytes flip back.
+// (An earlier copy of this comment said "55 escape bytes and 69 modifier bytes"; both figures
+// were wrong — the 55 is a count of escape FINDINGS, not bytes, and the modifier findings
+// re-measure as 238 in 31 modules. Numbers in a file whose subject is correctness are measured
+// here, not restated.) So any group containing one of those modules AND a collision on one of
+// those names merges to different — correct — bytes.
 // A machine that merged such a group before this fix has a cache entry holding a merge that
 // does not parse, and the bump is what stops it serving that forever.
 // BUMPED to '13' (phase 5b, task 1, fix round 1): lexicalCodeMask's `/*` branch gained an
@@ -50,7 +60,7 @@
 // inputs". A machine that already merged some OTHER group under the old masker keeps a
 // cache entry this fix could legitimately invalidate; bumping is the only way that is
 // guaranteed to reach it.
-var MERGER_VERSION = '14';
+var MERGER_VERSION = '15';
 
 // `meta.locals` is the union of two engine tables (vardefs + closure_var) and can repeat a name
 // across them, and it reports compiler-internal synthetic names in angle brackets (e.g.
@@ -564,12 +574,29 @@ function propertyNames(src, mask) {
     while (p > 0 && mask[p - 1] && isIdentCode(src.charCodeAt(p - 1))) p--;
     return isIdentStartCode(src.charCodeAt(p)) ? p : -1;
   }
-  function braceKind(p) { // p = prevIdx of the `{`
+  function braceKind(p, at) { // p = prevIdx of the `{`; at = the `{`'s own index
+    // `${{ … }}` — an object literal as the FIRST token of a template interpolation. The `${`
+    // is template punctuation rather than code (lexicalCodeMask steps over both bytes without
+    // masking them), so prevIdx finds "no token we can name" and the old reading was `block`.
+    // An interpolation holds an Expression, and a `{` that starts an expression is an object
+    // and nothing else. The mask test is what keeps this from firing on an ordinary `{{` in
+    // code: only the template's own `${` has its `{` masked 0.
+    if (at >= 2 && src.charCodeAt(at - 1) === 123 && src.charCodeAt(at - 2) === 36
+      && !mask[at - 1]) return 'obj';
     if (p < 0) return 'block';
     var ch = src.charAt(p);
     if (ch === '>' && p > 0 && src.charAt(p - 1) === '=') return 'block'; // arrow function body
     if (ch === ')' || ch === '}' || ch === ';') return 'block';
     if ('=(,[:?!&|+-*/%<>~^'.indexOf(ch) !== -1) return 'obj';
+    // `...{ … }` — spreading an object literal. `.` is in neither the operator set nor the
+    // word set, so the `{` read as a block and nothing inside it was protected. `...` is only
+    // ever spread or rest, and both are followed by an expression or a binding pattern — never
+    // by a statement — so this `{` is an object every time. (40 sites in the pinned 2.1.251
+    // carve; all 8 non-empty ones are `key:` entries, which the bracket-kind-independent rule
+    // already protected, so nothing in today's corpus depended on it — but a `...{m(){}}` or a
+    // `...{get x(){}}` is the silent-wrong-property class, which neither this file's gate nor
+    // assertNoRenamedFixedNames can see for a plain member NAME.)
+    if (ch === '.' && p >= 2 && src.charCodeAt(p - 1) === 46 && src.charCodeAt(p - 2) === 46) return 'obj';
     var ws = wordStart(p);
     if (ws >= 0) return OBJ_OPEN_WORD.has(src.slice(ws, p + 1)) ? 'obj' : 'block';
     return 'block';
@@ -586,6 +613,48 @@ function propertyNames(src, mask) {
     var r = nextIdx(q + 1);
     return r >= 0 && src.charAt(r) === '{';
   }
+  // Index just past the `]` that closes the bracket at `p`, or -1. Every bracket kind is
+  // counted, because a computed member name is an arbitrary expression and the real carve has
+  // `async*[(xr=new WeakMap,Symbol.asyncIterator)](){…}` in it.
+  function bracketEnd(p) { // p = index of the `[`
+    var d = 0, q, ch;
+    for (q = p; q < n; q++) {
+      if (!mask[q]) continue;
+      ch = src.charAt(q);
+      if (ch === '[' || ch === '(' || ch === '{') d++;
+      else if (ch === ']' || ch === ')' || ch === '}') { d--; if (!d) return q + 1; }
+    }
+    return -1;
+  }
+  // DOES A MEMBER NAME BEGIN AT `p`, AND DOES IT END THE WAY A MEMBER DOES? This is the
+  // confirmation that makes `get[`/`async*` decidable without a parser, and without trusting
+  // the brace classification that put us here. A member name is an identifier, a `#private`
+  // one, or a computed `[expr]`; what follows it is a parameter list whose `)` is followed by
+  // `{` (a method), or — in a class body only — `=`, `;` or `}` (a field). No expression
+  // statement has that shape: `get[k](a){` and `async*g(){` are not parseable as expressions,
+  // which is exactly why renaming the modifier in front of them emits something no engine
+  // accepts. `kind` narrows it: a generator is always a method, never a field.
+  function memberNameTail(p, enc, kind) {
+    var q = p, r, c2;
+    if (p < 0) return false;
+    c2 = src.charCodeAt(p);
+    if (c2 === 91) {                                   // [computed]
+      q = bracketEnd(p);
+      if (q < 0) return false;
+      r = nextIdx(q);
+    } else {
+      if (c2 === 35) q = p + 1;                        // #private
+      if (!isIdentStartCode(src.charCodeAt(q))) return false;
+      while (q < n && mask[q] && isIdentCode(src.charCodeAt(q))) q++;
+      r = nextIdx(q);
+    }
+    if (r < 0) return false;
+    if (src.charCodeAt(r) === 40 /* ( */) return methodTail(r);
+    if (kind === 'method') return false;
+    // A class FIELD. `=` only when it is the assignment, not `==`/`=>`.
+    return enc === 'class' && (src.charCodeAt(r) === 59 || src.charCodeAt(r) === 125
+      || (src.charCodeAt(r) === 61 && src.charCodeAt(r + 1) !== 61 && src.charCodeAt(r + 1) !== 62));
+  }
 
   for (i = 0; i < n; i++) {
     if (!mask[i]) continue;
@@ -600,7 +669,7 @@ function propertyNames(src, mask) {
       // `let t = s.session, l: l = ...` — a SyntaxError. Measured on the real linux-x64 group.
       if (classPending) { stack.push('class'); classPending = false; blockPending = false; continue; }
       if (blockPending) { stack.push('block'); blockPending = false; continue; }
-      stack.push(braceKind(prevIdx(i - 1)));
+      stack.push(braceKind(prevIdx(i - 1), i));
       continue;
     }
     blockPending = false; // only the token IMMEDIATELY after the clause's `:` can be its body
@@ -716,8 +785,48 @@ function propertyNames(src, mask) {
         // no engine parses. Excluded on purpose: `(` (the member is NAMED `get`), `:` (a
         // property key, already protected above), `,`/`}`/`=`/`;` (a member named `static`, or
         // a shorthand entry) — every position where the word is a name rather than a modifier.
+        //
+        // THREE MORE POSITIONS, same idea, measured on the same corpus (2026-09-22): a
+        // modifier at a member-start position followed by `[`, `*` or `{` is fixed syntax
+        // too, and the pinned 2.1.251 carve holds 42 + 28 + 17 of them in CODE POSITION,
+        // MASK 1, none protected. Two are already inside MERGED groups — `__clode-scc-2.js`
+        // holds 16 `get[__m1_yt](){…}` getters and `__clode-scc-1.js` holds 2 `async*`
+        // members AND declares top-level `var get` / `var set` — so only which module landed
+        // in which group is keeping this from breaking. `node --check` on each renamed form:
+        // `__m0_get[Symbol.toStringTag](){` -> "Unexpected token '['", `__m0_async*g(){` ->
+        // "Unexpected token '*'", `__m0_static{` -> "Unexpected token '{'".
+        //
+        // Each carries its OWN confirmation rather than trusting the brace classification
+        // that got us here, because `[` and `*` are also ordinary operators: `get[0]` and
+        // `get*2` are real expressions, and a brace this file misclassifies as an object (the
+        // labelled-block gap `propertyNames`' own comment names) would otherwise refuse to
+        // rename a genuine binding — the silent direction. `memberNameTail` is that
+        // confirmation: nothing that parses as an expression ends in `(…){` or, in a class
+        // body, a field's `= ; }`.
+        //
+        // `get*`/`set*` are DECLINED, and not for lack of nerve: a getter or a setter can
+        // never be a generator, so `get*` in a member position is not grammar this fix could
+        // be protecting — it is multiplication, and protecting it could only ever refuse a
+        // real rename. `*` is therefore reached only from `async` and `static`, the two
+        // modifiers a generator may actually carry. The previous pass declined the star
+        // wholesale on that reasoning; it is right about `get*` and wrong about `async*`.
+        var pn = -1;                                    // where the member NAME would begin
         if (end - i < 7 && MEMBER_MODIFIER.has(src.slice(i, end))
-            && (isIdentStartCode(nc) || nc === 35 /* # */)) {
+            && (
+              (isIdentStartCode(nc) || nc === 35 /* # */)
+              || (nc === 91 /* [ */ && memberNameTail(ni, enc, 'any'))
+              || (nc === 42 /* * */
+                  && (src.slice(i, end) === 'async' || src.slice(i, end) === 'static')
+                  && (pn = nextIdx(ni + 1)) >= 0 && memberNameTail(pn, enc, 'method'))
+              // `static{…}` — a class static-initialization block. There is no tail to
+              // confirm and none is needed: the body of a class holds members and nothing
+              // else, so `static` followed by `{` in one is the block form every time. The
+              // `enc === 'class'` test is the whole confirmation, which is why this one
+              // position is not extended to an object literal (where `static{` is not
+              // grammar) or to a `block` (where it would be an ASI-separated reference and a
+              // bare statement — a shape a minifier does not emit and this must not guess at).
+              || (nc === 123 /* { */ && enc === 'class' && src.slice(i, end) === 'static')
+            )) {
           markSpan(keys, i, end - i);
           i = end - 1;
           continue;
@@ -785,6 +894,16 @@ function expandCollidingShorthand(src, renamed) {
 // (\`extends\` follows the renamed CLASS NAME: \`class __m11_a9e extends Error {}\`.)
 var WORD_AFTER_BINDING = new Set(['in', 'instanceof', 'of', 'as', 'from', 'extends']);
 
+// Derived from MEMBER_MODIFIER, not restated: a fifth modifier word added there is covered by
+// check (c) below without a second edit. (Set has no .join, and this file is ES5-shaped.)
+var MEMBER_MODIFIER_ALT = (function () {
+  var out = [];
+  MEMBER_MODIFIER.forEach(function (w) { out.push(w); });
+  return out.join('|');
+}());
+var RENAMED_MODIFIER_RE = new RegExp(
+  '(?<![A-Za-z0-9_$.])__m\\d+_(' + MEMBER_MODIFIER_ALT + ')[ \\t]*([*\\[{])', 'g');
+
 function assertNoRenamedFixedNames(mergedSource, groupIndex) {
   var mask = lexicalCodeMask(mergedSource);
   var m, n = mergedSource.length;
@@ -822,7 +941,82 @@ function assertNoRenamedFixedNames(mergedSource, groupIndex) {
       + '`. That is a fixed NAME, not a binding reference: the merged module would silently read '
       + 'and write the wrong property. propertyNames() failed to protect it.');
   }
+
+  // (c) A MEMBER MODIFIER IN FRONT OF A NON-IDENTIFIER MEMBER NAME. (b) sees a modifier only
+  // when whitespace and another identifier follow it, which is `static __m0_get rules(){`. It
+  // is blind to the three shapes where the member name is not a plain identifier —
+  // `__m0_get[Symbol.toStringTag](){`, `__m0_async*iterPages(){`, `__m0_static{…}` — and all
+  // three are live in the pinned carve, two of them inside ALREADY-MERGED groups. Each emits a
+  // SyntaxError under node and QuickJS alike, so if propertyNames() ever stops protecting one,
+  // the build must say so here rather than at the compile step three tools downstream.
+  //
+  // NARROWED TO THE MODIFIER WORDS, unlike (b), and that is not timidity: `__m0_x[0]` and
+  // `__m0_x*2` are perfectly ordinary renamed-binding code, so an unrestricted reading of `[`
+  // or `*` would fail the build on correct merges. The one thing that is never ordinary is a
+  // renamed token whose ORIGINAL name was a member modifier sitting in front of something
+  // shaped like a member. The word list is MEMBER_MODIFIER itself, so a fifth modifier added
+  // there is covered here without a second edit.
+  RENAMED_MODIFIER_RE.lastIndex = 0;
+  while ((m = RENAMED_MODIFIER_RE.exec(mergedSource))) {
+    if (!mask[m.index]) continue;
+    var punct = m[2];
+    var after = m.index + m[0].length;      // the byte just past `*`, `[` or `{`
+    if (!fixedMemberShape(mergedSource, mask, punct, after, m[1])) continue;
+    throw new Error('scc-merge: group ' + groupIndex + ' renamed ' + m[0].slice(0, -1)
+      + ' into a member-modifier position — `'
+      + mergedSource.slice(Math.max(0, m.index - 40), m.index + m[0].length + 30)
+      + '`. A `' + m[1] + '` in front of a computed name, a generator star or a class '
+      + 'static-initialization block is fixed syntax, not a binding reference: the merged '
+      + 'module does not parse in ANY engine. propertyNames() failed to protect it.');
+  }
   return n;
+}
+
+// Is what follows the modifier shaped like a MEMBER and not like an expression? Deliberately a
+// second, independent reading of the text — no brace kinds, no enclosure stack — so a regression
+// in propertyNames()'s classifier cannot hide here too.
+//   `[ … ] ( … ) {`   a computed method name        (an expression can never have that shape)
+//   `* name ( … ) {`  a generator method            (ditto)
+//   `{`               a class static-init block, for `static` only
+function fixedMemberShape(src, mask, punct, after, word) {
+  var n = src.length, r;
+  function skipWs(p) {
+    while (p < n && mask[p] && isAsciiWsCode(src.charCodeAt(p))) p++;
+    return (p < n && mask[p]) ? p : -1;
+  }
+  // Byte just past the bracket run opened at `p`, skipping masked (string/comment/regex) bytes.
+  function balancedEnd(p) {
+    var d = 0, q, ch;
+    for (q = p; q < n; q++) {
+      if (!mask[q]) continue;
+      ch = src.charAt(q);
+      if (ch === '[' || ch === '(' || ch === '{') d++;
+      else if (ch === ']' || ch === ')' || ch === '}') { d--; if (!d) return q + 1; }
+    }
+    return -1;
+  }
+  function paramsThenBody(p) { // p = the `(` of a parameter list
+    if (p < 0 || src.charAt(p) !== '(') return false;
+    var e = balancedEnd(p);
+    if (e < 0) return false;
+    var b = skipWs(e);
+    return b >= 0 && src.charAt(b) === '{';
+  }
+  if (punct === '{') return word === 'static';
+  if (punct === '[') return paramsThenBody(skipWs(balancedEnd(after - 1)));
+  // `*` — only `async` and `static` may carry a generator star; `get*`/`set*` is multiplication.
+  if (word !== 'async' && word !== 'static') return false;
+  r = skipWs(after);
+  if (r < 0) return false;
+  if (src.charCodeAt(r) === 91 /* [ */) {
+    r = skipWs(balancedEnd(r));
+  } else {
+    if (src.charCodeAt(r) === 35 /* # */) r++;
+    if (!isIdentStartCode(src.charCodeAt(r))) return false;
+    while (r < n && mask[r] && isIdentCode(src.charCodeAt(r))) r++;
+    r = skipWs(r);
+  }
+  return paramsThenBody(r);
 }
 
 // ONE-ENTRY MEMO, worth roughly three quarters of all the masking work. mergeGroup routes ~20
