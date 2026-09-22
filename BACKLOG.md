@@ -8,6 +8,47 @@ Concrete clode-under-Node divergences from native Claude Code, to triage and fix
 That page is GENERATED from `scripts/build-graph.cjs` — the one declaration of the build — so it
 cannot drift from it; it is also where the honest answer to "does this need node?" lives.
 
+## The SCC merger's mask: four residuals recorded, not fixed (2026-09-22)
+
+Filed out of the review of `0689837..a41df80` and the fix pass that followed it. None is
+release-blocking; all four are ways `libexec/scc-merge.cjs` can be wrong that nothing
+currently watches. The merger has no AST — every brace classification is a heuristic with a
+stated safe direction — so these are the places where the safe direction is not available.
+
+- **An escaped BINDING never renames, while plain references to it still do.**
+  `lexicalCodeMask` now masks an escaped IdentifierName 0 in full, which is right (the engine
+  reports bindings by VALUE, `µs`, never by the escaped spelling, so no whole-token rename was
+  ever possible). The residual: `var \u0075=1;console.log(u)` leaves the DECLARATION verbatim
+  and the reference renameable, so a collision moves the reference and strands the declaration.
+  Strictly better than the old garbage output, and there is no live exposure — all 55 escape
+  sites in the pinned 2.1.251 carve are property keys — but nothing gates it, and
+  `assertNoRenamedFixedNames` cannot see this direction at all (it only catches names the
+  merger DID rename).
+
+- **A labelled block as the first statement of a block reads as an object, and the member-modifier
+  rule now fires inside it.** `function f(){lbl:{get in x}}` masks `get` 0 where `6032f77`
+  masked it 1: if `get` collides, the declaration renames, this reference does not, and the
+  merged module parses and reads the wrong binding — the silent class. This is the ONE false
+  protection the whole member-modifier change can produce. Zero occurrences in the pinned
+  corpus (measured). The three rules added on 2026-09-22 each carry a tail confirmation
+  (`[…](…){`, `*name(…){`, `static{` in a class body only) specifically so they do NOT
+  inherit it; the original modifier+identifier rule has no tail to confirm and does.
+
+- **The merger's five renameable-position guards SKIP in CI.** `read()` resolves
+  `~/.cache/clode/<pin>/graph.json`, which is absent on a fresh runner, so all five are
+  dev-box gates. That is the established pattern (`test/build-gates/dep-closure-gates.test.cjs`
+  does the same) and not a new deficiency — but the release gate IS CI, and in CI these guards
+  measure nothing. Either stage the pinned carve on one leg, or accept it in writing.
+
+- **A generator member's NAME is still unprotected**, one token past the modifier that now is.
+  `async*iterPages(){}` protects `async`; `iterPages` stays renameable, because the member-start
+  walk stops at the `*`. Same for `class C{*m(){}}`. That is the silent-wrong-property class,
+  not a syntax error. Deliberately out of scope for the 2026-09-22 pass: the obvious rule
+  ("an identifier after a `*` is a member name") is catastrophically wrong — the pinned corpus
+  has 361 `*name(` sites at mask 1 and most are `function*name(){}` DECLARATIONS that must
+  rename. The correct rule walks the modifier chain back across the star to a member boundary;
+  it needs its own measured pass.
+
 ## The carve gate refused nine platforms it can never be satisfied on (2026-09-21)
 
 The 2026-09-04 carve refusal is right: Bun folds `process.platform` at carve time, and a
