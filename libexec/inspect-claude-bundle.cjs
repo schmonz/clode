@@ -78,7 +78,74 @@ const KNOWN_BUN = new Set([
   // must stay ABSENT so the guard skips it), isStandaloneExecutable (feature-detect
   // via `===true`; shim provides an honest `false`).
   'TOML', 'WebView', 'isStandaloneExecutable',
+  // Reviewed 2026-09-22 against the 2.1.278 carve, all four real Bun members
+  // that the UNRECOGNIZED bucket was hiding (see gateProblems below for why
+  // that bucket is no longer silent):
+  //   sliceAnsi            NEW in 2.1.278; Ink's text truncation. IMPLEMENTED
+  //                        (bun-shim, npm slice-ansi). Its absence is what made
+  //                        the 2.1.278 TUI paint zero printable cells.
+  //   unsafe               NEW in 2.1.278; Bun.unsafe.setJITPolicy?.(). Provided
+  //                        as an EMPTY namespace on purpose (see bun-shim).
+  //   zstdDecompress(Sync) present since <=2.1.251; reads an embedded text asset
+  //                        ONLY when it starts with the zstd magic 28 B5 2F FD,
+  //                        and quaude's assets are loose uncompressed files, so
+  //                        the branch is unreachable. Accepted-missing below.
+  // Bun.Image is deliberately NOT here even though it is equally real: it is
+  // referenced by 2.1.210/215/218 too, so moving it out of `unrecognized` would
+  // rewrite three committed golden --json shas for no behavioural gain. It is
+  // accepted by name in ACCEPTED_UNRECOGNIZED_BUN instead, with the same review.
+  'sliceAnsi', 'unsafe', 'zstdDecompress', 'zstdDecompressSync',
 ]);
+
+// ---- Bun.ant: the SECOND level, because the first level cannot see the drift ----
+//
+// `Bun.ant` is Anthropic's own private Bun namespace, and the coverage gate above
+// reasons about `Bun.<member>` ONLY — so as far as it is concerned there is one
+// fact to know about ant, "missing, accepted". That acceptance was a MEASUREMENT,
+// taken 2026-07-27 against a bundle whose ant surface was getPeerUid / getPeerPid /
+// memoryPressureLevel: three syscall probes, each guarded, each of which upstream
+// handles being absent. Deliberately absent was the right answer for that surface.
+//
+// Upstream changed the surface under it. 2.1.278 DROPPED getPeerUid/getPeerPid/
+// memoryPressureLevel from the bundle and ADDED `Bun.ant.CellSegmenter`, the native
+// grapheme->terminal-cell segmenter Ink's screen model is built on — and unlike the
+// probes, upstream does NOT tolerate its absence: it throws "This build of
+// @anthropic-ai/bun-internal has no Bun.ant.CellSegmenter" from the render root. A
+// quaude built from 2.1.278 therefore boots, writes its alternate-screen escapes,
+// throws that on the first frame and vanishes, and the one-level gate said nothing,
+// because "Bun.ant (missing)" was still accepted and still true.
+//
+// So: track the members, not just the namespace. Each accepted member below records
+// WHY its absence is survivable, in the bundle's own terms; anything not listed is a
+// finding. The regex takes `Bun.ant.x` and `Bun.ant?.x` and nothing else — a bare
+// /\bant\.\w+/ matches `participant.custom` and a hundred minified locals (measured:
+// 15 false hits for `ant.custom` alone on 2.1.278).
+const BUN_ANT_API = /\bBun\.ant\??\.([A-Za-z_$][A-Za-z0-9_$]*)/g;
+const KNOWN_BUN_ANT = new Map([
+  ['getPeerUid', 'SO_PEERCRED/LOCAL_PEERCRED on a UDS. Upstream gates the whole '
+    + 'peer-credential capability on `typeof Bun.ant?.getPeerPid === "function"`, so '
+    + 'absent is the answer that turns the capability off cleanly. Do NOT stub it.'],
+  ['getPeerPid', 'the same capability probe as getPeerUid; see bun-shim\'s Bun.ant note.'],
+  ['memoryPressureLevel', 'macOS memory-pressure level; read for telemetry, absence is '
+    + 'a missing datapoint and nothing else.'],
+  ['waitForUrlEvent', 'macOS claude-cli:// deep-link handoff. Called only when '
+    + '__CFBundleIdentifier is the Claude app bundle (so never under quaude) and wrapped '
+    + 'in try/catch returning null.'],
+]);
+
+// Every Bun.ant.<member> the bundle references, deduplicated, in source order of
+// first appearance made stable by sorting.
+function bunAntMembers(data) {
+  const out = new Set();
+  for (const m of data.matchAll(BUN_ANT_API)) out.add(m[1]);
+  return [...out].sort();
+}
+
+// The members with no recorded review. A finding here means upstream grew a new
+// private-namespace dependency and nobody has said what happens without it.
+function unaccountedBunAnt(members) {
+  return members.filter((k) => !KNOWN_BUN_ANT.has(k));
+}
 
 const KNOWN_SEARCH_APPLETS = new Set(['ugrep', 'bfs']);
 const SEARCH_APPLET = /[A-Za-z_$][\w$]*\("[a-z][a-z0-9_+-]{0,15}","([a-z][a-z0-9_+-]{1,15})",\["-/g;
@@ -588,13 +655,43 @@ const ACCEPTED_STUBBED_BUN = new Set(['serve', 'listen', 'file', 'write', 'Termi
 // guarded (try/catch, null fallback). WebView: feature-detected via `"WebView" in
 // Bun` — must stay ABSENT so the guard skips it (adding it would flip the detect
 // and try to call the stub). All safe to leave unimplemented.
-const ACCEPTED_MISSING_BUN = new Set(['SQL', 'ant', 'WebView']);
+const ACCEPTED_MISSING_BUN = new Set(['SQL', 'ant', 'WebView',
+  // zstdDecompress/zstdDecompressSync: the ONE call site reads an embedded text
+  // asset and only decompresses when the bytes start with the zstd magic
+  // (28 B5 2F FD) -- `(s(r) ? await Bun.zstdDecompress(r) : r).toString("utf8")`.
+  // quaude's assets are loose, uncompressed files, so the guard is false and the
+  // call is unreachable. If upstream ever ships zstd-compressed assets this stops
+  // being true, and [[upstream-deps-become-our-deps]] says the answer is then a
+  // host-provisioned zstd, not a vendored one.
+  'zstdDecompress', 'zstdDecompressSync']);
+
+// UNRECOGNIZED Bun.* members that are NOT a gate problem, each with the review
+// that says why. Anything not named here fails --strict: see gateProblems().
+const ACCEPTED_UNRECOGNIZED_BUN = new Set([
+  // Image: real Bun API, referenced since at least 2.1.210. Clipboard entry
+  // points (Bun.Image.hasClipboardImage / fromClipboard) are both inside
+  // try/catch with false/null fallbacks, so absence reads as "no image paste
+  // here", which is the honest answer for a host with no image codecs. Kept out
+  // of KNOWN_BUN only to avoid rewriting the 2.1.210/215/218 golden --json shas.
+  'Image',
+]);
 const ACCEPTED_BUN_MODULES = new Set(['bun:jsc']);
 
 function gateProblems(cov) {
   let p = [];
   p = p.concat(cov.stubbed.filter((k) => !ACCEPTED_STUBBED_BUN.has(k)).map((k) => `Bun.${k} (stubbed)`));
   p = p.concat(cov.missing.filter((k) => !ACCEPTED_MISSING_BUN.has(k)).map((k) => `Bun.${k} (missing)`));
+  // UNRECOGNIZED USED TO BE SILENT, AND THAT IS HOW 2.1.278 SHIPPED A DEAD TUI.
+  // This bucket is "a Bun.<member> the bundle references that KNOWN_BUN has never
+  // heard of" -- which is the exact shape of upstream adopting a NEW Bun API, the
+  // one case this whole gate exists to catch. It was excluded from the gate as
+  // "new API or minifier noise", so on the 2.1.278 carve `--strict` reported only
+  // Bun.sleepSync while Bun.sliceAnsi and Bun.unsafe sat in the quiet bucket. Both
+  // were real, both were load-bearing, and the first of them cost a four-hour hunt
+  // that started from "the TUI emits 518 bytes and not one printable cell".
+  // Noise is the exception now, named one member at a time, not the default.
+  p = p.concat(cov.unrecognized.filter((k) => !ACCEPTED_UNRECOGNIZED_BUN.has(k))
+    .map((k) => `Bun.${k} (unrecognized -- a Bun API this gate has never been told about)`));
   p = p.concat(cov.bun_modules_unhandled.filter((m) => !ACCEPTED_BUN_MODULES.has(m)).map((m) => `${m} (bun: module unhandled)`));
   p = p.concat(cov.modules_missing.filter((m) => !ACCEPTED_MISSING_EXTERNALS.has(m)).map((m) => `${m} (external require MISSING)`));
   p = p.concat((cov.search_applets_unknown || []).map((a) => `${a} (search applet unhandled)`));
@@ -876,12 +973,14 @@ module.exports = {
   MARKER, BUN_API, BUN_MOD, REQ_ANY, ASSET, JSON_TXT, SEARCH_APPLET,
   KNOWN_BUN, KNOWN_SEARCH_APPLETS, NATIVE_FEATURES, HANDLED_BUN_MODULES,
   ACCEPTED_MISSING_EXTERNALS, ACCEPTED_STUBBED_BUN, ACCEPTED_MISSING_BUN, ACCEPTED_BUN_MODULES,
+  ACCEPTED_UNRECOGNIZED_BUN,
   count, countSubstr, searchApplets, unknownSearchApplets, ripgrepLeverPresent,
   doctorHookAnchorPresent, snapshotGeneratorPresent, autoupdaterHookAnchorPresent,
   nativeAutoupdaterHookAnchorPresent, legacyAutoupdaterHookAnchorPresent, manualUpdateHookAnchorPresent,
   updateNoticeHookAnchorPresent, remoteControlHookAnchorPresent,
   embeddedAppletVersions, hostAppletVersion, which, featureForAsset,
   inspect, probeShim, gateProblems, coverage,
+  BUN_ANT_API, KNOWN_BUN_ANT, bunAntMembers, unaccountedBunAnt,
   humanSurface, humanApplets, humanCoverage,
 };
 

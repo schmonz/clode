@@ -968,7 +968,15 @@ function isRecordedProductionGateExclusion(rel) {
 // someone seeing it". Some of the 30 are certainly false positives under a classifier with
 // no input half (see classifyProductionFile above); each one that is confirmed by hand
 // becomes a PRODUCTION_GATE_EXCLUSIONS entry with a reason and the baseline drops.
-const UNCONTROLLED_GATE_BASELINE = 29;
+//   28  2026-09-22 — libexec/inspect-claude-bundle.cjs gained a control. It was gate-shaped
+//       from the day it was written (`--strict` derives a verdict from a carved bundle and
+//       refuses) and uncontrolled for just as long, and the half that had gone stale is the
+//       one that cost the most: `Bun.ant` sat in ACCEPTED_MISSING_BUN on a 2026-07-27
+//       measurement of its MEMBERS, upstream 2.1.278 swapped those members for
+//       `Bun.ant.CellSegmenter` — which upstream does NOT tolerate being absent — and the
+//       gate stayed green because the accepted sentence was still true about the NAME.
+//       test/build-gates/bun-ant-surface-gate.test.cjs controls the level below the name.
+const UNCONTROLLED_GATE_BASELINE = 28;
 
 // GATE_SHAPED_FLOOR — the OTHER half of the ratchet, and the reason a fall can be trusted.
 // FIX ROUND 1 (reviewer, 2026-09-12): the uncontrolled count alone cannot tell "someone wrote

@@ -20,6 +20,8 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
+const { gateProblems } = require('../libexec/inspect-claude-bundle.cjs');
+
 const REPO = path.resolve(__dirname, '..');
 const EXTRACT = path.join(REPO, 'libexec', 'extract-claude-js.cjs');
 const INSPECT = path.join(REPO, 'libexec', 'inspect-claude-bundle.cjs');
@@ -45,4 +47,41 @@ test('API-surface gate: inspect --strict --shim is clean on the provider', (t) =
     'inspect --strict flagged unaccounted bundle surface (upstream API drift?). '
     + 'Review + implement/stub/accept each item (see this file\'s header):\n'
     + `${r.stdout}\n${r.stderr}`);
+});
+
+// ---------------------------------------------------------------------------
+// PROOF THE GATE CAN FAIL ON THE THING IT WAS BLIND TO.
+//
+// Until 2026-09-22 `gateProblems()` ignored `cov.unrecognized` entirely — the
+// bucket holding every `Bun.<member>` the bundle references that KNOWN_BUN has
+// never heard of, which is precisely the shape of upstream adopting a NEW Bun
+// API. On the real 2.1.278 carve that bucket held Bun.sliceAnsi and Bun.unsafe;
+// `--strict` reported neither, and the resulting quaude's interactive TUI painted
+// zero printable cells while every `-p` check stayed green.
+//
+// The gate test above can only run where a provider binary exists, so on its own
+// it proves nothing about the code here on a box without one. These two do: a
+// coverage report carrying one unrecognized member MUST produce a finding, and an
+// accepted one MUST NOT. Feed them a KNOWN-BAD input and watch it go red — that is
+// the whole contract (test/guard.cjs).
+const EMPTY_COV = {
+  implemented: [], stubbed: [], missing: [], unrecognized: [],
+  bun_modules_unhandled: [], modules_missing: [], modules_host_stub: [],
+  disabled_native_features: [], search_applets_unknown: [],
+};
+
+test('gate control: an UNRECOGNIZED Bun member is reported (Bun.sliceAnsi, 2.1.278)', () => {
+  const problems = gateProblems({ ...EMPTY_COV, unrecognized: ['sliceAnsi'] });
+  assert.ok(problems.some((p) => p.startsWith('Bun.sliceAnsi')),
+    `gateProblems ignored an unrecognized Bun member — the gate is blind again: ${JSON.stringify(problems)}`);
+});
+
+test('gate control: a reviewed UNRECOGNIZED member is not reported (Bun.Image)', () => {
+  const problems = gateProblems({ ...EMPTY_COV, unrecognized: ['Image'] });
+  assert.deepStrictEqual(problems, [],
+    'Bun.Image carries a written review in ACCEPTED_UNRECOGNIZED_BUN and must not be a finding');
+});
+
+test('gate control: an empty coverage report is clean (the check is not always-red)', () => {
+  assert.deepStrictEqual(gateProblems({ ...EMPTY_COV }), []);
 });

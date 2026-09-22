@@ -539,9 +539,20 @@ test('the controlled set is EXACTLY the modules a guard was deliberately written
   // test/build-gates/carve-probe-gates.test.cjs controls both of its refusals — an
   // unreadable recorded expectation, and a comparator that has lost one of its two
   // directions — which returned the count to 29. The baseline did not move.
+  //
+  // libexec/inspect-claude-bundle.cjs ADDED 2026-09-22, and this one is a file that was
+  // gate-shaped all along: `--strict` derives a verdict from a carved bundle and refuses.
+  // It went uncontrolled for as long as it has existed, which is the whole point of the
+  // count. test/build-gates/bun-ant-surface-gate.test.cjs controls the half that had gone
+  // stale in the worst way — `Bun.ant` was ACCEPTED MISSING on a 2026-07-27 measurement of
+  // its members, upstream 2.1.278 replaced those members with `Bun.ant.CellSegmenter`,
+  // which upstream does NOT tolerate being absent, and the gate said nothing because the
+  // accepted sentence was still true about the NAME. Uncontrolled therefore falls to 28
+  // and the baseline moves with it; this is the ratchet doing the thing it is for.
   assert.deepStrictEqual([...controlledProductionModules().keys()].sort(), [
     'libexec/clode-build.cjs',
     'libexec/host-provision.cjs',
+    'libexec/inspect-claude-bundle.cjs',
     'libexec/scc-merge.cjs',
     'libexec/target-update-check.cjs',
     'scripts/build-graph.cjs',

@@ -45,7 +45,7 @@ test('coverage classifies implemented/stubbed/missing', () => {
 });
 
 test('yaml stub is accepted by strict gate', () => {
-  const cov = { stubbed: ['YAML'], missing: [], bun_modules_unhandled: [], modules_missing: [] };
+  const cov = { stubbed: ['YAML'], missing: [], unrecognized: [], bun_modules_unhandled: [], modules_missing: [] };
   assert.ok(!ins.gateProblems(cov).includes('Bun.YAML (stubbed)'));
 });
 
@@ -237,7 +237,7 @@ test('legacy autoupdater anchor present (raw + already-patched) and absent', () 
 
 test('gate_problems flags missing legacy autoupdater anchor', () => {
   const cov = {
-    stubbed: [], missing: [], bun_modules_unhandled: [], modules_missing: [],
+    stubbed: [], missing: [], unrecognized: [], bun_modules_unhandled: [], modules_missing: [],
     search_applets_unknown: [], ripgrep_lever_present: true,
     legacy_autoupdater_hook_anchor_present: false,
   };
@@ -265,7 +265,7 @@ test('manual update anchor present (raw + already-patched) and absent', () => {
 
 test('gate_problems flags missing manual update anchor', () => {
   const cov = {
-    stubbed: [], missing: [], bun_modules_unhandled: [], modules_missing: [],
+    stubbed: [], missing: [], unrecognized: [], bun_modules_unhandled: [], modules_missing: [],
     search_applets_unknown: [], ripgrep_lever_present: true,
     manual_update_hook_anchor_present: false,
   };
@@ -287,7 +287,7 @@ test('update notice anchor present (raw + already-patched) and absent', () => {
 
 test('gate_problems flags missing update notice anchor', () => {
   const cov = {
-    stubbed: [], missing: [], bun_modules_unhandled: [], modules_missing: [],
+    stubbed: [], missing: [], unrecognized: [], bun_modules_unhandled: [], modules_missing: [],
     search_applets_unknown: [], ripgrep_lever_present: true,
     update_notice_hook_anchor_present: false,
   };
@@ -323,7 +323,7 @@ test('remoteControlHookAnchorPresent: true on the 2.1.270 wrapped-reason gate', 
 
 test('gate_problems flags missing native autoupdater anchor', () => {
   const cov = {
-    stubbed: [], missing: [], bun_modules_unhandled: [], modules_missing: [],
+    stubbed: [], missing: [], unrecognized: [], bun_modules_unhandled: [], modules_missing: [],
     search_applets_unknown: [], ripgrep_lever_present: true,
     native_autoupdater_hook_anchor_present: false,
   };
@@ -332,7 +332,7 @@ test('gate_problems flags missing native autoupdater anchor', () => {
 
 test('gate_problems flags missing doctor anchor', () => {
   const cov = {
-    stubbed: [], missing: [], bun_modules_unhandled: [], modules_missing: [],
+    stubbed: [], missing: [], unrecognized: [], bun_modules_unhandled: [], modules_missing: [],
     search_applets_unknown: [], ripgrep_lever_present: true, doctor_hook_anchor_present: false,
   };
   assert.ok(ins.gateProblems(cov).some((p) => p.includes('/doctor')));
@@ -340,7 +340,7 @@ test('gate_problems flags missing doctor anchor', () => {
 
 test('gate_problems flags missing remote control anchor', () => {
   const cov = {
-    stubbed: [], missing: [], bun_modules_unhandled: [], modules_missing: [],
+    stubbed: [], missing: [], unrecognized: [], bun_modules_unhandled: [], modules_missing: [],
     search_applets_unknown: [], ripgrep_lever_present: true,
     remote_control_hook_anchor_present: false,
   };
@@ -349,7 +349,7 @@ test('gate_problems flags missing remote control anchor', () => {
 
 test('gate_problems includes unknown applet', () => {
   const cov = {
-    stubbed: [], missing: [], bun_modules_unhandled: [], modules_missing: [],
+    stubbed: [], missing: [], unrecognized: [], bun_modules_unhandled: [], modules_missing: [],
     search_applets_unknown: ['skim'], ripgrep_lever_present: true,
   };
   assert.ok(ins.gateProblems(cov).includes('skim (search applet unhandled)'));
@@ -357,7 +357,7 @@ test('gate_problems includes unknown applet', () => {
 
 test('gate_problems flags missing ripgrep lever', () => {
   const cov = {
-    stubbed: [], missing: [], bun_modules_unhandled: [], modules_missing: [],
+    stubbed: [], missing: [], unrecognized: [], bun_modules_unhandled: [], modules_missing: [],
     search_applets_unknown: [], ripgrep_lever_present: false,
   };
   assert.ok(ins.gateProblems(cov).some((p) => p.toLowerCase().includes('ripgrep')));
@@ -365,7 +365,7 @@ test('gate_problems flags missing ripgrep lever', () => {
 
 test('gate_problems clean for known applets and present lever', () => {
   const cov = {
-    stubbed: [], missing: [], bun_modules_unhandled: [], modules_missing: [],
+    stubbed: [], missing: [], unrecognized: [], bun_modules_unhandled: [], modules_missing: [],
     search_applets_unknown: [], ripgrep_lever_present: true,
   };
   assert.deepStrictEqual(ins.gateProblems(cov), []);
@@ -375,17 +375,23 @@ test('gate_problems returns unreviewed items', () => {
   const covBad = {
     stubbed: ['serve', 'newfeature'],
     missing: [],
+    // A Bun member KNOWN_BUN has never heard of is the shape of upstream adopting a
+    // new Bun API (2.1.278 did exactly this with Bun.sliceAnsi). It used to be
+    // silently dropped here; it is a finding now.
+    unrecognized: ['brandNewBunThing'],
     bun_modules_unhandled: [],
     modules_missing: ['undici', 'esbuild'],
   };
   const problems = ins.gateProblems(covBad);
   assert.ok(problems.includes('Bun.newfeature (stubbed)'));
+  assert.ok(problems.some((p) => p.startsWith('Bun.brandNewBunThing (unrecognized')));
   assert.ok(problems.includes('undici (external require MISSING)'));
-  assert.strictEqual(problems.length, 2);
+  assert.strictEqual(problems.length, 3);
 
   const covClean = {
     stubbed: [...ins.ACCEPTED_STUBBED_BUN],
     missing: [...ins.ACCEPTED_MISSING_BUN],
+    unrecognized: [...ins.ACCEPTED_UNRECOGNIZED_BUN],
     bun_modules_unhandled: [...ins.ACCEPTED_BUN_MODULES],
     modules_missing: [...ins.ACCEPTED_MISSING_EXTERNALS],
   };
