@@ -193,6 +193,31 @@ never gated).
 | 2026-08-21 | netbsd-arm64 | B4 | quaude | 2.1.218 | pass | floor-probe over ssh, driven against a quaude built from an engine compiled ON that guest from CURRENT sources (67 patches, incl. 906af8b's uid/gid) — SUPERSEDES the 2026-08-09 failing rows, which used a cached pre-906af8b engine whose FSS.stat omitted uid/gid and tripped the tmpdir-ownership guard: Write+Read+Edit+Grep+Bash chained in one agentic loop, file reads B4-EDITED on disk |
 | 2026-08-21 | netbsd-arm64 | D1 | quaude | 2.1.218 | pass | tui-probe over ssh -tt (scripts/tui-probe.mjs), driven against a quaude built from an engine compiled ON that guest from CURRENT sources (67 patches, incl. 906af8b's uid/gid) — SUPERSEDES the 2026-08-09 failing rows, which used a cached pre-906af8b engine whose FSS.stat omitted uid/gid and tripped the tmpdir-ownership guard: TUI booted, turn answered TUIPONG, /quit exited CLEANLY code 0 in 1096ms |
 | 2026-08-24 | haiku-x64 | G7 | quaude | unpinned | fail | WITHDRAWAL of the 2026-08-02 row above. The build-pipeline smoke that earns G7 under "What earns a row" #2 has not reached a PONG on any build since ~2026-08-02: the leg dies in guest package install, BEFORE any build/fuse/smoke, on 14+ consecutive identical `ci` runs (30730368429 was the last green; 32606247462, 32622574608, 32664058079 are three of the reds). `Refreshing repository "HaikuPorts" failed *** Failed to download package c_ares: Resource not found`. Cause is upstream and verified by direct HTTP probe, not inferred: Haiku deleted the r1beta5 HaikuPorts repo — https://eu.hpkg.haiku-os.org/haikuports/ lists only ["master"], the r1beta5 `repo` index serves a 2-byte `[]` (matching the log's "repochecksum-1 [2 bytes]") vs ~540KB for beta6/master, and the c_ares .hpkg 404s. NOTE the verdict: `fail` here means THE PIPELINE THAT EARNS THE ROW FAILS, not that a PONG ran and came back wrong — no turn executed at all. Recorded as `fail` because that is the verdict floorCoverage() understands, and revoking the claim is the honest outcome |
+| 2026-09-22 | darwin-arm64 | G7 | quaude | 2.1.278 | pass | CANDIDATE bundle, NOT the pin. floor-probe against a quaude built on this box from the 2.1.278 provider with the fixes below (Bun.unsafe, crypto.randomInt): -p exit 0, PONG, POST landed. Read this block together with the 2.1.251 block underneath it, which is the bundle clode actually ships today and which therefore decides this run-target's derived coverage |
+| 2026-09-22 | darwin-arm64 | B1 | quaude | 2.1.278 | pass | CANDIDATE bundle. floor-probe: Bash tool_result carried FLOOR-BASH-OK |
+| 2026-09-22 | darwin-arm64 | C1 | quaude | 2.1.278 | pass | CANDIDATE bundle. floor-probe: Write wrote 15 bytes, content exact |
+| 2026-09-22 | darwin-arm64 | A1 | quaude | 2.1.278 | pass | CANDIDATE bundle. floor-probe: config non-zero, parses, onboarding + project trust survive a relaunch |
+| 2026-09-22 | darwin-arm64 | B4 | quaude | 2.1.278 | pass | CANDIDATE bundle. floor-probe: Write+Read+Edit+Grep+Bash chained in one agentic loop, file reads B4-EDITED on disk |
+| 2026-09-22 | darwin-arm64 | D1 | quaude | 2.1.278 | fail | CANDIDATE bundle, and THE FINDING OF THIS DRIVE: the interactive TUI PAINTS NOTHING. tui-probe (node-pty, canned mock): the process enters the alternate screen, sets its title, runs the turn (two POSTs landed on /messages), and /quit exits code 0 — but emits ZERO printable cells, 518 bytes of pure control sequences. NATIVE 2.1.278 under the IDENTICAL harness paints normally and passes, so by the RECIPE's localization rule this is ours (engine / node-shim), not upstream. This state is AFTER two shim fixes that this drive found and landed; before them the same binary died at `Bun.unsafe.setJITPolicy` ("An internal error ended the session") and then hung with the render root never constructed. The remaining divergence is NOT the X1 tty knobs (CLODE_TTY_MOUSE=1 CLODE_TTY_FOCUS=1: same result) and NOT the fullscreen lever (CLAUDE_CODE_NO_FLICKER=1: same result). Next suspect, from the guest's debug log: 2.1.278 added a terminal-capability handshake (XTVERSION `CSI > 0 q`, kitty-keyboard `CSI ? u`, DA1 `CSI c`) whose no-reply fallback native survives and quaude does not |
+| 2026-09-22 | netbsd-arm64 | G7 | quaude | 2.1.278 | pass | CANDIDATE bundle, NOT the pin. floor-probe over ssh to the live NetBSD 11.0_RC2 evbarm guest, against a quaude cross-blobulated here onto an engine compiled ON that guest from current sources TODAY: -p exit 0, PONG, POST landed |
+| 2026-09-22 | netbsd-arm64 | B1 | quaude | 2.1.278 | pass | CANDIDATE bundle. floor-probe over ssh: Bash tool_result carried FLOOR-BASH-OK |
+| 2026-09-22 | netbsd-arm64 | C1 | quaude | 2.1.278 | pass | CANDIDATE bundle. floor-probe over ssh: Write wrote 15 bytes, content exact |
+| 2026-09-22 | netbsd-arm64 | A1 | quaude | 2.1.278 | pass | CANDIDATE bundle. floor-probe over ssh: config non-zero, parses, onboarding + project trust survive a relaunch |
+| 2026-09-22 | netbsd-arm64 | B4 | quaude | 2.1.278 | pass | CANDIDATE bundle. floor-probe over ssh: Write+Read+Edit+Grep+Bash chained in one agentic loop, file reads B4-EDITED on disk |
+| 2026-09-22 | netbsd-arm64 | D1 | quaude | 2.1.278 | fail | CANDIDATE bundle, and WORSE HERE THAN ON DARWIN: tui-probe over ssh -tt never reaches the alternate screen at all. The process sets the title, issues the three capability queries, gets no reply ("XTVERSION: no reply (terminal ignored query)"), shuts the LSP manager down, flushes telemetry and EXITS inside the boot window — no turn, no paint, 227 bytes of control sequences. Same binary passes all five headless floor rows on this guest, so this is interactive-only |
+| 2026-09-22 | darwin-arm64 | G7 | quaude | 2.1.251 | pass | THE PINNED BUNDLE, re-driven today so the ledger's derived coverage describes the artifact clode actually ships. Fresh quaude built on this box from the 2.1.251 provider with today's shim. floor-probe: -p exit 0, PONG, POST landed |
+| 2026-09-22 | darwin-arm64 | B1 | quaude | 2.1.251 | pass | PINNED BUNDLE, re-driven today. floor-probe: Bash tool_result carried FLOOR-BASH-OK |
+| 2026-09-22 | darwin-arm64 | C1 | quaude | 2.1.251 | pass | PINNED BUNDLE, re-driven today. floor-probe: Write wrote 15 bytes, content exact |
+| 2026-09-22 | darwin-arm64 | A1 | quaude | 2.1.251 | pass | PINNED BUNDLE, re-driven today. floor-probe: config non-zero, parses, onboarding + project trust survive a relaunch |
+| 2026-09-22 | darwin-arm64 | B4 | quaude | 2.1.251 | pass | PINNED BUNDLE, re-driven today. floor-probe: Write+Read+Edit+Grep+Bash chained in one agentic loop, file reads B4-EDITED on disk |
+| 2026-09-22 | darwin-arm64 | D1 | quaude | 2.1.251 | pass | PINNED BUNDLE, re-driven today. tui-probe (node-pty, canned mock): TUI booted, turn answered TUIPONG, /quit exited CLEANLY code 0 in 1424ms. This is the CONTROL that makes the 2.1.278 row above a finding about upstream's new bundle rather than about this box |
+| 2026-09-22 | netbsd-arm64 | G7 | quaude | 2.1.251 | pass | PINNED BUNDLE, re-driven today on the live NetBSD 11.0_RC2 evbarm guest. The engine was rebuilt ON that guest from current sources first (the 2026-08-21 engine still on the box is now REFUSED by `clode build`: it predates the constants ABI). floor-probe over ssh: -p exit 0, PONG, POST landed |
+| 2026-09-22 | netbsd-arm64 | B1 | quaude | 2.1.251 | pass | PINNED BUNDLE, re-driven today, engine rebuilt on the guest. floor-probe over ssh: Bash tool_result carried FLOOR-BASH-OK |
+| 2026-09-22 | netbsd-arm64 | C1 | quaude | 2.1.251 | pass | PINNED BUNDLE, re-driven today, engine rebuilt on the guest. floor-probe over ssh: Write wrote 15 bytes, content exact |
+| 2026-09-22 | netbsd-arm64 | A1 | quaude | 2.1.251 | pass | PINNED BUNDLE, re-driven today, engine rebuilt on the guest. floor-probe over ssh: config non-zero, parses, onboarding + project trust survive a relaunch |
+| 2026-09-22 | netbsd-arm64 | B4 | quaude | 2.1.251 | pass | PINNED BUNDLE, re-driven today, engine rebuilt on the guest. floor-probe over ssh: Write+Read+Edit+Grep+Bash chained in one agentic loop, file reads B4-EDITED on disk |
+| 2026-09-22 | netbsd-arm64 | D1 | quaude | 2.1.251 | pass | PINNED BUNDLE, re-driven today, engine rebuilt on the guest. tui-probe over ssh -tt: TUI booted, turn answered TUIPONG, /quit exited CLEANLY code 0 in 1079ms |
+| 2026-09-22 | netbsd-arm64 | F4 | quaude | 2.1.251 | pass | FIRST F4-CLASS ROW ON A NON-DARWIN RUN-TARGET, and the first evidence that the tier-2 blocker recorded as "trust-prompt freeze under iTerm2" does not reproduce here. Driven over ssh -tt with the project trust DELIBERATELY withheld from the seeded profile, so the real dialog appeared: "Quick safety check ... Is this a project you created or one you trust?" with "No, exit" preselected. A real Down arrow moved the selection to "Yes, I trust this folder" and a real Enter confirmed it; the dialog was replaced by the welcome box and the prompt, and the process did NOT exit. Keystrokes reach the read pump AND the input handler advances the prompt — which is exactly what F4 says must happen. NOTE what this row is not: it is not a run of F4 as literally written (that row is scoped `platform: iTerm2`, and there is no iTerm2 on NetBSD), it is the same ASSERTION driven on this run-target's own platform with real keystrokes |
 
 ## Attempted, not evidence
 
@@ -250,3 +275,34 @@ is exactly what the section-aware parse prevents.
 | 2026-08-04 | darwin-arm64 | F2 | quaude | 2.1.218 | fail | CONTAMINATED — Bash/Edit round-trip (real ~/.claude.json lock contention in the captured stderr) |
 | 2026-08-04 | darwin-arm64 | H3 | quaude | 2.1.218 | pass | CONTAMINATED — --continue; a pass from a contaminated run is not evidence either |
 | 2026-08-04 | darwin-arm64 | H7 | quaude | 2.1.218 | pass | CONTAMINATED — Workflow completion; same |
+
+## F3 is unrunnable as written — its repro no longer exists upstream (2026-09-22)
+
+An F3 drive was attempted on netbsd-arm64 and darwin-arm64 and produced **no row**,
+deliberately. Written down so the next person does not spend the same hour.
+
+RECIPE F3 is "a finished `/login`/`/doctor` lingers; repaint does not erase prior
+lines", and the committed worked example that guards it
+(`test/fidelity/stale-frames.pty.test.cjs`) anchors on `/doctor` opening a full-screen
+report whose footer reads **"Enter to close"**. In bundle 2.1.251 that report is gone:
+`/doctor` is now a **model-dispatched skill** ("Health-check the user's Claude Code setup
+and fix issues …"), so typing it and pressing Enter sends a normal turn to the model. No
+full-screen frame is opened, therefore nothing can linger, therefore the assertion is
+vacuous.
+
+MEASURED, not inferred, and localized the right way round: the same probe was run
+against the NATIVE 2.1.251 provider binary under the same pty, and native behaves
+IDENTICALLY — `/doctor` goes to the model in both. So this is upstream changing what
+`/doctor` is, not a quaude slash-dispatch divergence (H2 covers that and passes).
+
+Two consequences, neither of them "F3 passes":
+
+- The probe's first cut reported **PASS** here, from an `opened=true` that matched the
+  word "doctor" in the completion menu. A row that cannot fail is worth less than no
+  row; it was thrown away rather than recorded.
+- `test/fidelity/stale-frames.pty.test.cjs` asserts `assert.match(OPEN_SCREEN, /Enter to
+  close/)` BEFORE it checks the erase, so against a current bundle it should FAIL rather
+  than silently pass — but it is gated behind `CLODE_LIVE_RENDER=1` on darwin and is not
+  in the default suite, so nobody has seen it. Re-anchoring F3 on a full-screen surface
+  that still exists (the `/doctor`-shaped one is gone) is the work; until then F3 blocks
+  tier 2 on a symptom nothing can reproduce.

@@ -89,8 +89,12 @@ const LEGS = [
     // native tjs" entry (adds Edit). tier 2 stays unclaimed regardless: F3/F4
     // remain open per this leg's long-running daily-drive notes, so even a
     // clean floor wouldn't back the full recipe.
-    fidelity: { tier: 1, date: '2026-08-09', bundle: '2.1.218', how: 'primary-darwin',
-                note: 'floor 6/6 GREEN (A1,B1,B4,C1,D1,G7) — the first run-target to clear the floor. A1/B1/C1/G7 from scripts/floor-probe.mjs against a freshly built quaude; D1 from a real node-pty session (TUI booted, live mock turn answered, /quit exited code 0 in 1411ms). Tier 2 stays unclaimed: F3/F4 remain open per this leg daily-drive notes' } },
+    // RE-DRIVEN 2026-09-22 at the PINNED bundle against a freshly built quaude: same
+    // 6/6. The 2.1.278 candidate clears the five headless rows and FAILS D1 (the TUI
+    // enters the alternate screen and paints nothing), which is the reason the pin
+    // still has not moved — RESULTS.md carries the measurement and the localization.
+    fidelity: { tier: 1, date: '2026-09-22', bundle: '2.1.251', how: 'primary-darwin',
+                note: 'floor 6/6 GREEN (A1,B1,B4,C1,D1,G7) — the first run-target to clear the floor, re-driven 2026-09-22 at the pinned bundle. A1/B1/B4/C1/G7 from scripts/floor-probe.mjs against a freshly built quaude; D1 from a real node-pty session (TUI booted, mock turn answered, /quit exited code 0 in 1424ms). Tier 2 stays unclaimed, but for a different reason than before: F3 is unrunnable as written (its /doctor repro no longer exists upstream) and F4 has now passed on another run-target — see RESULTS.md. The 2.1.278 candidate FAILS D1 here' } },
   // glibc Linux: a CI-only CANARY (ciOnly:true → built in CI, filtered OUT of the
   // release tier; NB `smoke` is a different, taken field — the qemu-user smoke
   // MODE on the musl legs). The published Linux artifacts are musl-static
@@ -466,10 +470,18 @@ const LEGS = [
     // below it) had been spliced together mid-sentence and contradicted both the
     // tier-1 claim on this line and the ledger. Corrected 2026-08-24; the new
     // note is now GATED against the ledger by test/fidelity/fidelity-notes.test.cjs.
-    fidelity: { tier: 1, date: '2026-08-21', bundle: '2.1.218', how: 'netbsd-aarch64-spike-vm',
-                note: 'floor 6/6 GREEN (A1,B1,B4,C1,D1,G7) — re-driven 2026-08-21 against an '
-                      + 'engine rebuilt ON the guest from current sources, with the tmpdir-ownership '
-                      + 'guard armed. Tier 2 stays unclaimed — see RESULTS.md' } },
+    // RE-DRIVEN 2026-09-22 on the live NetBSD 11.0_RC2 guest, engine rebuilt there
+    // again (the 2026-08-21 engine is now REFUSED by `clode build` — it predates the
+    // constants ABI). Same 6/6 at the PINNED bundle. The candidate bundle 2.1.278
+    // clears the five headless rows here and FAILS D1; that is a finding about
+    // upstream's new TUI, recorded in RESULTS.md, and it is why the pin has not moved.
+    fidelity: { tier: 1, date: '2026-09-22', bundle: '2.1.251', how: 'netbsd-aarch64-spike-vm',
+                note: 'floor 6/6 GREEN (A1,B1,B4,C1,D1,G7) — re-driven 2026-09-22 against an '
+                      + 'engine rebuilt ON the guest from current sources, at the pinned bundle. '
+                      + 'F4 also driven here for the first time and PASSES (real keystrokes over '
+                      + 'a pty advance the trust prompt), so the iTerm2-scoped F4 is no longer '
+                      + 'this leg tier-2 blocker; F3 is unrunnable as written. The 2.1.278 '
+                      + 'candidate FAILS D1 — see RESULTS.md' } },
   { leg: 'freebsd-arm64', os: 'ubuntu-latest', 'guest-platform': 'freebsd', 'guest-arch': 'arm64',
     'guest-version': '14.4', 'guest-packages': 'cmake gmake node git bash', floor: '14.4',
     wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, timeout: 300, 'soft-fail': true,  // cpa, TCG
