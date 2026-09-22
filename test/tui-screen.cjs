@@ -40,6 +40,15 @@ const EXTRA_PROBES = [
 // exact; a byte >= 0x80 would need a Buffer write to stay faithful to the bytes.
 function parseArgs(argv) {
   const sends = []; const resizes = []; let rows = 40, cols = 100;
+  // --cells switches stdout from the ANSI-stripped text screen to a cell-level
+  // frame (JSON; see dumpCells). It takes no value, so it is lifted out before
+  // the value-flag loop below. Everything else is unchanged.
+  let cells = false;
+  {
+    const cut = argv.indexOf('--');
+    const at = argv.indexOf('--cells');
+    if (at !== -1 && (cut === -1 || at < cut)) { cells = true; argv = argv.slice(0, at).concat(argv.slice(at + 1)); }
+  }
   const FLAGS = ['--send-hex', '--then-hex', '--rows', '--cols', '--resize'];
   while (argv.length >= 2 && FLAGS.includes(argv[1])) {
     const v = argv[2];
@@ -60,14 +69,70 @@ function parseArgs(argv) {
   }
   sends.sort((a, b) => a[0] - b[0]);
   if (argv.length < 3 || argv[1] !== '--') {
-    process.stderr.write('usage: tui-screen.cjs SECONDS [--send-hex HEX] [--then-hex HEX@DELAY] [--resize COLSxROWS@DELAY] [--rows R --cols C] -- cmd ...\n');
+    process.stderr.write('usage: tui-screen.cjs SECONDS [--cells] [--send-hex HEX] [--then-hex HEX@DELAY] [--resize COLSxROWS@DELAY] [--rows R --cols C] -- cmd ...\n');
     process.exit(2);
   }
-  return { secs: parseFloat(argv[0]), cmd: argv.slice(2), sends, resizes, rows, cols };
+  return { secs: parseFloat(argv[0]), cmd: argv.slice(2), sends, resizes, rows, cols, cells };
+}
+
+// Cell-level frame capture. The text screen above answers "what words are on
+// screen"; it cannot answer "is this wide char's spacer in the right place",
+// "is this styled the same" or "is this the same hyperlink" — the three things
+// a cell segmenter can get wrong while the text stays identical. So --cells
+// emits every cell's glyph, its emulator-assigned width, its SGR attributes and
+// its OSC-8 target.
+//
+// Widths are the EMULATOR's: xterm gives the first half of a double-width
+// grapheme width 2 and its trailing half width 0 (an empty-string cell). That is
+// the outside-observable shadow of the screen model's narrow/wide/spacer words.
+//
+// OSC-8 has no public accessor in @xterm/headless 5.5, so it is read through two
+// internals: the buffer line's per-column `_extendedAttrs[x].urlId`, and the
+// core's `_oscLinkService.getLinkData(id).uri`. Both are feature-detected, and
+// when either is missing the frame records `links:false` so a comparison REFUSES
+// to claim it checked hyperlinks rather than silently passing.
+function dumpCells(term) {
+  const buf = term.buffer.active;
+  let osc = null;
+  try { osc = term._core && term._core._oscLinkService; } catch { osc = null; }
+  let links = !!(osc && typeof osc.getLinkData === 'function');
+  const rows = [];
+  for (let y = 0; y < term.rows; y++) {
+    const line = buf.getLine(y);
+    const row = [];
+    if (!line) { rows.push(row); continue; }
+    let ext = null;
+    try { ext = line._line && line._line._extendedAttrs; } catch { ext = null; }
+    if (!ext) links = false;
+    for (let x = 0; x < term.cols; x++) {
+      const cell = line.getCell(x);
+      if (!cell) { row.push({ c: '', w: 1, f: 'd:0', b: 'd:0', a: 0, l: null }); continue; }
+      const a = (cell.isBold() ? 1 : 0) | (cell.isItalic() ? 2 : 0) | (cell.isDim() ? 4 : 0)
+        | (cell.isUnderline() ? 8 : 0) | (cell.isBlink() ? 16 : 0) | (cell.isInverse() ? 32 : 0)
+        | (cell.isInvisible() ? 64 : 0) | (cell.isStrikethrough() ? 128 : 0) | (cell.isOverline() ? 256 : 0);
+      let l = null;
+      if (links) {
+        try {
+          const id = ext[x] && ext[x].urlId;
+          if (id) l = (osc.getLinkData(id) || {}).uri || null;
+        } catch { l = null; }
+      }
+      row.push({
+        c: cell.getChars(),
+        w: cell.getWidth(),
+        f: cell.getFgColorMode() + ':' + cell.getFgColor(),
+        b: cell.getBgColorMode() + ':' + cell.getBgColor(),
+        a,
+        l,
+      });
+    }
+    rows.push(row);
+  }
+  return { format: 'clode-frame-v1', cols: term.cols, rows: term.rows, links, cells: rows };
 }
 
 async function main() {
-  const { secs, cmd, sends, resizes, rows, cols } = parseArgs(process.argv.slice(2));
+  const { secs, cmd, sends, resizes, rows, cols, cells } = parseArgs(process.argv.slice(2));
   const term = new Terminal({ rows, cols, allowProposedApi: true });
   const child = pty.spawn(cmd[0], cmd.slice(1), { name: 'xterm-256color', cols, rows, env: process.env });
 
@@ -99,13 +164,28 @@ async function main() {
     process.stderr.write(`RAW tail: ${JSON.stringify(seen.slice(-160))}\n`);
   }
 
+  if (cells) { finish(JSON.stringify(dumpCells(term)) + '\n'); return; }
+
   const buf = term.buffer.active; const out = [];
   for (let i = 0; i < term.rows; i++) {
     const line = buf.getLine(i);
     out.push(line ? line.translateToString(true).replace(/\s+$/, '') : '');
   }
-  process.stdout.write(out.join('\n') + '\n');
-  process.exit(0);
+  finish(out.join('\n') + '\n');
+}
+
+// Write the result, THEN exit — never the other way round. stdout to a pipe is
+// asynchronous, so `write(); process.exit(0)` silently truncates at the pipe
+// buffer (64 KiB). A --cells frame is far bigger than that, and a truncated
+// frame is the worst possible failure for a differential harness: it looks like
+// a real capture that happens to differ. The exit waits for the flush callback,
+// with a timer so a wedged pipe still terminates rather than hanging the test.
+function finish(text) {
+  let done = false;
+  const bye = (code) => { if (!done) { done = true; process.exit(code); } };
+  const timer = setTimeout(() => bye(3), 10000);
+  timer.unref();
+  process.stdout.write(text, () => bye(0));
 }
 // Honor the "Exit 0 always" contract even if pty.spawn/setup throws: fail loud
 // with a nonzero exit rather than crashing on an unhandled rejection.

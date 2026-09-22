@@ -63,6 +63,7 @@ function seedClaudeProfile(home, opts = {}) {
 // the absolute program to run under the PTY (e.g. a built quaude, or a native binary).
 function capture(sbx, opts) {
   const args = [String(opts.seconds)];
+  if (opts.cells) args.push('--cells');
   if (opts.sendHex) args.push('--send-hex', opts.sendHex);
   for (const th of opts.thenHex || []) args.push('--then-hex', th);
   for (const rz of opts.resize || []) args.push('--resize', rz);
@@ -75,4 +76,18 @@ function capture(sbx, opts) {
   return r.stdout || '';
 }
 
-module.exports = { seedClaudeProfile, capture, apeCmd, TUI_SCREEN };
+// Same drive, but stdout is a cell-level frame (see tui-screen.cjs dumpCells).
+// Returns the parsed frame, or throws with the driver's output when the driver
+// did not produce one — an unparseable capture must never masquerade as an
+// empty screen that happens to compare equal.
+function captureFrame(sbx, opts) {
+  const out = capture(sbx, { ...opts, cells: true });
+  let frame;
+  try { frame = JSON.parse(out); } catch (e) {
+    throw new Error(`tui-screen --cells produced no frame (${e.message}); output was:\n${out.slice(0, 400)}`);
+  }
+  if (!frame || frame.format !== 'clode-frame-v1') throw new Error(`unexpected frame format: ${out.slice(0, 200)}`);
+  return frame;
+}
+
+module.exports = { seedClaudeProfile, capture, captureFrame, apeCmd, TUI_SCREEN };
