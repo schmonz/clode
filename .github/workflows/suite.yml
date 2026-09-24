@@ -114,13 +114,17 @@ jobs:
       # file. It hit about 1 run in 5, so one green run proves nothing — these two lines are
       # what will say, run after run, whether disk was ever the constraint. Windows only: the
       # POSIX rows never showed the failure and have no C:/D: to report.
+      # continue-on-error: GitHub runs pwsh with $ErrorActionPreference='stop', so a missing
+      # drive would fail this step — and a diagnostic must never keep `npm test` from running.
       - name: Free space on C and D before the suite (windows)
         if: runner.os == 'Windows'
+        continue-on-error: true
         shell: pwsh
         run: Get-PSDrive C,D | Select-Object Name, Root, Used, Free | Format-Table -AutoSize | Out-String -Width 200
       - name: Full node:test suite (includes the shim-fidelity gate)
         run: npm test
       - name: Free space on C and D after the suite (windows)
         if: always() && runner.os == 'Windows'
+        continue-on-error: true
         shell: pwsh
         run: Get-PSDrive C,D | Select-Object Name, Root, Used, Free | Format-Table -AutoSize | Out-String -Width 200

@@ -489,8 +489,10 @@ test('the decoder must not stream the frame through the child stdin (deadlock gu
     + "a deadlock it never saw. Pass TMPDIR/TEMP/TMP to the child.");
 });
 
-// CONCATENATED FRAMES ARE THE ONE INPUT ON WHICH THE TWO PATHS DISAGREE: `zstd -d -c` returns
-// every frame in the sequence, node:zlib returns only the first, and neither errors. Whichever
+// CONCATENATED FRAMES ARE THE ONE INPUT ON WHICH THE TWO PATHS DISAGREE: the zstd CLI returns
+// every frame in the sequence — measured under `-d -c` when bun-graph decoded to stdout, and
+// re-measured 2026-09-24 under the `-o` file form it uses now (46 of 46 bytes both ways, zstd
+// 1.5.7) — node:zlib returns only the first (23), and neither errors. Whichever
 // one upstream's Bun.zstdDecompressSync matches, the other embeds different bytes into the
 // target — silently. No 2.1.251 row is like this; the point is to hear about it if one ever is.
 //
@@ -600,6 +602,7 @@ test('a decoder whose STDOUT writes fail still decodes: the output goes to a -o 
 // from the decode itself rather than from provisioning.
 test('a decode that fails names its output mode and the free space it had', stderrOpts, () => {
   const real = realZstdPath();
+  assert.ok(real, 'the host has a zstd (HAVE_ZSTD_CLI) but findTool could not locate it');
   const fake = writeFake('big-fails-zstd',
     '#!/bin/sh\n# Pass the tiny KAT frame, fail any real row, the way the CI failure did.\n'
     + 'eval "f=\\${$#}"\n'
@@ -667,6 +670,12 @@ test('a decoder that only echoes its input is REFUSED, not taken as asset text',
     assert.throws(() => bunGraph.__zstdToTextForTest(frame, 0, frame.length, { forceCli: true }),
       /cannot decode them/,
       'a passthrough must be refused, never returned as the asset text');
+    // ...and refused for its BYTES, as the comment above claims: host-provision's known-answer
+    // test ran it through the real -o argv and compared what landed in the file. A fake whose -o
+    // loop broke would be refused too, but for a different reason, and this would catch it.
+    assert.throws(() => bunGraph.__zstdToTextForTest(frame, 0, frame.length, { forceCli: true }),
+      /passthru-zstd\): ran fine but produced the wrong bytes/,
+      'the refusal must name the reason: wrong bytes in the -o file');
   } finally {
     if (saved === undefined) delete process.env.CLODE_ZSTD; else process.env.CLODE_ZSTD = saved;
   }

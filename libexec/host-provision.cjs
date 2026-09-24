@@ -266,8 +266,16 @@ const REGISTRY = {
         const r = run(bin, candidate.args(tmp, out));
         if (!r || r.status !== 0) return false;
         let got;
-        // No output file: whatever it did, it did not decode to where bun-graph will look.
-        try { got = fs.readFileSync(out, 'utf8'); } catch { return false; }
+        try { got = fs.readFileSync(out, 'utf8'); } catch {
+          // No output file: it did not decode to where bun-graph will look. THROWN, not `false`:
+          // a false with status 0 and a quiet stderr reads, in whyRejected(), as "ran fine but
+          // produced the wrong bytes" — a lie when the bytes were right and went to stdout
+          // (a decoder that ignores -o, which is the fallback the zstdcat note above relies on).
+          const printed = !r.stdout ? 0
+            : (Buffer.isBuffer(r.stdout) ? r.stdout.length : Buffer.byteLength(String(r.stdout)));
+          throw new Error('exited 0 but wrote no -o output file'
+            + (printed ? `; it printed ${printed} bytes to stdout instead` : ''));
+        }
         return got === ZSTD_KAT.expected;
       } finally {
         try { fs.unlinkSync(tmp); } catch { /* absent */ }

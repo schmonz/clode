@@ -346,13 +346,16 @@ function zstdScratchDir(fs, os, path) {
   return ZSTD_SCRATCH;
 }
 
-// THE ONE INPUT ON WHICH THE TWO PATHS DISAGREE: concatenated frames. `zstd -d -c` decodes a
+// THE ONE INPUT ON WHICH THE TWO PATHS DISAGREE: concatenated frames. The zstd CLI decodes a
 // frame SEQUENCE and returns all of it; `zlib.zstdDecompressSync` returns only the FIRST frame.
 // Measured: two 23-byte-content frames back to back give 46 bytes from the CLI and 23 from zlib,
-// both with no error. At most one of those matches upstream's `Bun.zstdDecompressSync`, so on
-// such a row the dev path and the shipped path would embed DIFFERENT bytes and neither would say
-// so — the exact "builds green, dies on the first turn" shape. No 2.1.251 row is like this (all
-// 101 verified single-frame), and this makes sure we hear about it if one ever is.
+// both with no error — first with `zstd -d -c` when this path decoded to stdout, and re-measured
+// 2026-09-24 (zstd 1.5.7, Node 24.21.0) with the `-d -q -f -o out` form it uses now: 46 bytes in
+// the file, 46 from `-c`, 23 from zlib. At most one of those matches upstream's
+// `Bun.zstdDecompressSync`, so on such a row the dev path and the shipped path would embed
+// DIFFERENT bytes and neither would say so — the exact "builds green, dies on the first turn"
+// shape. No 2.1.251 row is like this (all 101 verified single-frame), and this makes sure we
+// hear about it if one ever is.
 //
 // Frame_Content_Size (RFC 8878 3.1.1.1) is the cheap check: the header states the decoded size of
 // THIS frame, so a decode that overruns it decoded something else as well. Measured on the real

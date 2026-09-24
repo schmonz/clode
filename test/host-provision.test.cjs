@@ -256,7 +256,9 @@ test('provision(zstd) REFUSES an override that merely echoes its input', shOpts,
       env: { PATH: realDir ? `${bindir}${path.delimiter}${realDir}` : bindir, CLODE_ZSTD: fake },
       dataDir: tmpDataDir(),
     }),
-    /CLODE_ZSTD/,
+    // The reason, not just the install hint every refusal carries: the fake honours -o, so it
+    // must be refused for its BYTES. A broken -o loop in the fake would fail differently.
+    /CLODE_ZSTD='[^']*passthru' \([^)]*\): ran fine but produced the wrong bytes/,
     'a pass-through must fail the known-answer test, not resolve');
 });
 
@@ -423,6 +425,11 @@ test('provision(zstd) REFUSES a decoder that answers on stdout and ignores -o', 
       spawn: () => ({ status: 0, stdout: expected, stderr: '' }),
       fs, dataDir: tmpDataDir(),
     }),
-    /CLODE_ZSTD/,
+    // THE REASON, not just "refused": every refusal carries the CLODE_ZSTD install hint, so
+    // matching that alone passed while the refusal said "produced the wrong bytes" — false here,
+    // the bytes were right and went to stdout. On a host nobody is sitting at (windows-latest's
+    // unverified zstd.EXE, a zstdcat whose -o does not override its forced stdout) that lie
+    // points at the decoder's correctness instead of its output mode.
+    /exited 0 but wrote no -o output file; it printed 100 bytes to stdout instead/,
     'bun-graph reads the -o file; a decoder that never writes it would hand the carve nothing');
 });
