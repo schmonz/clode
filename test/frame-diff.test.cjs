@@ -65,9 +65,12 @@ const P = {
   link: `${HOME}AB CD\r\n日本 xy\r\n${ESC}]8;;https://example.com/b\x07LINK${ESC}]8;;\x07 tail\r\n`,
   // the wide run replaced by narrow glyphs: the spacer columns move
   spacer: `${HOME}AB CD\r\n日ab xy\r\n${ESC}]8;;https://example.com/a\x07LINK${ESC}]8;;\x07 tail\r\n`,
+  // the space between AB and CD SKIPPED with cursor-forward instead of written:
+  // the cell is unwritten (""), and on a terminal it looks exactly like base
+  skipped: `${HOME}AB${ESC}[1CCD\r\n日本 xy\r\n${ESC}]8;;https://example.com/a\x07LINK${ESC}]8;;\x07 tail\r\n`,
+  // that space written with a BLUE BACKGROUND: visibly different from skipped
+  bgspace: `${HOME}AB${ESC}[44m ${ESC}[0mCD\r\n日本 xy\r\n${ESC}]8;;https://example.com/a\x07LINK${ESC}]8;;\x07 tail\r\n`,
 };
-
-function shq(s) { return `'${String(s).replace(/'/g, "'\\''")}'`; }
 
 let SBX = null; let DIR = null; let SKIP = null; const FRAMES = {};
 before(() => {
@@ -76,11 +79,14 @@ before(() => {
   SBX = sandbox();
   DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'frame-diff-'));
   const shoot = (name, payload) => {
-    // `sleep` outlives the capture window so the driver always ends on its own
-    // timer with the full payload rendered, never on an early child exit.
-    const script = path.join(DIR, `${name}.sh`);
-    fs.writeFileSync(script, `printf '%s' ${shq(payload)}\nsleep 20\n`);
-    FRAMES[name] = captureFrame(SBX, { seconds: 1.2, rows: ROWS, cols: COLS, cmd: ['/bin/sh', script], env: DRIVER_ENV });
+    // The printer is NODE, not /bin/sh: windows-latest has no /bin/sh, and there
+    // ConPTY's CreateProcess fails inside the driver itself (no frame at all, ci
+    // run 35727111476), where POSIX node-pty would fork and paint a blank one.
+    // The 20s timer outlives the capture window so the driver always ends on its
+    // own timer with the full payload rendered, never on an early child exit.
+    const script = path.join(DIR, `${name}.cjs`);
+    fs.writeFileSync(script, `process.stdout.write(${JSON.stringify(payload)});\nsetTimeout(() => {}, 20000);\n`);
+    FRAMES[name] = captureFrame(SBX, { seconds: 1.2, rows: ROWS, cols: COLS, cmd: [process.execPath, script], env: DRIVER_ENV });
   };
   for (const [name, payload] of Object.entries(P)) shoot(name, payload);
   // A second capture of the SAME payload, to show identity is reproducible and
@@ -196,4 +202,31 @@ test('a frame that could not observe hyperlinks refuses to judge them', (t) => {
   assert.match(describeDiff(blind, changed, d), /hyperlinks NOT judged/);
   const { assertFramesEqual } = require('./frame-diff.cjs');
   assert.throws(() => assertFramesEqual(blind, blind, 'blind'), /hyperlinks could not be observed/);
+});
+
+test('an unwritten cell and a written plain space are the SAME visible cell', (t) => {
+  if (SKIP) { t.skip(SKIP); return; }
+  // Precondition, or this test proves nothing: the capture really does record the
+  // two differently. If the emulator ever reports the skipped cell as " ", the
+  // equivalence below is untested and this must say so rather than pass.
+  assert.strictEqual(FRAMES.base.cells[0][2].c, ' ', 'base writes a space at 0,2');
+  assert.strictEqual(FRAMES.skipped.cells[0][2].c, '', 'skipped leaves 0,2 unwritten');
+  const d = diff(FRAMES.base, FRAMES.skipped);
+  assert.ok(d.equal, `native flips exactly this at its banner; it must not count:\n${describeDiff(FRAMES.base, FRAMES.skipped, d)}`);
+});
+
+test('the equivalence does not absorb a COLOURED space, a spacer, or another glyph', (t) => {
+  if (SKIP) { t.skip(SKIP); return; }
+  const bg = diff(FRAMES.skipped, FRAMES.bgspace);
+  assert.strictEqual(bg.total, 1, describeDiff(FRAMES.skipped, FRAMES.bgspace, bg));
+  assert.strictEqual(bg.counts.sgr, 1, 'a blue-background space is visibly not an unwritten cell');
+  assert.strictEqual(bg.counts.glyph, 0);
+  // A width-0 spacer is "" too, and must NOT read as a space (row 1 holds 日本).
+  const sp = FRAMES.base.cells[1].findIndex((c) => c.w === 0);
+  assert.ok(sp > 0, 'the capture has a width-0 spacer cell to test against');
+  const asSpace = corrupt(FRAMES.base, 'glyph', { y: 1, x: sp });
+  asSpace.cells[1][sp].c = ' ';
+  assert.strictEqual(diff(FRAMES.base, asSpace).counts.glyph, 1, 'a spacer is not a space');
+  const other = corrupt(FRAMES.skipped, 'glyph', { y: 0, x: 2 });
+  assert.strictEqual(diff(FRAMES.skipped, other).counts.glyph, 1, 'an unwritten cell is not an X');
 });

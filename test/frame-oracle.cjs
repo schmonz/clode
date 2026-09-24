@@ -41,13 +41,15 @@ function parse(argv) {
   return o;
 }
 
-async function main() {
-  const o = parse(process.argv.slice(2));
-  for (const p of [o.ref, o.sub]) if (!fs.existsSync(p)) { process.stderr.write(`frame-oracle: no such binary: ${p}\n`); process.exit(2); }
-
+// Capture a REFERENCE and a SUBJECT frame through the same scripted pty session
+// against the canned mock. Returns { ref, sub } (either may be null, with the
+// reason written to stderr). Shared by the CLI below and by
+// test/fidelity/interactive-frame-diff.test.cjs, so the gate measures exactly
+// what an operator measures by hand.
+async function captureFrames(o) {
   const mock = await startMockAnthropic({ text: 'PONG' });
-  const out = o.out || fs.mkdtempSync(path.join(os.tmpdir(), 'frame-oracle-'));
-  fs.mkdirSync(out, { recursive: true });
+  const out = o.out || null;
+  if (out) fs.mkdirSync(out, { recursive: true });
 
   // The driver's own scratch locators (it loads node-pty from the per-platform
   // harness dir), plus the mock endpoint and a hard no to the auto-updater.
@@ -60,7 +62,7 @@ async function main() {
   };
   for (const k of ['TMPDIR', 'CLODE_BUILD_SCRATCH']) if (process.env[k]) env[k] = process.env[k];
 
-  const opts = { seconds: o.seconds, rows: o.rows, cols: o.cols, sendHex: o.sendHex, thenHex: o.thenHex, env };
+  const opts = { seconds: o.seconds, rows: o.rows, cols: o.cols, sendHex: o.sendHex, thenHex: o.thenHex || [], env };
   // A FRESH HOME PER CAPTURE, not one shared sandbox. tui-screen ends a capture
   // with SIGKILL, and a Claude Code killed inside the fullscreen renderer leaves
   // a "didn't finish starting" marker in its profile; the NEXT process to read
@@ -69,20 +71,31 @@ async function main() {
   // classic-renderer frame — measured here on 2026-09-22, and it made a
   // native-vs-native run differ in 1431 cells. Same seed, separate state.
   const shoot = (label, bin) => {
+    const sbx = sandbox();
     try {
-      const sbx = sandbox();
       seedClaudeProfile(sbx.home, { cwd: process.cwd(), apiKey: 'sk-ant-mock-0000000000000000000000' });
       const f = captureFrame(sbx, { ...opts, cmd: [bin] });
-      fs.writeFileSync(path.join(out, `${label}.json`), JSON.stringify(f));
+      if (out) fs.writeFileSync(path.join(out, `${label}.json`), JSON.stringify(f));
       return f;
     } catch (e) {
       process.stderr.write(`frame-oracle: ${label} (${bin}) produced no frame: ${e.message}\n`);
       return null;
+    } finally {
+      try { fs.rmSync(sbx.dir, { recursive: true, force: true }); } catch { /* best effort */ }
     }
   };
-  const ref = shoot('ref', o.ref);
-  const sub = shoot('sub', o.sub);
-  await mock.close();
+  try {
+    return { ref: shoot('ref', o.ref), sub: shoot('sub', o.sub) };
+  } finally {
+    await mock.close();
+  }
+}
+
+async function main() {
+  const o = parse(process.argv.slice(2));
+  for (const p of [o.ref, o.sub]) if (!fs.existsSync(p)) { process.stderr.write(`frame-oracle: no such binary: ${p}\n`); process.exit(2); }
+  const out = o.out || fs.mkdtempSync(path.join(os.tmpdir(), 'frame-oracle-'));
+  const { ref, sub } = await captureFrames({ ...o, out });
   process.stdout.write(`frames written to ${out}\n`);
   if (!ref || !sub) process.exit(2);
 
@@ -91,4 +104,8 @@ async function main() {
   process.exit(d.equal ? 0 : 1);
 }
 
-main().catch((e) => { process.stderr.write('frame-oracle: ' + ((e && e.stack) || e) + '\n'); process.exit(2); });
+module.exports = { captureFrames };
+
+if (require.main === module) {
+  main().catch((e) => { process.stderr.write('frame-oracle: ' + ((e && e.stack) || e) + '\n'); process.exit(2); });
+}

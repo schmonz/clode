@@ -38,12 +38,25 @@ function cellAt(frame, y, x) {
   return c || { c: '', w: 1, f: 'd:0', b: 'd:0', a: 0, l: null };
 }
 
+// THE ONE EQUIVALENCE: an UNWRITTEN narrow cell ("") and a written SPACE (" ")
+// are the same glyph. Measured 2026-09-24, not assumed: native Claude Code
+// against ITSELF (2.1.251 and 2.1.278, darwin-arm64) sometimes writes the space
+// at row 1 col 8 of its banner and sometimes skips it — the renderer's
+// frame-to-frame diff decides, not the content — so without this an exact-equality
+// gate flakes on native-vs-native, and a gate that flakes is a gate that lies.
+// The two render identically on any terminal. What the equivalence does NOT
+// absorb, each proven in frame-diff.test.cjs: a space whose colours or
+// attributes differ from the unwritten cell (still `sgr`), a width-0 spacer
+// (the second half of a wide glyph, `c:""` with `w:0`, never touched here), and
+// any other glyph.
+function visibleGlyph(c) { return (c.c === '' && c.w === 1) ? ' ' : c.c; }
+
 // Classify one cell pair. Returns the list of classes it differs in ([] = same).
 // A cell can differ in more than one class at once; all are reported, so a
 // summary can never hide a class behind another.
 function classifyCell(a, b, opts) {
   const out = [];
-  if (a.c !== b.c) out.push('glyph');
+  if (visibleGlyph(a) !== visibleGlyph(b)) out.push('glyph');
   if (a.w !== b.w) out.push('width');
   if (a.f !== b.f || a.b !== b.b || a.a !== b.a) out.push('sgr');
   if (opts.links && (a.l || null) !== (b.l || null)) out.push('link');

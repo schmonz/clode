@@ -61,7 +61,7 @@ function seedClaudeProfile(home, opts = {}) {
 // tui-screen self-terminates after opts.seconds, so no external timeout is needed.
 // opts: { seconds, cmd:[...], sendHex?, thenHex?:[...], resize?:['COLSxROWS@DELAY'], rows?, cols?, env? }. cmd[0] is
 // the absolute program to run under the PTY (e.g. a built quaude, or a native binary).
-function capture(sbx, opts) {
+function drive(sbx, opts) {
   const args = [String(opts.seconds)];
   if (opts.cells) args.push('--cells');
   if (opts.sendHex) args.push('--send-hex', opts.sendHex);
@@ -73,18 +73,27 @@ function capture(sbx, opts) {
   const env = { ...sbx.env, ...(opts.env || {}), TERM: 'xterm-256color' };
   for (const k of ['TMUX', 'TMUX_PANE', 'TERM_PROGRAM', 'NODE_PATH']) delete env[k];
   const r = spawnSync(NODE, [TUI_SCREEN, ...args], { encoding: 'utf8', env, maxBuffer: 8 * 1024 * 1024 });
-  return r.stdout || '';
+  return { stdout: r.stdout || '', stderr: r.stderr || '', status: r.status, signal: r.signal, error: r.error };
 }
+function capture(sbx, opts) { return drive(sbx, opts).stdout; }
 
 // Same drive, but stdout is a cell-level frame (see tui-screen.cjs dumpCells).
 // Returns the parsed frame, or throws with the driver's output when the driver
 // did not produce one — an unparseable capture must never masquerade as an
 // empty screen that happens to compare equal.
+//
+// The error carries the driver's STDERR and exit status, not just its stdout:
+// on windows-latest (ci run 35727111476) every capture died as "produced no
+// frame (Unexpected end of JSON input); output was:" followed by NOTHING,
+// because the reason was on stderr and capture() threw stderr away.
 function captureFrame(sbx, opts) {
-  const out = capture(sbx, { ...opts, cells: true });
+  const r = drive(sbx, { ...opts, cells: true });
+  const out = r.stdout;
   let frame;
   try { frame = JSON.parse(out); } catch (e) {
-    throw new Error(`tui-screen --cells produced no frame (${e.message}); output was:\n${out.slice(0, 400)}`);
+    const how = r.error ? `spawn error ${r.error.message}` : r.signal ? `killed by ${r.signal}` : `exit ${r.status}`;
+    throw new Error(`tui-screen --cells produced no frame (${e.message}; driver ${how}); `
+      + `stdout was:\n${out.slice(0, 400)}\nstderr was:\n${r.stderr.slice(0, 1200)}`);
   }
   if (!frame || frame.format !== 'clode-frame-v1') throw new Error(`unexpected frame format: ${out.slice(0, 200)}`);
   return frame;

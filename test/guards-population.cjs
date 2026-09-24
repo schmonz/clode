@@ -147,6 +147,16 @@ const PATTERN_MATCHES = [
   /\.exec\s*\(/,
   /\.includes\s*\(\s*['"]/,
   /assert\.(?:match|doesNotMatch)\s*\(/,
+  // A CELL-BY-CELL COMPARISON of the frames two real binaries painted
+  // (test/frame-oracle.cjs's captureFrames, judged by test/frame-diff.cjs). Added
+  // 2026-09-24 the same way CLODE_DEPSCAN_ENGINE was: fidelity/interactive-frame-diff
+  // -- a registered defineGuard guard deriving its finding from the bytes native and
+  // quaude put on a pty -- classified as "derives no finding from its bytes", and the
+  // FLOOR test said, correctly, that the classifier was the broken party. A structural
+  // diff is a finding derived from bytes; it just is not spelled as a regex. Narrow on
+  // purpose: `captureFrames(` names the two-binary capture, not frame-diff's own unit
+  // tests (which build synthetic payloads and call captureFrame, singular).
+  /\bcaptureFrames\s*\(/,
 ];
 
 function classifyTestFile(src) {

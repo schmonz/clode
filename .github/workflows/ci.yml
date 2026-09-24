@@ -1026,7 +1026,7 @@ jobs:
         run: npm install --prefix test
       - name: Preflight — node-pty can open a PTY on this kernel
         run: node test/harness-preflight.cjs
-      - name: quaude-build + e2e-tui-tjs + e2e-ctrlz-tui + interactive-render/resize-diff
+      - name: quaude-build + e2e-tui-tjs + e2e-ctrlz-tui + interactive-render/frame/resize-diff
         # Named explicitly rather than a glob, so a future reader can tell what
         # is covered without running it. Each of these files builds its OWN
         # throwaway quaude internally — no shared state between them, hence no
@@ -1043,6 +1043,7 @@ jobs:
               test/e2e-tui-tjs.test.cjs \
               test/e2e-ctrlz-tui.test.cjs \
               test/fidelity/interactive-render-diff.test.cjs \
+              test/fidelity/interactive-frame-diff.test.cjs \
               test/fidelity/interactive-resize-diff.test.cjs
       # update-notify.pty is gated on a PREBUILT quaude (CLODE_QUAUDE), not on
       # tjs/provider directly — build one explicitly (cost: see this job's

@@ -154,9 +154,12 @@ leave the stripped text identical. So:
   capture pairs, row 1 col 8 (the space between the logo and "Claude Code") comes back as a
   written `" "` in some native runs and an unwritten `""` in others, and quaude does the same.
   The two look identical on a terminal; it is the renderer's redraw timing, not the
-  segmenter, and it is why an occasional 1-cell `glyph` diff at exactly that cell is noise.
-  Before treating the oracle as a CI gate, `frame-diff` should class unwritten-vs-space as
-  equal or the gate should ignore it by name — a gate that flakes on native-vs-native lies.
+  segmenter. `frame-diff` now treats an unwritten narrow cell and a plain space as the same
+  visible cell (proven both ways against real pty captures in `frame-diff.test.cjs`), and
+  the initial frame is a CI GATE: `test/fidelity/interactive-frame-diff.test.cjs`, in the
+  `linux-x64-pty` job, exact equality against native with a 200-cell floor. Verified green
+  on darwin-arm64 (2.1.251 and 2.1.278) and in a Linux x64 container mirroring that job
+  (2.1.251), and red with VIOLATION against the blank-screen q278f build.
 - Two ways the instrument itself was wrong, found and fixed before trusting it:
   `tui-screen.cjs` truncated its own stdout at 64 KiB (`write()` then `process.exit`), so
   every cell frame came back as broken JSON; and a shared `HOME` let the SIGKILL teardown
