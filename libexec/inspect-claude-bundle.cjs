@@ -95,6 +95,15 @@ const KNOWN_BUN = new Set([
   // rewrite three committed golden --json shas for no behavioural gain. It is
   // accepted by name in ACCEPTED_UNRECOGNIZED_BUN instead, with the same review.
   'sliceAnsi', 'unsafe', 'zstdDecompress', 'zstdDecompressSync',
+  // Reviewed 2026-09-24: secrets (Bun.secrets, the OS credential store). A
+  // PER-CARVE member, like Bun.ant's (see the union note below): measured with
+  // extract-claude-js + grep, 22 `Bun.secrets` + 2 `Bun?.secrets` in the
+  // win32-x64 carve of both 2.1.251 and 2.1.278, and ZERO in darwin-arm64 and
+  // linux-x64 -- upstream constant-folds process.platform, so the Windows
+  // Credential Manager backend exists only in the win32 binary. It is why
+  // windows-latest's API-surface gate went red after 844480d made unrecognized
+  // members a finding. Accepted-missing below, with the fallback it lands on.
+  'secrets',
 ]);
 
 // ---- Bun.ant: the SECOND level, because the first level cannot see the drift ----
@@ -732,7 +741,26 @@ const ACCEPTED_MISSING_BUN = new Set(['SQL', 'ant', 'WebView',
   // call is unreachable. If upstream ever ships zstd-compressed assets this stops
   // being true, and [[upstream-deps-become-our-deps]] says the answer is then a
   // host-provisioned zstd, not a vendored one.
-  'zstdDecompress', 'zstdDecompressSync']);
+  'zstdDecompress', 'zstdDecompressSync',
+  // secrets: Windows Credential Manager, win32 carve ONLY (counts in KNOWN_BUN
+  // above). Read from the 2.1.251 win32-x64 carve, 2026-09-24: the credman
+  // backend is selected ONLY when CLAUDE_CODE_FORCE_WINDOWS_CREDMAN=1 or
+  // ~/.claude.json's cachedGrowthBookFeatures.tengu_windows_credman === true;
+  // otherwise credentials are the plaintext ~/.claude/.credentials.json, which is
+  // native claude.exe's default too. With Bun.secrets ABSENT, upstream's own
+  // feature detection (get/set/delete must all be functions) and its probe
+  // (`globalThis.Bun?.secrets` without .get -> backend off) make the credman
+  // backend inert, and reads and writes fall back to that plaintext file --
+  // nothing throws or hangs; a write logs `plaintext_fallback_used` and warns
+  // "Storing credentials in plaintext". So with the flag off quaude == native.
+  // THE ONE REAL DIVERGENCE (flag on): native's first successful credman write
+  // DELETES the plaintext file, so a user who logged in with native claude.exe
+  // reads "Not logged in" under quaude (an honest failure, not the stale-file 401
+  // of [[quaude-never-reads-keychain]]); /login under quaude works.
+  // Do NOT stub: a stub whose get resolves switches credman ON while storing
+  // nothing. Implementing it for real is in BACKLOG ("Bun.secrets (Windows
+  // Credential Manager) -- accepted absent, implement later").
+  'secrets']);
 
 // UNRECOGNIZED Bun.* members that are NOT a gate problem, each with the review
 // that says why. Anything not named here fails --strict: see gateProblems().

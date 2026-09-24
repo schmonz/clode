@@ -8,6 +8,49 @@ Concrete clode-under-Node divergences from native Claude Code, to triage and fix
 That page is GENERATED from `scripts/build-graph.cjs` — the one declaration of the build — so it
 cannot drift from it; it is also where the honest answer to "does this need node?" lives.
 
+## Bun.secrets (Windows Credential Manager) — accepted absent, implement later (2026-09-24)
+
+`windows-latest`'s API-surface gate went red (CI run 36039332441, at `54de06b`) on
+`Bun.secrets (unrecognized)`. Reviewed and accepted-absent in
+`libexec/inspect-claude-bundle.cjs` (KNOWN_BUN + ACCEPTED_MISSING_BUN, where the full
+reasoning lives); pinned by two rows in `test/node-shim-api-surface-gate.test.cjs`. The
+measured facts:
+
+- **Win32 carve only.** 22 `Bun.secrets` + 2 `Bun?.secrets` in the win32-x64 carve of
+  2.1.251 and of 2.1.278; zero in darwin-arm64 and linux-x64. Upstream constant-folds
+  `process.platform`, so no darwin or linux provider could ever have shown it — the same
+  per-carve class as `Bun.ant`'s members.
+- **Used only when asked for.** The credman backend is selected only when
+  `CLAUDE_CODE_FORCE_WINDOWS_CREDMAN=1` or `~/.claude.json`'s
+  `cachedGrowthBookFeatures.tengu_windows_credman === true`. Otherwise credentials are the
+  plaintext `~/.claude/.credentials.json` — native `claude.exe`'s default too.
+- **Absent = inert, measured.** Upstream's feature detection wants get/set/delete all to be
+  functions, and its probe turns the backend off when `Bun.secrets` or `.get` is missing, so
+  under quaude reads and writes fall back to the plaintext file: nothing throws or hangs; a write
+  logs `plaintext_fallback_used` and warns "Storing credentials in plaintext".
+- **The one real divergence (flag on).** Native's first successful credman write DELETES the
+  plaintext file, so a user who logged in with native `claude.exe` reads "Not logged in" under
+  quaude. `/login` under quaude works. A quaude `/logout` cannot remove native's credman entry.
+  An honest failure, not the stale-file 401 of the darwin Keychain P0.
+- **Do NOT stub it.** A stub whose `get` resolves switches credman ON while storing nothing.
+
+**Future acceptance:** a Windows twin of `test/credential-store-attempted.test.cjs` (which
+skips non-darwin today), run with `CLAUDE_CODE_FORCE_WINDOWS_CREDMAN=1`, asserting the built
+quaude really writes and reads the credential store.
+
+**Implementation route:** advapi32 `CredReadW` / `CredWriteW` / `CredDeleteW` with
+`CRED_TYPE_GENERIC`, as a tjs C primitive patch (the tjs legs ship with ffi off, so it cannot be
+done from JS; precedent: `spike/quickjs/patches/txiki-sync-spawn.patch`). It is Windows-only,
+with the written reason "upstream calls it only from win32". The target/user naming and the blob
+encoding must match Bun's exactly, proven by a round trip against native `claude.exe` with
+FORCE=1 on a Windows runner (write with one, read with the other, both ways). A helper process
+was considered and rejected: `cmdkey` cannot read a secret back, and a PowerShell P/Invoke
+likely overruns upstream's 2000 ms per-call timeout (unmeasured).
+
+**Class fix (follow-up):** have the ubuntu suite also carve and inspect the win32 and darwin
+providers, so Windows-only (and darwin-only) surface shows up on every leg instead of only on
+the one whose provider happens to contain it.
+
 ## `Bun.ant.CellSegmenter` — the 2.1.278 TUI's real blocker, and it is NOT small (2026-09-22)
 
 **Status: OPEN, phases 1-2 of 6 DONE (2026-09-24), and it is still what stands between this
