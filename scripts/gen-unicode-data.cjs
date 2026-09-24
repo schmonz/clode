@@ -4,6 +4,9 @@
 //
 // RULES from pinned UCD (the Unicode version native Bun turns out to use); WIDTHS from
 // native itself, per code point, under both ambiguous settings. Nothing hand-written.
+// Two rule sets, because native has two clusterers (ruling R15-amended): `uax29` data at
+// the width version (native Intl.Segmenter), and `*Cell` data at CELL_UNICODE (native
+// Bun.ant.CellSegmenter's own clusterer) — see CELL_UNICODE below for the measurement.
 //
 //   node scripts/gen-unicode-data.cjs --pin VERSION                # fill missing sha256 pins (TOFU; review the diff)
 //   node scripts/gen-unicode-data.cjs --native BIN                 # regenerate
@@ -32,10 +35,32 @@ const GCB = { Other: 0, CR: 1, LF: 2, Control: 3, Extend: 4, ZWJ: 5, Regional_In
 const INCB = { Linker: 1, Consonant: 2, Extend: 3 };
 const GENERATOR_SHA = ucd.sha256Text(fs.readFileSync(__filename, 'utf8'));
 
+// The Unicode version of native CellSegmenter's CLUSTERER data (its Grapheme_Cluster_Break,
+// Indic_Conjunct_Break and Extended_Pictographic tables), which is NOT the version its
+// widths track. Measured 2026-09-24 against 2.1.278 (Bun 1.4.3): thirteen join templates
+// (`a X`, `X a`, `1100 X`, `X 1161`, `X 11A8`, `X 0308`, `1F1E6 X`, `1F600 ZWJ X`,
+// `X 1F3FB`, `0915 094D X`, `0915 X 0915`, `0915 094D X 0915`, `1F600 X ZWJ 1F600`, each
+// closed by U+0903 so the cluster has width) run over EVERY code point X, against the
+// `bun-cell` rules (a scratch prototype of libexec/unicode-text.cjs's, with the other
+// deltas in place) over each pinned version's tables, one table's version varied at a
+// time: 16.0.0 matches all 13 x 1,112,064 exactly; 17.0.0 GCB misses 42 code points per template
+// (U+1ACF.., Extend only since 17.0), 17.0.0 InCB 671 + 14 (Myanmar, Khmer, Balinese ...
+// get no GB9c join), 17.0.0 ExtPict 689 (U+2701, U+2605 ... are still pictographic);
+// 15.1.0 GCB misses 51 and 15.1.0 InCB 1303. So the cell tables come from 16.0.0 and no
+// guess is involved: a version that matched nothing would have stopped the work.
+// scripts/cell-profile-diff.cjs re-measures it (its `sweep` corpus) on every run.
+const CELL_UNICODE = '16.0.0';
+
 // Per-code-point width from native: the CellSegmenter advance of the one-code-point
 // string (0 when it produced no cell), under ambiguousIsNarrow true and false. Lone
 // surrogates go in as the one UTF-16 unit they are. `substitute: []` so the bidi
 // controls report their own width, not U+FFFD's.
+//
+// A third answer per code point, `base`: the advance of `X U+0903 U+0903 U+0903 U+200D`
+// when native makes it ONE cell, else -1. Its code points sum to at least 3 (each U+0903
+// is 1 wide), so a 2 means native capped it the way it caps an emoji ZWJ sequence — X is
+// an emoji WIDTH BASE (libexec/unicode-text.cjs WIDTH-EMOJI-BASE). The override
+// `emoji-not-width-base` is read from this, never typed.
 const WIDTH_PROBE = String.raw`
   const mk = (amb) => new Bun.ant.CellSegmenter({ ambiguousIsNarrow: amb, substitute: [],
     screen: { widthMask: 3, narrow: 0, wide: 1, spacerTail: 2, spacerHead: 3, emptyCharIndex: 0, spacerCharIndex: 1, emptyWord: 0, tabWidth: 8 } });
@@ -46,7 +71,9 @@ const WIDTH_PROBE = String.raw`
     const s = (cp >= 0xd800 && cp <= 0xdfff) ? String.fromCharCode(cp) : String.fromCodePoint(cp);
     const na = a.segment(s, cells, runs, false); const wa = na > 0 ? (cells[1] & 255) : 0;
     const nb = b.segment(s, cells, runs, false); const wb = nb > 0 ? (cells[1] & 255) : 0;
-    out.push(wa, wb);
+    const t = s + '\u0903\u0903\u0903\u200d';
+    const nt = a.segment(t, cells, runs, false); const wt = (nt === 1 && a.graphemes[cells[0]] === t) ? (cells[1] & 255) : -1;
+    out.push(wa, wb, wt);
   }
   return { bun: Bun.version, out };
 `;
@@ -55,20 +82,21 @@ const hexCp = (cp) => 'U+' + cp.toString(16).toUpperCase().padStart(4, '0');
 
 function nativeWidths(bin) {
   const narrow = new Uint8Array(CODE_POINTS); const wide = new Uint8Array(CODE_POINTS);
+  const base = new Int16Array(CODE_POINTS);
   let bun = '';
   for (let lo = 0; lo < CODE_POINTS; lo += CHUNK) {
     const hi = lo + CHUNK - 1;
     const r = runInNative(bin, WIDTH_PROBE, { input: { lo, hi }, timeoutMs: 600000 });
     // A short answer would leave the rest of the plane at width 0 — a table that looks
     // complete and is not. Refuse instead.
-    if (!r || !Array.isArray(r.out) || r.out.length !== 2 * CHUNK) {
+    if (!r || !Array.isArray(r.out) || r.out.length !== 3 * CHUNK) {
       throw new Error(`native answered ${r && Array.isArray(r.out) ? r.out.length : 'nothing'} widths for `
-        + `${hexCp(lo)}..${hexCp(hi)}, expected ${2 * CHUNK}; refusing to generate from a partial probe`);
+        + `${hexCp(lo)}..${hexCp(hi)}, expected ${3 * CHUNK}; refusing to generate from a partial probe`);
     }
     bun = r.bun;
-    for (let i = 0; i < r.out.length; i += 2) { narrow[lo + i / 2] = r.out[i]; wide[lo + i / 2] = r.out[i + 1]; }
+    for (let i = 0; i < r.out.length; i += 3) { narrow[lo + i / 3] = r.out[i]; wide[lo + i / 3] = r.out[i + 1]; base[lo + i / 3] = r.out[i + 2]; }
   }
-  return { narrow, wide, bun };
+  return { narrow, wide, base, bun };
 }
 
 // Run-length encode a per-code-point array into flat [lo, hi, value, ...], keeping only
@@ -160,7 +188,42 @@ function fromRanges(flat, stride, absent = 0) {
   return arr;
 }
 
-const TABLES = { gcb: [3, 0], incb: [3, 0], extPict: [2, 0], width: [3, 1], ambiguous: [2, 0] };   // [stride, absent]
+const TABLES = { gcb: [3, 0], incb: [3, 0], extPict: [2, 0], width: [3, 1], ambiguous: [2, 0],   // [stride, absent]
+  emoji: [2, 0], gcbCell: [3, 0], incbCell: [3, 0], extPictCell: [2, 0], cc: [2, 0], emojiModifier: [2, 0], emojiModifierBase: [2, 0] };
+
+// One emoji-data property as a 0/1 membership array.
+function propertySet(text, name) {
+  const arr = new Uint8Array(CODE_POINTS);
+  for (const [lo, hi, v] of ucd.parseRanges(text)) if (v === name) for (let c = lo; c <= hi; c++) arr[c] = 1;
+  return arr;
+}
+
+// The named override WIDTH-EMOJI-BASE needs: the Emoji code points native does NOT treat
+// as an emoji width base, read from the `base` probe (see WIDTH_PROBE). Measured
+// 2026-09-24 against 2.1.278: 18 of the Emoji code points — the twelve ASCII keycap bases,
+// U+00A9, U+00AE, U+3030, U+303D, U+3297, U+3299 — come back as the plain sum
+// (`00A9 0903 0903 0903 200D` is 4, `203C 0903 0903 0903 200D` is 2). No rule over the
+// pinned properties separates U+00A9 from U+203C or U+3030 from U+1F202 (same Emoji,
+// Extended_Pictographic, Emoji_Presentation and East_Asian_Width values), so this is a
+// residual, and it is native's own answer, not a typed list.
+//
+// Every Emoji code point must come back as ONE cell (U+0903 is a SpacingMark, which joins
+// anything but a control): -1 means the probe no longer measures what it says, so refuse
+// rather than file the code point under the override.
+function emojiNotWidthBase(emoji, base) {
+  const out = new Uint8Array(CODE_POINTS);
+  const broken = [];
+  for (let c = 0; c < CODE_POINTS; c++) {
+    if (!emoji[c]) continue;
+    if (base[c] < 0) broken.push(c);
+    else if (base[c] !== 2) out[c] = 1;
+  }
+  if (broken.length) {
+    throw new Error(`${broken.length} Emoji code point(s) did not come back as one cell from the width-base probe `
+      + `(X U+0903 U+0903 U+0903 U+200D): ${broken.slice(0, 20).map(hexCp).join(', ')}; refusing to derive emoji-not-width-base`);
+  }
+  return out;
+}
 
 function describeDrift(was, now) {
   const lines = [];
@@ -173,7 +236,7 @@ function describeDrift(was, now) {
   }
   for (const [name, [stride, absent]] of Object.entries(TABLES)) {
     if (JSON.stringify(was[name]) === JSON.stringify(now[name])) continue;
-    const a = fromRanges(was[name] || [], stride, absent); const b = fromRanges(now[name], stride, absent);
+    const a = fromRanges(was[name] || [], stride, absent); const b = fromRanges(now[name] || [], stride, absent);
     const moved = [];
     for (let c = 0; c < CODE_POINTS; c++) if (a[c] !== b[c]) moved.push(c);
     lines.push(`${name}: ${moved.length} code point(s) change: `
@@ -221,6 +284,17 @@ async function main(argv, env = process.env) {
   for (const ver of versions) {
     choice[ver] = { eaw: await ucd.fetchVerified(ver, 'EastAsianWidth', o), emoji: await ucd.fetchVerified(ver, 'emoji-data', o) };
   }
+  // The `bun-cell` clusterer's data, from CELL_UNICODE (measured above) — fetched here, before
+  // the probe, for the same reason. Cc comes from DerivedGeneralCategory because
+  // CC-CONTROLS-ONLY needs it: native applies GB4/GB5 to Cc alone, and
+  // GraphemeBreakProperty's Control class is wider than Cc.
+  const cellPins = ucd.pins()[CELL_UNICODE];
+  const cellUsed = {};
+  const cellText = {};
+  for (const name of ['GraphemeBreakProperty', 'DerivedCoreProperties', 'emoji-data', 'DerivedGeneralCategory']) {
+    cellText[name] = await ucd.fetchVerified(CELL_UNICODE, name, o);
+    cellUsed[name] = cellPins[name].sha256;
+  }
   const nat = nativeWidths(o.native);
 
   // Choose the Unicode version whose EAW+Emoji_Presentation prediction disagrees with
@@ -243,23 +317,47 @@ async function main(argv, env = process.env) {
 
   const gcb = mapValues(ucd.parseRanges(await ucd.fetchVerified(ver, 'GraphemeBreakProperty', o)), GCB, 'GraphemeBreakProperty');
   const incb = mapValues(ucd.parseRanges(await ucd.fetchVerified(ver, 'DerivedCoreProperties', o), 'InCB'), INCB, 'InCB');
-  const ext = new Uint8Array(CODE_POINTS);
-  for (const [lo, hi, v] of ucd.parseRanges(await ucd.fetchVerified(ver, 'emoji-data', o))) if (v === 'Extended_Pictographic') for (let c = lo; c <= hi; c++) ext[c] = 1;
+  const emojiText = await ucd.fetchVerified(ver, 'emoji-data', o);
+  const ext = propertySet(emojiText, 'Extended_Pictographic');
+  const emoji = propertySet(emojiText, 'Emoji');
   const amb = ambiguousFrom(nat.narrow, nat.wide);
   // Verify every pinned input of the chosen version, including the two test corpora
   // Task 4 reads (GraphemeBreakTest, emoji-test), so the header's hashes are all proven.
   const pinsUsed = {};
   for (const [name, p] of Object.entries(ucd.pins()[ver])) { await ucd.fetchVerified(ver, name, o); pinsUsed[name] = p.sha256; }
 
+  const gcbCell = mapValues(ucd.parseRanges(cellText.GraphemeBreakProperty), GCB, `GraphemeBreakProperty ${CELL_UNICODE}`);
+  const incbCell = mapValues(ucd.parseRanges(cellText.DerivedCoreProperties, 'InCB'), INCB, `InCB ${CELL_UNICODE}`);
+  const cc = new Uint8Array(CODE_POINTS);
+  for (const [lo, hi, v] of ucd.parseRanges(cellText.DerivedGeneralCategory)) if (v === 'Cc') for (let c = lo; c <= hi; c++) cc[c] = 1;
+  const notBase = emojiNotWidthBase(emoji, nat.base);
+  const nativeClaude = nativeVersion(o.native);
+
   const data = {
-    header: { unicode: ver, ucdSha256: pinsUsed, nativeClaude: nativeVersion(o.native), nativeBun: nat.bun,
-      versionChoice: counts, generatorSha256: GENERATOR_SHA },
+    header: { unicode: ver, ucdSha256: pinsUsed, nativeClaude, nativeBun: nat.bun,
+      versionChoice: counts, generatorSha256: GENERATOR_SHA,
+      cell: { unicode: CELL_UNICODE, ucdSha256: cellUsed,
+        why: 'native Bun.ant.CellSegmenter clusters with Unicode ' + CELL_UNICODE + ' GCB/InCB/ExtPict while its widths track '
+          + ver + ': 13 join templates over every code point match ' + CELL_UNICODE + ' and no other pinned version '
+          + '(measured 2026-09-24; see CELL_UNICODE in scripts/gen-unicode-data.cjs)' } },
     gcb: toRanges(gcb, (v) => v !== 0),
     incb: toRanges(incb, (v) => v !== 0),
     extPict: toSpans(ext),
     width: toRanges(nat.narrow, (v) => v !== 1),     // absent = width 1
     ambiguous: toSpans(amb),
-    overrides: [],                                    // Task 4/5 append named overrides with evidence
+    emoji: toSpans(emoji),
+    gcbCell: toRanges(gcbCell, (v) => v !== 0),
+    incbCell: toRanges(incbCell, (v) => v !== 0),
+    extPictCell: toSpans(propertySet(cellText['emoji-data'], 'Extended_Pictographic')),
+    cc: toSpans(cc),
+    emojiModifier: toSpans(propertySet(cellText['emoji-data'], 'Emoji_Modifier')),
+    emojiModifierBase: toSpans(propertySet(cellText['emoji-data'], 'Emoji_Modifier_Base')),
+    overrides: [
+      { name: 'emoji-not-width-base', spans: toSpans(notBase),
+        evidence: 'Emoji (emoji-data ' + ver + ') code points whose `X U+0903 U+0903 U+0903 U+200D` native '
+          + nativeClaude + ' does not cap at 2, read per code point by this generator (WIDTH_PROBE `base`); '
+          + 'measured 2026-09-24: U+00A9 gives 4 where U+203C gives 2' },
+    ],
   };
   const region = `${BEGIN}\n// DO NOT EDIT. Regenerate: node scripts/gen-unicode-data.cjs --native <claude ${data.header.nativeClaude}>\n`
     + `const UNICODE_DATA = ${JSON.stringify(data)};\n${END}`;
@@ -284,7 +382,7 @@ async function main(argv, env = process.env) {
 // run could not look" from "this run looked and refused".
 function exitCodeFor(e) { return e && e.name === 'UcdOfflineMiss' ? 3 : 2; }
 
-module.exports = { toRanges, toSpans, ambiguousFrom, eawAssigned, eawPredicted, widthDisagreements, mapValues, fromRanges, describeDrift, main, exitCodeFor };
+module.exports = { CELL_UNICODE, propertySet, emojiNotWidthBase, toRanges, toSpans, ambiguousFrom, eawAssigned, eawPredicted, widthDisagreements, mapValues, fromRanges, describeDrift, main, exitCodeFor };
 
 if (require.main === module) {
   main(process.argv.slice(2)).then((c) => process.exit(c), (e) => { process.stderr.write(`gen-unicode-data: ${e.message}\n`); process.exit(exitCodeFor(e)); });

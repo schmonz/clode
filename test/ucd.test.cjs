@@ -98,6 +98,21 @@ test('mapValues refuses a class name the generator does not know, even an inheri
   assert.throws(() => mapValues([[0x41, 0x41, 'toString']], t, 'InCB'), /unknown value "toString"/);
 });
 
+test('emojiNotWidthBase files the Emoji native did not cap under the override, and refuses a broken probe', () => {
+  const { emojiNotWidthBase, propertySet } = require('../scripts/gen-unicode-data.cjs');
+  // emoji-data shape: propertySet reads one property's lines and nothing else.
+  const emoji = propertySet('0023 ; Emoji # x\n00A9 ; Emoji # x\n203C ; Emoji # x\n2605 ; Extended_Pictographic # x\n', 'Emoji');
+  assert.deepStrictEqual(toSpans(emoji), [0x23, 0x23, 0xa9, 0xa9, 0x203c, 0x203c]);
+  // The `base` probe's answers, shaped as native gave them on 2026-09-24: a sum (4) for
+  // U+0023 and U+00A9, the cap (2) for U+203C; a non-Emoji code point is not consulted.
+  const base = new Int16Array(0x110000);
+  base[0x23] = 4; base[0xa9] = 4; base[0x203c] = 2; base[0x2605] = 4;
+  assert.deepStrictEqual(toSpans(emojiNotWidthBase(emoji, base)), [0x23, 0x23, 0xa9, 0xa9]);
+  // -1 = native did not make `X U+0903 U+0903 U+0903 U+200D` one cell: the probe is broken.
+  base[0xa9] = -1;
+  assert.throws(() => emojiNotWidthBase(emoji, base), /1 Emoji code point\(s\) did not come back as one cell .*U\+00A9; refusing/);
+});
+
 // test/run.mjs runs the suite with CLODE_OFFLINE=1 by default. A cold UCD cache offline is
 // a missing precondition — refused by name, with its own exit status (3), BEFORE the
 // generator needs a native at all — never a silent network fetch and never a red table.

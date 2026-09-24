@@ -49,6 +49,10 @@
     "emoji-test": {
       "url": "https://www.unicode.org/Public/emoji/16.0/emoji-test.txt",
       "sha256": "24f0c534e86cf142e2496953e8f0e46a3e702392911eddcd29c6cced85139697"
+    },
+    "DerivedGeneralCategory": {
+      "url": "https://www.unicode.org/Public/16.0.0/ucd/extracted/DerivedGeneralCategory.txt",
+      "sha256": "7676ab755a41ef82108460238569e60ad65c191ddafe61b36c6765ec1353f293"
     }
   },
   "17.0.0": {
