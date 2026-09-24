@@ -50,11 +50,15 @@ function codePointWidth(cp, ambiguousIsNarrow = true) {
   return w;
 }
 
-// The code point at code-unit offset i. A lone surrogate is returned as itself: UCD gives
-// it GCB=Control, so it becomes its own cluster instead of swallowing a neighbour.
-function cpAt(str, i) {
+// The code point at code-unit offset i, reading no further than `end`: a pair that `end`
+// splits leaves its high surrogate lone, because the low one is data the caller excluded.
+// A lone surrogate is returned as itself. The generated gcb table has no entry for
+// U+D800..DFFF, so it classifies as Other and can join an Extend/ZWJ/SpacingMark after it
+// or a Prepend before it like any letter; whether native agrees on such malformed input
+// is for the native text differential to judge.
+function cpAt(str, i, end) {
   const c = str.charCodeAt(i);
-  if (c >= 0xd800 && c <= 0xdbff && i + 1 < str.length) {
+  if (c >= 0xd800 && c <= 0xdbff && i + 1 < end) {
     const d = str.charCodeAt(i + 1);
     if (d >= 0xdc00 && d <= 0xdfff) return ((c - 0xd800) << 10) + (d - 0xdc00) + 0x10000;
   }
@@ -68,7 +72,7 @@ function graphemeBoundaries(str, start = 0, end = str.length) {
   const out = [];
   if (start >= end) return out;
   let i = start;
-  let prevCp = cpAt(str, i);
+  let prevCp = cpAt(str, i, end);
   let prev = gcbOf(prevCp);
   i += prevCp > 0xffff ? 2 : 1;
   // GB12/GB13 look back over the whole run of RIs; only its parity matters, so the run
@@ -79,7 +83,7 @@ function graphemeBoundaries(str, start = 0, end = str.length) {
   // GB9c: Consonant [Extend Linker]* Linker [Extend Linker]* × Consonant
   let conj = incbOf(prevCp) === INCB_CONSONANT ? 1 : 0; // 1 = after consonant, 2 = linker seen
   while (i < end) {
-    const cp = cpAt(str, i);
+    const cp = cpAt(str, i, end);
     const cur = gcbOf(cp);
     const ic = incbOf(cp);
     let brk;
@@ -119,12 +123,12 @@ function graphemeBoundaries(str, start = 0, end = str.length) {
 // emoji-test.txt by the differential; a case it misses is a finding, and its fix is a
 // named override in the generator, never a special case here.
 function clusterWidth(str, start, end, ambiguousIsNarrow = true) {
-  const first = cpAt(str, start);
+  const first = cpAt(str, start, end);
   let w = codePointWidth(first, ambiguousIsNarrow);
   if (end - start <= (first > 0xffff ? 2 : 1)) return w;
   let ri = gcbOf(first) === RI ? 1 : 0;
   for (let i = start + (first > 0xffff ? 2 : 1); i < end;) {
-    const cp = cpAt(str, i);
+    const cp = cpAt(str, i, end);
     if (cp === 0xfe0f) w = 2;                                      // VS16: emoji presentation
     else if (gcbOf(cp) === RI) ri++;
     else if (gcbOf(cp) === ZWJ) { if (isExtPict(first)) w = 2; }  // ZWJ emoji sequence

@@ -81,6 +81,22 @@ test('start acts as sot and end as eot; a surrogate pair is one code point', () 
   assert.deepStrictEqual(graphemeBoundaries(flags, 2), [6, 8]);
 });
 
+test('an end that splits a surrogate pair never reads past end', () => {
+  // U+101FD is a supplementary GCB=Extend: whole, it joins the 'a' before it (GB9). Cut by
+  // end, the high surrogate left in range is a lone code unit (GCB Other in the table) and
+  // must not borrow the low surrogate the caller excluded.
+  const s = 'a\u{101fd}b';
+  assert.deepStrictEqual(graphemeBoundaries(s, 0, s.length), [3, 4]);
+  assert.deepStrictEqual(graphemeBoundaries(s, 0, 2), [1, 2]);
+  // clusterWidth reads the cluster's first code point and then the rest; cut each by end.
+  // A lone surrogate's own width is the table's 0 (native gives it no cell).
+  assert.strictEqual(codePointWidth(0xd83d), 0);
+  assert.strictEqual(clusterWidth('\u{1f600}', 0, 2), 2);
+  assert.strictEqual(clusterWidth('\u{1f600}', 0, 1), 0, 'half an emoji is not the emoji');
+  assert.strictEqual(clusterWidth('a\u{1f3fb}', 0, 3), 2, 'a whole emoji modifier widens');
+  assert.strictEqual(clusterWidth('a\u{1f3fb}', 0, 2), 1, 'half of one does not');
+});
+
 test('cluster widths native measured on 2026-09-24', () => {
   const w = (s) => clusterWidth(s, 0, s.length, true);
   assert.strictEqual(w('a'), 1);
