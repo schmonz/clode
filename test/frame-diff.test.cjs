@@ -27,7 +27,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { sandbox, REPO } = require('./e2e.cjs');
 const { captureFrame } = require('./e2e-pty.cjs');
-const { diff, describe: describeDiff, corrupt, rowText } = require('./frame-diff.cjs');
+const { diff, describe: describeDiff, corrupt, rowText, cloneFrame } = require('./frame-diff.cjs');
 
 // tui-screen.cjs loads node-pty/@xterm from the per-platform harness dir, which
 // resolves through $TMPDIR (scripts/build-scratch.cjs). The e2e sandbox env is
@@ -206,13 +206,64 @@ test('a frame that could not observe hyperlinks refuses to judge them', (t) => {
 
 test('an unwritten cell and a written plain space are the SAME visible cell', (t) => {
   if (SKIP) { t.skip(SKIP); return; }
-  // Precondition, or this test proves nothing: the capture really does record the
-  // two differently. If the emulator ever reports the skipped cell as " ", the
-  // equivalence below is untested and this must say so rather than pass.
+  // Precondition, or this test proves nothing: the capture really does record a
+  // space at 0,2 in the base payload. Whether the SKIPPED payload's 0,2 is truly
+  // unwritten depends on the pty layer, not on us — decide by the MEASURED cell,
+  // never by process.platform.
   assert.strictEqual(FRAMES.base.cells[0][2].c, ' ', 'base writes a space at 0,2');
-  assert.strictEqual(FRAMES.skipped.cells[0][2].c, '', 'skipped leaves 0,2 unwritten');
-  const d = diff(FRAMES.base, FRAMES.skipped);
-  assert.ok(d.equal, `native flips exactly this at its banner; it must not count:\n${describeDiff(FRAMES.base, FRAMES.skipped, d)}`);
+  const skipped = FRAMES.skipped.cells[0][2];
+  if (skipped.c === '') {
+    // POSIX (node-pty + xterm/headless, every leg observed so far): the cursor-
+    // forward really does leave the cell unwritten. This is the real proof: a
+    // capture-based comparison of the two payloads must report them equal.
+    const d = diff(FRAMES.base, FRAMES.skipped);
+    assert.ok(d.equal, `native flips exactly this at its banner; it must not count:\n${describeDiff(FRAMES.base, FRAMES.skipped, d)}`);
+    return;
+  }
+  // ConPTY (windows-latest, CI run 36057766387): it re-renders the screen itself
+  // and MATERIALIZES the cursor-skipped cell as a written space with default
+  // attributes before the emulator ever sees the frame, so the capture cannot
+  // contain an unwritten cell here at all. That is a positive measurement of the
+  // platform, asserted exactly — not assumed — so a future ConPTY that stops
+  // materializing flips this red and the capture-based proof comes back.
+  const isDefaultSpace = skipped.c === ' ' && skipped.w === 1
+    && skipped.f === 'd:0' && skipped.b === 'd:0' && skipped.a === 0;
+  assert.ok(isDefaultSpace,
+    `skipped cell 0,2 is neither unwritten nor a default-attribute space — something else happened: ${JSON.stringify(skipped)}`);
+  t.skip('ConPTY materializes cursor-skipped cells as written spaces; the capture cannot contain '
+    + 'an unwritten cell, so the capture-based proof is not possible here; the equivalence itself '
+    + 'is proven by the synthetic test');
+});
+
+test('SYNTHETIC: the equivalence holds without a pty, on every platform', () => {
+  // No `before()` capture, no SKIP gate: this proves the same equivalence the
+  // test above proves from a real capture on POSIX, but from a frame literal in
+  // the frame-diff format, so it runs even where no pty harness is installed
+  // (and on ConPTY, where the capture itself can never show the unwritten side).
+  const base = {
+    format: 'clode-frame-v1', cols: 3, rows: 1, links: true,
+    cells: [[
+      { c: 'A', w: 1, f: 'd:0', b: 'd:0', a: 0, l: null },
+      { c: '', w: 1, f: 'd:0', b: 'd:0', a: 0, l: null },
+      { c: 'B', w: 1, f: 'd:0', b: 'd:0', a: 0, l: null },
+    ]],
+  };
+  const unwritten = cloneFrame(base);
+  const written = cloneFrame(base);
+  written.cells[0][1].c = ' ';
+  const d = diff(unwritten, written);
+  assert.ok(d.equal, `unwritten "" and a written " " with identical attributes must compare equal:\n${describeDiff(unwritten, written, d)}`);
+  assert.strictEqual(d.counts.glyph, 0);
+  assert.strictEqual(d.total, 0);
+
+  // Negative: a coloured space is NOT absorbed by the equivalence — it is an sgr
+  // difference, same as the real-capture "does not absorb" test below proves.
+  const coloured = cloneFrame(unwritten);
+  coloured.cells[0][1] = { c: ' ', w: 1, f: 'd:0', b: '2:12', a: 0, l: null };
+  const bg = diff(unwritten, coloured);
+  assert.strictEqual(bg.equal, false);
+  assert.strictEqual(bg.counts.sgr, 1);
+  assert.strictEqual(bg.counts.glyph, 0);
 });
 
 test('the equivalence does not absorb a COLOURED space, a spacer, or another glyph', (t) => {
