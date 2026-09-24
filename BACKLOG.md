@@ -10,8 +10,33 @@ cannot drift from it; it is also where the honest answer to "does this need node
 
 ## `Bun.ant.CellSegmenter` — the 2.1.278 TUI's real blocker, and it is NOT small (2026-09-22)
 
-**Status: OPEN, and it is what stands between this repo and moving the pin.** Everything
-else in the 2.1.278 interactive chain is fixed and driven; this is the remainder.
+**Status: OPEN, phases 1-2 of 6 DONE (2026-09-24), and it is still what stands between this
+repo and moving the pin.** Everything else in the 2.1.278 interactive chain is fixed and driven;
+this is the remainder.
+
+**Phases 1-2 landed: the 2.1.278 TUI paints, and its initial frame matches native.**
+`libexec/bun-shim.cjs` now provides `Bun.ant` with exactly one member, `CellSegmenter`
+(pools, packing, `segment`/`paint`/`setCell`, the SGR parser with the exact open/close
+spellings). Measured on darwin-arm64 against native 2.1.278 with `test/frame-oracle.cjs`:
+**709 differing cell-classes -> 0**, and D1 (`scripts/tui-probe.mjs`) went from "paints
+nothing" to PASS; the pinned 2.1.251 still passes D1. `test/bun-shim-cell-segmenter.test.cjs`
+pins the contract by playing the caller's own arithmetic, and `test/bun-shim-ant-gap.test.cjs`
+pins the membership (a second member is red). What is NOT done, and is pinned as wrong in that
+test so fixing it forces a re-take:
+
+- **phase 3, clustering and width.** Clustering is per CODE POINT and every non-control code
+  point is one column wide. A CJK glyph or an emoji anywhere on a line shifts the rest of it.
+  The initial frame is 0-diff only because it contains nothing wide.
+- **phase 4, OSC-8.** Hyperlinks are consumed but never interned, so links do not work.
+- **phase 5, the stateful surfaces** (damage under partial repaint, scroll, resize; the
+  grow-and-retry and pool-reset paths under a real session), and **phase 6** (`reordered`,
+  performance on the slow boxes). Not started.
+- **Unmeasured choice:** a re-applied SGR slot is replaced IN PLACE (so chalk re-opening an
+  outer colour reuses one style id). The initial frame never re-applies, so what native does
+  there is an open experiment for a multi-frame oracle script.
+- **The NetBSD leg has not been re-driven** with the segmenter. Its 2026-09-22 D1 failure was
+  earlier than painting (no reply to the capability handshake, exits in the boot window), so
+  the segmenter alone is not expected to fix it.
 
 Upstream 2.1.278 moved Ink's screen model onto a NATIVE cell segmenter in Anthropic's own
 private Bun namespace. The bundle asks for it once, unconditionally, and refuses to
@@ -125,6 +150,13 @@ leave the stripped text identical. So:
 - Measured with it: **native 2.1.278's initial TUI frame is bit-identical across runs**
   (0 differing cells), so this can be an exact-equality gate; and quaude-from-.278 paints
   a completely EMPTY screen (709 differing cell-classes, all of them native's content).
+- **Correction, 2026-09-24: native is NOT always bit-identical to itself.** Across 17
+  capture pairs, row 1 col 8 (the space between the logo and "Claude Code") comes back as a
+  written `" "` in some native runs and an unwritten `""` in others, and quaude does the same.
+  The two look identical on a terminal; it is the renderer's redraw timing, not the
+  segmenter, and it is why an occasional 1-cell `glyph` diff at exactly that cell is noise.
+  Before treating the oracle as a CI gate, `frame-diff` should class unwritten-vs-space as
+  equal or the gate should ignore it by name — a gate that flakes on native-vs-native lies.
 - Two ways the instrument itself was wrong, found and fixed before trusting it:
   `tui-screen.cjs` truncated its own stdout at 64 KiB (`write()` then `process.exit`), so
   every cell frame came back as broken JSON; and a shared `HOME` let the SIGKILL teardown

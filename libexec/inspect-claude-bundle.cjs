@@ -106,10 +106,9 @@ const KNOWN_BUN = new Set([
 // memoryPressureLevel: three syscall probes, each guarded, each of which upstream
 // handles being absent. Deliberately absent was the right answer for that surface.
 //
-// Upstream changed the surface under it. 2.1.278 DROPPED getPeerUid/getPeerPid/
-// memoryPressureLevel from the bundle and ADDED `Bun.ant.CellSegmenter`, the native
-// grapheme->terminal-cell segmenter Ink's screen model is built on — and unlike the
-// probes, upstream does NOT tolerate its absence: it throws "This build of
+// Upstream changed the surface under it. 2.1.278 ADDED `Bun.ant.CellSegmenter`, the
+// native grapheme->terminal-cell segmenter Ink's screen model is built on — and
+// unlike the probes, upstream does NOT tolerate its absence: it throws "This build of
 // @anthropic-ai/bun-internal has no Bun.ant.CellSegmenter" from the render root. A
 // quaude built from 2.1.278 therefore boots, writes its alternate-screen escapes,
 // throws that on the first frame and vanishes, and the one-level gate said nothing,
@@ -121,6 +120,29 @@ const KNOWN_BUN = new Set([
 // /\bant\.\w+/ matches `participant.custom` and a hundred minified locals (measured:
 // 15 false hits for `ant.custom` alone on 2.1.278).
 const BUN_ANT_API = /\bBun\.ant\??\.([A-Za-z_$][A-Za-z0-9_$]*)/g;
+
+// THIS TABLE IS A UNION ACROSS PLATFORM CARVES, NOT A DESCRIPTION OF ONE BUNDLE.
+// Upstream ships a different binary per platform and the ant surface DIFFERS
+// between them, so a gate run against one provider structurally cannot see the
+// others' members. Measured 2026-09-22, all four at 2.1.278, each carved with
+// libexec/extract-claude-js.cjs and counted with bunAntMembers():
+//
+//   darwin-arm64  CellSegmenter getPeerPid getPeerUid memoryPressureLevel waitForUrlEvent
+//   linux-x64     CellSegmenter getPeerPid getPeerUid memoryPressureLevel setDumpable
+//   linux-arm64   CellSegmenter getPeerPid getPeerUid memoryPressureLevel setDumpable
+//   win32-x64     CellSegmenter getPeerPid getPeerUid memoryPressureLevel
+//
+// That is a union of SIX members and a per-carve count of 4 or 5, which is why
+// the guard's verdict now names the carve it measured: "examined 4" and
+// "examined 5" are both correct, and without the name the difference reads as
+// drift. It is also why a review here must be taken from the carve that HAS the
+// member -- reviewing setDumpable from the darwin carve is impossible, the
+// string does not occur in it.
+//
+// CONSEQUENCE FOR THE FLOOR: the smallest measured surface is win32's 4. The
+// floor stays at 3 (set from darwin measurements) because its job is to catch a
+// scanner that stopped matching, not to assert a particular upstream shape --
+// but a carve reporting 3 or fewer is now known to be below every real bundle.
 const KNOWN_BUN_ANT = new Map([
   ['getPeerUid', 'SO_PEERCRED/LOCAL_PEERCRED on a UDS. Upstream gates the whole '
     + 'peer-credential capability on `typeof Bun.ant?.getPeerPid === "function"`, so '
@@ -128,21 +150,27 @@ const KNOWN_BUN_ANT = new Map([
   ['getPeerPid', 'the same capability probe as getPeerUid; see bun-shim\'s Bun.ant note.'],
   ['memoryPressureLevel', 'macOS memory-pressure level; read for telemetry, absence is '
     + 'a missing datapoint and nothing else.'],
-  ['CellSegmenter', 'the native grapheme->cell segmenter 2.1.278 moved Ink\'s screen '
-    + 'model onto. UNLIKE every other entry here, absent is NOT an acceptable answer: '
-    + 'the bundle constructs it unconditionally from a class-field initialiser with no '
-    + 'flag and no fallback, so without it there is no TUI at all -- every frame throws '
-    + 'from onRender. This entry does not accept its absence; it records that the '
-    + 'decision was made (2026-09-22, user) to IMPLEMENT it, that the contract is '
-    + 'derived in BACKLOG.md from its three call sites, and that the frame-differential '
-    + 'oracle that will judge the implementation exists (test/frame-diff.cjs). It is '
-    + 'here so this gate keeps reporting members nobody has looked at yet, instead of '
-    + 'holding main red on a question already answered. REMOVE THIS ENTRY the day '
-    + 'bun-shim provides CellSegmenter, so a future upstream change to its shape '
-    + 'surfaces as a new finding rather than a silence.'],
+  // CellSegmenter is NOT here any more, and its absence from this table is the
+  // point. It was reviewed into it on 2026-09-22 as "decided to implement"; on
+  // 2026-09-22 bun-shim implemented it, and a member the shim PROVIDES is
+  // accounted for by the implementation, not by a sentence accepting its
+  // absence. unaccountedBunAnt() now subtracts shimBunAntMembers() as well as
+  // this table's keys, so nothing had to be loosened to keep the gate green --
+  // and a member upstream adds that the shim neither provides nor has reviewed
+  // still surfaces as a finding, which is the whole job.
   ['waitForUrlEvent', 'macOS claude-cli:// deep-link handoff. Called only when '
     + '__CFBundleIdentifier is the Claude app bundle (so never under quaude) and wrapped '
     + 'in try/catch returning null.'],
+  ['setDumpable', 'Linux prctl(PR_SET_DUMPABLE, 0). MEASURED on the linux-x64 2.1.278 '
+    + 'carve (npm @anthropic-ai/claude-code-linux-x64@2.1.278), not inferred: one call '
+    + 'site, `function Je(n){try{if(!Bun.ant.setDumpable(!1))n("prctl(PR_SET_DUMPABLE,0) '
+    + 'returned nonzero")}catch(e){n(`prctl unavailable: ${e.message}`)}}`, and its one '
+    + 'caller is the AGENT-PROXY init, which reports through a warn-level logger '
+    + '("[agent-proxy] prctl unavailable: ..."). So absence is a caught exception and a '
+    + 'warning: the process stays dumpable, one hardening step short of upstream, and '
+    + 'nothing else changes. txiki.js has no prctl binding at all (grepped: zero hits), '
+    + 'so there is nothing to implement it with short of a new C primitive. '
+    + 'THIS MEMBER DOES NOT EXIST IN THE DARWIN OR WIN32 CARVES -- see the union note above.'],
 ]);
 
 // Every Bun.ant.<member> the bundle references, deduplicated, in source order of
@@ -153,10 +181,39 @@ function bunAntMembers(data) {
   return [...out].sort();
 }
 
+// The Bun.ant members bun-shim PROVIDES, DERIVED FROM ITS SOURCE TEXT rather than
+// declared here twice. Same discipline as clode-build.cjs reading bun-shim's
+// `const PROVIDES = {...}` as text: bun-shim stays the ONE place the membership
+// lives, so the two cannot drift. Read as text and not by require() on purpose --
+// requiring bun-shim installs its process-wide Module._load hook, which this
+// inspector must not do to its own process.
+//
+// test/bun-shim-ant-gap.test.cjs pins this derivation against the
+// RUNTIME Object.keys(Bun.ant), so a spelling this regex cannot see is a test
+// failure rather than a member that silently stops counting as provided.
+const BUN_ANT_PROVIDED_RE = /\bant:\s*\{([^{}]*)\}/;
+function shimBunAntMembers(shimPath) {
+  const p = shimPath || path.join(__dirname, 'bun-shim.cjs');
+  let text;
+  try { text = fs.readFileSync(p, 'utf8'); } catch (_) { return []; }
+  const m = text.match(BUN_ANT_PROVIDED_RE);
+  if (!m) return [];
+  return m[1].split(',')
+    .map((part) => (part.split(':')[0] || '').trim())
+    .filter((k) => /^[A-Za-z_$][\w$]*$/.test(k))
+    .sort();
+}
+
 // The members with no recorded review. A finding here means upstream grew a new
 // private-namespace dependency and nobody has said what happens without it.
-function unaccountedBunAnt(members) {
-  return members.filter((k) => !KNOWN_BUN_ANT.has(k));
+//
+// "Accounted for" is TWO things, and conflating them is how a table entry outlives
+// its own reason: a member the shim PROVIDES needs no sentence accepting its
+// absence, and a member the shim does NOT provide needs one. CellSegmenter moved
+// from the second to the first the day it was implemented.
+function unaccountedBunAnt(members, provided) {
+  const have = new Set(provided || shimBunAntMembers());
+  return members.filter((k) => !KNOWN_BUN_ANT.has(k) && !have.has(k));
 }
 
 const KNOWN_SEARCH_APPLETS = new Set(['ugrep', 'bfs']);
@@ -992,7 +1049,7 @@ module.exports = {
   updateNoticeHookAnchorPresent, remoteControlHookAnchorPresent,
   embeddedAppletVersions, hostAppletVersion, which, featureForAsset,
   inspect, probeShim, gateProblems, coverage,
-  BUN_ANT_API, KNOWN_BUN_ANT, bunAntMembers, unaccountedBunAnt,
+  BUN_ANT_API, KNOWN_BUN_ANT, bunAntMembers, unaccountedBunAnt, shimBunAntMembers,
   humanSurface, humanApplets, humanCoverage,
 };
 

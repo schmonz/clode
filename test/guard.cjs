@@ -73,8 +73,26 @@ function normalize(name, result) {
       + `a guard that cannot say how much it inspected cannot be distinguished from a `
       + `guard that inspected nothing`);
   }
-  return { findings: r.findings, examined: r.examined };
+  // `note` is OPTIONAL and PURELY DESCRIPTIVE: a short sentence naming WHAT was
+  // examined, appended to every verdict message. It exists because `examined: 4`
+  // is not interpretable on its own — the bun-ant guard measures a carve whose
+  // member count legitimately DIFFERS between upstream's platform bundles, so
+  // "examined 4" versus "examined 5" reads as a mystery, or worse as drift,
+  // unless the verdict says which artifact it counted. A note can never change a
+  // verdict; it is rejected if it is not a non-empty string.
+  let note;
+  if (r.note !== undefined) {
+    if (typeof r.note !== 'string' || r.note.length === 0) {
+      throw new Error(`guard ${name}: scan() returned a \`note\` that is not a non-empty `
+        + `string — a note names what was examined, so an empty one is worse than none`);
+    }
+    note = r.note;
+  }
+  return { findings: r.findings, examined: r.examined, note };
 }
+
+// Append a scan's `note` to a verdict message, so every verdict says what it looked at.
+function withNote(message, note) { return note ? `${message}\n    [examined: ${note}]` : message; }
 
 function checkControl(g) {
   const controlInputs = g.control();
@@ -95,7 +113,7 @@ function checkControl(g) {
   const r = normalize(g.name, g.scan(controlInputs));
   if (r.findings.length > 0) {
     return { verdict: OK, examined: r.examined, findings: r.findings,
-      message: `${g.name}: control produced ${r.findings.length} finding(s) — the guard can fail` };
+      message: withNote(`${g.name}: control produced ${r.findings.length} finding(s) — the guard can fail`, r.note) };
   }
   return { verdict: CANNOT_FAIL, examined: r.examined, findings: [],
     message: `${g.name}: CANNOT FAIL — its own positive control produced NO findings. `
@@ -126,17 +144,17 @@ function checkGate(g) {
   const r = normalize(g.name, g.scan(inputs));
   if (r.examined < g.floor) {
     return { verdict: BROKEN, examined: r.examined, findings: r.findings,
-      message: `${g.name}: BROKEN — examined ${r.examined}, floor is ${g.floor}. This is NOT `
+      message: withNote(`${g.name}: BROKEN — examined ${r.examined}, floor is ${g.floor}. This is NOT `
         + `a clean result: the guard inspected less than it must for its verdict to mean `
-        + `anything. Something it reads moved, emptied, or changed shape.` };
+        + `anything. Something it reads moved, emptied, or changed shape.`, r.note) };
   }
   if (r.findings.length > 0) {
     return { verdict: VIOLATION, examined: r.examined, findings: r.findings,
-      message: `${g.name}: VIOLATION — examined ${r.examined}, ${r.findings.length} finding(s):\n`
-        + r.findings.map((f) => `    ${f}`).join('\n') };
+      message: withNote(`${g.name}: VIOLATION — examined ${r.examined}, ${r.findings.length} finding(s):\n`
+        + r.findings.map((f) => `    ${f}`).join('\n'), r.note) };
   }
   return { verdict: OK, examined: r.examined, findings: [],
-    message: `${g.name}: OK — examined ${r.examined}, no findings` };
+    message: withNote(`${g.name}: OK — examined ${r.examined}, no findings`, r.note) };
 }
 
 // Declares the two node:test cases for a guard. Deliberately separate tests: a guard that

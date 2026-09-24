@@ -8,12 +8,20 @@
 // getPeerUid / getPeerPid / memoryPressureLevel, three guarded syscall probes — and
 // upstream is free to change them without changing the name the gate watches.
 //
-// It did. 2.1.278 dropped all three and added `Bun.ant.CellSegmenter`, the native
-// grapheme->cell segmenter Ink's screen model is built on, and upstream does NOT
-// tolerate that one being absent: the render root throws. A quaude built from
-// 2.1.278 boots, writes its alternate-screen escapes, throws on the first frame and
-// exits — while the one-level gate stayed green, because "Bun.ant (missing)" was
-// still an accurate, reviewed, accepted sentence.
+// It did. 2.1.278 added `Bun.ant.CellSegmenter`, the native grapheme->cell segmenter
+// Ink's screen model is built on, and upstream does NOT tolerate that one being
+// absent: the render root throws. A quaude built from 2.1.278 boots, writes its
+// alternate-screen escapes, throws on the first frame and exits — while the
+// one-level gate stayed green, because "Bun.ant (missing)" was still an accurate,
+// reviewed, accepted sentence.
+//
+// CORRECTION, 2026-09-22, measured with bunAntMembers() on the carved cli.cjs of
+// four real 2.1.278 providers: this comment used to say 2.1.278 "dropped all three"
+// of getPeerUid/getPeerPid/memoryPressureLevel. It did not — all three are present
+// in every 2.1.278 carve. What is true, and was the actual source of that
+// impression, is that the surface is PER PLATFORM: see the union table in
+// inspect-claude-bundle.cjs. Nothing about why this guard exists changes; the
+// sentence was simply wrong, and a guard's rationale has to be measured too.
 //
 // So this guard reads the LEVEL BELOW the name. It is deliberately a separate file
 // from the surface gate: that one is about the shim's coverage of Bun, this one is
@@ -29,7 +37,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const { bunAntMembers, unaccountedBunAnt, KNOWN_BUN_ANT } =
+const { bunAntMembers, unaccountedBunAnt, KNOWN_BUN_ANT, shimBunAntMembers } =
   require('../../libexec/inspect-claude-bundle.cjs');
 const { defineGuard, guardTests } = require('../guard.cjs');
 
@@ -40,10 +48,17 @@ guardTests(defineGuard({
   name: 'bun-ant-member-surface',
   // FLOOR 3. A carve whose ant surface came back with fewer than three members is
   // not "clean", it is a scanner that stopped matching: every provider measured so
-  // far carries at least getPeerUid + getPeerPid + memoryPressureLevel (2.1.251) or
-  // CellSegmenter + getPeerPid + getPeerUid + memoryPressureLevel + waitForUrlEvent
-  // (2.1.278). Without the floor, a regex that silently stopped matching reads
-  // exactly like an upstream that grew nothing.
+  // far carries at least getPeerUid + getPeerPid + memoryPressureLevel (2.1.251),
+  // and at 2.1.278 the smallest real surface is win32's four (CellSegmenter +
+  // getPeerPid + getPeerUid + memoryPressureLevel). Without the floor, a regex that
+  // silently stopped matching reads exactly like an upstream that grew nothing.
+  //
+  // THE FLOOR STAYS AT 3 THOUGH EVERY MEASURED BUNDLE HAS AT LEAST 4, because the
+  // count is upstream's to change and the floor's job is to catch a BLIND SCANNER,
+  // not to assert a shape. Raising it to 4 would turn "upstream dropped a member"
+  // into BROKEN ("the guard is blind"), which is the wrong sentence for a true
+  // finding. See the union table in inspect-claude-bundle.cjs for all four
+  // per-platform measurements.
   floor: 3,
   read() {
     const bin = process.env.CLODE_PROVIDER_BIN;
@@ -59,17 +74,42 @@ guardTests(defineGuard({
     // latin1 so 1 char == 1 byte, matching the inspector's own round-trip.
     const text = fs.readFileSync(cli, 'latin1');
     try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ }
-    return { text };
+    // WHICH CARVE. The ant surface is PER PLATFORM (see the union table in
+    // inspect-claude-bundle.cjs), so a member count is only interpretable beside
+    // the artifact it was counted from. Derived from the provider's own container
+    // rather than from this host's process.platform: a cross-carve is a real and
+    // deliberate thing to do here, and reporting the runner's OS would be a lie
+    // exactly when it mattered.
+    //
+    // Loaded through the EXTRACT constant, NOT a require() literal, on purpose: this is a
+    // FIXTURE use (borrowing two helpers to label the carve), and guards-population reads
+    // require() literals in build-gates files as "this guard CONTROLS that module". This
+    // guard does not control extract-claude-js, and letting the label claim it would drop
+    // the uncontrolled-gate count for a gate nobody controls.
+    let carve = bin;
+    try {
+      const { providerPlatformOf, providerArchOf } = require(EXTRACT);
+      const plat = providerPlatformOf(bin), arch = providerArchOf(bin);
+      if (plat && arch) carve = `${plat}-${arch} carve (${bin})`;
+    } catch { /* an unidentifiable container still reports its path */ }
+    return { text, carve };
   },
-  scan({ text }) {
+  scan({ text, carve }) {
     const members = bunAntMembers(text);
+    const provided = shimBunAntMembers();
+    const where = carve || 'a synthetic control fixture';
     return {
       examined: members.length,
-      findings: unaccountedBunAnt(members).map((k) =>
-        `Bun.ant.${k} — upstream references it and nothing here says what happens without it. `
-        + 'Decide, then record the decision: implement it in bun-shim, or add it to '
-        + "inspect-claude-bundle's KNOWN_BUN_ANT with the measured reason its absence is "
-        + `survivable. Reviewed today: ${[...KNOWN_BUN_ANT.keys()].join(', ')}.`),
+      note: `${where}: Bun.ant surface [${members.join(' ')}]`
+        + `; bun-shim provides [${provided.join(' ') || '(none)'}]`,
+      findings: unaccountedBunAnt(members, provided).map((k) =>
+        `Bun.ant.${k} — upstream references it in ${where} and nothing here says what `
+        + 'happens without it. Decide, then record the decision: implement it in bun-shim, '
+        + "or add it to inspect-claude-bundle's KNOWN_BUN_ANT with the measured reason its "
+        + 'absence is survivable — and take that measurement from a carve that HAS the '
+        + 'member, since the surface differs per platform. '
+        + `Provided: ${provided.join(', ') || '(none)'}. `
+        + `Reviewed absent: ${[...KNOWN_BUN_ANT.keys()].join(', ')}.`),
     };
   },
   // The control is the real regression, spelled out: a bundle that reaches for a
@@ -77,14 +117,15 @@ guardTests(defineGuard({
   // control also clears the floor, which is the point: a control that tripped the floor
   // instead of the finding would prove the wrong thing.
   //
-  // THE CONTROL'S MEMBER MUST BE ONE `KNOWN_BUN_ANT` WILL NEVER HOLD. It used to be
-  // `CellSegmenter`, on the sound reasoning that it was not hypothetical — it is exactly
-  // what 2.1.278 added and what this guard exists to have caught. Then CellSegmenter was
-  // reviewed (the decision to implement it is recorded in the table), the control stopped
-  // producing a finding, and this guard reported CANNOT_FAIL — correctly. A control
-  // spelled with a REAL member is a control with an expiry date: it dies the day someone
-  // does the reviewing this guard exists to demand. So the control names something
-  // upstream cannot plausibly ship, and says so.
+  // THE CONTROL'S MEMBER MUST BE ONE NOTHING WILL EVER ACCOUNT FOR — neither
+  // `KNOWN_BUN_ANT` nor bun-shim. It used to be `CellSegmenter`, on the sound
+  // reasoning that it was not hypothetical — it is exactly what 2.1.278 added and what
+  // this guard exists to have caught. Then CellSegmenter was reviewed, the control
+  // stopped producing a finding, and this guard reported CANNOT_FAIL — correctly. It
+  // has since been IMPLEMENTED, which would have expired the control a second time.
+  // A control spelled with a REAL member is a control with an expiry date: it dies the
+  // day someone does the work this guard exists to demand. So the control names
+  // something upstream cannot plausibly ship, and says so.
   control() {
     return {
       text: 'if(typeof Bun.ant?.getPeerPid==="function"){}Bun.ant.getPeerUid(1);'

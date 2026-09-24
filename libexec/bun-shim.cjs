@@ -997,6 +997,402 @@ const YAML = {
 // so inspect-claude-bundle's coverage reports it honestly (stubbed, not implemented).
 if (!_yaml) YAML.__bunShimStub = true;
 
+
+// --- Bun.ant.CellSegmenter -------------------------------------------------
+// Upstream 2.1.278 moved Ink's screen model onto a NATIVE grapheme->cell
+// segmenter that exists only inside Anthropic's private Bun build. Unlike every
+// other Bun.ant member (see the note beside `spawnSync`), absence is NOT an
+// acceptable answer: `class Mf { native = vs(qot) }` constructs it from a
+// class-field initialiser with no flag and no fallback, so without it every
+// frame throws out of onRender and quaude paints a blank screen.
+//
+// THE CALLER IS THE SPEC. The whole contract is derived in
+// BACKLOG.md from the three call sites that exist in the 1958-module bundle
+// (`Mf.native`, the `A0 ??= vs([])` singleton `px()` uses only for setCell, and
+// `Mf.resetNative()`), and it separates what the caller OBSERVES from what it
+// never looks at. What it never looks at, we choose. In particular:
+//   - how cells[2i] encodes a grapheme is ours (any index into our own
+//     `graphemes`), because only our own paint() reads it back;
+//   - whether a wide grapheme takes one scratch cell or two is ours, because
+//     width() SUMS advances and nothing counts cells per grapheme. We use ONE
+//     cell carrying the full advance, and paint() emits the spacer.
+//
+// What IS observed, and must match native exactly:
+//   scratch cells[2i+1]:  bits 0-7 advance columns, bit 8 "this is a TAB"
+//                         (advance is tabWidth - col%tabWidth), bits 10+ run index
+//   runs[2j] / runs[2j+1]: index into sgrKeys/sgrCloseKeys, index into uris,
+//                         with 0 RESERVED in both ("no style" / "no hyperlink")
+//   the pools:            live, indexable, append-only JS arrays of strings whose
+//                         indices are stable for the life of the instance (the
+//                         caller memoises styleIds[i]/linkIds[i] across frames)
+//   paint()/setCell() return: a double packing
+//                         endColumn | damageX1<<20 | damageX2<<36
+//   every screen cell written: BOTH slots, char index and packed word.
+//
+// SCOPE, STATED SO IT IS MEASURABLE RATHER THAN SILENT. This is phases 1 and 2
+// of a plan whose phase 3 is real UAX #29 grapheme clustering plus a width
+// table, and phase 4 is OSC-8. Today:
+//   - CLUSTERING IS PER CODE POINT, not per grapheme cluster. Surrogate pairs
+//     are kept whole, but a combining mark, a ZWJ emoji sequence, a
+//     regional-indicator flag pair and a skin-tone modifier each split into
+//     several graphemes. `Intl.Segmenter` does not exist in bare tjs and the
+//     polyfill we ship (libexec/node-shim/modules/intl.cjs) is itself a code
+//     point splitter, so there is no correct segmenter anywhere in this stack
+//     to call. Phase 3 writes one; approximating it here would hide that.
+//   - EVERY non-control code point is ONE COLUMN WIDE. No width table, on
+//     purpose: a partial table is indistinguishable from a correct one until it
+//     is wrong at the worst moment, and a wrong width is not a wrong cell, it is
+//     a wrong offset for the whole rest of the line.
+//   - HYPERLINKS ARE PARSED BUT NOT INTERNED. OSC sequences are consumed (they
+//     must be, or their bytes would paint as glyphs) and `uris` therefore never
+//     grows past its reserved index 0, so runs[2j+1] is always 0 and the caller
+//     skips interning. Frames containing OSC-8 links differ from native in the
+//     link class and nowhere else.
+// test/bun-shim-cell-segmenter.test.cjs PINS each of these three as currently
+// wrong, so the day one is fixed the pin goes red and has to be re-taken.
+
+// Pool interning. The pools are ARRAYS because the caller indexes and .length
+// them directly; the Map beside each is ours and never escapes.
+function _csIntern(pool, index, s) {
+  let i = index.get(s);
+  if (i === undefined) { i = pool.length; pool.push(s); index.set(s, i); }
+  return i;
+}
+
+// SGR attribute table: which slot an opening code occupies, and the closing code
+// the caller compares BY STRING IDENTITY against its own fixed set (\x1b[22m
+// bold/dim, 23m italic, 24m underline, 27m inverse, 29m strikethrough, 39m
+// foreground, 49m background, 55m overline). A wrong close code is not cosmetic:
+// `sx` drives "does this run carry a background-ish attribute" and
+// withSelectionBg filters on it, so it changes selection highlighting.
+//
+// Slots are per ATTRIBUTE, not per close code, because bold and dim both close
+// with 22m and must be able to coexist. Closing removes every attribute whose
+// close code matches, which is exactly what 22m means.
+const _CS_SIMPLE = {
+  1: 'bold', 2: 'dim', 3: 'italic', 4: 'underline',
+  7: 'inverse', 8: 'hidden', 9: 'strike', 53: 'overline',
+};
+const _CS_CLOSE_OF = {
+  bold: 22, dim: 22, italic: 23, underline: 24,
+  inverse: 27, hidden: 28, strike: 29, overline: 55,
+  fg: 39, bg: 49,
+};
+// Closing codes that clear a slot, and the slot(s) they clear.
+const _CS_CLOSERS = { 22: 22, 23: 23, 24: 24, 27: 27, 28: 28, 29: 29, 39: 39, 49: 49, 55: 55 };
+
+// Parse ONE SGR sequence's parameters into a list of operations. Upstream emits
+// one attribute per escape, but a compound `\x1b[1;31m` must still be split:
+// the caller's own SC regex accepts only `\x1b[<n>m`, `\x1b[<n>;5;<i>m` and
+// `\x1b[<n>;2;<r>;<g>;<b>m`, so a non-canonical spelling is not an error, it is
+// an INVISIBLE loss of styling. Canonicalising here is what keeps that from
+// happening. Unrecognised codes are dropped, which is what SC would do anyway.
+function _csSgrOps(params) {
+  const ops = [];
+  const p = params.length === 0 ? [0] : params;
+  for (let i = 0; i < p.length; i++) {
+    const n = p[i];
+    if (n === 0) { ops.push({ op: 'reset' }); continue; }
+    if (_CS_SIMPLE[n]) {
+      const slot = _CS_SIMPLE[n];
+      ops.push({ op: 'open', slot, code: `\x1b[${n}m`, close: `\x1b[${_CS_CLOSE_OF[slot]}m` });
+      continue;
+    }
+    if (_CS_CLOSERS[n]) { ops.push({ op: 'close', close: `\x1b[${n}m` }); continue; }
+    if ((n >= 30 && n <= 37) || (n >= 90 && n <= 97)) {
+      ops.push({ op: 'open', slot: 'fg', code: `\x1b[${n}m`, close: '\x1b[39m' }); continue;
+    }
+    if ((n >= 40 && n <= 47) || (n >= 100 && n <= 107)) {
+      ops.push({ op: 'open', slot: 'bg', code: `\x1b[${n}m`, close: '\x1b[49m' }); continue;
+    }
+    if (n === 38 || n === 48) {
+      const slot = n === 38 ? 'fg' : 'bg';
+      const close = n === 38 ? '\x1b[39m' : '\x1b[49m';
+      const kind = p[i + 1];
+      if (kind === 5 && i + 2 < p.length) {
+        ops.push({ op: 'open', slot, code: `\x1b[${n};5;${p[i + 2]}m`, close }); i += 2; continue;
+      }
+      if (kind === 2 && i + 4 < p.length) {
+        ops.push({ op: 'open', slot, code: `\x1b[${n};2;${p[i + 2]};${p[i + 3]};${p[i + 4]}m`, close });
+        i += 4; continue;
+      }
+      // Malformed extended colour: consume what is there and emit nothing,
+      // rather than leaving the parameters to be read as separate attributes.
+      i = p.length; continue;
+    }
+    // Anything else (21 double-underline, 51/52 frames, 4:3 style sub-params
+    // which never reach here because they are not plain digits): dropped. SC
+    // drops them too, so tracking them could only produce a key nobody reads.
+  }
+  return ops;
+}
+
+class _CellSegmenter {
+  constructor(options) {
+    const o = options || {};
+    const s = o.screen || {};
+    // ambiguousIsNarrow is only ever passed `true` and is never re-read by the
+    // caller; recorded so a future width table has it to honour.
+    this.ambiguousIsNarrow = o.ambiguousIsNarrow !== false;
+    this.widthMask = s.widthMask === undefined ? 3 : s.widthMask;
+    this.narrow = s.narrow === undefined ? 0 : s.narrow;
+    this.wide = s.wide === undefined ? 1 : s.wide;
+    this.spacerTail = s.spacerTail === undefined ? 2 : s.spacerTail;
+    // spacerHead is accepted and never emitted: nothing in the bundle produces
+    // or distinguishes it (every reader treats 2 and 3 alike, and the blit
+    // fixups in Yd test only for 2), so an implementation that never emits 3 is
+    // indistinguishable from one that does.
+    this.spacerHead = s.spacerHead === undefined ? 3 : s.spacerHead;
+    this.emptyCharIndex = s.emptyCharIndex === undefined ? 0 : s.emptyCharIndex;
+    this.spacerCharIndex = s.spacerCharIndex === undefined ? 1 : s.spacerCharIndex;
+    this.emptyWord = s.emptyWord === undefined ? 0 : s.emptyWord;
+    this.tabWidth = s.tabWidth === undefined ? 8 : s.tabWidth;
+
+    // `substitute` is a list of codepoint RANGES to replace with U+FFFD — the
+    // bidi controls (ALM, LRE..RLO/PDF, LRI..PDI). The module's own JS twin Ec()
+    // replaces exactly those. px()'s singleton passes [], i.e. no substitution.
+    this.substitute = [];
+    if (Array.isArray(o.substitute)) {
+      for (const r of o.substitute) {
+        if (Array.isArray(r) && r.length >= 2) this.substitute.push([r[0], r[1]]);
+      }
+    }
+
+    // The four pools the caller holds references to. They must be the SAME
+    // objects for the life of the instance and must grow IN PLACE: the caller
+    // caches them in fields and re-reads them only in its constructor and in
+    // resetNative(), which builds a whole new segmenter.
+    //
+    // Index 0 is RESERVED in sgrKeys/sgrCloseKeys ("no style": ansiCodes(0)
+    // short-circuits without reading sgrKeys[0], and styleId(0) is the
+    // cached-style sentinel) and in uris ("no hyperlink": the caller skips
+    // interning when runs[2j+1] === 0). `graphemes` reserves nothing.
+    this.graphemes = [];
+    this.sgrKeys = [''];
+    this.sgrCloseKeys = [''];
+    this.uris = [''];
+    this._gIndex = new Map();
+    this._sgrIndex = new Map([['', 0]]);
+    this._uriIndex = new Map([['', 0]]);
+  }
+
+  // The style key for the currently-active attribute list: the NUL-joined open
+  // codes and the parallel NUL-joined close codes. ORDER IS OBSERVED (the
+  // caller interns the decoded list and the interned identity is
+  // order-sensitive), so this is the order the attributes were applied in, with
+  // a re-applied slot replaced in place. In place rather than moved to the end
+  // is a CHOICE, not a measurement: chalk re-opens an outer colour after every
+  // nested one, and moving it would mint a second style id for an identical
+  // appearance. The initial-frame oracle does not exercise re-application, so
+  // what native does here is still an open experiment.
+  _sgrIndexOf(attrs) {
+    if (attrs.length === 0) return 0;
+    let open = attrs[0].code, close = attrs[0].close;
+    for (let i = 1; i < attrs.length; i++) {
+      open += '\x00' + attrs[i].code;
+      close += '\x00' + attrs[i].close;
+    }
+    let i = this._sgrIndex.get(open);
+    if (i === undefined) {
+      i = this.sgrKeys.length;
+      this.sgrKeys.push(open);
+      this.sgrCloseKeys.push(close);
+      this._sgrIndex.set(open, i);
+    }
+    return i;
+  }
+
+  // segment(text, cells, runs, reordered) -> cellCount, or -needed to grow.
+  //
+  // The caller reallocates BOTH buffers to 2*max(-u, oldLength) ints and calls
+  // again exactly ONCE — it does not loop — so the negative value has to
+  // guarantee the retry succeeds. -cellCount is sufficient and minimal;
+  // anything smaller is a silent screen corruption, not an error.
+  //
+  // `reordered` is the caller's xf(), true only under Windows Terminal and
+  // VS Code's terminal. We never reorder, so we ignore it: when it is true the
+  // caller merely stops assuming run indices are monotonic and scans all cells
+  // for the max, which costs correctness nothing.
+  segment(text, cells, runs, _reordered) {
+    const cap = cells.length >>> 1;
+    const runCap = runs.length >>> 1;
+    const str = typeof text === 'string' ? text : String(text == null ? '' : text);
+    const n = str.length;
+
+    let attrs = [];            // active SGR attributes, in application order
+    let sgrIdx = 0;            // index into sgrKeys for `attrs`
+    let uriIdx = 0;            // index into uris; 0 = no hyperlink (see SCOPE)
+    let runIdx = -1;           // last emitted run
+    let runSgr = -1, runUri = -1;
+    let count = 0;             // scratch cells needed (written while <= capacity)
+    let runCount = 0;
+    let overflow = false;
+
+    const emit = (graphemeIdx, word) => {
+      if (runIdx < 0 || runSgr !== sgrIdx || runUri !== uriIdx) {
+        if (runCount >= runCap) overflow = true;
+        else { runs[runCount * 2] = sgrIdx; runs[runCount * 2 + 1] = uriIdx; }
+        runIdx = runCount++;
+        runSgr = sgrIdx; runUri = uriIdx;
+      }
+      if (count >= cap) overflow = true;
+      else { cells[count * 2] = graphemeIdx; cells[count * 2 + 1] = word | (runIdx << 10); }
+      count++;
+    };
+
+    for (let i = 0; i < n;) {
+      const c = str.charCodeAt(i);
+
+      if (c === 0x1b) {
+        const next = i + 1 < n ? str[i + 1] : '';
+        if (next === '[') {
+          // CSI: parameter bytes 0x30-0x3f, intermediates 0x20-0x2f, final 0x40-0x7e.
+          let j = i + 2;
+          while (j < n && str.charCodeAt(j) >= 0x30 && str.charCodeAt(j) <= 0x3f) j++;
+          while (j < n && str.charCodeAt(j) >= 0x20 && str.charCodeAt(j) <= 0x2f) j++;
+          if (j < n) {
+            if (str[j] === 'm') {
+              const body = str.slice(i + 2, j);
+              // Colon sub-parameters (\x1b[4:3m) have no canonical single-code
+              // spelling the caller's SC regex would accept, so a parameter
+              // carrying one is dropped rather than mis-spelled.
+              const params = body === '' ? [] : body.split(';').map((x) => {
+                if (x === '') return 0;
+                if (!/^[0-9]+$/.test(x)) return -1;
+                return parseInt(x, 10);
+              });
+              if (params.indexOf(-1) < 0) {
+                for (const op of _csSgrOps(params)) {
+                  if (op.op === 'reset') attrs = [];
+                  else if (op.op === 'close') attrs = attrs.filter((a) => a.close !== op.close);
+                  else {
+                    const at = attrs.findIndex((a) => a.slot === op.slot);
+                    if (at < 0) attrs.push(op);
+                    else attrs[at] = op;
+                  }
+                }
+                sgrIdx = this._sgrIndexOf(attrs);
+              }
+            }
+            i = j + 1;
+          } else i = n;
+          continue;
+        }
+        if (next === ']') {
+          // OSC: terminated by BEL or ST (ESC \). Consumed, not interned — see
+          // the SCOPE note above; this is phase 4.
+          let j = i + 2;
+          while (j < n) {
+            const d = str.charCodeAt(j);
+            if (d === 0x07) { j++; break; }
+            if (d === 0x1b && j + 1 < n && str[j + 1] === '\\') { j += 2; break; }
+            j++;
+          }
+          i = j;
+          continue;
+        }
+        // Any other escape: two bytes (ESC + final). DCS/APC/PM would need their
+        // own ST scan; the painter never produces one.
+        i += next === '' ? 1 : 2;
+        continue;
+      }
+
+      if (c === 0x09) {                       // TAB
+        // Bit 8 says "advance is tabWidth - col%tabWidth", which only the
+        // consumer (width(), or our paint()) can resolve because it depends on
+        // the column. The low advance bits are unread for a tab; keep them 0.
+        emit(0, 256);
+        i++;
+        continue;
+      }
+      if (c < 0x20 || c === 0x7f) { i++; continue; }   // other C0: no cell
+
+      // ONE CODE POINT PER CELL. Surrogate pairs stay whole; clusters do not
+      // exist yet. See the SCOPE note.
+      let cp = c;
+      let len = 1;
+      if (c >= 0xd800 && c <= 0xdbff && i + 1 < n) {
+        const lo = str.charCodeAt(i + 1);
+        if (lo >= 0xdc00 && lo <= 0xdfff) { cp = str.codePointAt(i); len = 2; }
+      }
+      let g = str.substr(i, len);
+      for (const [lo, hi] of this.substitute) {
+        if (cp >= lo && cp <= hi) { g = '�'; break; }
+      }
+      emit(_csIntern(this.graphemes, this._gIndex, g), 1);
+      i += len;
+    }
+
+    if (overflow) return -count;
+    return count;
+  }
+
+  // paint(screenCells, screenWidth, x, y, segCells, count, _unused, charIndices,
+  //       runWords) -> endColumn | damageX1<<20 | damageX2<<36
+  //
+  // The 7th argument is ALWAYS undefined at the only call site, so its meaning
+  // is unobservable; recorded as a freedom rather than a mystery.
+  //
+  // CLIPPING IS PAINT'S JOB: the caller passes an x that may exceed the screen
+  // width and the full cell count regardless of how much fits.
+  paint(screenCells, screenWidth, x, y, segCells, count, _unused, charIndices, runWords) {
+    const base = y * screenWidth;
+    let col = x;
+    let x1 = 0, x2 = 0, any = false;
+    const put = (c, charIndex, word) => {
+      if (c < 0 || c >= screenWidth) return;
+      const k = (base + c) << 1;
+      screenCells[k] = charIndex;
+      screenCells[k + 1] = word;
+      if (!any) { x1 = c; x2 = c + 1; any = true; }
+      else { if (c < x1) x1 = c; if (c + 1 > x2) x2 = c + 1; }
+    };
+    for (let i = 0; i < count; i++) {
+      const w = segCells[(i << 1) + 1];
+      const word = runWords[w >>> 10];
+      if ((w & 256) !== 0) {
+        // A tab paints the run's own blanks, so it carries the run's background.
+        let adv = this.tabWidth - (((col % this.tabWidth) + this.tabWidth) % this.tabWidth);
+        while (adv-- > 0) { put(col, this.emptyCharIndex, word | this.narrow); col++; }
+        continue;
+      }
+      const adv = w & 255;
+      if (adv === 0) continue;               // zero-width: no cell of its own
+      if (adv >= 2) {
+        put(col, charIndices[segCells[i << 1]], word | this.wide);
+        // spacerTail (2) is the ONLY spelling of "second half of a wide
+        // grapheme": Yd()'s blit fixups test for width===1 followed by
+        // width===2, so any other spelling corrupts clipped blits.
+        for (let k = 1; k < adv; k++) put(col + k, this.spacerCharIndex, word | this.spacerTail);
+        col += adv;
+        continue;
+      }
+      put(col, charIndices[segCells[i << 1]], word | this.narrow);
+      col++;
+    }
+    return _csPack(col, x1, x2);
+  }
+
+  // setCell(screenCells, screenWidth, x, y, charIndex, word) -> the same packed
+  // triple, of which only the damage half is read. The word arrives ALREADY
+  // PACKED, width bits included: setCell segments nothing and touches no pool.
+  setCell(screenCells, screenWidth, x, y, charIndex, word) {
+    if (x < 0 || y < 0 || x >= screenWidth) return _csPack(x, 0, 0);
+    const k = ((y * screenWidth) + x) << 1;
+    screenCells[k] = charIndex;
+    screenCells[k + 1] = word;
+    return _csPack(x + 1, x, x + 1);
+  }
+}
+
+// endColumn (bits 0-19) | damageX1 (bits 20-35) | damageX2 (bits 36+), as a
+// double. B0 does nothing when x1 >= x2, so 0/0 is "no damage". The caller reads
+// the end column as `m % 1048576`, so it must not overflow into the x1 field.
+function _csPack(endCol, x1, x2) {
+  const e = endCol < 0 ? 0 : (endCol > 0xfffff ? 0xfffff : endCol);
+  return e + (x1 * 1048576) + (x2 * 68719476736);
+}
+
 const Bun = {
   version: process.versions.bun || '1.4.0',
   revision: '0000000000000000000000000000000000000000',
@@ -1159,23 +1555,30 @@ const Bun = {
   TOML: Object.assign(
     { parse(){ throw new Error('Bun.TOML.parse not yet implemented in the Node host shim'); } },
     { __bunShimStub: true }),
-  // Bun.ant — DELIBERATELY ABSENT, and it must STAY absent. New in 2.1.243,
-  // Anthropic's own private Bun namespace; four methods, all needing a syscall:
+  // Bun.ant — EXACTLY ONE MEMBER, and the rest must STAY absent. Anthropic's own
+  // private Bun namespace, and the ONE place in this shim where "provide it" and
+  // "leave it absent" are both right, member by member:
   //
-  //   getPeerUid(fd) / getPeerPid(fd)  SO_PEERCRED / LOCAL_PEERCRED on a UDS
-  //   setDumpable(bool)                Linux prctl(PR_SET_DUMPABLE, 0)
-  //   memoryPressureLevel()            macOS memory-pressure level
+  //   CellSegmenter                    PROVIDED (see the implementation above)
+  //   getPeerUid(fd) / getPeerPid(fd)  ABSENT — SO_PEERCRED / LOCAL_PEERCRED on a UDS
+  //   setDumpable(bool)                ABSENT — Linux prctl(PR_SET_DUMPABLE, 0)
+  //   memoryPressureLevel()            ABSENT — macOS memory-pressure level
+  //   waitForUrlEvent()                ABSENT — macOS claude-cli:// deep-link handoff
   //
-  // DO NOT STUB IT. Upstream gates a whole capability on
+  // DO NOT ADD THE OTHERS, and do not reach for a convenient `{ ...ant, ... }`.
+  // Upstream gates a whole capability on
   // `typeof Bun.ant?.getPeerPid === "function"`, so a stub — even a throwing
   // one — flips that probe TRUE and makes upstream advertise a peer-credential
-  // capability we cannot honor. That is the Bun.SQL trap above running in
-  // reverse: there, defining a Bun global defeated a guard that wanted Bun
-  // absent; here, defining Bun.ant would defeat a probe that is currently
-  // getting the RIGHT answer. Absent is the faithful answer, the same shape
-  // that makes Bun.WebView benign.
+  // capability we cannot honor. That is the Bun.SQL trap elsewhere in this file
+  // running in reverse: there, defining a Bun global defeated a guard that
+  // wanted Bun absent; here, defining Bun.ant.getPeerPid would defeat a probe
+  // that is currently getting the RIGHT answer. Adding CellSegmenter beside it
+  // does NOT flip that probe — `Bun.ant?.getPeerPid` is still undefined — which
+  // is the whole reason this namespace can be introduced at all.
+  // test/bun-shim-ant-gap.test.cjs asserts the membership EXACTLY, so adding a
+  // second member is a test failure and not a quiet capability change.
   //
-  // WHY NOT IMPLEMENT IT (checked, not assumed):
+  // WHY THE OTHERS ARE NOT IMPLEMENTED (checked, not assumed):
   //   - Peer credentials are technically within reach: the vendored txiki.js
   //     exposes `socket_from_fd(fd)` and `sock.getopt(level, opt, len)` in
   //     mod_posix-socket.c. But nothing can ever call them here, because BOTH
@@ -1189,7 +1592,7 @@ const Bun = {
   //   - setDumpable: txiki.js has no prctl binding at all (grepped: zero hits).
   //   - memoryPressureLevel: no macOS memory-pressure primitive either.
   //
-  // WHAT A USER OBSERVES, per call site, all four with upstream's own fallback:
+  // WHAT A USER OBSERVES, per absent call site, all with upstream's own fallback:
   //   - capability probe -> false, so upstream drops that capability from its
   //     advertised list. Clean feature detection; nothing is broken.
   //   - daemon peer-uid check (`aXn`) -> catch, warn, returns null, which
@@ -1205,7 +1608,9 @@ const Bun = {
   //   - Linux setDumpable -> reports "prctl unavailable"; the process stays
   //     dumpable, i.e. one hardening step short of upstream.
   //
-  // Recorded as an intentional divergence in test/shim-surface/golden.json.
+  // Recorded in test/shim-surface/golden.json, which no longer lists Bun.ant as
+  // a layer-1 gap because the property now exists.
+  ant: { CellSegmenter: _CellSegmenter },
   spawnSync: spawn.sync,
 };
 
