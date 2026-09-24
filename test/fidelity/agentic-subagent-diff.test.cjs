@@ -10,7 +10,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
-const { REPO, tjsPath, skipUnlessTjs, isApeFile, LOADER } = require('../node-shim-helper.cjs');
+const { REPO, tjsPath, skipUnlessTjs, isApeFile, wantsTrampoline, LOADER } = require('../node-shim-helper.cjs');
 const { startMockAnthropic, cannedSSE, cannedToolUseSSE } = require('../mock-anthropic-helper.cjs');
 
 function providerBin() { const p = process.env.CLODE_PROVIDER_BIN; return p && fs.existsSync(p) ? p : null; }
@@ -30,9 +30,11 @@ function stage(bin) {
 }
 function run(cmd, args, dir, env, timeoutMs) {
   // A cosmo APE engine can't be execve'd on non-Windows — wrap it in the /bin/sh
-  // ENOEXEC trampoline. Node (the naude side of this differential) is not an APE,
-  // so it passes through unchanged.
-  if (isApeFile(cmd)) { args = ['-c', '"$@"', 'sh', cmd, ...args]; cmd = '/bin/sh'; }
+  // ENOEXEC trampoline, on POSIX only (node-shim-helper.cjs's wantsTrampoline).
+  // On win32 every PE is 'MZ'-headed — node.exe (the naude side) and tjs.exe
+  // alike — so the magic alone would send BOTH sides to a /bin/sh Windows does
+  // not have; the same misfire failed CI runs 30675029624 and 36039332441.
+  if (wantsTrampoline(process.platform, isApeFile(cmd))) { args = ['-c', '"$@"', 'sh', cmd, ...args]; cmd = '/bin/sh'; }
   return new Promise((res) => {
     const c = spawn(cmd, args, { cwd: dir, stdio: ['ignore', 'pipe', 'pipe'], env });
     let so = '', se = ''; c.stdout.on('data', (d) => so += d); c.stderr.on('data', (d) => se += d);

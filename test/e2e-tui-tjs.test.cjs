@@ -36,7 +36,13 @@ before(() => {
   SBX = sandbox();
   seedClaudeProfile(SBX.home, { cwd: REPO });
   DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'e2e-tui-tjs-'));
-  const quaude = path.join(DIR, 'quaude');
+  // `.exe` on win32 (written reason for the per-platform name): a native build
+  // honours an explicit --out VERBATIM (libexec/clode-build.cjs resolveBuildOut),
+  // and libuv cannot spawn an extensionless file on Windows. With bare `quaude`
+  // the windows-amd64-tui job built, died in SMOKE with `spawn …\quaude ENOENT`,
+  // and SKIPPED this file's only render test — green while asserting nothing
+  // (CI runs 35727111476, 35692420157). Same spelling as test/built-binary.cjs.
+  const quaude = path.join(DIR, process.platform === 'win32' ? 'quaude.exe' : 'quaude');
   const build = spawnSync(process.execPath, [ENTRY, 'build', '--out', quaude], {
     encoding: 'utf8',
     timeout: 300000,

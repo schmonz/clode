@@ -7,6 +7,7 @@ const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const { REPO, NODE } = require('./e2e.cjs');
+const { isApeFile, wantsTrampoline } = require('./node-shim-helper.cjs');
 
 const TUI_SCREEN = path.join(REPO, 'test', 'tui-screen.cjs');
 
@@ -17,17 +18,17 @@ const TUI_SCREEN = path.join(REPO, 'test', 'tui-screen.cjs');
 // (version checks, PTY capture) would fail on cosmo. Detect the MZ magic and run
 // it the way clode-build's isApeFile path does: `/bin/sh -c '"$@"' sh <ape> …`.
 // Non-APE binaries (native Claude, naude SEA, native-tjs quaude) are unchanged.
-function isApeFile(bin) {
-  try {
-    const fd = fs.openSync(bin, 'r');
-    const b = Buffer.alloc(2);
-    const n = fs.readSync(fd, b, 0, 2, 0);
-    fs.closeSync(fd);
-    return n === 2 && b[0] === 0x4d && b[1] === 0x5a; // 'MZ'
-  } catch { return false; }
-}
-function apeCmd(cmd) {
-  if (!Array.isArray(cmd) || cmd.length === 0 || !isApeFile(cmd[0])) return cmd;
+//
+// POSIX ONLY, via the one shared decision (node-shim-helper.cjs's
+// wantsTrampoline). 'MZ' is also the head of every Windows PE — node.exe
+// included — so gating on the magic alone turned every win32 spawn into
+// `/bin/sh …`, which ConPTY cannot find: all of test/frame-diff.test.cjs failed
+// with node-pty's "File not found: " on windows-latest (CI run 36039332441,
+// 2026-09-24). `platform` is injectable so test/e2e-pty.test.cjs can pin the
+// win32 answer on every host.
+function apeCmd(cmd, platform = process.platform) {
+  if (!Array.isArray(cmd) || cmd.length === 0) return cmd;
+  if (!wantsTrampoline(platform, isApeFile(cmd[0]))) return cmd;
   return ['/bin/sh', '-c', '"$@"', 'sh', ...cmd];
 }
 
