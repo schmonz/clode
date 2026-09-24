@@ -208,13 +208,19 @@ export function stageDeps(nmdir) {
 // The old `builder` asset (the path of the clode building this naude, once fed to
 // the retired spawn-a-rebuild callback) is GONE: auto-update is notify-only now,
 // so nothing reads a builder path and nothing writes one.
-export function naudeSeaConfig({ mainBundle, cliCjs, bunShim, tar, sig, out, targetUpdateCheck, manifest, manifestSig }) {
+export function naudeSeaConfig({ mainBundle, cliCjs, bunShim, tar, sig, out, targetUpdateCheck, unicodeText, manifest, manifestSig }) {
   const assets = {
     'deps.tar': tar,
     'deps.sig': sig,
     'bun-shim.cjs': bunShim,
     'cli.cjs': cliCjs,
     'target-update-check.cjs': targetUpdateCheck,
+    // bun-shim.cjs's own require(__dirname + '/unicode-text.cjs') companion (Task 5 —
+    // see test/shim-companions.test.cjs): materialized into the SAME workDir cli.cjs
+    // and bun-shim.cjs land in (naude-entry.cjs's materializeAssets `names` list), so
+    // the require resolves. Resolved the same way as targetUpdateCheck just above —
+    // clode's own code, version-independent, not staged per-bundle.
+    'unicode-text.cjs': unicodeText,
   };
   // manifest.json: what this naude knows about itself — which clode built it, which
   // upstream bundle it bakes, which platform that bundle was CARVED for, and the sha256
@@ -310,6 +316,10 @@ export function naudeManifest({
 export function writeSeaConfig({
   bundle, cliCjs, tar, sigFile, outDir = OUT,
   targetUpdateCheck = path.join(REPO, 'libexec', 'target-update-check.cjs'),
+  // unicodeText (Task 5 — bun-shim.cjs's own unicode-text.cjs companion, see
+  // test/shim-companions.test.cjs): same reasoning as targetUpdateCheck just above —
+  // clode's own code, version-independent, not staged per-bundle.
+  unicodeText = path.join(REPO, 'libexec', 'unicode-text.cjs'),
   extras = {}, template = null,
 }) {
   // Ensure the artifact dir exists before writing into it (sea-config.json here).
@@ -336,6 +346,12 @@ export function writeSeaConfig({
     console.error(`build-naude: target-update-check.cjs not found at: ${targetUpdateCheck}`);
     process.exit(1);
   }
+  if (!fs.existsSync(unicodeText)) {
+    // Fail loud, same reason as targetUpdateCheck just above: bun-shim.cjs's own
+    // `require(__dirname + '/unicode-text.cjs')` 404s at load without this asset.
+    console.error(`build-naude: unicode-text.cjs not found at: ${unicodeText}`);
+    process.exit(1);
+  }
   // -- the manifest + its sig, written HERE (not by main) so the shas recorded are the
   // shas of the very files the SEA config is about to name as assets: no window in which
   // an asset could be re-staged between being hashed and being embedded.
@@ -345,6 +361,7 @@ export function writeSeaConfig({
     'bun-shim.cjs': bunShim,
     'cli.cjs': cliCjs,
     'target-update-check.cjs': targetUpdateCheck,
+    'unicode-text.cjs': unicodeText,
   };
   const members = {};
   for (const [name, file] of Object.entries(assetFiles)) {
@@ -381,6 +398,7 @@ export function writeSeaConfig({
     sig: sigFile,
     out: outDir,
     targetUpdateCheck,
+    unicodeText,
     manifest: manifestPath,
     manifestSig: manifestSigPath,
   });

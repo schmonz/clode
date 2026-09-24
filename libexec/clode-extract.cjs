@@ -232,13 +232,17 @@ function mergeStagedGraph(doc, docPath, opts) {
 }
 
 // Extract-on-first-use, cached per key. Mirrors extract_if_needed exactly:
-//  - CACHE HIT when cli.cjs AND bun-shim.cjs exist AND .extractor-sig matches the
-//    current extractor sig: still refresh the cached shim if the installed source
-//    differs, then return.
+//  - CACHE HIT when cli.cjs AND bun-shim.cjs AND its unicode-text.cjs companion (see
+//    test/shim-companions.test.cjs — bun-shim.cjs requires it from its own directory,
+//    so anywhere the shim is staged, this must be staged too) all exist AND
+//    .extractor-sig matches the current extractor sig: still refresh the cached shim
+//    (and its unicode-text.cjs companion, together) if the installed source differs,
+//    then return.
 //  - CACHE MISS: log (first-extract vs extractor-changed), run the extractor
-//    in-process to (re)write cli.cjs, `node --check` it, copy the shim, write the
-//    sig. Any extraction/verify/check problem removes the partial cli.cjs and fails
-//    loudly (throws), matching the sh's rm + exit 1.
+//    in-process to (re)write cli.cjs, `node --check` it, copy the shim and its
+//    unicode-text.cjs companion, write the sig. Any extraction/verify/check problem
+//    removes the partial cli.cjs and fails loudly (throws), matching the sh's rm +
+//    exit 1.
 //
 // opts: { bin, cacheDir, libexec, verbose=false, node=process.execPath, key,
 //         log } — `key` defaults to basename(cacheDir) (the sh KEY, since
@@ -272,14 +276,21 @@ function extractIfNeeded(opts) {
   const cliPath = path.join(cacheDir, split ? 'graph.json' : 'cli.cjs');
   const cacheShim = path.join(cacheDir, 'bun-shim.cjs');
   const srcShim = path.join(libexec, 'bun-shim.cjs');
+  // bun-shim.cjs's own require(__dirname + '/unicode-text.cjs') companion (Task 5 —
+  // see test/shim-companions.test.cjs): staged beside the shim everywhere the shim is
+  // staged, never on its own.
+  const cacheUnicode = path.join(cacheDir, 'unicode-text.cjs');
+  const srcUnicode = path.join(libexec, 'unicode-text.cjs');
   const sigPath = path.join(cacheDir, '.extractor-sig');
 
-  if (isFile(cliPath) && isFile(cacheShim) && readSig(sigPath) === extractorSig) {
-    // Cache hit on the bundle. Refresh the cached shim if the installed source
-    // differs, so a shim fix reaches existing per-version caches without waiting
-    // for a provider update to trigger a re-extract.
+  if (isFile(cliPath) && isFile(cacheShim) && isFile(cacheUnicode) && readSig(sigPath) === extractorSig) {
+    // Cache hit on the bundle. Refresh the cached shim (and its unicode-text.cjs
+    // companion, together — a shim with no companion is a shim that dies at load) if
+    // the installed source differs, so a shim fix reaches existing per-version caches
+    // without waiting for a provider update to trigger a re-extract.
     if (!filesEqual(srcShim, cacheShim)) {
       fs.copyFileSync(srcShim, cacheShim);
+      fs.copyFileSync(srcUnicode, cacheUnicode);
       clodeLog(`clode: refreshed cached bun-shim for ${key}`);
     }
     return;
@@ -351,6 +362,7 @@ function extractIfNeeded(opts) {
   }
 
   fs.copyFileSync(srcShim, cacheShim);
+  fs.copyFileSync(srcUnicode, cacheUnicode);
   fs.writeFileSync(sigPath, extractorSig + '\n');
 }
 
