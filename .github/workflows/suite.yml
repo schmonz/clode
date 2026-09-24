@@ -40,6 +40,8 @@ jobs:
     # occurrence: the repo change under suspicion wrote ZERO bytes on this job, so the
     # volume was already tight. POSIX runners are unaffected (their TMPDIR is already
     # roomy); setting these on every row keeps one definition rather than a per-OS branch.
+    # (2026-09-24: "already tight" was never measured, and error 70 turned out to be a
+    # failing stdout pipe — see the free-space steps around `npm test` below.)
     defaults:
       run:
         shell: bash
@@ -104,5 +106,21 @@ jobs:
           PROV="$(node scripts/stage-provider.mjs)"
           echo "provider: $PROV"
           echo "CLODE_PROVIDER_BIN=$PROV" >> "$GITHUB_ENV"
+      # MEASURE THE "SMALL DISK" PREMISE instead of assuming it. The scratch comment above and
+      # three skips in test/bun-graph.test.cjs blamed windows-latest's `zstd: error 70 ... No
+      # space left on device` on a full C:, and no free-space figure was ever logged. It was
+      # zstd's writes to a stdout PIPE failing (a 1.33 MB decode failed and a 3.98 MB one passed
+      # 342 ms later in the same process, CI run 36039332441); bun-graph now decodes to a -o
+      # file. It hit about 1 run in 5, so one green run proves nothing — these two lines are
+      # what will say, run after run, whether disk was ever the constraint. Windows only: the
+      # POSIX rows never showed the failure and have no C:/D: to report.
+      - name: Free space on C and D before the suite (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Get-PSDrive C,D | Select-Object Name, Root, Used, Free | Format-Table -AutoSize | Out-String -Width 200
       - name: Full node:test suite (includes the shim-fidelity gate)
         run: npm test
+      - name: Free space on C and D after the suite (windows)
+        if: always() && runner.os == 'Windows'
+        shell: pwsh
+        run: Get-PSDrive C,D | Select-Object Name, Root, Used, Free | Format-Table -AutoSize | Out-String -Width 200

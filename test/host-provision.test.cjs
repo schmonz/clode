@@ -218,8 +218,9 @@ test('provision resolves a real zstd decompressor on this host (integration)', z
   assert.ok(['zstd', 'unzstd', 'zstdcat'].includes(got.candidate.name), `unexpected candidate ${got.candidate.name}`);
 });
 
-// DECODE ARGV DIFFERS PER CANDIDATE — `zstd -d -c f`, `unzstd -c f`, `zstdcat f` — so one
-// shared argv would resolve a host that has only an alias and then run it wrong. zstd
+// DECODE ARGV DIFFERS PER CANDIDATE — `zstd -d -q -f -o out f`, `unzstd -q -f -o out f`,
+// `zstdcat -q -f -o out f` — so one shared argv would resolve a host that has only an alias and
+// then run it wrong. zstd
 // switches mode on argv[0], so a link named `unzstd` IS unzstd; these rows run the real
 // tool through the real argv, not a mock of it.
 for (const alias of ['unzstd', 'zstdcat']) {
@@ -240,7 +241,11 @@ for (const alias of ['unzstd', 'zstdcat']) {
 test('provision(zstd) REFUSES an override that merely echoes its input', shOpts, () => {
   const bindir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-zstdfake-'));
   const fake = path.join(bindir, 'passthru');
-  fs.writeFileSync(fake, '#!/bin/sh\n# ignore every flag; echo the last argument\'s bytes back\neval "f=\\${$#}"\nexec cat "$f"\n');
+  // Honours the -o contract (copies its input to the named output file), so it is refused for
+  // its BYTES, not for failing to write where it was told.
+  fs.writeFileSync(fake, '#!/bin/sh\n# ignore every other flag; copy the last argument\'s bytes to the -o file\n'
+    + 'eval "f=\\${$#}"; out=\nwhile [ $# -gt 1 ]; do [ "$1" = -o ] && { out=$2; shift; }; shift; done\n'
+    + 'exec cat "$f" > "$out"\n');
   fs.chmodSync(fake, 0o755);
   // PATH deliberately still holds the REAL zstd (when this host has one). An override that
   // fails must fail the requirement, not quietly hand back whatever else was lying around:
@@ -335,6 +340,15 @@ test('the zstd KAT frame demands decompression — its block is not RAW', () => 
     + 'so no passthrough or payload-copier can produce it');
 });
 
+// Where an injected fake must put its output: the `-o <out>` the registry's argv names. Every zstd
+// candidate decodes to a FILE (see host-provision.cjs), and the known-answer test reads that file,
+// so a fake that answered on stdout would be refused for the wrong reason and prove nothing.
+function outArg(args) {
+  const i = args.indexOf('-o');
+  assert.ok(i >= 0 && args[i + 1], `the zstd argv must name an -o output file: ${JSON.stringify(args)}`);
+  return args[i + 1];
+}
+
 // The fake above, as an injected spawn: pure JS, so it runs identically under node and the engine,
 // and no subprocess is involved. It is a *correct* raw-block frame walker — it just cannot inflate.
 function rawBlockWalkerSpawn(bin, args) {
@@ -355,7 +369,8 @@ function rawBlockWalkerSpawn(bin, args) {
     else { at += size; }
     if (last) break;
   }
-  return { status: 0, stdout: Buffer.concat(out).toString('utf8'), stderr: '' };
+  fs.writeFileSync(outArg(args), Buffer.concat(out));
+  return { status: 0, stdout: '', stderr: '' };
 }
 
 test('provision(zstd) REFUSES a frame walker that copies raw blocks without decoding', () => {
@@ -377,9 +392,37 @@ test('provision(zstd) REFUSES a decoder that appends a newline to correct output
   assert.throws(
     () => provision('zstd', {
       env: { PATH: '/nowhere' }, findTool: () => '/fake/zstd',
-      spawn: () => ({ status: 0, stdout: expected + '\n', stderr: '' }),
+      spawn: (bin, args) => { fs.writeFileSync(outArg(args), expected + '\n'); return { status: 0, stdout: '', stderr: '' }; },
       fs, dataDir: tmpDataDir(),
     }),
     /CLODE_ZSTD/,
     'the decoded bytes are embedded verbatim; a stray newline corrupts the asset');
+});
+
+// THE KNOWN-ANSWER TEST READS THE -o FILE, NOT STDOUT. Every candidate decodes to a file because
+// zstd.EXE's writes to a stdout PIPE intermittently fail on windows-latest (`error 70 ... No space
+// left on device`, ~1 run in 5; CI runs 36039332441, 35692416628) — and bun-graph reads the file
+// back, so the self-check has to prove that exact invocation. Two injected decoders pin it, and
+// they are each other's control: the right bytes in the -o file are ACCEPTED (so the refusals above
+// are about their bytes, not their plumbing); the same right bytes on stdout, -o ignored, are REFUSED.
+test('provision(zstd) ACCEPTS a decoder that writes the right bytes to the -o file', () => {
+  const { expected } = REGISTRY.zstd.KAT;
+  const got = provision('zstd', {
+    env: { PATH: '/nowhere' }, findTool: () => '/fake/zstd',
+    spawn: (bin, args) => { fs.writeFileSync(outArg(args), expected); return { status: 0, stdout: '', stderr: '' }; },
+    fs, dataDir: tmpDataDir(),
+  });
+  assert.strictEqual(got.path, '/fake/zstd');
+});
+
+test('provision(zstd) REFUSES a decoder that answers on stdout and ignores -o', () => {
+  const { expected } = REGISTRY.zstd.KAT;
+  assert.throws(
+    () => provision('zstd', {
+      env: { PATH: '/nowhere' }, findTool: () => '/fake/zstd',
+      spawn: () => ({ status: 0, stdout: expected, stderr: '' }),
+      fs, dataDir: tmpDataDir(),
+    }),
+    /CLODE_ZSTD/,
+    'bun-graph reads the -o file; a decoder that never writes it would hand the carve nothing');
 });

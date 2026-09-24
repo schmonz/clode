@@ -11,7 +11,7 @@
 // on `${base}/${version}/${platform}/${file}.zst`.
 //
 // NOT the zstd clode already has. clode's zstd is a HOST TOOL: libexec/host-provision.cjs
-// resolves a real `zstd -d -c` (KAT-verified) and libexec/bun-graph.cjs shells out to it
+// resolves a real `zstd -d -o` (KAT-verified) and libexec/bun-graph.cjs shells out to it
 // at CARVE time, so a built target never needs zstd to read upstream's embedded text
 // assets. This one is a streaming node:zlib Transform inside someone else's pipeline,
 // and tjs has no native zlib at all (libexec/node-shim/modules/zlib.cjs: every

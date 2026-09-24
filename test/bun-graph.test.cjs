@@ -410,6 +410,28 @@ function describeDecodeFailure(frameLen, r) {
     + "the child's stderr inherited.";
 }
 
+// Free bytes on the volume holding `dir`, or null when this runtime cannot measure it (tjs has no
+// fs.statfsSync). Blocks are in f_frsize units where reported, else f_bsize.
+function freeBytesAt(dir) {
+  if (typeof fs.statfsSync !== 'function') return null;
+  try {
+    const st = fs.statfsSync(dir);
+    const n = Number(st.bavail) * Number(st.frsize || st.bsize);
+    return Number.isFinite(n) ? n : null;
+  } catch (e) { return null; }
+}
+// A skip reason ONLY when a no-room failure is PROVEN; null means the guard must judge (and fail).
+// Proof = the failure reads as no-room AND the volume had fewer than `need` bytes free before the
+// decode began, so the decode's own writes could not have fit whatever the decoder did. Unmeasured
+// free space proves nothing, and neither does a no-room message from a volume that had the room.
+function noRoomSkipReason(r, need, free, dir) {
+  if (r.status === 0) return null;
+  if (!/No space left on device|error 70/i.test(String(r.stderr || '') + String(r.stdout || ''))) return null;
+  if (typeof free !== 'number' || free >= need) return null;
+  return `no room: ${dir} had ${free} bytes free before the decode, and decoding it writes ${need} `
+    + '(the staged frame plus the -o output) — the host could not hold this guard, measured by statfs';
+}
+
 test('the decoder must not stream the frame through the child stdin (deadlock guard)', deadlockOpts, (t) => {
   const plain = Buffer.from(pseudoText(6 << 20));
   const frame = makeZstdFrameViaCli(plain);
@@ -435,21 +457,22 @@ test('the decoder must not stream the frame through the child stdin (deadlock gu
   // reads `D:\a\_temp\x` as the remote host `D` (MSYS mounts C: but not D:).
   const roomy = scratch();
   const childEnv = { ...process.env, TMPDIR: roomy, TMP: roomy, TEMP: roomy };
+  // What the decode must write into `roomy`: bun-graph's staged copy of the frame plus the -o
+  // output it decodes to. The fixture itself is already on disk before the measurement.
+  const need = frame.length + plain.length;
+  const freeBefore = freeBytesAt(roomy);
   const r = require('node:child_process').spawnSync(cmd, argv, { encoding: 'utf8', timeout: 60000, env: childEnv });
-  // NO ROOM IS NOT A FAILING GUARD. This decodes ~6MB, and Windows runners have twice run out
-  // of disk mid-decode (`zstd: error 70 ... No space left on device`) — at 482e9ec, and again
-  // at 9ee9b1a WITH the RUNNER_TEMP redirect in place, so the roomy volume is not where I
-  // assumed. That is the environment failing to HOST the check, not the decoder streaming
-  // through stdin, and reporting it as the latter is a lie about the product.
-  // So skip LOUDLY, naming the sizes: a skipped oracle reads like a clean one, which is exactly
-  // why the reason has to be legible in the log. Deferred on purpose (2026-08-31, to cut a
-  // release); the real fix is scratch space that exists, not tolerating its absence forever.
-  const noRoom = /No space left on device|error 70/i;
-  if (r.status !== 0 && noRoom.test(String(r.stderr || '') + String(r.stdout || ''))) {
-    t.skip(`no room to decode a ${frame.length}-byte frame to ${plain.length} bytes — the host ran out of disk, so this guard could not run`);
-    return;
-  }
-  assert.strictEqual(r.status, 0, describeDecodeFailure(frame.length, r));
+  // A NO-ROOM SKIP MUST PROVE ITSELF. This used to skip on ANY `No space left on device|error
+  // 70`, and it hid three of the five windows-latest failures sampled 2026-09-20..24 (CI runs
+  // 35670438691, 35562770090, 35562521239) as "the host ran out of disk" — a premise nobody had
+  // measured, and false: those were zstd's writes to its stdout PIPE failing (bun-graph.cjs now
+  // decodes to a -o file). So it skips only when statfs says the volume had less than `need`
+  // free BEFORE the decode started; otherwise it FAILS with zstd's own words.
+  const skip = noRoomSkipReason(r, need, freeBefore, roomy);
+  if (skip) { t.skip(skip); return; }
+  assert.strictEqual(r.status, 0, describeDecodeFailure(frame.length, r)
+    + `\n[${roomy}: ${freeBefore === null ? 'free space not measurable here (no fs.statfsSync)' : `${freeBefore} bytes free`}`
+    + ` before the decode, ${need} needed — so a no-room skip was not proven]`);
   assert.strictEqual((r.stdout || '').trim(), 'LEN ' + plain.length);
   // AND IT HAPPENED IN THE ROOM THIS TEST WENT TO FIND. scratch() asks for RUNNER_TEMP
   // because the Windows runner's os.tmpdir() is on the small C: volume -- but the decode
@@ -533,6 +556,68 @@ test('a decoder that runs and fails surfaces its stderr', stderrOpts, () => {
   }
 });
 
+// THE DECODE COMES BACK THROUGH A FILE, NOT THROUGH STDOUT. On windows-latest zstd.EXE's writes
+// to its stdout PIPE intermittently fail with `zstd: error 70 : Write error : cannot write block
+// : No space left on device` (~1 run in 5; CI runs 36039332441, 35692416628, 35670438691,
+// 35562770090, 35562521239) while the disk is not full: a 1.33 MB frame failed and the 3.98 MB
+// frame after it passed 342 ms later in the same process. This fake models exactly that host —
+// the real zstd, except that any decode NOT given `-o <file>` dies with that error 70 — so it
+// holds on every POSIX leg, not just on the ~1-in-5 Windows run that happens to hit it.
+function realZstdPath() {
+  return require('../libexec/clode-hosttools.cjs').findTool('zstd', { env: process.env });
+}
+function writeFake(name, body) {
+  const fake = path.join(scratch(), name);
+  fs.writeFileSync(fake, body);
+  fs.chmodSync(fake, 0o755);
+  return fake;
+}
+function withZstd(fake, fn) {
+  const saved = process.env.CLODE_ZSTD;
+  try { process.env.CLODE_ZSTD = fake; return fn(); }
+  finally { if (saved === undefined) delete process.env.CLODE_ZSTD; else process.env.CLODE_ZSTD = saved; }
+}
+const ERROR_70 = 'zstd: error 70 : Write error : cannot write block : No space left on device';
+
+test('a decoder whose STDOUT writes fail still decodes: the output goes to a -o file', stderrOpts, () => {
+  const real = realZstdPath();
+  assert.ok(real, 'the host has a zstd (HAVE_ZSTD_CLI) but findTool could not locate it');
+  const fake = writeFake('stdout-fails-zstd',
+    '#!/bin/sh\n# Models windows-latest: a decode to the stdout pipe fails with error 70; -o works.\n'
+    + `case " $* " in *" -o "*) exec ${JSON.stringify(real)} "$@" ;; esac\n`
+    + `echo ${JSON.stringify(ERROR_70)} 1>&2\nexit 70\n`);
+  const s = pseudoText(64 << 10);
+  const frame = makeZstdFrameViaCli(Buffer.from(s));
+  assert.strictEqual(withZstd(fake, () => bunGraph.__zstdToTextForTest(frame, 0, frame.length, { forceCli: true })), s,
+    'the decode must not depend on the child writing its output to a pipe');
+});
+
+// AND WHEN IT DOES FAIL, THE REFUSAL CARRIES THE EVIDENCE. "No space left on device" from a tool
+// writing to a pipe does not mean the disk is full, and nobody had ever measured the disk: the
+// refusal now says where the output was going (-o, to a file in which directory) and — where the
+// runtime has fs.statfsSync (Node; not tjs) — how much room that volume had. This fake passes the
+// 25-byte host-provision known-answer frame and fails on anything larger, so the refusal comes
+// from the decode itself rather than from provisioning.
+test('a decode that fails names its output mode and the free space it had', stderrOpts, () => {
+  const real = realZstdPath();
+  const fake = writeFake('big-fails-zstd',
+    '#!/bin/sh\n# Pass the tiny KAT frame, fail any real row, the way the CI failure did.\n'
+    + 'eval "f=\\${$#}"\n'
+    + `if [ "$(wc -c < "$f")" -gt 100 ]; then echo ${JSON.stringify(ERROR_70)} 1>&2; exit 70; fi\n`
+    + `exec ${JSON.stringify(real)} "$@"\n`);
+  const frame = makeZstdFrameViaCli(Buffer.from(pseudoText(16 << 10)));
+  assert.ok(frame.length > 100, `fixture must exceed the fake's 100-byte pass-through, got ${frame.length}`);
+  let msg = '';
+  try { withZstd(fake, () => bunGraph.__zstdToTextForTest(frame, 0, frame.length, { forceCli: true })); }
+  catch (e) { msg = e.message; }
+  assert.match(msg, /exited 70/, 'the exit status is part of the diagnosis');
+  assert.match(msg, /No space left on device/, "the decoder's own stderr must reach the refusal");
+  assert.match(msg, /-o /, 'the refusal must say the output went to a file, not a pipe');
+  if (typeof fs.statfsSync === 'function') {
+    assert.match(msg, /\d+ bytes free/, 'with statfsSync available, the refusal must measure the volume');
+  }
+});
+
 // A zstd frame WITH NO Frame_Content_Size, hand-built from RFC 8878's simplest legal shape:
 // magic, a Frame_Header_Descriptor of 0 (no content size, not single-segment, no checksum, no
 // dictionary), a 1-byte Window_Descriptor, then one LAST/RAW block. Deterministic, tiny, and
@@ -570,7 +655,11 @@ test('a decoder that only echoes its input is REFUSED, not taken as asset text',
   assert.strictEqual(bunGraph.__zstdToTextForTest(frame, 0, frame.length, { forceCli: false }), plain);
 
   const fake = path.join(scratch(), 'passthru-zstd');
-  fs.writeFileSync(fake, '#!/bin/sh\n# ignore every flag; echo the last argument\'s bytes straight back\neval "f=\\${$#}"\nexec cat "$f"\n');
+  // It honours the -o contract — copies its input to the named output file — so it is refused
+  // for its BYTES (by host-provision's known-answer test), not for failing to write where told.
+  fs.writeFileSync(fake, '#!/bin/sh\n# ignore every other flag; copy the last argument\'s bytes to the -o file\n'
+    + 'eval "f=\\${$#}"; out=\nwhile [ $# -gt 1 ]; do [ "$1" = -o ] && { out=$2; shift; }; shift; done\n'
+    + 'exec cat "$f" > "$out"\n');
   fs.chmodSync(fake, 0o755);
   const saved = process.env.CLODE_ZSTD;
   try {
@@ -718,4 +807,22 @@ test('the deadlock guard tells a hung decode apart from a failed one', () => {
   const MUTE = describeDecodeFailure(3980022, { status: 3, signal: null, error: undefined, stdout: '', stderr: '   ' });
   assert.doesNotMatch(MUTE, /HUNG|streaming the frame/);
   assert.match(MUTE, /no output at all|said nothing/i);
+});
+
+// THE NO-ROOM SKIP, hermetically: it may fire only on a MEASURED shortfall. The runs it used to
+// hide (35670438691, 35562770090, 35562521239) had exactly this stderr and no measurement at all.
+test('the deadlock guard skips for no room ONLY when statfs proves the shortfall', () => {
+  const ENOSPC = { status: 1, stdout: '', stderr: 'C:\\tools\\zstd\\zstd.EXE exited 70: zstd: error 70 : '
+    + 'Write error : cannot write block : No space left on device' };
+  const need = 10 << 20;
+  assert.match(noRoomSkipReason(ENOSPC, need, need - 1, 'D:\\x') || '', /no room: .* had \d+ bytes free .* writes \d+/,
+    'a no-room failure on a volume measured too small is a proven skip, and says both numbers');
+  assert.strictEqual(noRoomSkipReason(ENOSPC, need, need, 'D:\\x'), null,
+    'a volume with the room it needed did not run out of disk: FAIL with zstd\'s text');
+  assert.strictEqual(noRoomSkipReason(ENOSPC, need, null, 'D:\\x'), null,
+    'unmeasured free space proves nothing (tjs has no statfsSync): FAIL, do not skip');
+  assert.strictEqual(noRoomSkipReason({ ...ENOSPC, stderr: 'zstd: unsupported frame parameter' }, need, 0, 'D:\\x'), null,
+    'a small disk does not excuse a failure that is not about room');
+  assert.strictEqual(noRoomSkipReason({ status: 0, stdout: 'LEN 1', stderr: '' }, need, 0, 'D:\\x'), null,
+    'a success is never skipped');
 });

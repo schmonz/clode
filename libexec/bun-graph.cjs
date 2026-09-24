@@ -209,6 +209,18 @@ function isZstdFrame(u8, p, len) {
 // frame hangs forever, and upstream's assets only get bigger. A temp file leaves stdout as the
 // only pipe, and stdout IS drained by the poll loop. Node's own spawnSync has no such hazard —
 // this is the portable shape that is correct under both, not a tjs special case.
+//
+// AND THE DECODE COMES BACK THROUGH A FILE TOO (`-o`), so NO pipe carries data. On
+// windows-latest zstd.EXE's writes to its stdout pipe intermittently fail — `zstd: error 70 :
+// Write error : cannot write block : No space left on device`, about 1 run in 5 (CI runs
+// 36039332441, 35692416628, 35670438691, 35562770090, 35562521239). Not a full disk: in one run a
+// 1.33 MB frame failed and the 3.98 MB frame after it passed 342 ms later in the same process,
+// and 35692416628 exited 70 with an EMPTY stderr, which a full disk cannot cause (stderr is a
+// pipe too). The UCRT's _write_nolock turns a WriteFile that reports 0 bytes written into
+// ENOSPC; on a pipe that is a short write, not a volume. stdout and stderr now carry only
+// diagnostics, and the argv comes from host-provision's registry, whose known-answer test runs
+// this exact -o form.
+//
 // RESOLVED THROUGH host-provision.cjs, not by a name lookup here. That module already owns the
 // shape this needs — an override env, an ORDERED CANDIDATE LIST with per-candidate argv, a
 // known-answer test, an install hint, a cached winner — and the KAT is the part that is
@@ -258,39 +270,69 @@ function zstdViaCli(buf) {
     ZSTD_WHY = (e && e.message) || 'no zstd decoder resolved';
     return null;
   }
-  var file;
+  var dir, file, out;
   try {
-    file = path.join(zstdScratchDir(fs, os, path), 'frame.zst');
+    dir = zstdScratchDir(fs, os, path);
+    file = path.join(dir, 'frame.zst');
+    out = path.join(dir, 'frame.out');
     fs.writeFileSync(file, buf);
   } catch (e) { ZSTD_WHY = 'could not stage the frame in tmpdir: ' + (e && e.message); return null; }
-  var r;
-  try {
-    r = cp.spawnSync(bin, argv(file), { maxBuffer: 1 << 28 });
-  } catch (e) {
-    ZSTD_WHY = 'spawning ' + bin + ' threw: ' + (e && e.message); return null;
-  } finally {
-    try { fs.unlinkSync(file); } catch (e) { /* best effort; the dir is a mkdtemp */ }
-  }
-  if (!r) { ZSTD_WHY = 'spawnSync ' + bin + ' returned nothing'; return null; }
-  if (r.status !== 0) {
-    // r.error does NOT mean the same thing on both runtimes, and saying "could not run" would be
-    // a lie on the one that ships. Node sets it for a failed LAUNCH (status null). The shim sets
-    // it only on the ETIMEDOUT path (child_process.cjs), and since no `timeout` is passed here,
-    // the sole way to reach it under tjs is a maxBuffer overrun — mod_spawn_sync.c reports an
-    // overrun and a real timeout through the same `timedOut` flag and cannot tell them apart.
-    // So on the engine this branch means "started fine, produced more than we allowed", and the
-    // child's stderr is the only thing that can say which. Append it in both cases.
-    var tail = String(r.stderr || '').trim();
-    ZSTD_WHY = (r.error ? ('could not run or complete ' + bin + ': ' + r.error.message)
-      : (bin + ' exited ' + r.status + (r.signal ? ' on ' + r.signal : '')))
-      + (tail ? ': ' + tail : '');
+  // Every refusal below says where the decode was going: "No space left on device" is evidence
+  // only once it names WHICH volume and how much room it had. Measured AT the failure (before
+  // the finally removes the partial output), and only on failure — 101 rows decode per carve.
+  function refuse(why) {
+    ZSTD_WHY = why + ' [decoding with -o to a file in ' + dir + zstdFreeNote(fs, dir) + ']';
     return null;
   }
-  // status 0 with EMPTY stdout is a SUCCESSFUL decode of an empty asset, not a failure. The
-  // magic-byte gate upstream of here admits a 13-byte zstd frame whose payload is zero bytes,
-  // and treating that as "the decoder is broken" would refuse a provider for being correct.
-  if (!r.stdout) return Buffer.alloc(0);
-  return Buffer.isBuffer(r.stdout) ? r.stdout : Buffer.from(r.stdout);
+  try {
+    var r;
+    try {
+      // maxBuffer: stdout and stderr now carry only diagnostics (the decode goes to `out`), so
+      // the runtimes' shared 1 MiB default is ample; spelled out so neither side is guessing.
+      r = cp.spawnSync(bin, argv(file, out), { maxBuffer: 1 << 20 });
+    } catch (e) {
+      return refuse('spawning ' + bin + ' threw: ' + (e && e.message));
+    }
+    if (!r) return refuse('spawnSync ' + bin + ' returned nothing');
+    if (r.status !== 0) {
+      // r.error does NOT mean the same thing on both runtimes, and saying "could not run" would be
+      // a lie on the one that ships. Node sets it for a failed LAUNCH (status null). The shim sets
+      // it only on the ETIMEDOUT path (child_process.cjs), and since no `timeout` is passed here,
+      // the sole way to reach it under tjs is a maxBuffer overrun — mod_spawn_sync.c reports an
+      // overrun and a real timeout through the same `timedOut` flag and cannot tell them apart.
+      // So on the engine this branch means "started fine, produced more than we allowed", and the
+      // child's stderr is the only thing that can say which. Append it in both cases.
+      var tail = String(r.stderr || '').trim();
+      return refuse((r.error ? ('could not run or complete ' + bin + ': ' + r.error.message)
+        : (bin + ' exited ' + r.status + (r.signal ? ' on ' + r.signal : '')))
+        + (tail ? ': ' + tail : ''));
+    }
+    // status 0 with an EMPTY output file is a SUCCESSFUL decode of an empty asset, not a failure.
+    // The magic-byte gate upstream of here admits a 13-byte zstd frame whose payload is zero
+    // bytes, and treating that as "the decoder is broken" would refuse a provider for being
+    // correct. A MISSING output file is a failure: whatever the tool did, it did not decode to
+    // where it was told to.
+    try { return fs.readFileSync(out); } catch (e) {
+      return refuse(bin + ' exited 0 but its -o output could not be read (' + (e && e.message) + ')');
+    }
+  } finally {
+    try { fs.unlinkSync(file); } catch (e) { /* best effort; the dir is a mkdtemp */ }
+    try { fs.unlinkSync(out); } catch (e) { /* best effort; absent when the decode failed early */ }
+  }
+}
+
+// Best-effort free bytes on the volume holding `dir`, as "; N bytes free there", or '' — for a
+// refusal's evidence only, never a decision. fs.statfsSync is ABSENT under tjs (node-shim's fs has
+// only the async statfs: the sync-fs binding has no statfs entry), and a missing figure must not
+// turn a decoder's diagnosis into a TypeError, so it is feature-tested and omitted rather than
+// thrown. Blocks are in f_frsize units where the runtime reports one, else f_bsize.
+function zstdFreeNote(fs, dir) {
+  try {
+    if (typeof fs.statfsSync !== 'function') return '';
+    var st = fs.statfsSync(dir);
+    var free = Number(st.bavail) * Number(st.frsize || st.bsize);
+    return isFinite(free) ? '; ' + free + ' bytes free there' : '';
+  } catch (e) { return ''; }
 }
 
 // ONE mkdtemp for the whole carve, not one per asset: 2.1.251 has 101 zstd rows, and a temp dir

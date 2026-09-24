@@ -227,12 +227,26 @@ const REGISTRY = {
     // reason `args` lives on the candidate rather than on the requirement: zstd switches mode
     // on argv[0], so `unzstd` and `zstdcat` are the same binary already in decompress mode and
     // do not take (or need) `-d`. One shared argv would resolve an alias-only host and then
-    // drive it wrong. `zstd -d -c f` / `unzstd -c f` / `zstdcat f` are each that tool's own
-    // documented decompress-to-stdout form.
+    // drive it wrong.
+    //
+    // EACH DECODES TO A FILE (`-o out`), NOT TO STDOUT. On windows-latest zstd.EXE's writes to
+    // its stdout PIPE intermittently fail — `zstd: error 70 : Write error : cannot write block
+    // : No space left on device`, ~1 run in 5 (CI runs 36039332441, 35692416628, 35670438691,
+    // 35562770090, 35562521239) — and it is not a full disk: a 1.33 MB frame failed and the
+    // 3.98 MB one after it passed 342 ms later in the same process, and one run exited 70 with
+    // an EMPTY stderr, which a full disk cannot cause. The UCRT's _write_nolock turns a WriteFile
+    // that reports 0 bytes written into ENOSPC; on a pipe that is a short write, not a volume
+    // (the recon's reading of the source, not reproduced here). A file output takes
+    // the pipe out of the decode on every host, and with it any dependence on how a runtime
+    // drains stdout. `-q` keeps the progress line off stderr; `-f` overwrites a stale output.
+    // zstdcat is zstd with `-dcf` preset, and its `-o` DOES override the forced stdout —
+    // verified 2026-09-24 with zstd 1.5.7 (pkgsrc, darwin): `zstdcat -q -f -o out kat.zst`
+    // wrote the 100-byte KAT plaintext to `out` and 0 bytes to stdout. A zstdcat that ignored
+    // -o would fail verify() below (no output file), not decode silently to the wrong place.
     candidates: [
-      { name: 'zstd', args: (f) => ['-d', '-c', f] },
-      { name: 'unzstd', args: (f) => ['-c', f] },
-      { name: 'zstdcat', args: (f) => [f] },
+      { name: 'zstd', args: (f, out) => ['-d', '-q', '-f', '-o', out, f] },
+      { name: 'unzstd', args: (f, out) => ['-q', '-f', '-o', out, f] },
+      { name: 'zstdcat', args: (f, out) => ['-q', '-f', '-o', out, f] },
     ],
     // Exposed so the tests can assert on the constant itself rather than re-deriving it.
     KAT: ZSTD_KAT,
@@ -240,18 +254,27 @@ const REGISTRY = {
     // whitespace strip — unlike the gzip family above, whose consumer unpacks an archive.
     // bun-graph embeds what comes back as the asset's TEXT, so a decoder that appends a newline
     // is not this decoder: on a row with no Frame_Content_Size nothing downstream would notice
-    // the extra byte, and the target would carry a corrupted asset.
+    // the extra byte, and the target would carry a corrupted asset. Through the SAME argv
+    // bun-graph uses, and read back from the SAME place — the -o file, never stdout — so the
+    // self-check proves the exact invocation the carve will make.
     verify({ candidate, path: bin, run, fs }) {
       const tmp = path.join(os.tmpdir(), `clode-kat-zstd-${process.pid}.zst`);
+      const out = path.join(os.tmpdir(), `clode-kat-zstd-${process.pid}.out`);
+      try { fs.unlinkSync(out); } catch { /* absent */ }
       fs.writeFileSync(tmp, Buffer.from(ZSTD_KAT.zst));
       try {
-        const r = run(bin, candidate.args(tmp));
-        return !!r && r.status === 0 && String(r.stdout) === ZSTD_KAT.expected;
+        const r = run(bin, candidate.args(tmp, out));
+        if (!r || r.status !== 0) return false;
+        let got;
+        // No output file: whatever it did, it did not decode to where bun-graph will look.
+        try { got = fs.readFileSync(out, 'utf8'); } catch { return false; }
+        return got === ZSTD_KAT.expected;
       } finally {
         try { fs.unlinkSync(tmp); } catch { /* absent */ }
+        try { fs.unlinkSync(out); } catch { /* absent */ }
       }
     },
-    installHint: 'install zstd (or unzstd/zstdcat), or set CLODE_ZSTD to a `zstd -d -c`-compatible decompressor. Needed to carve Claude Code 2.1.251+, which embeds its text assets as zstd frames.',
+    installHint: 'install zstd (or unzstd/zstdcat), or set CLODE_ZSTD to a `zstd -d -o <out> <in>`-compatible decompressor. Needed to carve Claude Code 2.1.251+, which embeds its text assets as zstd frames.',
   },
 };
 
@@ -275,7 +298,7 @@ function writeCache(fs, file, cache) {
 // the fallback always rescues it. Failing the override fails the requirement, loudly.
 //
 // Its argv is that of the candidate whose BASENAME it matches (CLODE_ZSTD=/usr/bin/zstdcat
-// gets `zstdcat f`, not `zstd -d -c f`), falling back to the first candidate's form for a
+// gets zstdcat's form, without zstd's `-d`), falling back to the first candidate's form for a
 // name the registry does not know — a wrapper script, a differently-named build.
 function candidateList(req, env) {
   const ov = req.overrideEnv && env[req.overrideEnv];
