@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { compareTextResults } = require('../scripts/lib/text-probe.cjs');
+const { compareTextResults, runNative, runOurs } = require('../scripts/lib/text-probe.cjs');
 const { corpusCodePoints, corpusComposed, corpusEmojiTest, corpusGraphemeBreakTest } =
   require('../scripts/lib/text-corpus.cjs');
 
@@ -39,6 +39,15 @@ test('the composed corpus holds the cases a single code point cannot', () => {
   assert.ok(c.includes('é'));
   assert.ok(c.includes('a‮b́'), 'a bidi control inside a would-be cluster');
   assert.ok(c.includes('e\x1b[1ḿ'), 'an escape inside a would-be cluster');
+});
+
+// The refusal happens before any spawn (native or tjs), so this needs neither a real
+// native binary nor a tjs engine — a nonsense bin path proves the empty check fires first.
+test('runNative and runOurs refuse an empty corpus before spawning anything', () => {
+  assert.throws(() => runNative('/no/such/claude', [], { segmenter: true }),
+    /empty corpus: nothing to compare/);
+  assert.throws(() => runOurs([], { segmenter: true }),
+    /empty corpus: nothing to compare/);
 });
 
 test('GraphemeBreakTest and emoji-test parsers read the published formats', () => {

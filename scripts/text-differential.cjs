@@ -28,8 +28,17 @@ function main(argv) {
             : null;
   if (!strings) { process.stderr.write(`text-differential: unknown corpus ${o.corpus}\n`); return 2; }
   const wants = { segmenter: true, stringWidth: true, intl: true };
-  const native = runNative(o.native, strings, wants);
-  const ours = runOurs(strings, wants);
+  // A thrown error (a missing/refusing native binary, a tjs launch failure, an empty
+  // corpus) is a HARNESS failure, distinct from "differences were found" (exit 1) — both
+  // runNative and runOurs throw plain Errors, never exit the process themselves.
+  let native, ours;
+  try {
+    native = runNative(o.native, strings, wants);
+    ours = runOurs(strings, wants);
+  } catch (e) {
+    process.stderr.write(`text-differential: ${e && e.message ? e.message : e}\n`);
+    return 2;
+  }
   const d = compareTextResults(strings, native, ours);
   if (o.out) { fs.mkdirSync(o.out, { recursive: true }); fs.writeFileSync(path.join(o.out, `${o.corpus}.json`), JSON.stringify({ native, ours, d })); }
   process.stdout.write(`${o.corpus}: examined ${d.examined} (${native.runtime} vs ${ours.runtime}) `

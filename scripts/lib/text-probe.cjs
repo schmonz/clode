@@ -57,10 +57,12 @@ function batches(strings) {
 }
 
 function runNative(bin, strings, wants) {
+  if (strings.length === 0) throw new Error('empty corpus: nothing to compare');
   return merge(batches(strings).map((s) => runInNative(bin, PROBE_SOURCE, { input: { strings: s, wants, side: 'native' } })));
 }
 
 function runOurs(strings, wants) {
+  if (strings.length === 0) throw new Error('empty corpus: nothing to compare');
   const { runLoader } = require(path.join(REPO, 'test', 'node-shim-helper.cjs'));
   const shim = path.join(REPO, 'libexec', 'bun-shim.cjs');
   return merge(batches(strings).map((s) => {
@@ -72,7 +74,10 @@ function runOurs(strings, wants) {
         + `const input = JSON.parse(fs.readFileSync(${JSON.stringify(inf)}, 'utf8'));\n`
         + `const r = (function (input) {${PROBE_SOURCE}\n})(input);\n`
         + `fs.writeFileSync(${JSON.stringify(outf)}, JSON.stringify(r));\n`);
-      const r = runLoader(prog, [], { timeout: 600000 });
+      // NODE_PATH so bun-shim's npm-backed helpers (string-width, etc.) resolve
+      // regardless of the caller's own environment — same fix as test/node-shim-vm.test.cjs,
+      // test/node-shim-esm.test.cjs and ~8 other call sites in this repo.
+      const r = runLoader(prog, [], { timeout: 600000, env: { NODE_PATH: path.join(REPO, 'deps', 'claude', 'node_modules') } });
       if (r.status !== 0) throw new Error(`our probe failed under tjs (exit ${r.status}): ${r.stderr.slice(0, 800)}`);
       return JSON.parse(fs.readFileSync(outf, 'utf8'));
     } finally { fs.rmSync(dir, { recursive: true, force: true }); }
