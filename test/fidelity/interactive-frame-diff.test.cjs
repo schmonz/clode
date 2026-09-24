@@ -43,7 +43,6 @@
 // opt-in (CLODE_LIVE_RENDER=1, Keychain); every other platform runs it by
 // default. CI runs it in the linux-x64-pty job against the pinned provider.
 const { before } = require('node:test');
-const fs = require('node:fs');
 const { spawnSync } = require('node:child_process');
 const { liveRenderSkipReason } = require('../live-render-helper.cjs');
 const { skipReason: providerSkipReason } = require('../provider-resolve.cjs');
@@ -52,6 +51,7 @@ const { apeCmd } = require('../e2e-pty.cjs');
 const { captureFrames } = require('../frame-oracle.cjs');
 const { diff, describe, corrupt, cloneFrame } = require('../frame-diff.cjs');
 const { defineGuard, guardTests } = require('../guard.cjs');
+const { resolveNativeClaude, nativeVersion } = require('../../scripts/lib/native-oracle.cjs');
 
 const ROWS = 40, COLS = 100;
 // Long enough for the late-arriving status line: at 12s the "● high · /effort"
@@ -72,12 +72,10 @@ function harnessMissing() {
   return 'PTY harness (node-pty/@xterm/headless) is not installed for this platform tag';
 }
 
-function nativeClaude() {
-  if (process.env.CLODE_NATIVE_CLAUDE) return process.env.CLODE_NATIVE_CLAUDE;
-  const r = spawnSync('command', ['-v', 'claude'], { shell: true, encoding: 'utf8' });
-  const p = (r.stdout || '').trim();
-  return p && fs.existsSync(p) ? p : null;
-}
+// versionOf() stays LOCAL, and apeCmd-aware, because it reads the QUAUDE's version — a
+// cosmo/APE quaude cannot be exec'd directly, so it needs the same wrapper the rest of
+// this file uses to run it. nativeVersion() (scripts/lib/native-oracle.cjs) is a plain
+// spawnSync and is for the native side ONLY (controller ruling R2, phase-3 task 1).
 function versionOf(bin) {
   const w = apeCmd([bin, '--version']);
   const env = { ...process.env, DISABLE_AUTOUPDATER: '1' }; delete env.NODE_PATH;
@@ -95,11 +93,11 @@ let SKIP = null, FRAMES = null, WHAT = '';
 before(async () => {
   SKIP = liveRenderSkipReason() || harnessMissing() || providerSkipReason(process.env) || null;
   if (SKIP) return;
-  const ref = nativeClaude();
+  const ref = resolveNativeClaude();
   if (!ref) { SKIP = 'no native claude (set CLODE_NATIVE_CLAUDE, or put `claude` on PATH)'; return; }
   const built = builtQuaude();
   if (built.skip) { SKIP = built.skip; return; }
-  const rv = versionOf(ref), qv = versionOf(built.path);
+  const rv = nativeVersion(ref), qv = versionOf(built.path);
   if (!rv || rv !== qv) {
     SKIP = `native and quaude are not the same version, so their frames are not comparable: `
       + `${ref} says ${JSON.stringify(rv)}, ${built.path} says ${JSON.stringify(qv)}`;

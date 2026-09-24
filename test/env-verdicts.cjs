@@ -413,6 +413,27 @@ const VERDICTS = [
       + 'as CLODE_TIMEOUT_SCALE. It carried no verdict for as long as it has existed because '
       + 'the inventory could not see shell reads at all; it is classified now for the same '
       + 'reason the bootstrap resolver\'s names are.' },
+  { name: 'CLODE_NATIVE_CLAUDE', verdict: 'env-only',
+    because: "read only by scripts/lib/native-oracle.cjs's resolveNativeClaude(): selects "
+      + 'which native Claude binary test/fidelity/interactive-frame-diff.test.cjs treats as '
+      + "the SAME-VERSION reference for its cell-by-cell frame comparison against quaude "
+      + '(the FRAME gate refuses to compare two different versions\' frames — see that '
+      + "file's version-equality check). Same family as CLODE_PROVIDER_BIN just below: a "
+      + "diagnostic instrument's own configuration, not part of clode's user-facing build "
+      + 'surface. It never changes what `clode build` produces, and nothing under libexec/ '
+      + 'may read it (native-oracle.cjs is a stated TEST/DEV-only instrument).' },
+  { name: 'CLODE_NATIVE_ORACLE', verdict: 'env-only',
+    because: "read only by scripts/lib/native-oracle.cjs's resolveNativeOracle(): selects "
+      + 'which native Claude build a test or a future generator runs a probe program INSIDE '
+      + '(via BUN_OPTIONS=--preload), falling back to resolveNativeClaude() when unset. '
+      + 'Deliberately a SEPARATE name from CLODE_NATIVE_CLAUDE (controller ruling R1, '
+      + 'CellSegmenter phase-3 task 1): the frame gate above needs a SAME-VERSION reference, '
+      + 'so it never consults this one, while every other phase-3 consumer (this file\'s own '
+      + "tests, and later a Unicode-table generator / freshness gate) wants THIS one, so an "
+      + 'operator can point it at whichever native build has the feature under test (e.g. '
+      + '2.1.278\'s Bun.ant.CellSegmenter) without silently becoming the frame gate\'s '
+      + 'reference too. Same diagnostic-configuration reasoning as CLODE_PROVIDER_BIN and '
+      + 'CLODE_NATIVE_CLAUDE; never changes what `clode build` produces.' },
   { name: 'CLODE_NPM', verdict: 'env-only',
     because: 'overrides which npm binary libexec/clode-deps.cjs invokes to install deps '
       + '(used verbatim, matching `${CLODE_NPM:-...}`). A host-tool-location override, '
