@@ -25,9 +25,10 @@
 // only from output that step caused.
 //
 // WHAT IT IS A GUARD OVER, and its floor. `examined` is the visibly painted cells over
-// every frame of every session's first run (type-edit: 6 frames, ~2030 cells). The floor
+// every frame of every session's first run (type-edit: 6 frames, ~2035 cells). The floor
 // is 1000: a native that painted nothing compares identical to itself, and that must read
-// BROKEN, not OK.
+// BROKEN, not OK. A blank frame on either run is its own finding (ruling R8, in
+// judgeSessions): two blank frames compare equal and judge nothing.
 //
 // Gated by test/live-frame-gate.cjs as a SESSION gate: live render (darwin opt-in,
 // CLODE_LIVE_RENDER=1: it spawns the real bundle), not inside the concurrent full suite
@@ -39,7 +40,7 @@ const { before, test } = require('node:test');
 const assert = require('node:assert');
 const { liveFrameGate } = require('../live-frame-gate.cjs');
 const { captureSessions } = require('../frame-oracle.cjs');
-const { diffSessions, describeSessions, nonBlank, frameShows, syntheticSession, corrupt } = require('../frame-diff.cjs');
+const { judgeSessions, syntheticSession, corrupt } = require('../frame-diff.cjs');
 const { defineGuard, guardTests } = require('../guard.cjs');
 const { nativeVersion } = require('../../scripts/lib/native-oracle.cjs');
 const { SCRIPT_DEFAULTS } = require('../tui-screen.cjs');
@@ -64,34 +65,18 @@ before(async () => {
   }
 });
 
-// Pure: every session's two runs, judged. A finding names the session, the step and (via
+// Pure: every session's two runs, judged by judgeSessions (frame-diff.cjs), the one
+// judgement every session gate shares. A finding names the session, the step and (via
 // describeSessions) the row, column and class of the first differing cell.
+const RUNS_AS = [{ who: 'native', run: 'run 1', native: true }, { who: 'native', run: 'run 2', native: true }];
 function scanSessions({ runs, what }) {
   const findings = [];
   let examined = 0;
   for (const [name, r] of Object.entries(runs)) {
-    if (!r.a || !r.b) {
-      findings.push(`${name}: a capture produced no session (run 1: ${!!r.a}, run 2: ${!!r.b}); the reason is on stderr`);
-      continue;
-    }
-    examined += r.a.frames.reduce((n, f) => n + nonBlank(f.frame), 0);
-    for (const [run, s] of [['run 1', r.a], ['run 2', r.b]]) {
-      if (s.exit) findings.push(`${name}: native exited during step "${s.exit.during}" on ${run} (code ${s.exit.code}, signal ${s.exit.signal})`);
-      for (const f of s.frames) {
-        if (!f.settled) {
-          findings.push(`${name}: step "${f.label}" never settled on native within ${f.ms} ms (${run}) -- `
-            + 'fix the script (a settle point after the timing-sensitive UI), never the cap');
-        }
-      }
-    }
-    const last = r.a.frames[r.a.frames.length - 1];
-    if (r.mustShow && !frameShows(last.frame, r.mustShow)) {
-      findings.push(`${name}: native never painted ${JSON.stringify(r.mustShow)} by its last step ("${last.label}"), `
-        + 'so this session judged nothing it exists for');
-    }
-    const d = diffSessions(r.a, r.b, { maxDetail: 30 });
-    if (!d.linksJudged) findings.push(`${name}: hyperlinks were NOT observable in a frame, so identity cannot be claimed`);
-    if (!d.equal) findings.push(`${name}: native painted the session differently the second time: ${describeSessions(r.a, r.b, d)}`);
+    const j = judgeSessions({ session: name, a: r.a, b: r.b, sides: RUNS_AS, mustShow: r.mustShow,
+      differs: 'native painted the session differently the second time' });
+    examined += j.examined;
+    findings.push(...j.findings);
   }
   return { examined, findings, note: what };
 }
@@ -130,6 +115,20 @@ test('an unsettled step, a native that exited, a capture that failed and an unpa
     'gone: a capture produced no session (run 1: false, run 2: true); the reason is on stderr',
   ]);
   assert.strictEqual(r.examined, 3 * 300, 'examined counts run 1 of every session that captured');
+});
+
+// Ruling R8: two blank boot frames compare equal and judge nothing -- the shape a loaded
+// native produced in task 3 (boot frames taken before the first paint). Both runs blank at
+// the same step: the diff is clean, and only this finding stands between it and a pass.
+test('a blank native frame is a finding naming the session, the step and the run (ruling R8)', () => {
+  const a = syntheticSession(3), b = syntheticSession(3);
+  for (const s of [a, b]) for (const row of s.frames[0].frame.cells) for (const c of row) c.c = '';
+  const r = scanSessions({ runs: { 'type-edit': { a, b, mustShow: null } }, what: 'x' });
+  assert.deepStrictEqual(r.findings, [
+    'type-edit: native painted a BLANK frame at step "boot" (run 1) -- two blank frames compare equal and judge nothing',
+    'type-edit: native painted a BLANK frame at step "boot" (run 2) -- two blank frames compare equal and judge nothing',
+  ]);
+  assert.strictEqual(r.examined, 2 * 300, 'the blank frame adds nothing to examined');
 });
 
 test('the control\'s finding names the session, the step and the cell', () => {

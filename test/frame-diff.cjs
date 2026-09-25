@@ -240,8 +240,65 @@ function describeSessions(a, b, ds) {
   return `${where}:\n${describe(a.frames[f.index].frame, b.frames[f.index].frame, f.d)}`;
 }
 
+// THE JUDGEMENT OF A PAIR OF CAPTURED SESSIONS, stated once for every session gate: native
+// against itself (session-determinism), native against quaude (interactive-session-diff),
+// and each later one. Pure: { examined, findings }, every finding naming the session.
+//
+//   sides     how a finding names each capture, and whether it is native:
+//             [{ who: 'native', run: 'run 1', native: true }, { who: 'quaude' }]
+//   mustShow  text side A (the reference) must paint in its last frame
+//   differs   the sentence a difference is reported with
+//
+// `examined` is side A's painted cells over every frame. Each of these is a finding: a
+// capture that produced nothing, a side that exited, a step that never settled, a NATIVE
+// frame with no painted cell, a reference that never showed `mustShow`, hyperlinks no
+// frame could observe, and the first difference (describeSessions).
+//
+// A BLANK NATIVE FRAME (ruling R8, phase 5 task 4). Two blank frames compare equal and
+// judge nothing, so a native that had not painted yet -- measured in task 3: 3 of 8 loaded
+// boots were blank after an 800 ms window -- would read as a pass against a quaude that had
+// not painted either, and a slow quaude boot would be misread. The finding names the step
+// and the run.
+function judgeSessions({ session, a, b, sides, mustShow, differs }) {
+  const name = (s) => s.run || s.who;
+  if (!a || !b) {
+    return { examined: 0, findings: [`${session}: a capture produced no session (${name(sides[0])}: ${!!a}, `
+      + `${name(sides[1])}: ${!!b}); the reason is on stderr`] };
+  }
+  const findings = [];
+  for (const [side, s] of [[sides[0], a], [sides[1], b]]) {
+    const on = side.run ? ` on ${side.run}` : '';
+    const inRun = side.run ? ` (${side.run})` : '';
+    if (s.exit) findings.push(`${session}: ${side.who} exited during step "${s.exit.during}"${on} (code ${s.exit.code}, signal ${s.exit.signal})`);
+    for (const f of s.frames) {
+      if (!f.settled) {
+        findings.push(`${session}: step "${f.label}" never settled on ${side.who} within ${f.ms} ms${inRun} -- `
+          + (side.native ? 'fix the script (a settle point after the timing-sensitive UI), never the cap'
+            : `${side.who} kept painting past the cap: find why, never widen the cap`));
+      }
+    }
+    if (side.native) {
+      for (const f of s.frames) {
+        if (nonBlank(f.frame) === 0) {
+          findings.push(`${session}: ${side.who} painted a BLANK frame at step "${f.label}"${inRun} -- two blank `
+            + 'frames compare equal and judge nothing');
+        }
+      }
+    }
+  }
+  const last = a.frames[a.frames.length - 1];
+  if (mustShow && !frameShows(last.frame, mustShow)) {
+    findings.push(`${session}: ${sides[0].who} never painted ${JSON.stringify(mustShow)} by its last step `
+      + `("${last.label}"), so this session judged nothing it exists for`);
+  }
+  const d = diffSessions(a, b, { maxDetail: 30 });
+  if (!d.linksJudged) findings.push(`${session}: hyperlinks were NOT observable in a frame, so identity cannot be claimed`);
+  if (!d.equal) findings.push(`${session}: ${differs}: ${describeSessions(a, b, d)}`);
+  return { examined: a.frames.reduce((n, f) => n + nonBlank(f.frame), 0), findings };
+}
+
 module.exports = { diff, describe, assertFramesEqual, rowText, corrupt, cloneFrame, classifyCell, CLASSES,
-  nonBlank, frameShows, syntheticSession, diffSessions, describeSessions };
+  nonBlank, frameShows, syntheticSession, diffSessions, describeSessions, judgeSessions };
 
 // CLI: frame-diff.cjs A.json B.json — exits 0 when identical, 1 when they differ.
 if (require.main === module) {
