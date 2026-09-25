@@ -61,6 +61,7 @@ jobs:
       - name: Install the `next` Claude Code
         run: npm i -g @anthropic-ai/claude-code@next 2>&1 | tail -3
       - name: Every clode hook anchor still matches the newest bundle
+        id: anchors
         run: |
           set -euo pipefail
           VER="$(npm view @anthropic-ai/claude-code@next version)"
@@ -70,8 +71,28 @@ jobs:
           # "nothing changed", and this job's only product is a trustworthy answer.
           if [ -z "$PROV" ]; then echo "ERROR: no Bun provider found under @anthropic-ai/claude-code" >&2; exit 1; fi
           echo "provider: $PROV"
+          echo "provider=$PROV" >> "$GITHUB_OUTPUT"
           echo "$VER" > "$RUNNER_TEMP/upstream-version"
           node scripts/upstream-drift-check.mjs "$PROV" "$VER"
+
+      # THE CARVE-TIME TEXT TRIPWIRES, against the same `next` bundle. ci.yml runs them only
+      # against the text oracle (the native libexec/unicode-text.cjs was generated from), so
+      # neither ever saw a NEWER upstream, which is the one bundle each exists to warn about:
+      # a Bun.sliceAnsi call gaining a 4th argument (an ellipsis, which the shim refuses with
+      # a throw, i.e. a blank TUI) or a spread; and ansiCodes()/SC changing under the text
+      # gate's painted-style column (test/build-gates/text-probe-gates.test.cjs). A finding
+      # fails this job. Either one SKIPS, saying so, if the bundle no longer calls
+      # Bun.sliceAnsi or has no CellSegmenter caller. It runs even when the anchor check
+      # above went red (a different question), but not without a provider to read.
+      - name: The text tripwires still hold on the newest bundle (sliceAnsi arity, painted style)
+        if: ${{ !cancelled() && steps.anchors.outputs.provider != '' }}
+        env:
+          PROV: ${{ steps.anchors.outputs.provider }}
+        run: |
+          set -euo pipefail
+          CLODE_PROVIDER_BIN="$PROV" node --test --test-concurrency=1 \
+            test/bun-slice-ansi-arity.test.cjs \
+            test/build-gates/text-probe-gates.test.cjs
 
       # WHEN IT BREAKS, SAY WHAT UPSTREAM SAID. Twice now upstream has broken
       # `clode build` with no change in this repo, and both times a public changelog

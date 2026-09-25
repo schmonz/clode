@@ -15,9 +15,10 @@
 // Bun 1.4.1 already had it).
 //
 // WHAT COUNTS. Every `sliceAnsi` in the carve must be a direct call on Bun (`Bun.sliceAnsi(`,
-// `Bun?.sliceAnsi(`, `Bun.sliceAnsi?.(`) with at most 3 top-level arguments. Any other
-// reference (an alias, a destructure, `Bun["sliceAnsi"]`'s neighbour) is a finding too: a
-// call through an alias could pass a 4th argument this scan cannot see.
+// `Bun?.sliceAnsi(`, `Bun.sliceAnsi?.(`) with at most 3 top-level arguments, none of them a
+// spread. Any other reference (an alias, a destructure, `Bun["sliceAnsi"]`'s neighbour) is a
+// finding too: a call through an alias could pass a 4th argument this scan cannot see, and so
+// could `Bun.sliceAnsi(...a)`, which this scan once counted as ONE argument.
 //
 // The carve is read the way inspect-claude-bundle reads it: a 2.1.243+ carve carries every
 // module's source JSON-escaped twice inside one string literal, so it is DECODED first
@@ -42,13 +43,16 @@ const REPO = path.resolve(__dirname, '..');
 const EXTRACT = path.join(REPO, 'libexec', 'extract-claude-js.cjs');
 const MAX_ARGS = 3;
 
-// The number of top-level arguments of the call whose `(` is at `open`, or -1 when the
-// text ends first. Strings, template literals and nested brackets are skipped; a backslash
-// outside a string (a regex literal's `\)`) skips the next character.
+// The number of top-level arguments of the call whose `(` is at `open`, -1 when the text
+// ends first, or SPREAD when a top-level argument is spread (`...a`: its count is unknowable
+// here). Strings, template literals and nested brackets are skipped; a backslash outside a
+// string (a regex literal's `\)`) skips the next character.
+const SPREAD = -2;
 function argCount(text, open) {
   let depth = 0, commas = 0, any = false;
   for (let i = open + 1; i < text.length; i++) {
     const ch = text[i];
+    if (depth === 0 && ch === '.' && text.startsWith('...', i)) return SPREAD;
     if (ch === '\\') { i++; any = true; continue; }
     if (ch === '"' || ch === "'" || ch === '`') {
       for (i++; i < text.length && text[i] !== ch; i++) if (text[i] === '\\') i++;
@@ -80,7 +84,8 @@ function scanSliceAnsiCalls({ text, what }) {
     }
     const n = argCount(text, m.index + m[0].length + after[0].length - 1);
     if (n < 0 || n > MAX_ARGS) {
-      findings.push(`Bun.sliceAnsi called with ${n < 0 ? 'an unterminated argument list' : n + ' arguments'}: ...${at}... `
+      const what = n === SPREAD ? 'a spread argument, so any number of arguments' : n < 0 ? 'an unterminated argument list' : n + ' arguments';
+      findings.push(`Bun.sliceAnsi called with ${what}: ...${at}... `
         + '— a 4th argument is an ellipsis, which libexec/unicode-text.cjs refuses (throws); implement it '
         + "from native's measured behaviour before this bundle ships");
     }
@@ -106,10 +111,11 @@ guardTests(defineGuard({
     } finally { fs.rmSync(dir, { recursive: true, force: true }); }
   },
   scan: scanSliceAnsiCalls,
-  // The regression itself: a bundle that starts truncating with an ellipsis, beside the
-  // three-argument shape every current call has, so the control clears the floor on the
-  // clean call and its finding is the 4-argument one.
-  control: () => ({ text: 'let c=Bun.sliceAnsi(i,a,a+o);let t=Bun.sliceAnsi(n,s,u,"\\u2026");', what: 'synthetic control' }),
+  // The regression itself: a bundle that starts truncating with an ellipsis, and one that
+  // spreads its arguments in, beside the three-argument shape every current call has, so the
+  // control clears the floor on the clean call and its findings are the other two.
+  control: () => ({ text: 'let c=Bun.sliceAnsi(i,a,a+o);let t=Bun.sliceAnsi(n,s,u,"\\u2026");let r=Bun.sliceAnsi(...q);',
+    what: 'synthetic control' }),
 }));
 
 // The parser's edge cases, each a real shape: nested calls and a string holding a comma are
@@ -123,5 +129,9 @@ test('the arity scan counts top-level arguments and refuses what it cannot count
   assert.strictEqual(count('Bun.sliceAnsi(s,0,1,{ellipsis:e})').findings.length, 1);
   assert.strictEqual(count('let q=Bun.sliceAnsi;q(s,0,1,e)').findings.length, 1, 'an alias is a finding');
   assert.strictEqual(count('Bun.sliceAnsi(s,0').findings.length, 1, 'an unterminated call is a finding');
+  assert.strictEqual(count('Bun.sliceAnsi(...a)').findings.length, 1, 'a top-level spread is a finding');
+  assert.strictEqual(count('Bun.sliceAnsi(s,...a)').findings.length, 1, 'so is a spread after the text');
+  assert.deepStrictEqual(count('Bun.sliceAnsi(f(...a),[...b].length,{...c}.x)').findings, [], 'a spread inside an argument is not');
+  assert.match(count('Bun.sliceAnsi(...a)').findings[0], /a spread argument/);
   assert.strictEqual(count('').examined, 0);
 });
