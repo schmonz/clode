@@ -186,22 +186,30 @@ runs:
         PKGS="${{ inputs.packages }}"
         case "${{ inputs.platform }}" in
           netbsd)
-            # PINNED to the 2026Q1 quarterly. pkgin's default repo tracks the
-            # CURRENT quarterly (the 10.1 path 302s to 10.0_<currentQ>), and the
-            # 2026Q2 NetBSD/x86_64 bulk build shipped NO nodejs package at all —
-            # verified against the repo index: 2026Q2 has only unrelated node-*
-            # /nodejs-version entries, while 2026Q1 has nodejs-20/22/24/25. This
-            # guest NEEDS node to run scripts/build-tjs.cjs, so the leg died with
-            # "nodejs is not available in the repository" (green 2026-07-19, red
-            # from 2026-07-22). Deliberately NOT tolerating pkgin's nonzero exit:
-            # that would mask the missing interpreter and fail later as
-            # "node: not found" (exactly how the midnightbsd leg failed).
-            # REVISIT: drop this pin once a later quarterly publishes nodejs again
-            # (2026Q1 will eventually be pruned from the mirror).
+            # UNPINNED (2026-09-24). This used to pin the 2026Q1 quarterly repo
+            # because the 2026Q2 bulk build once shipped no nodejs package
+            # (green 2026-07-19, red from 2026-07-22 with "nodejs is not
+            # available in the repository"). Re-measured with curl before
+            # dropping it, and the situation has flipped: the pinned
+            # .../NetBSD/x86_64/10.0_2026Q1/All/pkg_summary.gz now 404s (that
+            # quarterly WAS pruned from the mirror, exactly as the old comment
+            # predicted it eventually would be), while pkgin's own default repo
+            # path -- .../NetBSD/x86_64/10.0/All/pkg_summary.gz, no quarterly
+            # named -- 302s to 10.0_2026Q2, and 2026Q2's pkg_summary now lists
+            # nodejs-22.23.0, nodejs-24.17.0 and nodejs-26.3.1. The gap that
+            # justified the pin is gone, and keeping it would have broken this
+            # leg the moment 2026Q1 was pruned (CI run 36057766387, job
+            # tjs-slow/leg (netbsd-amd64, ...)). So: no repositories.conf write
+            # here, pkgin uses its default current-quarterly repo. The guest
+            # NEEDS node to run scripts/build-tjs.cjs, so if some future
+            # quarterly again ships no nodejs, expect this step to fail again
+            # exactly as it did in 2026-07 -- "nodejs is not available in the
+            # repository" from `pkgin -y install` -- at which point re-pin to
+            # the last quarterly that had it. Deliberately still NOT tolerating
+            # pkgin's nonzero exit: that would mask the missing interpreter and
+            # fail later as "node: not found" (exactly how the midnightbsd leg
+            # failed).
             [ -z "$PKGS" ] || {
-              printf '%s\n' \
-                "https://cdn.NetBSD.org/pub/pkgsrc/packages/NetBSD/$(uname -p)/10.0_2026Q1/All" \
-                | sudo tee /usr/pkg/etc/pkgin/repositories.conf >/dev/null
               sudo pkgin -y update
               sudo pkgin -y install $PKGS
             } ;;
