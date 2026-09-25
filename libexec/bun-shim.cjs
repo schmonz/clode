@@ -1210,7 +1210,10 @@ class _CellSegmenter {
       emit(_csIntern(this.graphemes, this._gIndex, g), tab ? 256 : advance);
     });
     // After the last cell: native still interns the URI of a link it reads there
-    // (CELL-LINK), but no style key (it keys only a style a cell has).
+    // (CELL-LINK), but no style key, because native keys only a style a cell has. This
+    // shim does not match that mid-string: apply() interns every intermediate style as it
+    // applies it (`ESC[1m ESC[0m a` leaves two keys, native one). A recorded divergence:
+    // BACKLOG.md, `Bun.ant.CellSegmenter` section, "Style keys for styles no cell has".
     for (; next < sequences.length; next++) if (sequences[next].kind === 'osc') apply(sequences[next]);
 
     if (overflow) return -count;
