@@ -69,10 +69,78 @@ the one whose provider happens to contain it.
 
 ## `Bun.ant.CellSegmenter` — the 2.1.278 TUI's real blocker, and it is NOT small (2026-09-22)
 
-**Status: OPEN, phases 1-3 of 6 DONE (phase 3 closed 2026-09-25), and it is still what stands
-between this repo and moving the pin: phase 4 (OSC-8 links do not work yet) is the next
-functional gap.** Everything else in the 2.1.278 interactive chain is fixed and driven; this is
-the remainder. Phase 3's record is the next block; phases 1-2's follows it.
+**Status: OPEN, phases 1-4 of 6 DONE (phase 4 closed 2026-09-25), and it is still what stands
+between this repo and moving the pin: phase 5 (the stateful surfaces: damage under partial
+repaint, scroll, resize) is the next functional gap.** Everything else in the 2.1.278
+interactive chain is fixed and driven; this is the remainder. Phase 4's record is the next
+block, then phase 3's; phases 1-2's follows them.
+
+**Phase 4 landed (2026-09-25): OSC-8 hyperlinks are native's.** CellSegmenter parsed OSC 8 but
+never interned a link (`uris` stayed `['']`, every run's link 0), so a link painted as plain
+text where native paints a hyperlink, and the segmenter gate could not see it (it judged text,
+advance, tab and style, never the link). Measured against native 2.1.278 (Bun 1.4.3) -- every
+UTF-16 code unit in the parameter and in the URI position of a link, and a links corpus through
+all four text consumers -- the rules are stated once in `libexec/unicode-text.cjs`:
+
+- **OSC-8, shared with `Bun.sliceAnsi`.** It is exactly the grammar SLICE-LINKS already read,
+  now ONE function (`oscLink`) both readers call, each finding where an OSC ends by its own
+  escape grammar: a body `8;`, parameters up to the next `;`, the URI after it verbatim
+  (controls, C1, NUL, lone surrogates, any length; `8;a;b;u` links `b;u`) up to BEL, U+009C or
+  ESC \. An empty URI closes; there is no nesting; anything else (one `;`, `08;;`, `88;;`,
+  another OSC, an ESC that is not ST, CAN, SUB, unterminated) opens and closes nothing, and so
+  do SGR 0 and RIS. A mutation of it turns the segmenter AND sliceAnsi gates red; old and new
+  sliceAnsi agree on 300,000 random link-heavy strings.
+- **CELL-LINK, the segmenter's own.** A cell takes the link in force where its cluster STARTS
+  (as it takes its style); each `segment()` starts with none; `uris` holds the URI alone, one
+  entry per URI whatever its `id=`; a URI is interned as it is READ, even after the last cell,
+  where a style key is interned only for a cell that has it. The escape layer now records an
+  ESC \ terminator as such, so the segmenter can tell the ST from any other ESC.
+
+Gate first, then the fix. The segmenter gate's rows now carry each cell's link as the caller's
+`runWords()` reads it, and `test/build-gates/text-probe-gates.test.cjs` gained
+`text-probe-caller-link`, which checks that restatement against the carve (green on 2.1.278 and
+2.1.282; red when the probe's read drifts). A new corpus part, `links` (395 strings, its own
+floor 380). **text-diff-segmenter: 1,168 of 1,177,506 strings differ -> 0** (escapes 413, slice
+probes 393, links 362; one class: native links the cells, ours none); stringWidth, Intl and
+sliceAnsi stayed 0 over the new part; cell-profile-diff exit 0; the freshness gate green. Each
+CELL-LINK sub-rule is load-bearing in the corpus: keeping the parameters in the URI, letting any
+ESC end a link, an empty URI closing nothing, carrying a link into the next `segment()` and
+applying a link to the cluster it falls inside turn the gate red (366, 8, 311, 32, 8 strings of
+the links part). `test/bun-shim-cell-segmenter.test.cjs`'s phase-4 pin went red with the fix, as
+written, and was re-taken as three CELL-LINK tests with native's literals.
+
+**On the screen.** `test/fidelity/interactive-frame-diff.test.cjs` gained a third guard,
+`tui-reply-hyperlinks`: a turn typed into the prompt, answered by the canned mock with a
+markdown link and a bare URL, the frame compared cell for cell with links judged; the reference
+must show the reply and paint both links. Native paints NO OSC 8 under the harness
+(TERM=xterm-256color, TERM_PROGRAM removed: upstream's detection finds no support and prints
+`the docs (https://example.com/docs)`), so both sides get `FORCE_HYPERLINK=1`, the switch that
+detection reads first, and the user setting `showTurnDuration: false`, whose line carries the
+wall-clock time. darwin-arm64, 100x40, examined 353 / 336 / 398 for the three scenes: native vs
+itself 0; the pre-phase-4 quaude (whose shim members hash to 1d98cc1's) 64 cell-classes on the
+reply row (link 32, sgr 32: native underlines what it links), the other two scenes 0; fresh
+quaudes of this tree 0 on all three against native 2.1.278 and against native 2.1.251. D1 PASS
+on both (1762 / 1488 ms).
+
+**An instrument fix the scene needed, and a finding it makes.** `captureFrames`
+(`test/frame-oracle.cjs`) captured with `spawnSync` from the very process serving the canned
+mock, so the mock never ran during a capture and no typed turn could ever be answered: the TUI
+spun with zero requests seen. It now captures asynchronously (`captureFrameAsync`,
+`test/e2e-pty.cjs`), which left the other two scenes at 0. That is likely also what RECIPE G2's
+"a mock key spins forever without ever dialing ANTHROPIC_BASE_URL" observed: measured with an
+answering mock, native 2.1.278's interactive first turn sends HEAD /api/hello, then POST
+/v1/messages, and paints the canned reply. G2's row is not edited here; it should be re-driven.
+
+**Recorded, not fixed (phase 4):**
+
+- **Style keys for styles no cell has.** Native interns an `sgrKeys` entry only for a cell's
+  style (`ESC[1m ESC[0m a` leaves `sgrKeys` at `['']`); the shim interns each intermediate
+  style as it applies it. The caller reads keys only by a cell's run, so the one observable is
+  the pool size the caller resets at (16,384 entries): at worst an earlier reset. Measured
+  2026-09-25.
+- **The link scene has not been mirrored on linux-x64.** CI's linux-x64-pty job runs the frame
+  gate against the pinned 2.1.251 and will run the new scene on the next push; the darwin
+  2.1.251 drive above is the evidence so far.
 
 **Phase 3 landed (2026-09-24/25): quaude clusters, sizes and slices text exactly as native Bun
 does.** One module, `libexec/unicode-text.cjs`, serves all four text consumers through three
@@ -260,8 +328,8 @@ loader boot from 44.1 to 20.0 ms and `clode --version` under tjs from 90.5 to 66
 applied. It does not move a quaude's first frame (1572 ms), because bun-shim loads the module
 anyway.
 
-**What remains:** phase 4 (OSC-8 interning — links are consumed, never interned), phase 5 (the
-stateful surfaces below), phase 6 (`reordered`, and
+**What remains:** ~~phase 4 (OSC-8 interning — links are consumed, never interned)~~ DONE
+2026-09-25 (the block above), phase 5 (the stateful surfaces below), phase 6 (`reordered`, and
 performance on the slow boxes — starting with the Tiger first-frame number above).
 
 **Phases 1-2 landed: the 2.1.278 TUI paints, and its initial frame matches native.**
@@ -278,7 +346,8 @@ test so fixing it forces a re-take:
   point is one column wide. A CJK glyph or an emoji anywhere on a line shifts the rest of it.
   The initial frame is 0-diff only because it contains nothing wide.~~ DONE 2026-09-25 (the
   block above); the pins were re-taken as native's measurements in task 6.
-- **phase 4, OSC-8.** Hyperlinks are consumed but never interned, so links do not work.
+- ~~**phase 4, OSC-8.** Hyperlinks are consumed but never interned, so links do not work.~~
+  DONE 2026-09-25 (the phase-4 block above); the pin was re-taken as native's measurements.
 - **phase 5, the stateful surfaces** (damage under partial repaint, scroll, resize; the
   grow-and-retry and pool-reset paths under a real session), and **phase 6** (`reordered`,
   performance on the slow boxes). Not started.
