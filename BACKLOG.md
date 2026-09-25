@@ -8,6 +8,22 @@ Concrete clode-under-Node divergences from native Claude Code, to triage and fix
 That page is GENERATED from `scripts/build-graph.cjs` — the one declaration of the build — so it
 cannot drift from it; it is also where the honest answer to "does this need node?" lives.
 
+## build-clode-main cannot recover from a reaped toolchain in the same run (2026-09-25)
+
+**Pre-existing, found by CellSegmenter phase 3's task-8 suite run; not fixed.** macOS's
+dirhelper reaps `$TMPDIR` files by atime (03:35 daily; `scripts/build-clode-main.mjs`'s own
+comment says so). When it has taken the esbuild toolchain (`$TMPDIR/toolchain/<os>-<arch>-node24`),
+`ensureToolchain()` re-runs `npm ci`, which succeeds, and then still throws "esbuild does not
+load ... even after `npm ci` reported success": its post-install `loadable()` re-requires esbuild
+IN THE SAME PROCESS, whose module system remembers the broken tree. Proven on a scratch copy of
+the toolchain (task-8 report, `tc-probe.cjs`): with esbuild's JS removed and restored, or its
+native binary removed and restored, the second in-process check still fails, and a fresh process
+loads it both times. So the first build-clode-main run after every reap is red, whatever npm did;
+on 2026-09-25 that was four suite failures (build-clode-main, and quaude-cross-blobulate's three,
+refusing the stale clode-main bundle it left behind). **Fix:** run the post-install probe in a
+child process (`spawnSync(process.execPath, ['-e', "require('esbuild').transformSync('')"])`),
+proven red then green by taking the toolchain's esbuild away between the two checks.
+
 ## Bun.secrets (Windows Credential Manager) — accepted absent, implement later (2026-09-24)
 
 `windows-latest`'s API-surface gate went red (CI run 36039332441, at `54de06b`) on
@@ -74,6 +90,7 @@ Against native 2.1.278 (Bun 1.4.3), exact equality, strings that differ:
 | consumer | before phase 3 | now |
 | --- | --- | --- |
 | `Bun.ant.CellSegmenter` (cells: text, advance, tab bit) | 234,044 | 0 |
+| `Bun.ant.CellSegmenter` (the style each cell PAINTS; judged since the final fix wave) | 2,014 | 0 |
 | `Bun.stringWidth` (both ambiguous settings) | 49,910 | 0 |
 | `Intl.Segmenter` | 5,694 | 0 |
 | `Bun.sliceAnsi` (eleven cuts per string) | 250,673 | 0 |
@@ -133,6 +150,30 @@ not on `ellipsis !== ''`: measured first, native treats a zero-width non-empty e
 a mark, an SGR, an OSC-8 open; 448 cases) exactly as no ellipsis. (3) The probe now
 availability-checks `Bun.sliceAnsi` like the segmenter (2.1.251's Bun 1.4.1 has it anyway).
 
+**The painted style, and R29 corrected (final fix wave, 2026-09-25, ruling R33).** R29 said that
+native keeping unknown and colon SGR keys (`ESC[99m`, `ESC[4:3m`) where the shim dropped them
+could change only the run COUNT, which nothing paints. That was asserted, not measured, and it
+was wrong. The segmenter gate now judges what is painted: each cell's row carries its run's
+`sgrKeys` entry as the bundle's own `ansiCodes()` reads it (index 0 is no style; each open code
+the bundle's SC regex accepts, with its close code). Against native 2.1.278 that column differed
+on 2,014 of the gate's 1,177,111 strings (4 escapes, 2,010 slice probes; the text identical
+everywhere): 1,392 a code native keys that ours dropped (5 6 10-19 20 21 26 50-52 56-89 98 99
+108+, 58 the underline colour among them); 375 a bare or short 38/48 (native keeps it bare and
+reads what follows as codes, ours dropped the whole SGR); 129 more than 32 parameters and 71 a
+colon form (native keys each WHOLE in its first parameter's attribute, where SC then drops it, so
+`ESC[4m ESC[4:3m` is NOT underlined); 30 a parameter over 255 (whole too); 17 order only (native
+moves a replaced style to the end). Measured rule by rule (every code 0-130 alone and after
+another, compound, extended, colon and over-long forms, values past 2^32), the rules now live
+once in `libexec/unicode-text.cjs`: the SGR- rules both native readers share (SGR-PARAMETERS,
+-CLOSES, -ATTRIBUTES, -APPLY, -WHOLE) and each reader's own (SLICE-STYLES, CELL-SGR); bun-shim's
+hand-written attribute table is gone. 2,014 -> 0 over the full gate, 0 over 40,000 random SGR
+strings (segmenter and sliceAnsi), and on a fresh 2.1.278 quaude both frame scenes are 0 and D1
+passes (1555 ms). The column restates the bundle's `ansiCodes()`/SC, so
+`test/build-gates/text-probe-gates.test.cjs` checks that restatement against the carve it is
+given. In the same wave each corpus part got its own floor (a truncated part is BROKEN, naming
+it; before, only the total, 95% code points, was floored), and the arity tripwire also refuses a
+spread argument and runs, with the style check, against upstream's `next` in upstream-drift.
+
 **Recorded, not fixed — each a written divergence or a finding, with its ruling:**
 
 - **R22, darwin libicucore's PUA quirk.** darwin's native `Intl.Segmenter` treats 39 private-use
@@ -153,9 +194,6 @@ availability-checks `Bun.sliceAnsi` like the segmenter (2.1.251's Bun 1.4.1 has 
   the AMBIENT HOME: a cached GrowthBook `.claude.json` there makes the 2.1.278 bundle under Node
   exit 0 after `HEAD /api/hello` without ever POSTing — likely the root of the
   "load-sensitive naude smoke flake" task 5 saw; a hermetic HOME in `smokeTarget` is the fix.
-- **R29, unknown and colon SGR keys.** Native keeps `ESC[99m`, `ESC[4:3m`, `ESC[38:5:208m`
-  verbatim as `sgrKeys`; the shim drops them. The caller filters keys through its own SGR
-  regex, so only the run COUNT could differ, and nothing paints that.
 - **The graphemes pool's pre-seed.** Native starts `graphemes` with 98 entries; ours starts
   empty. The caller only ever reads the indices a `segment()` hands it, so it is unobservable.
 - **`string-width` stays in `deps/claude`, now for two reasons that are not the product's
@@ -164,6 +202,51 @@ availability-checks `Bun.sliceAnsi` like the segmenter (2.1.251's Bun 1.4.1 has 
   embedded closure whether or not it is listed; and `test/node-shim-esm` and
   `test/node-shim-vflag-regex` exercise the npm package itself under tjs, which the shipped
   stringWidth cannot stand in for. Its direct listing is therefore kept.
+
+**Phase-3 follow-ups (LATER, as the final review triaged them, 2026-09-25):**
+
+- **`Bun.wrapAnsi` is a fifth width consumer, still on npm rules.** bun-shim's `Bun.wrapAnsi`
+  is npm `wrap-ansi` (and its `string-width`), not native's. The 2.1.278 carve calls it from one
+  helper (3 call sites, the helper reached from 19 wrap calls passing `{trim, hard}`). Measured
+  2026-09-25 with the text probe's runners (native inside its own Bun through
+  `scripts/lib/native-oracle.cjs`, ours under tjs with bun-shim), over the text gates' corpora
+  but the bundle literals, each string wrapped as `s ab s` at 1, 4 and 10 columns under
+  {trim, hard}, {hard} and neither: **243,055 of 1,174,878 strings differ** (785,269 of 10,573,902
+  wraps): composed 12 of 19, cell probes 557 of 586, escapes 42,482 of 50,081, slice probes 3,440
+  of 4,855, emoji-test 5,012 of 5,225, code points 191,552 of 1,114,112. That is
+  `Bun.wrapAnsi`'s own answer, not what paints: the carve's helper swaps wide and astral clusters
+  for placeholders before calling it and restores them after, so of those strings only the
+  11,023 all-ASCII ones reach it untouched. Not fixed; the route is phase 3's (measure native's
+  rules, state them once in unicode-text.cjs, add a fifth text gate).
+- **The UCD warm-up fetches from unicode.org on every CI run.** Recommended: an
+  `actions/cache` step before it, keyed on `hashFiles('scripts/unicode-inputs.json')` with NO
+  restore-keys (a restore-key is a rolling prefix and would hand back another pin's files), so
+  the warm-up only verifies what the cache restored.
+- **Task 3 M1:** offline, an EMPTY sha256 pin reads as a cold cache (exit 3, the freshness gate
+  SKIPS) instead of being refused as "no sha256 pin"; online, `fetchVerified` downloads the
+  unpinned file before refusing. Check the pin before the cache and the network.
+- **Task 3 M2:** no test that a cached file not hashing to its pin is never returned (the core
+  "refuses unverified inputs" invariant).
+- **Task 3 M4:** the generator does not refuse an empty `nativeVersion()`, which would write a
+  header the text gates then SKIP against forever (R11).
+- **Task 4b M1, the CELL_UNICODE self-check:** generation does not re-measure which Unicode
+  version CellSegmenter's clusterer tracks; it should probe the three CLUSTER-DATA-16 literals
+  (and a 15.1 discriminator) against native and refuse on disagreement. CI's cell-profile-diff
+  catches a drift only after the fact.
+- **Task 6, companion sites derived rather than listed:** shim-companions' SITES is
+  hand-maintained, and missed `scripts/m3-live-roundtrip.sh` (it now copies unicode-text.cjs;
+  it is still not a SITE, the scan wanting quoted names), `spike/quickjs/qemu/stage-m4.sh:31` and
+  `stage-p3.sh:58` (they stage bun-shim.cjs without its companion, whose require then throws at
+  load) and `test/clode-build-naude.test.cjs:49`. Derive the sites by scanning for whatever
+  stages bun-shim.cjs; fix or mark dead the spike scripts.
+- **Task W, seven `--out quaude` tests:** seven build tests still pass `--out quaude` without
+  `.exe` on win32 (the class A2 fixed for windows-amd64-tui); one shared quaudeOutName() would
+  fix them and the two inlined choices.
+- **Rules restated in two or three places:** the SLICE string terminators in `sliceString` and
+  `readString` (plus a redundant `ESC \` consumption, measured unobservable); the 7-bit
+  introducer letters, three times; the caller's SC regex in test/bun-shim-cell-segmenter.test.cjs
+  beside the probe's (only the probe's copy is checked against the carve); the "which sequences
+  apply" rule in test/unicode-text.test.cjs's SGR helper beside bun-shim's.
 
 **Slow box (step 6, measure only).** Tiger PPC: BLOCKED on 2026-09-25 — no qemu guest was
 running on this Mac (nothing listening on port 1215) and no current darwin-ppc engine was at
@@ -178,7 +261,7 @@ applied. It does not move a quaude's first frame (1572 ms), because bun-shim loa
 anyway.
 
 **What remains:** phase 4 (OSC-8 interning — links are consumed, never interned), phase 5 (the
-stateful surfaces below, and the unmeasured SGR re-apply choice), phase 6 (`reordered`, and
+stateful surfaces below), phase 6 (`reordered`, and
 performance on the slow boxes — starting with the Tiger first-frame number above).
 
 **Phases 1-2 landed: the 2.1.278 TUI paints, and its initial frame matches native.**
@@ -199,9 +282,11 @@ test so fixing it forces a re-take:
 - **phase 5, the stateful surfaces** (damage under partial repaint, scroll, resize; the
   grow-and-retry and pool-reset paths under a real session), and **phase 6** (`reordered`,
   performance on the slow boxes). Not started.
-- **Unmeasured choice:** a re-applied SGR slot is replaced IN PLACE (so chalk re-opening an
+- ~~**Unmeasured choice:** a re-applied SGR slot is replaced IN PLACE (so chalk re-opening an
   outer colour reuses one style id). The initial frame never re-applies, so what native does
-  there is an open experiment for a multi-frame oracle script.
+  there is an open experiment for a multi-frame oracle script.~~ MEASURED 2026-09-25 (final fix
+  wave): native moves a replaced style to the END, unless it is re-opened exactly as it is
+  (CELL-SGR); the in-place choice was wrong, and the shim now does what native does.
 - **The NetBSD leg has not been re-driven** with the segmenter. Its 2026-09-22 D1 failure was
   earlier than painting (no reply to the capability handshake, exits in the boot window), so
   the segmenter alone is not expected to fix it.
