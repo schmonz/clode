@@ -18,7 +18,9 @@
 // phase 4's (OSC-8 links, not interned) were each asserted as they were until the fix
 // turned them red, and were re-taken on purpose: the last two tests assert native's
 // answers. Clusters, widths, styles and links themselves are judged against native by
-// test/fidelity/text-differential.test.cjs.
+// test/fidelity/text-differential.test.cjs; paint() and setCell() by
+// test/fidelity/paint-differential.test.cjs, and each of their rules is pinned at the end of
+// this file by native's own record of a scenario.
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -335,11 +337,13 @@ test('paint clips at the width, writes both slots, and packs end|x1|x2', (t) => 
   assert.deepStrictEqual({ end: o.paint.end, x1: o.paint.x1, x2: o.paint.x2 }, { end: 6, x1: 3, x2: 5 });
 });
 
+// Phase 5's re-take: this pinned the spacer carrying the run's style (S | 2) until SCREEN-SPACER
+// measured native's answer on this very case (2026-09-25): the spacer's word is emptyWord | 2.
 test('paint spells a wide grapheme as wide(1) then spacerTail(2) at spacerCharIndex', (t) => {
   const o = results(t); if (!o) return;
   const S = 7 << 17;
-  assert.deepStrictEqual(o.paintWide.row, [-1, -1, 100, S | 1, 1, S | 2, -1, -1, -1, -1],
-    'Yd()\'s blit fixups look for exactly 1 followed by 2');
+  assert.deepStrictEqual(o.paintWide.row, [-1, -1, 100, S | 1, 1, 2, -1, -1, -1, -1],
+    'Yd()\'s blit fixups look for exactly 1 followed by 2, and the 2 carries no style (native)');
   assert.deepStrictEqual({ end: o.paintWide.end, x1: o.paintWide.x1, x2: o.paintWide.x2 },
     { end: 3, x1: 1, x2: 3 });
 });
@@ -399,3 +403,167 @@ test('CELL-LINK: uris holds the URI alone, interned as it is read', (t) => {
   assert.deepStrictEqual(o.link.readNoCell, { cells: [['a', 0], ['b', 0]], uris: ['', 'u'] });
   assert.deepStrictEqual(o.link.trailing, { cells: [['a', 0]], uris: ['', 'u'] });
 });
+
+// ---- paint() and setCell(), as native paints -------------------------------------------------
+// Every rule of bun-shim.cjs's paint()/setCell() is pinned here, by the rule's own name. Each case
+// is a scenario of the paint probe (scripts/lib/paint-probe.cjs: the SAME program
+// test/fidelity/paint-differential.test.cjs runs inside native Bun), run here under tjs, and
+// every expected value is native 2.1.278's own record of that scenario (Bun 1.4.3, 2026-09-25),
+// in the probe's decoding: each op gives [end, x1, x2] and the screen, a cell reading
+// `grapheme|style|link|width` (`#` never written, `<empty>` the emptyCharIndex, `<spacer>` the
+// spacerCharIndex, a style as the caller's ansiCodes() pairs it).
+const { runPaintOurs } = require('../scripts/lib/paint-probe.cjs');
+const cp = (...c) => String.fromCodePoint(...c);
+const E = '\x1b', TAB = '\t', CJK = cp(0x4e2d), CJK2 = cp(0x6587), CJK3 = cp(0x5b57);
+const WIDE4 = cp(0x1100, 0x1100), WIDE255 = cp(0x1100).repeat(128), W2 = CJK + CJK2;   // advance 4, 255
+const seg = (t, x, y = 0) => ({ seg: t, x, y });
+const set = (x, y, width, style = '', link = '') => ({ set: { x, y, text: 'q', style, link, width } });
+const LINK = (t) => E + ']8;;https://x\x07' + t + E + ']8;;\x07';
+const cell = (g, width, style = '', link = '') => `${g}|${style}|${link}|${width}`;
+const _ = '#', EMPTY = '<empty>', SPACER = '<spacer>';
+const sgr = (...pairs) => JSON.stringify(pairs);
+const RED = sgr([E + '[31m', E + '[39m']);
+
+// rule -> [scenario, native's record of each of its ops]
+const PAINT_RULES = {
+  'PAINT-DAMAGE': [
+    [{ w: 5, h: 1, ops: [seg('a', 5)] },
+      [{ ret: [6, 65535, 0], grew: false, screen: [[_, _, _, _, _]] }]],
+    [{ w: 5, h: 1, ops: [seg('abcd', 0), seg('abcd', 0)] },
+      [{ ret: [4, 0, 4], grew: false, screen: [[cell('a', 0), cell('b', 0), cell('c', 0), cell('d', 0), _]] },
+       { ret: [4, 0, 4], grew: false, screen: [[cell('a', 0), cell('b', 0), cell('c', 0), cell('d', 0), _]] }]],
+    [{ w: 5, h: 1, ops: [seg(W2, 0), seg('x', 2)] },
+      [{ ret: [4, 0, 4], grew: false, screen: [[cell(CJK, 1), cell(SPACER, 2), cell(CJK2, 1), cell(SPACER, 2), _]] },
+       { ret: [3, 2, 4], grew: false, screen: [[cell(CJK, 1), cell(SPACER, 2), cell('x', 0), cell(EMPTY, 0), _]] }]],
+    [{ w: 5, h: 1, ops: [set(-1, 0, 0)] },
+      [{ ret: [0, 65535, 0], grew: null, screen: [[_, _, _, _, _]] }]],
+  ],
+  'PAINT-END': [
+    [{ w: 5, h: 1, ops: [seg(CJK.repeat(8), 0)] },
+      [{ ret: [10, 0, 5], grew: false, screen: [[cell(CJK, 1), cell(SPACER, 2), cell(CJK, 1), cell(SPACER, 2), cell(EMPTY, 3)]] }]],
+    [{ w: 5, h: 1, ops: [seg(TAB + 'b', 0)] },
+      [{ ret: [6, 0, 5], grew: false, screen: [[cell(EMPTY, 0), cell(EMPTY, 0), cell(EMPTY, 0), cell(EMPTY, 0), cell(EMPTY, 0)]] }]],
+    [{ w: 5, h: 1, ops: [seg('abc', 8)] },
+      [{ ret: [11, 65535, 0], grew: false, screen: [[_, _, _, _, _]] }]],
+  ],
+  'PACK-END': [
+    [{ w: 5, h: 1, ops: [seg('ab', 1048579)] },
+      [{ ret: [1048575, 65535, 0], grew: false, screen: [[_, _, _, _, _]] }]],
+    [{ w: 5, h: 1, ops: [seg('ab', -2147483647)] },
+      [{ ret: [0, 65535, 0], grew: false, screen: [[_, _, _, _, _]] }]],
+    [{ w: 5, h: 1, ops: [set(1048579, 0, 0)] },
+      [{ ret: [1048575, 65535, 0], grew: null, screen: [[_, _, _, _, _]] }]],
+  ],
+  'PAINT-TAB': [
+    [{ w: 12, h: 1, ops: [seg(E + '[41m' + TAB + 'b' + E + '[49m', 0)] },
+      [{ ret: [9, 0, 9], grew: false, screen: [[cell(EMPTY, 0), cell(EMPTY, 0), cell(EMPTY, 0), cell(EMPTY, 0), cell(EMPTY, 0), cell(EMPTY, 0), cell(EMPTY, 0), cell(EMPTY, 0), cell('b', 0, sgr([E + '[41m', E + '[49m'])), _, _, _]] }]],
+    [{ w: 12, h: 1, ops: [seg(LINK(TAB + 'b'), 0)] },
+      [{ ret: [9, 0, 9], grew: false, screen: [[cell(EMPTY, 0), cell(EMPTY, 0), cell(EMPTY, 0), cell(EMPTY, 0), cell(EMPTY, 0), cell(EMPTY, 0), cell(EMPTY, 0), cell(EMPTY, 0), cell('b', 0, '', 'https://x'), _, _, _]] }]],
+    [{ w: 12, h: 1, ops: [seg(TAB + 'b', -1)] },
+      [{ ret: [9, 0, 9], grew: false, screen: [[cell(EMPTY, 0), cell(EMPTY, 0), cell(EMPTY, 0), cell(EMPTY, 0), cell(EMPTY, 0), cell(EMPTY, 0), cell(EMPTY, 0), cell(EMPTY, 0), cell('b', 0), _, _, _]] }]],
+    [{ w: 12, h: 1, ops: [seg('a' + TAB + 'b', -9)] },
+      [{ ret: [1, 0, 1], grew: false, screen: [[cell('b', 0), _, _, _, _, _, _, _, _, _, _, _]] }]],
+    [{ w: 5, h: 1, ops: [seg('a' + TAB + 'b', 5)] },
+      [{ ret: [7, 65535, 0], grew: false, screen: [[_, _, _, _, _]] }]],
+  ],
+  'PAINT-EDGE-WIDE': [
+    [{ w: 5, h: 1, ops: [seg(CJK, 4)] },
+      [{ ret: [5, 4, 5], grew: false, screen: [[_, _, _, _, cell(EMPTY, 3)]] }]],
+    [{ w: 5, h: 1, ops: [seg(E + '[31m' + CJK + E + '[39ma', 4)] },
+      [{ ret: [6, 4, 5], grew: false, screen: [[_, _, _, _, cell(EMPTY, 3)]] }]],
+    [{ w: 5, h: 1, ops: [seg(WIDE4 + 'b', 2)] },
+      [{ ret: [4, 2, 4], grew: false, screen: [[_, _, cell(EMPTY, 3), cell('b', 0), _]] }]],
+    [{ w: 12, h: 1, ops: [seg(WIDE255 + 'b', 0)] },
+      [{ ret: [2, 0, 2], grew: false, screen: [[cell(EMPTY, 3), cell('b', 0), _, _, _, _, _, _, _, _, _, _]] }]],
+  ],
+  'SCREEN-SPACER': [
+    [{ w: 5, h: 1, ops: [seg(E + '[31m' + CJK + E + '[39ma', 0)] },
+      [{ ret: [3, 0, 3], grew: false, screen: [[cell(CJK, 1, RED), cell(SPACER, 2), cell('a', 0), _, _]] }]],
+    [{ w: 5, h: 1, ops: [set(0, 0, 1, 'S', 'L')] },
+      [{ ret: [1, 0, 2], grew: null, screen: [[cell('q', 1, 'S', 'L'), cell(SPACER, 2), _, _, _]] }]],
+    [{ w: 5, h: 1, ops: [set(4, 0, 1)] },
+      [{ ret: [5, 4, 5], grew: null, screen: [[_, _, _, _, cell('q', 1)]] }]],
+  ],
+  'PAINT-SPACERS': [
+    [{ w: 5, h: 1, ops: [seg(E + '[31m' + WIDE4 + E + '[39mb', 0)] },
+      [{ ret: [5, 0, 5], grew: false, screen: [[cell(WIDE4, 1, RED), cell(SPACER, 2), cell(SPACER, 2, RED), cell(SPACER, 2, RED), cell('b', 0)]] }]],
+    [{ w: 5, h: 1, ops: [seg(LINK(WIDE4) + 'b', 0)] },
+      [{ ret: [5, 0, 5], grew: false, screen: [[cell(WIDE4, 1, '', 'https://x'), cell(SPACER, 2), cell(SPACER, 2, '', 'https://x'), cell(SPACER, 2, '', 'https://x'), cell('b', 0)]] }]],
+  ],
+  'SCREEN-BOUNDS': [
+    [{ w: 5, h: 1, ops: [seg(CJK + 'a', -1)] },
+      [{ ret: [2, 1, 2], grew: false, screen: [[_, cell('a', 0), _, _, _]] }]],
+    [{ w: 5, h: 1, ops: [seg(WIDE4 + 'b', -1)] },
+      [{ ret: [4, 1, 4], grew: false, screen: [[_, cell(SPACER, 2), cell(SPACER, 2), cell('b', 0), _]] }]],
+    [{ w: 5, h: 2, ops: [seg('ab', 0, -1)] },
+      [{ ret: [2, 65535, 0], grew: false, screen: [[_, _, _, _, _], [_, _, _, _, _]] }]],
+    [{ w: 5, h: 2, ops: [seg('ab', 0, 2)] },
+      [{ ret: [2, 65535, 0], grew: false, screen: [[_, _, _, _, _], [_, _, _, _, _]] }]],
+    [{ w: 5, h: 2, ops: [set(0, 2, 0)] },
+      [{ ret: [1, 65535, 0], grew: null, screen: [[_, _, _, _, _], [_, _, _, _, _]] }]],
+  ],
+  'SCREEN-ORPHANS': [
+    [{ w: 5, h: 1, ops: [seg(W2, 0), seg('x', 0)] },
+      [{ ret: [4, 0, 4], grew: false, screen: [[cell(CJK, 1), cell(SPACER, 2), cell(CJK2, 1), cell(SPACER, 2), _]] },
+       { ret: [1, 0, 2], grew: false, screen: [[cell('x', 0), cell(EMPTY, 0), cell(CJK2, 1), cell(SPACER, 2), _]] }]],
+    [{ w: 5, h: 1, ops: [seg(W2, 0), seg('x', 3)] },
+      [{ ret: [4, 0, 4], grew: false, screen: [[cell(CJK, 1), cell(SPACER, 2), cell(CJK2, 1), cell(SPACER, 2), _]] },
+       { ret: [4, 2, 4], grew: false, screen: [[cell(CJK, 1), cell(SPACER, 2), cell(EMPTY, 0), cell('x', 0), _]] }]],
+    [{ w: 5, h: 1, ops: [seg(W2, 0), seg(CJK3, 1)] },
+      [{ ret: [4, 0, 4], grew: false, screen: [[cell(CJK, 1), cell(SPACER, 2), cell(CJK2, 1), cell(SPACER, 2), _]] },
+       { ret: [3, 0, 4], grew: false, screen: [[cell(EMPTY, 0), cell(CJK3, 1), cell(SPACER, 2), cell(EMPTY, 0), _]] }]],
+    [{ w: 5, h: 1, ops: [seg('a' + W2, 0), seg(CJK3, 0)] },
+      [{ ret: [5, 0, 5], grew: false, screen: [[cell('a', 0), cell(CJK, 1), cell(SPACER, 2), cell(CJK2, 1), cell(SPACER, 2)]] },
+       { ret: [2, 0, 3], grew: false, screen: [[cell(CJK3, 1), cell(SPACER, 2), cell(EMPTY, 0), cell(CJK2, 1), cell(SPACER, 2)]] }]],
+    [{ w: 5, h: 1, ops: [seg(E + '[31m' + W2 + E + '[39m', 0), seg(E + '[32mx' + E + '[39m', 1)] },
+      [{ ret: [4, 0, 4], grew: false, screen: [[cell(CJK, 1, RED), cell(SPACER, 2), cell(CJK2, 1, RED), cell(SPACER, 2), _]] },
+       { ret: [2, 0, 2], grew: false, screen: [[cell(EMPTY, 0), cell('x', 0, sgr([E + '[32m', E + '[39m'])), cell(CJK2, 1, RED), cell(SPACER, 2), _]] }]],
+    [{ w: 5, h: 1, ops: [seg(CJK, 3), seg(CJK2, 4)] },
+      [{ ret: [5, 3, 5], grew: false, screen: [[_, _, _, cell(CJK, 1), cell(SPACER, 2)]] },
+       { ret: [5, 3, 5], grew: false, screen: [[_, _, _, cell(EMPTY, 0), cell(EMPTY, 3)]] }]],
+    [{ w: 5, h: 1, ops: [seg(W2, 0), set(2, 0, 0)] },
+      [{ ret: [4, 0, 4], grew: false, screen: [[cell(CJK, 1), cell(SPACER, 2), cell(CJK2, 1), cell(SPACER, 2), _]] },
+       { ret: [3, 2, 4], grew: null, screen: [[cell(CJK, 1), cell(SPACER, 2), cell('q', 0), cell(EMPTY, 0), _]] }]],
+    [{ w: 5, h: 1, ops: [seg(W2, 0), set(1, 0, 2)] },
+      [{ ret: [4, 0, 4], grew: false, screen: [[cell(CJK, 1), cell(SPACER, 2), cell(CJK2, 1), cell(SPACER, 2), _]] },
+       { ret: [2, 1, 2], grew: null, screen: [[cell(CJK, 1), cell('q', 2), cell(CJK2, 1), cell(SPACER, 2), _]] }]],
+  ],
+  'SETCELL-END': [
+    [{ w: 5, h: 1, ops: [set(0, 0, 1)] },
+      [{ ret: [1, 0, 2], grew: null, screen: [[cell('q', 1), cell(SPACER, 2), _, _, _]] }]],
+    [{ w: 5, h: 1, ops: [set(10, 0, 0)] },
+      [{ ret: [11, 65535, 0], grew: null, screen: [[_, _, _, _, _]] }]],
+    [{ w: 5, h: 1, ops: [set(0, -1, 0)] },
+      [{ ret: [1, 65535, 0], grew: null, screen: [[_, _, _, _, _]] }]],
+    [{ w: 5, h: 1, ops: [set(-3, 0, 0)] },
+      [{ ret: [0, 65535, 0], grew: null, screen: [[_, _, _, _, _]] }]],
+  ],
+};
+
+let paintCached;
+function paintRule(t, name) {
+  if (skipUnlessTjs(t)) return;
+  if (!paintCached) {
+    const scenarios = [];
+    for (const [rule, cases] of Object.entries(PAINT_RULES)) for (const [sc] of cases) scenarios.push({ part: rule, ...sc });
+    const results = runPaintOurs(scenarios).results;
+    paintCached = new Map();
+    let i = 0;
+    for (const [rule, cases] of Object.entries(PAINT_RULES)) paintCached.set(rule, cases.map(() => results[i++]));
+  }
+  const ours = paintCached.get(name);
+  PAINT_RULES[name].forEach(([sc, native], i) => {
+    assert.deepStrictEqual(ours[i], native, `${name} case ${i} (${JSON.stringify(sc.ops)}): ours is not native's`);
+  });
+}
+
+test('PAINT-DAMAGE: the damage spans every column written, a same-value write and a cleared cell included; none is 65535..0', (t) => paintRule(t, 'PAINT-DAMAGE'));
+test('PAINT-END: the end column is x plus every cell\'s advance as painted, written or not', (t) => paintRule(t, 'PAINT-END'));
+test('PACK-END: the end column saturates into its 20 bits, 0 below and 1048575 above', (t) => paintRule(t, 'PACK-END'));
+test('PAINT-TAB: a tab\'s blanks carry no style or link, its stop\'s remainder is truncated, and it stops at the edge', (t) => paintRule(t, 'PAINT-TAB'));
+test('PAINT-EDGE-WIDE: a cluster wider than 1 that does not fit is one spacerHead cell, advancing 1', (t) => paintRule(t, 'PAINT-EDGE-WIDE'));
+test('SCREEN-SPACER: a wide cell\'s second column is a spacerTail with emptyWord, from paint and from setCell', (t) => paintRule(t, 'SCREEN-SPACER'));
+test('PAINT-SPACERS: a cluster wider than 2 carries the run\'s style and link in its columns after the second', (t) => paintRule(t, 'PAINT-SPACERS'));
+test('SCREEN-BOUNDS: nothing is written off the columns or rows, and a head not written writes no spacer', (t) => paintRule(t, 'SCREEN-BOUNDS'));
+test('SCREEN-ORPHANS: splitting a wide cluster clears the half it leaves, and the cleared cell is damage', (t) => paintRule(t, 'SCREEN-ORPHANS'));
+test('SETCELL-END: setCell\'s end column is x + 1, on the screen or off it, whatever the width', (t) => paintRule(t, 'SETCELL-END'));

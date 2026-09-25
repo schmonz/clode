@@ -1055,6 +1055,9 @@ if (!_yaml) YAML.__bunShimStub = true;
 //     same gate on the link the caller PAINTS (each cell's run's uris entry, as
 //     runWords() reads it), and on the screen by the frame gate's link scene
 //     (test/fidelity/interactive-frame-diff.test.cjs, tui-reply-hyperlinks).
+//   - PAINT() AND SETCELL() are native's too (phase 5): every screen cell they write and
+//     every packed triple they return, damage included, by the rules stated at paint()
+//     below, judged against native by test/fidelity/paint-differential.test.cjs.
 // What is still NOT native's is named in BACKLOG.md's CellSegmenter section (phase 5:
 // the stateful surfaces; phase 6: `reordered`, and performance).
 
@@ -1065,6 +1068,9 @@ function _csIntern(pool, index, s) {
   if (i === undefined) { i = pool.length; pool.push(s); index.set(s, i); }
   return i;
 }
+
+// PAINT-DAMAGE's x1 when nothing was written: the largest value its 16 bits hold.
+const _CS_NO_DAMAGE_X1 = 65535;
 
 class _CellSegmenter {
   constructor(options) {
@@ -1078,10 +1084,11 @@ class _CellSegmenter {
     this.narrow = s.narrow === undefined ? 0 : s.narrow;
     this.wide = s.wide === undefined ? 1 : s.wide;
     this.spacerTail = s.spacerTail === undefined ? 2 : s.spacerTail;
-    // spacerHead is accepted and never emitted: nothing in the bundle produces
-    // or distinguishes it (every reader treats 2 and 3 alike, and the blit
-    // fixups in Yd test only for 2), so an implementation that never emits 3 is
-    // indistinguishable from one that does.
+    // spacerHead (3) is what native paints in place of a wide cluster that does not
+    // fit before the right edge (PAINT-EDGE-WIDE, measured 2026-09-25). The bundle's
+    // readers treat 2 and 3 alike and Yd's blit fixups test only for 2, but the screen
+    // is judged cell by cell against native, so 3 is written exactly where native
+    // writes it.
     this.spacerHead = s.spacerHead === undefined ? 3 : s.spacerHead;
     this.emptyCharIndex = s.emptyCharIndex === undefined ? 0 : s.emptyCharIndex;
     this.spacerCharIndex = s.spacerCharIndex === undefined ? 1 : s.spacerCharIndex;
@@ -1116,6 +1123,9 @@ class _CellSegmenter {
     this._gIndex = new Map();
     this._sgrIndex = new Map([['', 0]]);
     this._uriIndex = new Map([['', 0]]);
+    // The damage span of the paint() or setCell() in progress (PAINT-DAMAGE).
+    this._dx1 = _CS_NO_DAMAGE_X1;
+    this._dx2 = 0;
   }
 
   // The style key for the styles in force: their NUL-joined open spellings and the
@@ -1228,59 +1238,120 @@ class _CellSegmenter {
   //
   // CLIPPING IS PAINT'S JOB: the caller passes an x that may exceed the screen
   // width and the full cell count regardless of how much fits.
+  //
+  // WHAT IT WRITES AND RETURNS IS NATIVE'S, measured against native 2.1.278 (Bun 1.4.3,
+  // 2026-09-25) over scripts/lib/paint-corpus.cjs by test/fidelity/paint-differential.test.cjs,
+  // every screen cell and every packed triple, damage included: the bundle repaints only
+  // inside the damage it is told, so a rect narrower than native's leaves a stale cell for a
+  // frame. Each rule below is pinned by a same-named test in
+  // test/bun-shim-cell-segmenter.test.cjs. Every measurement agrees with the JS painter
+  // native replaced (2.1.251's line writer: a tab's blanks, the spacerHead at the edge;
+  // over its one-cell writer: the clean-up of a split wide cluster), with the damage of
+  // every cell written; that one-cell writer is _csWrite() here, and is setCell() too.
   paint(screenCells, screenWidth, x, y, segCells, count, _unused, charIndices, runWords) {
-    const base = y * screenWidth;
+    this._dx1 = _CS_NO_DAMAGE_X1; this._dx2 = 0;
     let col = x;
-    let x1 = 0, x2 = 0, any = false;
-    const put = (c, charIndex, word) => {
-      if (c < 0 || c >= screenWidth) return;
-      const k = (base + c) << 1;
-      screenCells[k] = charIndex;
-      screenCells[k + 1] = word;
-      if (!any) { x1 = c; x2 = c + 1; any = true; }
-      else { if (c < x1) x1 = c; if (c + 1 > x2) x2 = c + 1; }
-    };
     for (let i = 0; i < count; i++) {
       const w = segCells[(i << 1) + 1];
-      const word = runWords[w >>> 10];
       if ((w & 256) !== 0) {
-        // A tab paints the run's own blanks, so it carries the run's background.
-        let adv = this.tabWidth - (((col % this.tabWidth) + this.tabWidth) % this.tabWidth);
-        while (adv-- > 0) { put(col, this.emptyCharIndex, word | this.narrow); col++; }
+        // PAINT-TAB (rule): a tab writes blank cells (emptyCharIndex, emptyWord: no style, no
+        //   link) up to its stop, tabWidth - col % tabWidth on with the remainder truncated as
+        //   JS truncates it (so from a column left of the screen the stop is further), and never
+        //   past the right edge, where it advances nothing.
+        const stop = col + this.tabWidth - (col % this.tabWidth);
+        for (; col < stop && col < screenWidth; col++) {
+          this._csWrite(screenCells, screenWidth, y, col, this.emptyCharIndex, this.emptyWord);
+        }
         continue;
       }
       const adv = w & 255;
       if (adv === 0) continue;               // zero-width: no cell of its own
-      if (adv >= 2) {
-        put(col, charIndices[segCells[i << 1]], word | this.wide);
-        // spacerTail (2) is the ONLY spelling of "second half of a wide
-        // grapheme": Yd()'s blit fixups test for width===1 followed by
-        // width===2, so any other spelling corrupts clipped blits.
-        for (let k = 1; k < adv; k++) put(col + k, this.spacerCharIndex, word | this.spacerTail);
-        col += adv;
+      if (adv >= 2 && col + adv > screenWidth) {
+        // PAINT-EDGE-WIDE (rule): a cluster wider than 1 that does not fit before the right
+        //   edge paints one spacerHead cell (emptyCharIndex, emptyWord) and advances 1, past the
+        //   edge as well, where it writes nothing.
+        this._csWrite(screenCells, screenWidth, y, col, this.emptyCharIndex, this.emptyWord | this.spacerHead);
+        col++;
         continue;
       }
-      put(col, charIndices[segCells[i << 1]], word | this.narrow);
-      col++;
+      const word = runWords[w >>> 10];
+      this._csWrite(screenCells, screenWidth, y, col, charIndices[segCells[i << 1]],
+        word | (adv >= 2 ? this.wide : this.narrow));
+      // PAINT-SPACERS (rule): a cluster wider than 2 writes its columns after the second as
+      //   spacerTail cells carrying the run's word, its style and link.
+      for (let k = 2; k < adv; k++) {
+        this._csWrite(screenCells, screenWidth, y, col + k, this.spacerCharIndex, word | this.spacerTail);
+      }
+      col += adv;
     }
-    return _csPack(col, x1, x2);
+    // PAINT-END (rule): paint's end column is x plus the advance of every cell as the rules
+    //   above paint it, whether or not it was written.
+    return _csPack(col, this._dx1, this._dx2);
   }
 
   // setCell(screenCells, screenWidth, x, y, charIndex, word) -> the same packed
   // triple, of which only the damage half is read. The word arrives ALREADY
   // PACKED, width bits included: setCell segments nothing and touches no pool.
+  // It is paint()'s one-cell writer on its own (measured): the word is written as
+  // given, and a wide one splits and spaces exactly as a painted one does.
   setCell(screenCells, screenWidth, x, y, charIndex, word) {
-    if (x < 0 || y < 0 || x >= screenWidth) return _csPack(x, 0, 0);
-    const k = ((y * screenWidth) + x) << 1;
-    screenCells[k] = charIndex;
-    screenCells[k + 1] = word;
-    return _csPack(x + 1, x, x + 1);
+    this._dx1 = _CS_NO_DAMAGE_X1; this._dx2 = 0;
+    this._csWrite(screenCells, screenWidth, y, x, charIndex, word);
+    // SETCELL-END (rule): setCell's end column is x + 1, on the screen or off it, whatever the
+    //   word's width.
+    return _csPack(x + 1, this._dx1, this._dx2);
+  }
+
+  // Write one screen cell as native does, and count its damage: every cell paint()
+  // writes, and setCell().
+  _csWrite(cells, width, y, c, charIndex, word) {
+    // SCREEN-BOUNDS (rule): only a column in [0, width) of a row in [0, height) is written,
+    //   the height being the screen array's own (cells.length / 2 / width), and a wide cell
+    //   that is not written writes no spacer either.
+    if (c < 0 || c >= width || y < 0 || (y + 1) * width * 2 > cells.length) return;
+    const k = (y * width + c) << 1, m = this.widthMask;
+    const was = cells[k + 1] & m, now = word & m;
+    // SCREEN-ORPHANS (rule): a write that splits a wide cluster clears the half it leaves to
+    //   an empty cell (emptyCharIndex, emptyWord): the spacerTail right of a head overwritten
+    //   by anything but a head, the head left of a spacerTail overwritten by anything but a
+    //   spacerTail, and the spacerTail of a head that a wide cell's own spacer lands on.
+    if (was === this.wide && now !== this.wide && c + 1 < width
+        && (cells[k + 3] & m) === this.spacerTail) this._csClear(cells, k + 2, c + 1);
+    if (was === this.spacerTail && now !== this.spacerTail && c > 0
+        && (cells[k - 1] & m) === this.wide) this._csClear(cells, k - 2, c - 1);
+    cells[k] = charIndex;
+    cells[k + 1] = word;
+    this._csDamage(c);
+    if (now !== this.wide || c + 1 >= width) return;
+    if ((cells[k + 3] & m) === this.wide && c + 2 < width
+        && (cells[k + 5] & m) === this.spacerTail) this._csClear(cells, k + 4, c + 2);
+    // SCREEN-SPACER (rule): a wide cell takes the next column, when it is on the screen, as a
+    //   spacerTail cell with emptyWord (no style, no link). spacerTail (2) is the ONLY spelling
+    //   of "second half of a wide cluster": Yd()'s blit fixups test for width===1 followed by
+    //   width===2, so any other spelling corrupts clipped blits.
+    cells[k + 2] = this.spacerCharIndex;
+    cells[k + 3] = this.emptyWord | this.spacerTail;
+    this._csDamage(c + 1);
+  }
+
+  _csClear(cells, k, c) {
+    cells[k] = this.emptyCharIndex;
+    cells[k + 1] = this.emptyWord;
+    this._csDamage(c);
+  }
+
+  // PAINT-DAMAGE (rule): the damage paint() and setCell() return spans every column they
+  //   wrote, a write of the value already there and a cell SCREEN-ORPHANS clears included,
+  //   and with none written is x1 = 65535, x2 = 0.
+  _csDamage(c) {
+    if (c < this._dx1) this._dx1 = c;
+    if (c + 1 > this._dx2) this._dx2 = c + 1;
   }
 }
 
-// endColumn (bits 0-19) | damageX1 (bits 20-35) | damageX2 (bits 36+), as a
-// double. B0 does nothing when x1 >= x2, so 0/0 is "no damage". The caller reads
-// the end column as `m % 1048576`, so it must not overflow into the x1 field.
+// endColumn (bits 0-19) | damageX1 (bits 20-35) | damageX2 (bits 36+), as a double.
+// PACK-END (rule): the end column saturates into the 20 bits the caller reads as
+//   `m % 1048576`, 0 below and 1048575 above.
 function _csPack(endCol, x1, x2) {
   const e = endCol < 0 ? 0 : (endCol > 0xfffff ? 0xfffff : endCol);
   return e + (x1 * 1048576) + (x2 * 68719476736);
