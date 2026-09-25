@@ -10,14 +10,10 @@
 'use strict';
 const { test } = require('node:test');
 const assert = require('node:assert');
-const fs = require('node:fs');
-const path = require('node:path');
-const { execFileSync } = require('node:child_process');
 
 const { planGraph, planOrder, externalsOf, shimSource, depsOf } =
   require('../libexec/bun-graph-plan.cjs');
 const { loadGraph, loadGraphFull } = require('../libexec/bun-graph.cjs');
-const REPO = path.join(__dirname, '..');
 
 const G = (obj) => new Map(Object.entries(obj));
 
@@ -118,30 +114,40 @@ test('planGraph refuses an entry that is not in the graph', () => {
 
 // ---- real providers ------------------------------------------------------------
 
-function providers() {
-  const found = [], seen = new Set();
-  const add = (p) => { if (p && fs.existsSync(p) && !seen.has(p)) { seen.add(p); found.push(p); } };
-  add(process.env.CLODE_PROVIDER_BIN);
-  add(process.env.CLODE_CLAUDE_BIN);
-  try {
-    add(execFileSync(process.execPath, [path.join(REPO, 'scripts', 'find-provider.mjs')],
-      { encoding: 'utf8' }).trim());
-  } catch { /* reported by the skip message */ }
-  try {
-    const { VERSIONS, providerBin } = require('./golden-shas-lib.cjs');
-    for (const v of VERSIONS) add(providerBin(v));
-  } catch { /* fixture lib unavailable */ }
-  return found;
+// PIN-SCOPED, through the suite's one resolver (test/provider-resolve.cjs): an explicit
+// CLODE_PROVIDER_BIN / CLODE_CLAUDE_BIN, else the version UPSTREAM_PIN names. This used to
+// ALSO add whatever scripts/find-provider.mjs found in the global npm root, plus the
+// golden-shas fixture store's CJS carves — so on 2026-09-25 a global 2.1.282 install, well
+// past the 2.1.251 pin, decided what "a real split bundle patches every hook" tested, and
+// failed it. Watching newer-than-pin upstream is upstream-drift.yml's job (it runs `next`),
+// not the default suite's. Each real test names the provider it ran against.
+const { providerBin, skipReason, pinnedVersion } = require('./provider-resolve.cjs');
+const PROVIDER = providerBin();
+const PROVIDERS = PROVIDER ? [PROVIDER] : [];
+const provOpts = { skip: skipReason() };
+function providerSource(bin) {
+  if (bin === process.env.CLODE_PROVIDER_BIN) return 'CLODE_PROVIDER_BIN';
+  if (bin === process.env.CLODE_CLAUDE_BIN) return 'CLODE_CLAUDE_BIN';
+  return `UPSTREAM_PIN ${pinnedVersion()}`;
 }
+const sayProvider = (t, bin) => t.diagnostic(`provider (${providerSource(bin)}): ${bin}`);
 
-const PROVIDERS = providers();
-const provOpts = {
-  skip: PROVIDERS.length ? false
-    : 'no Claude provider found (CLODE_PROVIDER_BIN, CLODE_CLAUDE_BIN, scripts/find-provider.mjs, or the golden-shas store)',
-};
+// The ratchet for the above: every provider this file tests must be one test/provider-resolve.cjs
+// would hand out — an explicit CLODE_PROVIDER_BIN / CLODE_CLAUDE_BIN, or a carve of the version
+// UPSTREAM_PIN names. Anything else (a global npm install, whatever a fixture store happens to
+// hold) is dev-box state choosing the test's subject. Measured 2026-09-25: a global 2.1.282
+// install made "a real split bundle patches every hook" fail here, on a box whose pin is 2.1.251.
+test('the providers under test are the pin or an explicit choice, never ambient state', () => {
+  const allowed = new Set(require('./provider-resolve.cjs').providers());
+  for (const p of PROVIDERS) {
+    assert.ok(allowed.has(p), `${p} is neither CLODE_PROVIDER_BIN/CLODE_CLAUDE_BIN nor a carve of `
+      + 'UPSTREAM_PIN — ambient state chose this test\'s subject');
+  }
+});
 
-test('a real bundle plans with no order violations and no missing sources', provOpts, () => {
+test('a real bundle plans with no order violations and no missing sources', provOpts, (t) => {
   for (const bin of PROVIDERS) {
+    sayProvider(t, bin);
     const mods = loadGraph(bin);
     const plan = planGraph(mods, loadGraphFull(bin).entryName);
     const pos = new Map(plan.order.map((n, i) => [n, i]));
@@ -190,9 +196,10 @@ test('transformGraph reports every hook by name, so a silent skip is impossible'
   ]);
 });
 
-test('a real split bundle patches every hook', provOpts, () => {
+test('a real split bundle patches every hook', provOpts, (t) => {
   let checked = 0;
   for (const bin of PROVIDERS) {
+    sayProvider(t, bin);
     const mods = loadGraph(bin);
     const full = loadGraphFull(bin);
     // CJS bundles go through transform(), not transformGraph().

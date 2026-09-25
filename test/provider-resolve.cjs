@@ -110,10 +110,14 @@ function providerBin(env = process.env) {
 // indistinguishable from one that is hiding something.
 function skipReason(env = process.env) {
   if (providers(env).length) return false;
-  return 'no Claude provider found. Looked at: CLODE_PROVIDER_BIN, CLODE_CLAUDE_BIN, '
-    + "libexec/clode-resolve.cjs's resolveClaudeBin, scripts/find-provider.mjs, "
-    + 'UPSTREAM_PIN\'s pinned version under ~/.local/share/clode/providers/, and the '
-    + 'golden-shas fixture store. Set CLODE_PROVIDER_BIN=<path to a claude binary> to run this.';
+  // Names only what _providers() actually consults. It used to also list resolveClaudeBin,
+  // scripts/find-provider.mjs and the golden-shas store, none of which selection has read
+  // since it became pin-exact -- a skip that claims to have looked somewhere it did not.
+  const pin = pinnedVersion();
+  return 'no Claude provider found. Looked at: CLODE_PROVIDER_BIN, CLODE_CLAUDE_BIN, and '
+    + `UPSTREAM_PIN's pinned version (${pin || 'unset'}) under ${path.join(storeDir(env), pin || '<pin>')}/. `
+    + 'Set CLODE_PROVIDER_BIN=<path to a claude binary> to run this, or run the suite through '
+    + 'test/run.mjs, which fetches the pinned version once.';
 }
 
 
