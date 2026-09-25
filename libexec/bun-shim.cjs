@@ -210,12 +210,22 @@ for (const m of ['exec', 'execSync']) {
 // --coverage) can tell "provided but unimplemented" from a real implementation.
 const TODO = (name) => { const f = () => { throw new Error(`Bun.${name} not yet implemented in the Node host shim`); }; f.__bunShimStub = true; return f; };
 
+// --- text: the ONE clustering/width implementation --------------------------
+// Bun.stringWidth and Bun.ant.CellSegmenter (below) both come from
+// unicode-text.cjs, which travels beside this file in every packaging
+// (test/shim-companions.test.cjs), so the two can never disagree about a width.
+// Bun.stringWidth used to be npm string-width, whose width rules are its own, not
+// Bun's (4206 code points differed from native 2.1.278). Both are judged against
+// native by test/fidelity/text-differential.test.cjs.
+const _ut = require(__dirname + '/unicode-text.cjs');
+const stringWidth = _ut.stringWidth;
+
 // --- external deps backed by real npm packages -----------------------------
-// stripANSI / stringWidth / wrapAnsi (and semver, below) are backed by the npm
-// strip-ansi / string-width / wrap-ansi / semver packages -- no in-house clones.
+// stripANSI / wrapAnsi / sliceAnsi (and semver, below) are backed by the npm
+// strip-ansi / wrap-ansi / slice-ansi / semver packages -- no in-house clones.
 // They render every frame / gate versions, so a missing one is FATAL: write the
 // install hint and exit (nothing to recover, unlike the optional ws/yaml features).
-// require() resolves these even though string-width/strip-ansi/wrap-ansi are ESM-
+// require() resolves these even though strip-ansi/wrap-ansi are ESM-
 // only: Node (clode floors at 24) supports require() of ESM with no top-level await
 // and returns a namespace whose `.default` is the function -- hence `.default || m`.
 // (A future top-level-await release would make require() throw ERR_REQUIRE_ASYNC_
@@ -228,7 +238,6 @@ function _extMissing(pkg, feature){
 function _extFatal(msg){ try { fs.writeSync(2, '\n' + msg + '\n'); } catch (_) {} process.exit(1); }
 function _extResolve(pkg){ try { const m = require(pkg); return (m && m.default) || m; } catch (_) { return undefined; } }
 
-const _stringWidthFn = _extResolve('string-width');
 const _stripAnsiFn   = _extResolve('strip-ansi');
 const _wrapAnsiFn    = _extResolve('wrap-ansi');
 // Bun.sliceAnsi -- NEW IN 2.1.278, and it is the ONLY Bun member the bundle
@@ -247,18 +256,16 @@ const _wrapAnsiFn    = _extResolve('wrap-ansi');
 // full turn. `-p` never touches this code, which is why every headless floor row
 // stayed green.
 //
-// Backed by npm slice-ansi, same as the three above: the indices are DISPLAY
+// Backed by npm slice-ansi, like strip-ansi and wrap-ansi above: the indices are DISPLAY
 // COLUMNS (slice-ansi advances its cursor by each token's visibleWidth, so a
 // fullwidth CJK cell counts 2), which is what upstream's width-derived arguments
 // and its own `se(f) > u-s` correction loop expect.
 const _sliceAnsiFn   = _extResolve('slice-ansi');
-function stringWidth(...a){ return _stringWidthFn ? _stringWidthFn(...a) : _extFatal(_extMissing('string-width', 'text rendering (display width)')); }
 function stripANSI(...a){ return _stripAnsiFn ? _stripAnsiFn(...a) : _extFatal(_extMissing('strip-ansi', 'text rendering (ANSI stripping)')); }
 function wrapAnsi(...a){ return _wrapAnsiFn ? _wrapAnsiFn(...a) : _extFatal(_extMissing('wrap-ansi', 'text rendering (line wrapping)')); }
 function sliceAnsi(...a){ return _sliceAnsiFn ? _sliceAnsiFn(...a) : _extFatal(_extMissing('slice-ansi', 'text rendering (ANSI-aware slicing)')); }
 // Without the real module these are fail-loud stubs, not implementations -- tag so
 // inspect-claude-bundle coverage reports them honestly (see Bun.YAML).
-if (!_stringWidthFn) stringWidth.__bunShimStub = true;
 if (!_stripAnsiFn) stripANSI.__bunShimStub = true;
 if (!_wrapAnsiFn) wrapAnsi.__bunShimStub = true;
 if (!_sliceAnsiFn) sliceAnsi.__bunShimStub = true;

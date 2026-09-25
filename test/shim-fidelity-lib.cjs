@@ -14,13 +14,15 @@
 // NOTE: this lib resolves the RAW npm packages directly (NOT libexec/bun-shim.cjs).
 // Deliberate: importing bun-shim.cjs has heavy global side effects unwanted in a unit
 // test (it patches fs / child_process, installs globalThis.WebSocket, hooks Module._load).
-// Today the shim's wrappers for these five are pure pass-throughs
-// (stringWidth(...a){return _stringWidthFn(...a)}, YAML.parse:(...a)=>_yaml.parse(...a),
-// semver.order/satisfies -> the package's compare/satisfies), so the raw package measures
-// exactly what clode ships. CAVEAT: if a shim wrapper ever gains real logic — e.g. passing
-// options to wrap-ansi to close the Bun {trim,hard,wordWrap} divergence — update THIS lib
-// to measure the shim's wrapped behavior, or the guard will silently keep measuring the
-// raw package and miss both the fix and any regression of it.
+// Today the shim's wrappers for the npm-backed ones are pure pass-throughs
+// (YAML.parse:(...a)=>_yaml.parse(...a), semver.order/satisfies -> the package's
+// compare/satisfies), so the raw package measures exactly what clode ships. CAVEAT: if a
+// shim wrapper ever gains real logic — e.g. passing options to wrap-ansi to close the Bun
+// {trim,hard,wordWrap} divergence — update THIS lib to measure the shim's wrapped behavior,
+// or the guard will silently keep measuring the raw package and miss both the fix and any
+// regression of it. That day came for stringWidth (phase 3, 2026-09-24): Bun.stringWidth is
+// no longer npm string-width but libexec/unicode-text.cjs's stringWidth, which is pure and
+// side-effect free, so it is measured HERE directly — the function bun-shim.cjs ships.
 
 // Claude Code's runtime deps (deps/claude/package.json) — NOT clode's own;
 // clode has none (test/clode-self-deps.test.cjs). Resolved via an explicit
@@ -41,7 +43,7 @@ function req(pkg) {
   return (m && m.default) || m;
 }
 
-const stringWidth = req('string-width');
+const { stringWidth } = require(path.join(__dirname, '..', 'libexec', 'unicode-text.cjs'));
 const stripAnsi   = req('strip-ansi');
 const wrapAnsi    = req('wrap-ansi');
 const sliceAnsi   = req('slice-ansi');
