@@ -76,16 +76,19 @@ const PART_FLOORS = {
 
 let SKIP = null, STRINGS = null, NATIVE = null, OURS = null, WHAT = '', PARTS = null;
 
-// The carved bundle's non-ASCII literals, or [] when no provider is at hand (named in WHAT).
+// The carved bundle's non-ASCII literals, or [] when no provider is named (said in WHAT).
+// `required`: CLODE_PROVIDER_BIN is set, so the part must not be empty — a path that is not
+// there reads as an empty part (BROKEN, naming it), never as "no provider".
 function bundleLiterals() {
   const prov = process.env.CLODE_PROVIDER_BIN;
-  if (!prov || !fs.existsSync(prov)) return { strings: [], why: 'no CLODE_PROVIDER_BIN', carved: false };
+  if (!prov) return { strings: [], why: 'no CLODE_PROVIDER_BIN', required: false };
+  if (!fs.existsSync(prov)) return { strings: [], why: `CLODE_PROVIDER_BIN names ${prov}, which does not exist`, required: true };
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'text-diff-carve-'));
   try {
     const cli = path.join(dir, 'cli.cjs');
     const r = spawnSync(process.execPath, [path.join(REPO, 'libexec', 'extract-claude-js.cjs'), prov, cli], { encoding: 'utf8' });
     if (r.status !== 0) throw new Error(`could not carve ${prov}: ${(r.stderr || '').slice(0, 400)}`);
-    return { strings: C.corpusBundleLiterals(fs.readFileSync(cli, 'utf8')), why: `bundle literals from ${prov}`, carved: true };
+    return { strings: C.corpusBundleLiterals(fs.readFileSync(cli, 'utf8')), why: `bundle literals from ${prov}`, required: true };
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 }
 
@@ -119,7 +122,7 @@ before(async () => {
   STRINGS = [].concat(...parts.map(([, s]) => s));
   PARTS = parts.map(([name, s]) => {
     if (!(name in PART_FLOORS)) throw new Error(`corpus part '${name}' has no floor in PART_FLOORS: measure it and add one`);
-    return { name, count: s.length, floor: name === 'bundle literals' && !lit.carved ? 0 : PART_FLOORS[name] };
+    return { name, count: s.length, floor: name === 'bundle literals' && !lit.required ? 0 : PART_FLOORS[name] };
   });
   WHAT = `${v} vs ours under tjs; ${parts.map(([n, s]) => `${s.length} ${n}`).join(', ')} (${lit.why})`;
   const wants = { segmenter: true, stringWidth: true, intl: true, sliceAnsi: true };
