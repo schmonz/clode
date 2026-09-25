@@ -18,7 +18,7 @@ const BATCH = 20000;
 const PROBE_SOURCE = String.raw`
   const { strings, wants, side } = input;
   const out = { runtime: side === 'native' ? 'bun ' + Bun.version : 'shim',
-    segmenter: null, stringWidth: null, intl: null };
+    segmenter: null, stringWidth: null, intl: null, sliceAnsi: null };
   if (wants.segmenter && typeof (Bun.ant && Bun.ant.CellSegmenter) === 'function') {
     const n = new Bun.ant.CellSegmenter({ ambiguousIsNarrow: true,
       substitute: [[1564, 1564], [8234, 8238], [8294, 8297]],
@@ -39,12 +39,31 @@ const PROBE_SOURCE = String.raw`
     const seg = new Intl.Segmenter('en', { granularity: 'grapheme' });
     out.intl = strings.map((s) => Array.from(seg.segment(s), (x) => x.segment));
   }
+  // Eleven cuts of each string, in COLUMNS (Ink's truncation passes columns): the edges of the
+  // first cluster (a wide one, an emoji sequence, an escape the string begins with), both
+  // negative forms (they count back from the total width), the whole string (0 to the end:
+  // native returns it untouched), and the string inside a bold run, inside an OSC-8 link, and
+  // before an escape and a plain run, each cut so the slice starts or ends inside the run.
+  if (wants.sliceAnsi) {
+    const E = '\x1b';
+    out.sliceAnsi = strings.map((s) => {
+      const bold = E + '[1m' + s + 'x' + E + '[22m';
+      const link = 'a' + E + ']8;;u\x07' + s + E + ']8;;\x07b';
+      const tail = s + E + '[31mab' + E + '[39m';
+      return [Bun.sliceAnsi(s, 0, 1), Bun.sliceAnsi(s, 1), Bun.sliceAnsi(s, 1, 2), Bun.sliceAnsi(s, 0, -1), Bun.sliceAnsi(s, -1), Bun.sliceAnsi(s, 0),
+        Bun.sliceAnsi(bold, 0, 2), Bun.sliceAnsi(bold, 1), Bun.sliceAnsi(link, 1, 3), Bun.sliceAnsi(link, 2), Bun.sliceAnsi(tail, 1, 3)];
+    });
+  }
   return out;
 `;
 
+// The consumers the probe can answer for, in the order every comparison reports them.
+const KEYS = ['segmenter', 'stringWidth', 'intl', 'sliceAnsi'];
+
 function merge(parts) {
-  const out = { runtime: parts[0].runtime, segmenter: null, stringWidth: null, intl: null };
-  for (const k of ['segmenter', 'stringWidth', 'intl']) {
+  const out = { runtime: parts[0].runtime };
+  for (const k of KEYS) {
+    out[k] = null;
     if (parts.every((p) => p[k])) out[k] = [].concat(...parts.map((p) => p[k]));
   }
   return out;
@@ -97,10 +116,11 @@ function runOurs(strings, wants) {
 const hex = (s) => Array.from(s, (c) => 'U+' + c.codePointAt(0).toString(16).toUpperCase().padStart(4, '0')).join(' ');
 
 function compareTextResults(strings, native, ours) {
-  const counts = { segmenter: null, stringWidth: null, intl: null };
+  const counts = {};
+  for (const k of KEYS) counts[k] = null;
   const findings = [];
   let more = 0;
-  for (const k of ['segmenter', 'stringWidth', 'intl']) {
+  for (const k of KEYS) {
     if (!native[k]) continue;                      // native lacks it: not compared, and counts says null
     counts[k] = 0;
     for (let i = 0; i < strings.length; i++) {

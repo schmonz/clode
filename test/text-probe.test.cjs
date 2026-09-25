@@ -17,8 +17,17 @@ test('a width difference, a split cluster and an Intl difference are each named'
   const n = { segmenter: [[['中', 2, 0]]], stringWidth: [[2, 2]], intl: [['中']] };
   const o = { segmenter: [[['中', 1, 0]]], stringWidth: [[1, 1]], intl: [['中', '']] };
   const d = compareTextResults(s, n, o);
-  assert.deepStrictEqual(d.counts, { segmenter: 1, stringWidth: 1, intl: 1 });
+  // sliceAnsi is null: absent from native's answer, so not compared.
+  assert.deepStrictEqual(d.counts, { segmenter: 1, stringWidth: 1, intl: 1, sliceAnsi: null });
   assert.match(d.findings[0], /^segmenter U\+4E2D: native/);
+});
+
+test('a sliceAnsi difference is counted and named like the other consumers', () => {
+  const n = { sliceAnsi: [['a', '', '\x1b[1ma\x1b[22m']] };
+  const d = compareTextResults(['a'], n, { sliceAnsi: [['a', 'a', '\x1b[1ma\x1b[22m']] });
+  assert.deepStrictEqual(d.counts, { segmenter: null, stringWidth: null, intl: null, sliceAnsi: 1 });
+  assert.match(d.findings[0], /^sliceAnsi U\+0061: native/);
+  assert.deepStrictEqual(compareTextResults(['a'], n, JSON.parse(JSON.stringify(n))).counts.sliceAnsi, 0);
 });
 
 test('a consumer native lacks (segmenter null) is NOT compared and says so', () => {

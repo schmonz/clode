@@ -169,6 +169,46 @@ function corpusEscapes() {
   return [...new Set(out)];   // the two halves overlap in a few strings
 }
 
+// Bun.sliceAnsi's own rules (task 7), which the corpora above never reach: what it replays,
+// keeps and closes needs a variety of SGR and OSC 8 sequences AROUND the cut, and two of its
+// clustering rules show only after a 1-wide Prepend. Measured 2026-09-25: with only the
+// corpora above, the sliceAnsi gate stayed green with any one of SLICE-CONTROLS-JOIN,
+// SLICE-IDENTITY, the SLICE-ASCII-RUNS horizon, or the SLICE-STYLES attribute, close and
+// replay rules switched off.
+//   AROUND  every sequence below before `a` and again between `a` and `bc`: the probe cuts
+//           columns (1) (the first replayed), (0, 1) (the second met at the cut) and (1, 2).
+//   PREPEND a 1-wide Prepend, then each Cc (and a few other would-be controls), then `x`:
+//           the Prepend takes it, so (1) is just `x` — except CR and LF.
+//   HORIZON zero-width marks, a 1-wide Prepend and two letters: the scan horizon lands
+//           between the Prepend and the letters for exactly one count of marks.
+const SGRS = [
+  '1', '2', '1;2', '3', '20', '4', '21', '5', '6', '7', '8', '9', '31', '91', '38;5;208', '38;2;1;2;3', '38;5', '38;2;1',
+  '48;5;1', '48;2;9;8;7', '58;5;1', '51', '52', '53', '73', '74', '10', '11', '99', '', '0', ';1', '1;', '22', '23', '24', '25',
+  '27', '28', '29', '39', '49', '54', '55', '59', '75', '22;4', '0;1', '4:3', '38:5:208', '1234567', '31;1;4;7;9;53;73;2;3;5',
+  new Array(33).fill('1').join(';'),
+].map((p) => '\x1b[' + p + 'm');
+const LINKS = ['\x1b]8;;http://x\x07', '\x1b]8;;\x07', '\x1b]8;id=1;u\x1b\\', '\x1b]8;;\x1b\\', '\x9d8;;u\x9c', '\x9d8;;\x9c',
+  '\x1b]8;u\x07', '\x1b]8;;u\x18', '\x1b]0;t\x07', '\x9b1m', '\x9b31;1m', '\x9b22m', '\x1b[2K', '\x1b[?25l'];
+const SLICE_PREPENDS = [0x890, 0xd4e];
+
+function corpusSliceProbes() {
+  const out = [];
+  const around = SGRS.concat(LINKS);
+  for (const x of around) for (const y of around) out.push(x + 'a' + y + 'bc');
+  const controls = [];
+  for (let c = 0; c <= 0x1f; c++) controls.push(c);
+  for (let c = 0x7f; c <= 0x9f; c++) controls.push(c);
+  for (const p of SLICE_PREPENDS) {
+    for (const c of controls.concat([0xd800, 0xdbff, 0xdc00, 0xdfff, 0x200b, 0xad, 0x2028, 0xfeff])) out.push(H(p, c, 0x78));
+    out.push(H(p) + '\x1b[1mab', H(p) + '\x1b[1ma\x1b[22mb', H(p) + '\x1b[1ma\u0301b');
+  }
+  for (let k = 0; k <= 10; k++) {
+    const marks = H(...new Array(k).fill(0x301));
+    out.push(marks + H(0x890) + 'ab', 'x' + marks + H(0x890) + 'abc', '\x1b[1m' + marks + H(0x890) + 'ab\x1b[22m');
+  }
+  return [...new Set(out)];
+}
+
 // The bun-cell per-code-point sweep (task 4b): every template, with every code point X in
 // the `X` slot, is one string. Templates close with a code point of nonzero width where a
 // zero-width X would otherwise leave nothing to compare. `narrow: false` runs it with
@@ -242,4 +282,4 @@ function graphemeBreakTestCases(text) {
 }
 
 module.exports = { corpusCodePoints, corpusComposed, corpusGraphemeBreakTest, corpusEmojiTest, corpusBundleLiterals,
-  corpusCellProbes, corpusEscapes, CELL_SWEEP_TEMPLATES, graphemeBreakTestCases };
+  corpusCellProbes, corpusEscapes, corpusSliceProbes, CELL_SWEEP_TEMPLATES, graphemeBreakTestCases };

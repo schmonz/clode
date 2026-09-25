@@ -3,7 +3,7 @@
 // Run ours vs native over one corpus and print classified counts. The phase-3 progress
 // meter: run it before a change and after.
 //
-//   node scripts/text-differential.cjs --native BIN --corpus codepoints|composed|probes|escapes|emoji-test FILE|gbt FILE|bundle CLI [--out DIR]
+//   node scripts/text-differential.cjs --native BIN --corpus codepoints|composed|probes|escapes|slices|emoji-test FILE|gbt FILE|bundle CLI [--out DIR]
 //
 // Exit 0 when every compared consumer is identical, 1 when any differs, 2 on harness failure.
 const fs = require('node:fs');
@@ -24,12 +24,13 @@ function main(argv) {
     : o.corpus === 'composed' ? C.corpusComposed()
       : o.corpus === 'probes' ? C.corpusCellProbes()
       : o.corpus === 'escapes' ? C.corpusEscapes()
+      : o.corpus === 'slices' ? C.corpusSliceProbes()
       : o.corpus === 'emoji-test' ? C.corpusEmojiTest(fs.readFileSync(o.file, 'utf8'))
         : o.corpus === 'gbt' ? C.corpusGraphemeBreakTest(fs.readFileSync(o.file, 'utf8'))
           : o.corpus === 'bundle' ? C.corpusBundleLiterals(fs.readFileSync(o.file, 'utf8'))
             : null;
   if (!strings) { process.stderr.write(`text-differential: unknown corpus ${o.corpus}\n`); return 2; }
-  const wants = { segmenter: true, stringWidth: true, intl: true };
+  const wants = { segmenter: true, stringWidth: true, intl: true, sliceAnsi: true };
   // A thrown error (a missing/refusing native binary, a tjs launch failure, an empty
   // corpus) is a HARNESS failure, distinct from "differences were found" (exit 1) — both
   // runNative and runOurs throw plain Errors, never exit the process themselves.
@@ -44,7 +45,7 @@ function main(argv) {
   const d = compareTextResults(strings, native, ours);
   if (o.out) { fs.mkdirSync(o.out, { recursive: true }); fs.writeFileSync(path.join(o.out, `${o.corpus}.json`), JSON.stringify({ native, ours, d })); }
   process.stdout.write(`${o.corpus}: examined ${d.examined} (${native.runtime} vs ${ours.runtime}) `
-    + `segmenter=${d.counts.segmenter} stringWidth=${d.counts.stringWidth} intl=${d.counts.intl}\n`);
+    + `segmenter=${d.counts.segmenter} stringWidth=${d.counts.stringWidth} intl=${d.counts.intl} sliceAnsi=${d.counts.sliceAnsi}\n`);
   for (const f of d.findings.slice(0, 20)) process.stdout.write(`  ${f}\n`);
   return Object.values(d.counts).some((v) => v) ? 1 : 0;
 }
