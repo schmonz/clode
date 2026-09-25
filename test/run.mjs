@@ -84,6 +84,16 @@ process.env.PATH = [KC_STUB_DIR, process.env.PATH || ''].join(path.delimiter);
 // child (test/central-security-stub.test.cjs), not merely that PATH changed.
 process.env.CLODE_TEST_SECURITY_STUB_DIR = KC_STUB_DIR;
 
+// THIS IS THE CONCURRENT FULL SUITE, declared to every file it runs. The live session gates
+// (CellSegmenter phase 5) are minute-long timing captures placed in a serial pty run (CI's
+// linux-x64-pty job, or `node --test` of the file), and they skip on this declaration:
+// off darwin nothing else keeps them out of the generic suite legs. test/live-frame-gate.cjs
+// owns the name and the reason.
+{
+  const { FULL_SUITE_ENV } = require('./live-frame-gate.cjs');
+  process.env[FULL_SUITE_ENV] = '1';
+}
+
 // State-root gate: a `clode build` (this suite drives MANY, real and fake) appends
 // one trace-log line per build (Task 5, build-trace.cjs) to <clodeDataDir>/
 // build-trace.jsonl, which resolves off HOME/XDG when nothing overrides it. Set

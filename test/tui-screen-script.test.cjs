@@ -11,19 +11,21 @@
 //      quiet already counted and the "settled" frame was taken before the TUI echoed
 //      the key (see the RED row below).
 //
-//   2. A FAKE TUI under a real pty (skipped when the PTY harness is absent): a node
-//      child that paints on a delay, echoes each keystroke late, reports its size on a
-//      resize, and never exits -- driven through e2e-pty.cjs's captureSession(), the
-//      same call the gates make. No Claude Code build, no network, no credentials.
+//   2. A FAKE TUI under a real pty: a node child that paints on a delay, echoes each
+//      keystroke late, reports its size on a resize, and never exits -- driven through
+//      e2e-pty.cjs's captureSession(), the same call the gates make. No Claude Code
+//      build, no network, no credentials. Skipped when the PTY harness is absent, and on
+//      Windows (see ptyGroupSkip).
 const { test, before, after } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { parseArgs, parseScript, settleVerdict, SCRIPT_DEFAULTS, loadHarness } = require('./tui-screen.cjs');
+const { parseArgs, parseScript, settleVerdict, SCRIPT_DEFAULTS } = require('./tui-screen.cjs');
 const { captureSession } = require('./e2e-pty.cjs');
 const { sandbox } = require('./e2e.cjs');
-const { rowText } = require('./frame-diff.cjs');
+const { frameShows } = require('./frame-diff.cjs');
+const { ptyHarnessSkipReason } = require('./live-frame-gate.cjs');
 
 const hex = (s) => Buffer.from(s, 'utf8').toString('hex');
 
@@ -124,9 +126,25 @@ test('settleVerdict: a wait step expects no output, so earlier quiet counts', ()
 
 // ---- 2. a fake TUI under a real pty ------------------------------------------
 
-function harnessSkip() {
-  try { loadHarness(); return null; } catch (e) { return `PTY harness (node-pty/@xterm/headless) is not loadable: ${e.message}`; }
+// NOT ON WINDOWS (ruling R6). The session harness has no Windows consumer: no session gate
+// runs there (they run in CI's linux-x64-pty job and on darwin). And ConPTY is recorded as
+// delivering a resize differently: node itself emits no stdout 'resize' through node-pty's
+// resize() under ConPTY (test/node-shim-tty.test.cjs, "process.stdout emits resize with
+// updated columns on SIGWINCH"), so the resize step here would be judging ConPTY, not the
+// harness. The pure tests above run everywhere.
+function ptyGroupSkip(platform = process.platform) {
+  if (platform === 'win32') {
+    return 'no session gate runs on Windows (the session harness has no Windows consumer), and ConPTY '
+      + 'delivers a resize differently: node emits no stdout resize through node-pty\'s resize() under '
+      + 'ConPTY (test/node-shim-tty.test.cjs, the SIGWINCH resize test)';
+  }
+  return ptyHarnessSkipReason();
 }
+
+test('the fake-TUI group skips on Windows with its reason, and elsewhere only for a missing harness', () => {
+  assert.match(ptyGroupSkip('win32'), /^no session gate runs on Windows .*node-shim-tty\.test\.cjs/);
+  assert.strictEqual(ptyGroupSkip('linux'), ptyHarnessSkipReason());
+});
 
 // The driver loads node-pty from the per-platform harness dir under $TMPDIR, and the
 // e2e sandbox passes nothing from process.env through, so the driver's own scratch
@@ -134,15 +152,13 @@ function harnessSkip() {
 const DRIVER_ENV = {};
 for (const k of ['TMPDIR', 'CLODE_BUILD_SCRATCH']) if (process.env[k]) DRIVER_ENV[k] = process.env[k];
 
-// Paints READY as it starts; echoes every input chunk 300 ms LATE (six of the settle
+// Paints READY after 200 ms; echoes every input chunk 300 ms LATE (six of the settle
 // loop's 50 ms polls, so a frame taken before the echo is a real risk the test can see);
-// reports its size on every resize; stays alive until killed. The windows below are wider
-// than the fake needs on POSIX because windows-latest runs this under ConPTY, which paints
-// on its own at spawn: the boot window must outlast node's own startup after that.
+// reports its size on every resize; stays alive until killed.
 const FAKE_TUI = `
 const ESC = String.fromCharCode(27);
 const out = (s) => process.stdout.write(s);
-out(ESC + '[2J' + ESC + '[H' + 'READY');
+setTimeout(() => out(ESC + '[2J' + ESC + '[H' + 'READY'), 200);
 process.stdin.setRawMode && process.stdin.setRawMode(true);
 process.stdin.on('data', (d) => setTimeout(() => out(ESC + '[2;1H' + ESC + '[K' + 'got ' + d.toString('utf8')), 300));
 process.stdout.on('resize', () => out(ESC + '[3;1H' + ESC + '[K' + 'size ' + process.stdout.columns + 'x' + process.stdout.rows));
@@ -163,7 +179,7 @@ setInterval(() => {}, 1000);
 
 let SKIP = null, SBX = null, DIR = null;
 before(() => {
-  SKIP = harnessSkip();
+  SKIP = ptyGroupSkip();
   if (SKIP) return;
   SBX = sandbox();
   DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'tui-screen-script-'));
@@ -175,13 +191,12 @@ function child(name, src) {
   fs.writeFileSync(f, src);
   return [process.execPath, f];
 }
-const shows = (frame, text) => { for (let y = 0; y < frame.rows; y++) if (rowText(frame, y).includes(text)) return true; return false; };
 
 test('a scripted session: one frame per step, each taken only after that step\'s output settled', async (t) => {
   if (SKIP) { t.skip(SKIP); return; }
   const s = await captureSession(SBX, {
     cmd: child('fake', FAKE_TUI), env: DRIVER_ENV, rows: 8, cols: 40,
-    settleMs: 1000, maxSettleMs: 10000, bootSettleMs: 1500, bootMaxMs: 10000,
+    settleMs: 500, maxSettleMs: 8000, bootSettleMs: 500, bootMaxMs: 8000,
     script: [
       { label: 'type', send: hex('hi') },
       { label: 'shrink', resize: '30x6' },
@@ -195,12 +210,12 @@ test('a scripted session: one frame per step, each taken only after that step\'s
     assert.ok(Number.isInteger(f.ms) && f.ms >= 0, `${f.label}.ms = ${f.ms}`);
   }
   const [boot, type, shrink, pause] = s.frames.map((f) => f.frame);
-  assert.ok(shows(boot, 'READY'), 'the boot frame waited for the first paint');
-  assert.ok(!shows(boot, 'got'), 'nothing was typed before the boot frame');
-  assert.ok(shows(type, 'got hi'), 'the step frame waited for the 300 ms-late echo');
-  assert.ok(s.frames[1].ms >= 300 + 1000, `the type frame came ${s.frames[1].ms} ms after the keystroke: before the echo plus a quiet window`);
+  assert.ok(frameShows(boot, 'READY'), 'the boot frame waited for the first paint');
+  assert.ok(!frameShows(boot, 'got'), 'nothing was typed before the boot frame');
+  assert.ok(frameShows(type, 'got hi'), 'the step frame waited for the 300 ms-late echo');
+  assert.ok(s.frames[1].ms >= 300 + 500, `the type frame came ${s.frames[1].ms} ms after the keystroke: before the echo plus a quiet window`);
   assert.deepStrictEqual([shrink.cols, shrink.rows], [30, 6], 'the emulator was resized with the pty');
-  assert.ok(shows(shrink, 'size 30x6'), 'the child saw the resize and painted after it');
+  assert.ok(frameShows(shrink, 'size 30x6'), 'the child saw the resize and painted after it');
   assert.deepStrictEqual(pause.cells, shrink.cells, 'a wait with nothing happening repaints nothing');
   assert.strictEqual(s.exit, null, 'the child was alive until the harness killed it');
 });

@@ -347,7 +347,7 @@ function finish(text) {
   timer.unref();
   process.stdout.write(text, () => bye(0));
 }
-module.exports = { hexPayload, parseArgs, parseScript, settleVerdict, SCRIPT_DEFAULTS, loadHarness };
+module.exports = { hexPayload, parseArgs, parseScript, settleVerdict, SCRIPT_DEFAULTS };
 
 // Honor the "Exit 0 always" contract even if pty.spawn/setup throws: fail loud
 // with a nonzero exit rather than crashing on an unhandled rejection.

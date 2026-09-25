@@ -66,14 +66,13 @@
 const { before, test } = require('node:test');
 const assert = require('node:assert');
 const { spawnSync } = require('node:child_process');
-const { liveRenderSkipReason } = require('../live-render-helper.cjs');
-const { skipReason: providerSkipReason } = require('../provider-resolve.cjs');
+const { liveFrameGate } = require('../live-frame-gate.cjs');
 const { builtQuaude } = require('../built-binary.cjs');
 const { apeCmd } = require('../e2e-pty.cjs');
 const { captureFrames } = require('../frame-oracle.cjs');
 const { diff, describe, corrupt, cloneFrame, nonBlank, frameShows } = require('../frame-diff.cjs');
 const { defineGuard, guardTests } = require('../guard.cjs');
-const { resolveNativeClaude, nativeVersion } = require('../../scripts/lib/native-oracle.cjs');
+const { nativeVersion } = require('../../scripts/lib/native-oracle.cjs');
 
 const ROWS = 40, COLS = 100;
 // Long enough for the late-arriving status line: at 12s the "● high · /effort"
@@ -95,18 +94,6 @@ const LINK_SHOWN = `See the docs and ${LINKS[1]} now.`;
 const LINK_SCENE = { mockText: LINK_REPLY, env: { FORCE_HYPERLINK: '1' }, settings: { showTurnDuration: false },
   thenHex: [`${Buffer.from('hi', 'utf8').toString('hex')}@${TYPE_AT}`, `0d@${TYPE_AT + 1.2}`] };
 
-function harnessMissing() {
-  const path = require('node:path');
-  const REPO = path.resolve(__dirname, '..', '..');
-  try {
-    const { harnessDir } = require(path.join(REPO, 'scripts', 'platform-tag.cjs'));
-    require.resolve(path.join(harnessDir(REPO), 'node_modules', 'node-pty'));
-    return null;
-  } catch { /* fall through to bare resolution */ }
-  try { require.resolve('node-pty'); return null; } catch { /* */ }
-  return 'PTY harness (node-pty/@xterm/headless) is not installed for this platform tag';
-}
-
 // versionOf() stays LOCAL, and apeCmd-aware, because it reads the QUAUDE's version — a
 // cosmo/APE quaude cannot be exec'd directly, so it needs the same wrapper the rest of
 // this file uses to run it. nativeVersion() (scripts/lib/native-oracle.cjs) is a plain
@@ -120,10 +107,9 @@ function versionOf(bin) {
 
 let SKIP = null, FRAMES = null, TYPED_FRAMES = null, LINK_FRAMES = null, WHAT = '', TYPED_WHAT = '', LINK_WHAT = '';
 before(async () => {
-  SKIP = liveRenderSkipReason() || harnessMissing() || providerSkipReason(process.env) || null;
-  if (SKIP) return;
-  const ref = resolveNativeClaude();
-  if (!ref) { SKIP = 'no native claude (set CLODE_NATIVE_CLAUDE, or put `claude` on PATH)'; return; }
+  const gate = liveFrameGate();
+  if (gate.skip) { SKIP = gate.skip; return; }
+  const ref = gate.native;
   const built = builtQuaude();
   if (built.skip) { SKIP = built.skip; return; }
   const rv = nativeVersion(ref), qv = versionOf(built.path);

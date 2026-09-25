@@ -117,6 +117,21 @@ const REPO_ROOTED = /__dirname\s*,\s*['"]\.\.|path\.resolve\(\s*__dirname|\bREPO
 // `npm-cli.cjs` is excluded) while still matching every real reference to the staged
 // artifact, which is always quoted, path-joined, or slash-preceded (`'cli.cjs'`,
 // `/cli.cjs`, `path.join(dir, 'cli.cjs')`) — never glued onto a longer identifier.
+//
+// THE TWO-BINARY FRAME CAPTURE (added 2026-09-25, CellSegmenter phase 5, ruling R7):
+// test/frame-oracle.cjs's captureFrames (one frame per run) and captureSessions (a frame
+// per scripted step). Each call launches REAL builds (native Claude Code and a built
+// quaude, or native twice) under a pty and returns the screens THEY painted: bytes the test
+// did not create, staged by the capture the way stageProviderCli stages a provider. So the
+// call names the artifact here AND the finding a structural diff derives from it
+// (TEST_VERDICT_EXTRA below): one list, spread into both. Until R7 the two frame gates
+// were recognised through their own copies of a PTY-harness check (require.resolve of
+// node-pty under REPO), which named the capture harness, never the artifact; when that
+// check moved to test/live-frame-gate.cjs the FLOOR test correctly said the classifier had
+// lost them. Narrow on purpose: the plural names the two-sided capture, never
+// captureFrame / captureSession (singular), which the harness's own unit tests drive
+// against payloads and fake TUIs they wrote themselves.
+const FRAME_CAPTURE_CALLS = [/\bcaptureFrames\s*\(/, /\bcaptureSessions\s*\(/];
 const STANDALONE_ARTIFACT_SIGNALS = [
   // CLODE_DEPSCAN_ENGINE (phase 4b) joins CLODE_TJS/CLODE_PROVIDER_BIN for the same
   // reason: it NAMES a real built binary the test inspects, through a helper
@@ -126,6 +141,7 @@ const STANDALONE_ARTIFACT_SIGNALS = [
   // FLOOR test below went red saying the classifier, not the file, was broken.
   /stageProviderCli|CLODE_PROVIDER_BIN|CLODE_TJS\b|CLODE_DEPSCAN_ENGINE\b/,
   /graph\.json|(?<![\w-])cli\.cjs/,
+  ...FRAME_CAPTURE_CALLS,
 ];
 // Kept as a flat array for export/inspection convenience — NOT what classifyTestFile()
 // evaluates with .some(): the first two entries are a whole-file AND (see readsArtifact()
@@ -157,16 +173,16 @@ const PATTERN_MATCHES = [
 // over every production file before and after the move: no verdict changed).
 const TEST_VERDICT_EXTRA = [
   // A CELL-BY-CELL COMPARISON of the frames two real binaries painted
-  // (test/frame-oracle.cjs's captureFrames, judged by test/frame-diff.cjs). Added
-  // 2026-09-24 the same way CLODE_DEPSCAN_ENGINE was: fidelity/interactive-frame-diff
-  // -- a registered defineGuard guard deriving its finding from the bytes native and
-  // quaude put on a pty -- classified as "derives no finding from its bytes", and the
-  // FLOOR test said, correctly, that the classifier was the broken party. A structural
-  // diff is a finding derived from bytes; it just is not spelled as a regex. Narrow on
-  // purpose: `captureFrames(` names the two-binary capture, not frame-diff's own unit
-  // tests (which build synthetic payloads and call captureFrame, singular). Moved here
-  // from PATTERN_MATCHES on 2026-09-24 (R10 revised): it is a test's shape, not a gate's.
-  /\bcaptureFrames\s*\(/,
+  // (test/frame-oracle.cjs's captureFrames, judged by test/frame-diff.cjs; and
+  // captureSessions, a frame per scripted step, judged step by step by diffSessions --
+  // FRAME_CAPTURE_CALLS above). Added 2026-09-24 the same way CLODE_DEPSCAN_ENGINE was:
+  // fidelity/interactive-frame-diff -- a registered defineGuard guard deriving its finding
+  // from the bytes native and quaude put on a pty -- classified as "derives no finding
+  // from its bytes", and the FLOOR test said, correctly, that the classifier was the broken
+  // party. A structural diff is a finding derived from bytes; it just is not spelled as a
+  // regex. Moved here from PATTERN_MATCHES on 2026-09-24 (R10 revised): it is a test's
+  // shape, not a gate's. captureSessions joined 2026-09-25 for fidelity/session-determinism.
+  ...FRAME_CAPTURE_CALLS,
   // A TEXT DIFFERENTIAL: the same probe program run inside native Bun and under our shim,
   // compared string by string (scripts/lib/text-probe.cjs's runNative, judged by
   // compareTextResults). Added 2026-09-24 for fidelity/text-differential, a registered
@@ -181,14 +197,6 @@ const TEST_VERDICT_EXTRA = [
   // classifier could not see, exactly as it said of text-differential. Narrow on purpose:
   // `runPaintNative(` names the native run, not the probe's own unit tests.
   /\brunPaintNative\s*\(/,
-  // A SESSION DIFFERENTIAL: the frame SEQUENCES two real runs painted, a frame per scripted
-  // step (test/frame-oracle.cjs's captureSessions, judged step by step by frame-diff.cjs's
-  // diffSessions). Added 2026-09-25 for fidelity/session-determinism (native against itself)
-  // and the phase-5 session gates after it: the same shape as captureFrames above, one frame
-  // per step instead of one per run. Narrow on purpose: `captureSessions(` names the
-  // two-sided capture, not captureSession (singular), which the harness's own unit tests
-  // drive against a fake TUI they wrote.
-  /\bcaptureSessions\s*\(/,
 ];
 
 function classifyTestFile(src) {

@@ -29,41 +29,29 @@
 // is 1000: a native that painted nothing compares identical to itself, and that must read
 // BROKEN, not OK.
 //
-// Gated like interactive-frame-diff (the session gates' own preconditions): live render
-// (darwin opt-in, CLODE_LIVE_RENDER=1: it spawns the real bundle), the PTY harness, a
-// build provider, and a native claude (CLODE_NATIVE_CLAUDE, else `claude` on PATH). No
-// credentials, no tokens: the canned mock answers and the profile holds a mock API key.
+// Gated by test/live-frame-gate.cjs as a SESSION gate: live render (darwin opt-in,
+// CLODE_LIVE_RENDER=1: it spawns the real bundle), not inside the concurrent full suite
+// (it runs serially: CI's linux-x64-pty job, or `node --test` of this file), the PTY
+// harness, a build provider, and a native claude (CLODE_NATIVE_CLAUDE, else `claude` on
+// PATH). No credentials, no tokens: the canned mock answers and the profile holds a mock
+// API key.
 const { before, test } = require('node:test');
 const assert = require('node:assert');
-const { liveRenderSkipReason } = require('../live-render-helper.cjs');
-const { skipReason: providerSkipReason } = require('../provider-resolve.cjs');
+const { liveFrameGate } = require('../live-frame-gate.cjs');
 const { captureSessions } = require('../frame-oracle.cjs');
 const { diffSessions, describeSessions, nonBlank, frameShows, syntheticSession, corrupt } = require('../frame-diff.cjs');
 const { defineGuard, guardTests } = require('../guard.cjs');
-const { resolveNativeClaude, nativeVersion } = require('../../scripts/lib/native-oracle.cjs');
+const { nativeVersion } = require('../../scripts/lib/native-oracle.cjs');
 const { SCRIPT_DEFAULTS } = require('../tui-screen.cjs');
 const { SESSIONS } = require('./sessions.cjs');
 
 const FLOOR = 1000;
 
-function harnessMissing() {
-  const path = require('node:path');
-  const REPO = path.resolve(__dirname, '..', '..');
-  try {
-    const { harnessDir } = require(path.join(REPO, 'scripts', 'platform-tag.cjs'));
-    require.resolve(path.join(harnessDir(REPO), 'node_modules', 'node-pty'));
-    return null;
-  } catch { /* fall through to bare resolution */ }
-  try { require.resolve('node-pty'); return null; } catch { /* */ }
-  return 'PTY harness (node-pty/@xterm/headless) is not installed for this platform tag';
-}
-
 let SKIP = null, RUNS = null, WHAT = '';
 before(async () => {
-  SKIP = liveRenderSkipReason() || harnessMissing() || providerSkipReason(process.env) || null;
-  if (SKIP) return;
-  const native = resolveNativeClaude();
-  if (!native) { SKIP = 'no native claude (set CLODE_NATIVE_CLAUDE, or put `claude` on PATH)'; return; }
+  const gate = liveFrameGate({ session: true });
+  if (gate.skip) { SKIP = gate.skip; return; }
+  const native = gate.native;
   const names = Object.keys(SESSIONS);
   WHAT = `native ${native} (${nativeVersion(native)}) against itself, sessions ${names.join(', ')}, `
     + `settle defaults ${JSON.stringify(SCRIPT_DEFAULTS)}`;
