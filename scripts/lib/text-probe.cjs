@@ -24,12 +24,27 @@ const PROBE_SOURCE = String.raw`
       substitute: [[1564, 1564], [8234, 8238], [8294, 8297]],
       screen: { widthMask: 3, narrow: 0, wide: 1, spacerTail: 2, spacerHead: 3,
         emptyCharIndex: 0, spacerCharIndex: 1, emptyWord: 0, tabWidth: 8 } });
+    // Each cell's STYLE as the caller sees it, through the bundle's own ansiCodes(): run
+    // index 0 is no style; otherwise the run's sgrKeys entry split on NUL, each open code
+    // kept only when it passes the bundle's SC regex, paired with its sgrCloseKeys close
+    // code (which the caller compares by identity). So a key SC drops is judged as the
+    // caller judges it — invisible — and one that changes what is PAINTED is a difference.
+    const SC = /^\x1b\[(?:\d{1,3})(?:;5;\d{1,3}|;2;\d{1,3};\d{1,3};\d{1,3})?m$/;
+    const ansiCodes = (k) => {
+      if (k === 0) return [];
+      const s = n.sgrKeys[k].split('\x00'), u = n.sgrCloseKeys[k].split('\x00'), f = [];
+      for (let m = 0; m < s.length; m++) if (SC.test(s[m])) f.push([s[m], u[m]]);
+      return f;
+    };
     let cells = new Int32Array(4096), runs = new Int32Array(4096);
     out.segmenter = strings.map((s) => {
       let c = n.segment(s, cells, runs, false);
       if (c < 0) { const f = Math.max(-c, cells.length); cells = new Int32Array(2 * f); runs = new Int32Array(2 * f); c = n.segment(s, cells, runs, false); }
       const row = [];
-      for (let i = 0; i < c; i++) { const w = cells[2 * i + 1]; row.push([n.graphemes[cells[2 * i]], w & 255, (w & 256) ? 1 : 0]); }
+      for (let i = 0; i < c; i++) {
+        const w = cells[2 * i + 1];
+        row.push([n.graphemes[cells[2 * i]], w & 255, (w & 256) ? 1 : 0, ansiCodes(runs[2 * (w >> 10)])]);
+      }
       return row;
     });
   }

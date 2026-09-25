@@ -45,6 +45,32 @@ test('PROBE_SOURCE answers null for a consumer the runtime lacks, and the rest s
   assert.strictEqual(run({ strings: ['ab'], wants: { sliceAnsi: true }, side: 'native' }, bunWith).sliceAnsi.length, 1);
 });
 
+// The segmenter row carries each cell's style the way the bundle's ansiCodes() reads it:
+// run index 0 is no style, a key the bundle's SC regex refuses (a colon form here) is not
+// painted and so not compared, and every kept code travels with its close code. A fake
+// CellSegmenter, so this runs anywhere: three cells in three runs.
+test('PROBE_SOURCE gives each segmenter cell the style the caller paints, SC-filtered, close codes kept', () => {
+  const E = String.fromCharCode(27), NUL = String.fromCharCode(0);
+  class Seg {
+    constructor() {
+      this.graphemes = ['a', 'b', 'c'];
+      this.sgrKeys = ['', [E + '[1m', E + '[4:3m', E + '[31m'].join(NUL), E + '[5m'];
+      this.sgrCloseKeys = ['', [E + '[22m', E + '[24m', E + '[39m'].join(NUL), E + '[25m'];
+    }
+    segment(s, cells, runs) {
+      for (let i = 0; i < 3; i++) { cells[2 * i] = i; cells[2 * i + 1] = 1 | (i << 10); runs[2 * i] = i; runs[2 * i + 1] = 0; }
+      return 3;
+    }
+  }
+  const run = new Function('input', 'Bun', PROBE_SOURCE);
+  const r = run({ strings: ['abc'], wants: { segmenter: true }, side: 'native' }, { version: 't', ant: { CellSegmenter: Seg } });
+  assert.deepStrictEqual(r.segmenter, [[
+    ['a', 1, 0, []],
+    ['b', 1, 0, [[E + '[1m', E + '[22m'], [E + '[31m', E + '[39m']]],
+    ['c', 1, 0, [[E + '[5m', E + '[25m']]],
+  ]]);
+});
+
 test('a consumer native lacks (segmenter null) is NOT compared and says so', () => {
   const d = compareTextResults(['a'], { segmenter: null, stringWidth: [[1, 1]], intl: [['a']] },
     { segmenter: [[['a', 1, 0]]], stringWidth: [[1, 1]], intl: [['a']] });

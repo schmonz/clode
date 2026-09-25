@@ -557,6 +557,15 @@ test('the controlled set is EXACTLY the modules a guard was deliberately written
   // pushed uncontrolled to 29 against the baseline of 28 and went red at authoring time;
   // test/build-gates/oracle-native-version-gates.test.cjs controls both refusals, which
   // returned the count to 28. The baseline did not move.
+  //
+  // scripts/lib/text-probe.cjs ADDED 2026-09-25 (CellSegmenter phase 3, final fix wave), the
+  // mechanism a sixth time, and a file that became VISIBLE as a gate rather than new: the
+  // text differential's probe gained each segmenter cell's style as the bundle's caller paints
+  // it, which restates the caller's ansiCodes() including its SC regex (`SC.test(`), beside
+  // the empty-corpus refusal it always had. It pushed uncontrolled to 29 against the baseline
+  // of 28 and went red at authoring time; test/build-gates/text-probe-gates.test.cjs controls
+  // the restatement against the carved bundle's own ansiCodes()/SC, which returned the count
+  // to 28. The baseline did not move.
   assert.deepStrictEqual([...controlledProductionModules().keys()].sort(), [
     'libexec/clode-build.cjs',
     'libexec/host-provision.cjs',
@@ -566,6 +575,7 @@ test('the controlled set is EXACTLY the modules a guard was deliberately written
     'scripts/build-graph.cjs',
     'scripts/build-runner.cjs',
     'scripts/carve-probe.mjs',
+    'scripts/lib/text-probe.cjs',
     'scripts/oracle-native-version.cjs',
     'scripts/render-build-graph.cjs',
   ].sort(),

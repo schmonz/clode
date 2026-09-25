@@ -1108,9 +1108,11 @@ jobs:
       # Bun.stringWidth, Intl.Segmenter and Bun.sliceAnsi, ours under the tjs engine quaude
       # ships vs native Bun, exact equality over ~1.18M strings; the freshness gate (the
       # generated table is what the generator makes from the pinned UCD + that native); the
-      # UAX #29 conformance test; and the carve-time tripwire that no Bun.sliceAnsi call in
-      # the oracle's bundle passes an ellipsis (CLODE_PROVIDER_BIN is the oracle here, so the
-      # bundle literals and the tripwire read the bundle the tables were generated from).
+      # UAX #29 conformance test; the check that the segmenter gate's painted-style column
+      # still restates the bundle's own ansiCodes()/SC; and the carve-time tripwire that no
+      # Bun.sliceAnsi call in the oracle's bundle passes an ellipsis (CLODE_PROVIDER_BIN is the
+      # oracle here, so the bundle literals, the style check and the tripwire read the bundle
+      # the tables were generated from).
       # They run whenever their own preconditions succeeded, not only when every PTY step
       # above did: a broken PTY gate must not mask working text gates, or the reverse.
       # `skipped 0` is asserted because every one of these SKIPS without its oracle or its
@@ -1128,6 +1130,7 @@ jobs:
               test/unicode-data-fresh.test.cjs \
               test/unicode-text.test.cjs \
               test/fidelity/text-differential.test.cjs \
+              test/build-gates/text-probe-gates.test.cjs \
               test/bun-slice-ansi-arity.test.cjs 2>&1 | tee text-gates.out
           grep -qE '^(ℹ|#) skipped 0$' text-gates.out \
             || { echo "ERROR: a text gate SKIPPED (see its reason above) — it judged nothing, so this is not a pass" >&2; grep -E 'skipped' text-gates.out >&2; exit 1; }

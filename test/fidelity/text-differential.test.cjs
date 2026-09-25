@@ -1,7 +1,9 @@
 'use strict';
 // Ours vs NATIVE Bun, per consumer, exact equality. The four text consumers the bundle
 // calls, each against the native it stands in for:
-//   text-diff-segmenter    Bun.ant.CellSegmenter's cells (grapheme text, advance, tab bit)
+//   text-diff-segmenter    Bun.ant.CellSegmenter's cells (grapheme text, advance, tab bit,
+//                          and the style the caller PAINTS: the run's SGR keys through the
+//                          bundle's own ansiCodes()/SC filter, close codes included)
 //   text-diff-stringwidth  Bun.stringWidth, both ambiguousIsNarrow settings
 //   text-diff-intl         Intl.Segmenter's grapheme segments
 //   text-diff-sliceansi    Bun.sliceAnsi, eleven cuts of each string in columns: the edges
@@ -118,7 +120,7 @@ const judge = (key) => ({
   control() {
     const strings = new Array(CORPUS_FLOOR).fill('a');
     const SHAPES = {
-      segmenter: [[['a', 1, 0]], [['a', 2, 0]]], stringWidth: [[1, 1], [2, 2]], intl: [['a'], ['', 'a']],
+      segmenter: [[['a', 1, 0, []]], [['a', 1, 0, [['\x1b[1m', '\x1b[22m']]]]], stringWidth: [[1, 1], [2, 2]], intl: [['a'], ['', 'a']],
       sliceAnsi: [['a', '', '\x1b[1ma\x1b[22m'], ['a', 'a', '\x1b[1ma\x1b[22m']],
     };
     const [one, bad] = SHAPES[key];
