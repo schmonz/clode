@@ -321,6 +321,36 @@ test('remoteControlHookAnchorPresent: true on the 2.1.270 wrapped-reason gate', 
   );
 });
 
+test('remoteControlHookAnchorPresent: true on the 2.1.281+ coded-reason gate', () => {
+  // 2.1.281 gave the helper a code: `var i=(e,o)=>({reason:o,code:e,orgPolicyDenied:!1})`.
+  // Verbatim from the real 2.1.282 bundle; the same fixture test/extract-hooks.test.cjs patches.
+  const coded = fs.readFileSync(path.join(__dirname, 'fixtures', 'doctor', 'rc-gate-coded-2.1.282.js'), 'latin1');
+  assert.strictEqual(ins.remoteControlHookAnchorPresent(coded), true);
+  assert.strictEqual(ins.remoteControlHookAnchorPresent(coded + coded), false);
+  assert.strictEqual(
+    ins.remoteControlHookAnchorPresent('if(globalThis.__clodeWsUnavailable)return{reason:"x",code:"y",orgPolicyDenied:!1};' + coded),
+    true,
+  );
+});
+
+// ONE STATEMENT OF THE ANCHORS. This file used to restate every Remote Control regex from
+// libexec/extract-claude-js.cjs ("keep them in step"), so a re-pin was two edits that had to
+// agree. They are now read from the extractor, which is the only way the strict gate and the
+// patch cannot disagree about what "anchored" means. The text check is the ratchet: a mirror
+// that comes back names its own sentence here.
+test('the Remote Control anchors have ONE statement: inspect reads the extractor\'s, never its own', () => {
+  const text = fs.readFileSync(SCRIPT, 'utf8');
+  assert.doesNotMatch(text, /not available inside a cloud session/,
+    'inspect-claude-bundle.cjs restates a Remote Control anchor instead of importing it');
+  assert.doesNotMatch(text, /only available when using Claude via api/,
+    'inspect-claude-bundle.cjs restates a Remote Control anchor instead of importing it');
+  const ex = require(path.join(ROOT, 'libexec', 'extract-claude-js.cjs'));
+  const fix = (n) => fs.readFileSync(path.join(__dirname, 'fixtures', 'doctor', n), 'latin1');
+  for (const src of [fix('cbo-remote-control-2.1.218.js'), fix('rc-gate-coded-2.1.282.js'), 'nothing']) {
+    assert.strictEqual(ins.remoteControlHookAnchorPresent(src), ex.patchRemoteControlUnavailable(src)[1]);
+  }
+});
+
 test('gate_problems flags missing native autoupdater anchor', () => {
   const cov = {
     stubbed: [], missing: [], unrecognized: [], bun_modules_unhandled: [], modules_missing: [],

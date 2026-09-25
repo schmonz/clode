@@ -351,6 +351,87 @@ test('the 2.1.270 gate-off returns a value the real consumers can read', async (
   }
 });
 
+// The gate as upstream emits it from 2.1.281 (measured: 2.1.280 is still the wrapped shape
+// above; 2.1.281 and 2.1.282 are this one). The local helper grew a FIRST parameter, a machine
+// code, and a field to carry it: `var i=(e,o)=>({reason:o,code:e,orgPolicyDenied:!1})`, called
+// as `i("cloud_session","Remote Control is not available inside a cloud session.")`. So the
+// 2.1.270 anchor's `return i("…")` never matches again, and the hook went dark. Verbatim from
+// the real 2.1.282 darwin-arm64 bundle (chunk-5ha9skvk.js), cut after its sixth statement.
+const RC_GATE_CODED = read('rc-gate-coded-2.1.282.js');
+
+test('patchRemoteControlUnavailable handles the 2.1.281+ coded-reason gate', () => {
+  const [out, applied] = ex.patchRemoteControlUnavailable('var z=1;' + RC_GATE_CODED);
+  assert.strictEqual(applied, true);
+  assert.match(out, /async function MFn\(\)\{if\(globalThis\.__clodeWsUnavailable\)return\{reason:"Remote Control isn.*transport\.",code:"quaude_no_websocket_transport",orgPolicyDenied:!1\};if\(u\(\)\)return null;/);
+});
+
+// The injected object is a LITERAL, so it is right only while it has exactly the fields
+// upstream's own helper gives every other reason. 2.1.281 is upstream adding one. The anchor
+// therefore pins the helper's definition: a helper that grows another field, or swaps which
+// parameter is the code, stops the anchor matching — a named drift-check red — instead of the
+// hook injecting an object that is missing the field the next consumer reads.
+test('the 2.1.281+ anchor pins the helper, so a field upstream adds is a red and not a missing field', () => {
+  const grown = RC_GATE_CODED.replace('orgPolicyDenied:!1})', 'orgPolicyDenied:!1,retryable:!1})');
+  assert.notStrictEqual(grown, RC_GATE_CODED, 'the perturbation must actually perturb');
+  assert.strictEqual(ex.patchRemoteControlUnavailable(grown)[1], false);
+  const swapped = RC_GATE_CODED.replace('({reason:o,code:e,', '({reason:e,code:o,');
+  assert.notStrictEqual(swapped, RC_GATE_CODED, 'the perturbation must actually perturb');
+  assert.strictEqual(ex.patchRemoteControlUnavailable(swapped)[1], false);
+  assert.strictEqual(ex.patchRemoteControlUnavailable(RC_GATE_CODED + RC_GATE_CODED)[1], false);
+});
+
+// ONE BEHAVIOUR, WHATEVER THE SHAPE. The hook exists to make every Remote Control entry
+// point say "not available in quaude" when the engine has no WebSocket transport, and to say
+// it BEFORE upstream's own "available" path can return null. Each shape is run the same way:
+// the stubs make upstream's gate report AVAILABLE (checked, unpatched, first — so the test
+// measures the hook, not a stub), then the patched gate is read the way THAT version's real
+// consumers read it (all read from the real bundles):
+//   gate    (seen 2.1.219..2.1.251; the pin): the value itself — `if(i)exitWithError(\`Error: ${i}\`…)`
+//   wrapped (seen 2.1.270..2.1.280): `(await gate())?.reason ?? null`, `.orgPolicyDenied`
+//   coded   (2.1.281+):       the same two, plus `.code` — sent as telemetry `error_code`, which
+//                             upstream keeps only if it matches /^[A-Za-z][A-Za-z0-9_-]{0,63}$/
+//                             (anything else is recorded as "nonconforming").
+// The object shapes must also carry EXACTLY the fields upstream's own helper builds, so the
+// helper in each fixture is run and its keys compared.
+const RC_SHAPE_CASES = [
+  { shape: 'gate (seen 2.1.219..2.1.251)', src: RC_GATE, fn: 'VUo',
+    stubs: 'const qUo=()=>true,DVe=()=>true,H4_=()=>"nope",qW=()=>false,zUo=()=>true;',
+    reasonOf: (v) => v, deniedOf: () => false },
+  { shape: 'wrapped (seen 2.1.270..2.1.280)', src: RC_GATE_WRAPPED, fn: 'xen', helperArgs: ['r'],
+    stubs: 'const l=()=>true,dG=()=>true,qC=()=>false,I$=()=>false,g=()=>true,x=()=>"nope",Z2="nope";',
+    reasonOf: (v) => v?.reason ?? null, deniedOf: (v) => v.orgPolicyDenied },
+  { shape: 'coded (2.1.281+)', src: RC_GATE_CODED, fn: 'MFn', helperArgs: ['c', 'r'],
+    stubs: 'const u=()=>true,tj=()=>true,H=()=>"nope",kP=()=>false,AN=()=>false,Eq="nope",d=()=>true;',
+    reasonOf: (v) => v?.reason ?? null, deniedOf: (v) => v.orgPolicyDenied },
+];
+
+for (const c of RC_SHAPE_CASES) {
+  test(`Remote Control gate-off behaves the same on the ${c.shape} shape`, async () => {
+    const load = (src) => new Function(c.stubs + src + ';return [' + c.fn + ','
+      + (c.helperArgs ? 'i' : 'null') + '];')();
+    const [upstream] = load(c.src);
+    const [out, applied] = ex.patchRemoteControlUnavailable(c.src);
+    assert.strictEqual(applied, true, `${c.shape}: hook did not apply`);
+    const [gate, helper] = load(out);
+    assert.strictEqual(await upstream(), null, 'the stubs must make upstream report AVAILABLE');
+    delete globalThis.__clodeWsUnavailable;
+    assert.strictEqual(await gate(), null, 'with a transport, upstream decides — unchanged');
+    globalThis.__clodeWsUnavailable = true;
+    try {
+      const got = await gate();
+      assert.match(String(c.reasonOf(got)), /^Remote Control isn.t available in quaude yet .* its engine has no WebSocket transport\.$/);
+      assert.strictEqual(c.deniedOf(got), false, 'never reported as an org-policy denial');
+      if (helper) {
+        assert.deepStrictEqual(Object.keys(got).sort(), Object.keys(helper(...c.helperArgs)).sort(),
+          'the injected object must have exactly the fields upstream\'s own helper builds');
+      }
+      if ('code' in Object(got)) assert.match(got.code, /^[A-Za-z][A-Za-z0-9_-]{0,63}$/);
+    } finally {
+      delete globalThis.__clodeWsUnavailable;
+    }
+  });
+}
+
 test('patchRemoteControlUnavailable still supports the old inline shape (<=2.1.218)', () => {
   const [out, applied] = ex.patchRemoteControlUnavailable('x;' + RC_INLINE);
   assert.strictEqual(applied, true);

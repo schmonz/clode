@@ -13,6 +13,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { nearestName } = require('./bundle-carve.cjs');
 const { findTool } = require('./clode-hosttools.cjs');
+const { remoteControlSite, REMOTE_CONTROL_PATCHED } = require('./extract-claude-js.cjs');
 
 // __doc__ equivalent: reproduced verbatim from the Python module docstring so the
 // usage/error path prints identical text. (Python sys.exit(__doc__) prints this
@@ -380,30 +381,15 @@ function updateNoticeHookAnchorPresent(data) {
 }
 
 // Remote Control gate-off (extract-claude-js patchRemoteControlUnavailable) needs
-// its anchor exactly once. Two shapes, in lockstep with extract-claude-js.cjs:
-// the new (>=2.1.219) availability-gate function pinned by its stable "not available
-// inside a cloud session" reason, and the old (<=2.1.218) inline api.anthropic.com
-// reason guard. Already-patched bundles carry the injected guard, so accept that
-// marker too (mirrors the autoupdater checks).
-// Mirror of libexec/extract-claude-js.cjs's REMOTE_CONTROL_WRAPPED_ANCHOR (2.1.270:
-// every reason wrapped by a local `(e)=>({reason:e,orgPolicyDenied:!1})` helper). These
-// two files must move together — that is what "keep them in step" in the drift check's
-// own failure message means.
-const _REMOTE_CONTROL_WRAPPED_ANCHOR =
-  /async function [A-Za-z0-9_$]{1,8}\(\)\{if\([A-Za-z0-9_$]{1,8}\(\)\)return null;if\(!?[A-Za-z0-9_$]{1,8}\(\)\)return [A-Za-z0-9_$]{1,8}\([A-Za-z0-9_$]{1,8}\(\)\);if\([A-Za-z0-9_$]{1,8}\(\)\)return [A-Za-z0-9_$]{1,8}\("Remote Control is not available inside a cloud session\."\)/g;
-const _REMOTE_CONTROL_GATE_ANCHOR =
-  /async function [A-Za-z0-9_$]{1,8}\(\)\{if\([A-Za-z0-9_$]{1,8}\(\)\)return null;if\(!?[A-Za-z0-9_$]{1,8}\(\)\)return [A-Za-z0-9_$]{1,8}\(\);if\([A-Za-z0-9_$]{1,8}\(\)\)return"Remote Control is not available inside a cloud session\."/g;
-const _REMOTE_CONTROL_INLINE_ANCHOR =
-  /if\(!?[A-Za-z0-9_$]{1,8}\(\)\)return"Remote Control is only available when using Claude via api\.anthropic\.com\."/g;
-// 2.1.270's gate returns {reason, orgPolicyDenied}, so the injection that follows this
-// marker is object-shaped there and string-shaped on older bundles. Match up to the
-// `return` only — the marker is our own and is specific enough without the value.
-const _REMOTE_CONTROL_PATCHED = 'globalThis.__clodeWsUnavailable)return';
+// its anchor exactly once. The anchors are NOT restated here: every shape (inline
+// <=2.1.218, gate 2.1.219.., wrapped 2.1.270.., coded 2.1.281..) lives once, in
+// extract-claude-js.cjs's REMOTE_CONTROL_SHAPES, and remoteControlSite() is the same
+// exactly-once question the patch asks. This file used to mirror the regexes ("keep them
+// in step"); test/inspect.test.cjs now fails if a mirror comes back. Already-patched
+// bundles carry the injected guard, so accept that marker too (mirrors the autoupdater
+// checks); it stops at `return`, so it holds for the string- and object-shaped injections.
 function remoteControlHookAnchorPresent(data) {
-  return [...data.matchAll(_REMOTE_CONTROL_WRAPPED_ANCHOR)].length === 1
-    || [...data.matchAll(_REMOTE_CONTROL_GATE_ANCHOR)].length === 1
-    || [...data.matchAll(_REMOTE_CONTROL_INLINE_ANCHOR)].length === 1
-    || data.includes(_REMOTE_CONTROL_PATCHED);
+  return remoteControlSite(data) !== null || data.includes(REMOTE_CONTROL_PATCHED);
 }
 
 const APPLET_VERSION = {
@@ -815,7 +801,7 @@ function gateProblems(cov) {
     p.push('installation-warnings version+warnings anchor missing/ambiguous (three-state update notice would not surface on /status or `claude doctor`)');
   }
   if (!getDefault(cov, 'remote_control_hook_anchor_present', true)) {
-    p.push('Remote Control cBo reason anchor missing/ambiguous (quaude gate-off notice would not apply -> silent no-op)');
+    p.push('Remote Control availability-gate anchor missing/ambiguous (quaude gate-off notice would not apply -> silent no-op)');
   }
   if (!getDefault(cov, 'snapshot_generator_present', true)) {
     p.push('snapshot-generator anchor missing/ambiguous (eager-snapshot bridge would not apply)');

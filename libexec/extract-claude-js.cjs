@@ -403,7 +403,7 @@ const REMOTE_CONTROL_GATE_ANCHOR =
 // as patchDoctorWarnings's 2.1.179/2.1.205 anchors).
 const REMOTE_CONTROL_INLINE_ANCHOR =
   /if\(!?[A-Za-z0-9_$]{1,8}\(\)\)return"Remote Control is only available when using Claude via api\.anthropic\.com\."/g;
-// Newest shape (2.1.270): the SAME async gate, but upstream hoisted a local
+// Wrapped shape (seen 2.1.270..2.1.280): the SAME async gate, but upstream hoisted a local
 // `var i=(e)=>({reason:e,orgPolicyDenied:!1})` and every reason now returns i(...) —
 // so the gate yields null (available) or an OBJECT, never a bare string. The
 // consumers moved with it: `(await gate())?.reason ?? null` and
@@ -415,26 +415,59 @@ const REMOTE_CONTROL_INLINE_ANCHOR =
 const REMOTE_CONTROL_WRAPPED_ANCHOR =
   /(?<pre>async function [A-Za-z0-9_$]{1,8}\(\)\{)if\([A-Za-z0-9_$]{1,8}\(\)\)return null;if\(!?[A-Za-z0-9_$]{1,8}\(\)\)return [A-Za-z0-9_$]{1,8}\([A-Za-z0-9_$]{1,8}\(\)\);if\([A-Za-z0-9_$]{1,8}\(\)\)return [A-Za-z0-9_$]{1,8}\("Remote Control is not available inside a cloud session\."\)/g;
 
+// 2.1.281+ shape (measured: 2.1.280 is still the wrapped one): the helper gained a FIRST
+// parameter, a machine code, and a field to carry it —
+// `var i=(e,o)=>({reason:o,code:e,orgPolicyDenied:!1})`, called as
+// `i("cloud_session","Remote Control is not available inside a cloud session.")` — so the
+// wrapped anchor's one-argument `i("…")` never matches again. The consumers read `.reason`
+// and `.orgPolicyDenied` as before, and the `claude remote-control` entry now also sends
+// `.code` as telemetry's `error_code`.
+//
+// THIS ANCHOR PINS THE HELPER'S DEFINITION, which the older ones do not. The injection is an
+// object LITERAL, and it is right only while it has exactly the fields upstream's own helper
+// gives every other reason — 2.1.281 is precisely upstream adding one. Pinning the helper
+// (field set, and which parameter is the code) means the next field upstream adds is a named
+// drift-check red, not an injected object that silently lacks what the next consumer reads.
+// `code` is ours and says what is true: this engine has no WebSocket transport. It matches
+// the pattern upstream's telemetry keeps (/^[A-Za-z][A-Za-z0-9_-]{0,63}$/), so it is recorded
+// as itself and not as "nonconforming".
+const REMOTE_CONTROL_CODED_ANCHOR =
+  /(?<pre>var (?<wrap>[A-Za-z0-9_$]{1,8})=\((?<code>[A-Za-z0-9_$]{1,8}),(?<reason>[A-Za-z0-9_$]{1,8})\)=>\(\{reason:\k<reason>,code:\k<code>,orgPolicyDenied:!1\}\);async function [A-Za-z0-9_$]{1,8}\(\)\{)if\([A-Za-z0-9_$]{1,8}\(\)\)return null;if\(!?[A-Za-z0-9_$]{1,8}\(\)\)return \k<wrap>\("[a-z_]{1,40}",[A-Za-z0-9_$]{1,8}\(\)\);if\([A-Za-z0-9_$]{1,8}\(\)\)return \k<wrap>\("[a-z_]{1,40}","Remote Control is not available inside a cloud session\."\)/g;
+const RC_CODE = 'quaude_no_websocket_transport';
+
+// EVERY SHAPE, IN ONE STATEMENT, newest first; the first whose anchor matches exactly once
+// wins. libexec/inspect-claude-bundle.cjs's strict gate reads THIS (remoteControlSite) rather
+// than restating the regexes — it used to mirror them, and a re-pin was two edits that had to
+// agree. `pre` ends at `async function X(){`, so the gate shapes splice the gate-off as the
+// function's FIRST statement; the old inline shape has no `pre` and splices before its guard.
+// The value each injects is the one THAT shape's consumers read (see each anchor above).
+const RC_INJECT_STRING = 'if(globalThis.__clodeWsUnavailable)return"' + RC_NOTICE + '";';
+const REMOTE_CONTROL_SHAPES = [
+  { name: 'coded (2.1.281+)', anchor: REMOTE_CONTROL_CODED_ANCHOR,
+    inject: 'if(globalThis.__clodeWsUnavailable)return{reason:"' + RC_NOTICE + '",code:"' + RC_CODE + '",orgPolicyDenied:!1};' },
+  { name: 'wrapped (seen 2.1.270..2.1.280)', anchor: REMOTE_CONTROL_WRAPPED_ANCHOR,
+    inject: 'if(globalThis.__clodeWsUnavailable)return{reason:"' + RC_NOTICE + '",orgPolicyDenied:!1};' },
+  { name: 'gate (seen 2.1.219..2.1.251)', anchor: REMOTE_CONTROL_GATE_ANCHOR, inject: RC_INJECT_STRING },
+  { name: 'inline (<=2.1.218)', anchor: REMOTE_CONTROL_INLINE_ANCHOR, inject: RC_INJECT_STRING },
+];
+// An already-patched bundle carries the injection's own opening, whatever value follows it.
+const REMOTE_CONTROL_PATCHED = 'globalThis.__clodeWsUnavailable)return';
+
+// The shape whose anchor matches exactly once, and that match; null when none does.
+function remoteControlSite(body) {
+  for (const shape of REMOTE_CONTROL_SHAPES) {
+    const hits = [...body.matchAll(shape.anchor)];
+    if (hits.length === 1) return { shape, match: hits[0] };
+  }
+  return null;
+}
+
 function patchRemoteControlUnavailable(body) {
-  const inject = 'if(globalThis.__clodeWsUnavailable)return"' + RC_NOTICE + '";';
-  // 2.1.270+ returns {reason, orgPolicyDenied} — see REMOTE_CONTROL_WRAPPED_ANCHOR.
-  const injectWrapped = 'if(globalThis.__clodeWsUnavailable)return{reason:"' + RC_NOTICE + '",orgPolicyDenied:!1};';
-  const wrapped = [...body.matchAll(REMOTE_CONTROL_WRAPPED_ANCHOR)];
-  if (wrapped.length === 1) {
-    const cut = wrapped[0].index + wrapped[0].groups.pre.length; // after `async function X(){`
-    return [body.slice(0, cut) + injectWrapped + body.slice(cut), true];
-  }
-  const gate = [...body.matchAll(REMOTE_CONTROL_GATE_ANCHOR)];
-  if (gate.length === 1) {
-    const cut = gate[0].index + gate[0].groups.pre.length;   // after `async function X(){`
-    return [body.slice(0, cut) + inject + body.slice(cut), true];
-  }
-  const inline = [...body.matchAll(REMOTE_CONTROL_INLINE_ANCHOR)];
-  if (inline.length === 1) {
-    const cut = inline[0].index;                             // before the reason guard
-    return [body.slice(0, cut) + inject + body.slice(cut), true];
-  }
-  return [body, false];
+  const site = remoteControlSite(body);
+  if (!site) return [body, false];
+  const { shape, match } = site;
+  const cut = match.index + (match.groups && match.groups.pre ? match.groups.pre.length : 0);
+  return [body.slice(0, cut) + shape.inject + body.slice(cut), true];
 }
 
 // --- pkg-manager autoupdater INSTALLER-NEUTRALIZATION (no install, no rebuild) --
@@ -895,8 +928,8 @@ function transform(body) {
   [body, rc] = patchRemoteControlUnavailable(body);
   if (!rc) {
     process.stderr.write(
-      'clode: Remote Control gate-off hook NOT applied — cBo api.anthropic.com '
-      + 'reason anchor not found exactly once (Claude version drift?). Remote Control '
+      'clode: Remote Control gate-off hook NOT applied — no availability-gate shape in '
+      + 'REMOTE_CONTROL_SHAPES matched exactly once (Claude version drift?). Remote Control '
       + 'may silently no-op under quaude; run inspect-claude-bundle --strict.\n');
   }
   return PRELUDE + body + '\n';
@@ -1693,6 +1726,8 @@ module.exports = {
   patchUpdateHint,
   patchUpdateNotice,
   patchRemoteControlUnavailable,
+  remoteControlSite,
+  REMOTE_CONTROL_PATCHED,
   transform,
   transformGraph,
   rewriteSafeRequires,

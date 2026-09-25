@@ -273,5 +273,6 @@ for (const b of broken) {
 process.stderr.write('\nThis is upstream drift, NOT a regression in the commit that ran this job.\n');
 process.stderr.write('Re-pin the anchor: find the site in the new bundle, extend the regex in\n');
 process.stderr.write('libexec/extract-claude-js.cjs AND its mirror in libexec/inspect-claude-bundle.cjs\n');
-process.stderr.write('(keep them in step), and prove it against the OLD and NEW versions both.\n');
+process.stderr.write('(keep them in step; Remote Control has no mirror — add a shape to REMOTE_CONTROL_SHAPES),\n');
+process.stderr.write('and prove it against the OLD and NEW versions both.\n');
 process.exit(1);
