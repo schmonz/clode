@@ -204,6 +204,45 @@ test('a frame that could not observe hyperlinks refuses to judge them', (t) => {
   assert.throws(() => assertFramesEqual(blind, blind, 'blind'), /hyperlinks could not be observed/);
 });
 
+// Whether `cell` is the SAME visible cell as `ref` in EVERY field: glyph,
+// width, both colour slots, attribute bits, and hyperlink. Judges a
+// ConPTY-materialized cursor-skipped cell against a MEASURED reference cell —
+// never against a hard-coded encoding. A previous version compared against
+// the literal 'd:0', which is test/frame-diff.cjs's cellAt() sentinel for a
+// cell that doesn't exist in the frame at all — not the encoding a real
+// capture uses for default colours. CI run 36084579962 measured
+// {"f":"0:-1","b":"0:-1"} on windows-latest (commit 2b4b48d) and that
+// predicate rejected it, failing the whole test.
+function isSameCell(cell, ref) {
+  return cell.c === ref.c && cell.w === ref.w && cell.f === ref.f
+    && cell.b === ref.b && cell.a === ref.a && cell.l === ref.l;
+}
+
+test('isSameCell judges a default-attribute space against a MEASURED reference, not a hard-coded encoding', () => {
+  const ref = { c: ' ', w: 1, f: '0:-1', b: '0:-1', a: 0, l: null }; // shape of the CI-measured cell
+  // Accepted: identical to the reference in every field.
+  assert.strictEqual(isSameCell({ c: ' ', w: 1, f: '0:-1', b: '0:-1', a: 0, l: null }, ref), true);
+  // Rejected: a different background is a real difference.
+  assert.strictEqual(isSameCell({ c: ' ', w: 1, f: '0:-1', b: '1:4', a: 0, l: null }, ref), false);
+  // Rejected: a hyperlink is a real difference.
+  assert.strictEqual(isSameCell({ c: ' ', w: 1, f: '0:-1', b: '0:-1', a: 0, l: 'https://example.com' }, ref), false);
+  // Rejected: an UNWRITTEN cell ("") is a different question entirely (the
+  // diff()-based equivalence handles that one, POSIX-only) — isSameCell must
+  // never absorb it.
+  assert.strictEqual(isSameCell({ c: '', w: 1, f: '0:-1', b: '0:-1', a: 0, l: null }, ref), false);
+
+  // Proves the fix, not just the helper: the OLD predicate compared against
+  // the hard-coded sentinel 'd:0' instead of a measured reference, so it
+  // rejects the exact cell CI measured — that rejection is the bug this test
+  // exists to keep fixed. RED against the old logic, GREEN against the new.
+  const oldPredicate = (c) => c.c === ' ' && c.w === 1
+    && c.f === 'd:0' && c.b === 'd:0' && c.a === 0;
+  assert.strictEqual(oldPredicate(ref), false,
+    'RED: the old hard-coded-encoding predicate rejects a real default-attribute space');
+  assert.strictEqual(isSameCell(ref, ref), true,
+    'GREEN: the new measured-reference predicate accepts the same cell');
+});
+
 test('an unwritten cell and a written plain space are the SAME visible cell', (t) => {
   if (SKIP) { t.skip(SKIP); return; }
   // Precondition, or this test proves nothing: the capture really does record a
@@ -220,19 +259,26 @@ test('an unwritten cell and a written plain space are the SAME visible cell', (t
     assert.ok(d.equal, `native flips exactly this at its banner; it must not count:\n${describeDiff(FRAMES.base, FRAMES.skipped, d)}`);
     return;
   }
-  // ConPTY (windows-latest, CI run 36057766387): it re-renders the screen itself
-  // and MATERIALIZES the cursor-skipped cell as a written space with default
-  // attributes before the emulator ever sees the frame, so the capture cannot
-  // contain an unwritten cell here at all. That is a positive measurement of the
-  // platform, asserted exactly — not assumed — so a future ConPTY that stops
-  // materializing flips this red and the capture-based proof comes back.
-  const isDefaultSpace = skipped.c === ' ' && skipped.w === 1
-    && skipped.f === 'd:0' && skipped.b === 'd:0' && skipped.a === 0;
+  // ConPTY (windows-latest, CI run 36057766387 and 36084579962): it re-renders
+  // the screen itself and MATERIALIZES the cursor-skipped cell as a written
+  // space with default attributes before the emulator ever sees the frame, so
+  // the capture cannot contain an unwritten cell here at all. Judged against
+  // the base capture's REAL space at the same coordinate — a MEASURED
+  // reference, not an assumed encoding — because the encoding real captures
+  // use for default colours ("0:-1") is not the same string cellAt()'s
+  // missing-cell sentinel ('d:0') uses.
+  const ref = FRAMES.base.cells[0][2];
+  const isDefaultSpace = isSameCell(skipped, ref);
   assert.ok(isDefaultSpace,
-    `skipped cell 0,2 is neither unwritten nor a default-attribute space — something else happened: ${JSON.stringify(skipped)}`);
-  t.skip('ConPTY materializes cursor-skipped cells as written spaces; the capture cannot contain '
-    + 'an unwritten cell, so the capture-based proof is not possible here; the equivalence itself '
-    + 'is proven by the synthetic test');
+    `skipped cell 0,2 is neither unwritten nor the same as the base capture's real space at `
+    + `0,2 (platform=${process.platform}) — something else happened: measured `
+    + `${JSON.stringify(skipped)} vs reference ${JSON.stringify(ref)}`);
+  t.skip(`ConPTY (platform=${process.platform}) materializes cursor-skipped cells as written `
+    + 'spaces; the capture cannot contain an unwritten cell, so the capture-based proof is not '
+    + 'possible here; the equivalence itself is proven by the synthetic test. This branch was '
+    + `written assuming ConPTY-only — the platform named above is a deferred review note: if it `
+    + 'is ever not "win32", a POSIX terminal started materializing skipped cells too, and that '
+    + 'is worth a second look, not a silent skip.');
 });
 
 test('SYNTHETIC: the equivalence holds without a pty, on every platform', () => {
