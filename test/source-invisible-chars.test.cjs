@@ -60,9 +60,9 @@ function trackedFiles() {
   return out.split('\n').filter(Boolean);
 }
 
-// git ls-files IS the project (see test/no-fuse-gate.test.cjs / test/no-retired-spellings
-// .test.cjs for why: it already excludes build/, node_modules/, test/.harness/, docs/ and
-// .superpowers/, so the corpus is identical on two checkouts of the same commit).
+// git ls-files IS the project (see test/no-retired-spellings.test.cjs and the retired-
+// vocabulary gate for why: it already excludes build/, node_modules/, test/.harness/,
+// docs/ and .superpowers/, so the corpus is identical on two checkouts of the same commit).
 function candidateFiles() {
   return trackedFiles().filter((rel) => DIRS.some((d) => rel.startsWith(d)) && EXT_RE.test(rel));
 }
@@ -117,7 +117,7 @@ function scanSources({ files }) {
 // (a file renamed, a test split, a module deleted) moves the real count by a handful; a
 // floor this far below only trips on the scan going BLIND (a bad cwd, a broken git
 // invocation, a filter that regressed to matching nothing), the same margin
-// test/no-retired-spellings.test.cjs and test/no-fuse-gate.test.cjs use for the same
+// test/no-retired-spellings.test.cjs and the retired-vocabulary gate use for the same
 // git-ls-files corpus shape.
 const guard = defineGuard({
   name: 'source-invisible-chars',
