@@ -29,6 +29,10 @@
 //   emoji-test        every sequence in the pinned emoji-test.txt
 //   bundle literals   the carved bundle's own non-ASCII snippets, when CLODE_PROVIDER_BIN
 //                     names a provider (CI's provider-min carves; it need not run)
+// EACH PART HAS A FLOOR OF ITS OWN (PART_FLOORS), and a part under it makes every gate here
+// BROKEN, naming the part. The one floor there was covered the whole corpus, which is 95% code
+// points: the escape, slice-probe, emoji-test or bundle-literal part could have been truncated
+// or emptied and the gates stayed OK, blind to exactly what those parts are there to judge.
 //
 // WHEN IT RUNS. Only against the native the tables were generated from (ruling R11): a
 // different Bun is a different oracle, not a failure of ours, so any other version SKIPS
@@ -36,7 +40,8 @@
 // else the frame gate's resolver. emoji-test is a pinned UCD input; offline with a cold
 // cache (test/run.mjs is offline by default) the gate SKIPS naming the file (ruling R17)
 // rather than pass on part of its corpus.
-const { before } = require('node:test');
+const { before, test } = require('node:test');
+const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -53,18 +58,34 @@ const { tjsPath } = require('../node-shim-helper.cjs');
 const REPO = path.resolve(__dirname, '..', '..');
 const CORPUS_FLOOR = 0x110000;   // every code point, at minimum
 
-let SKIP = null, STRINGS = null, NATIVE = null, OURS = null, WHAT = '';
+// Each part's floor: its size as measured on 2026-09-25 (the 2.1.278 oracle, Unicode 17.0.0's
+// emoji-test) less a small margin, so an edit that trims a corpus a little need not touch this
+// table, while one that truncates or empties a part cannot hide inside the total. Code points
+// are all of them, by definition. Bundle literals are required only when CLODE_PROVIDER_BIN
+// names a provider (then at least one: a carve that yields none is a broken reader, not an
+// empty bundle); without one the part is empty and WHAT says why.
+const PART_FLOORS = {
+  'code points': 0x110000,   // 1,114,112, exactly
+  composed: 18,              // 19
+  'cell probes': 560,        // 586
+  escapes: 48000,            // 50,081
+  'slice probes': 4600,      // 4,855
+  'emoji-test': 5000,        // 5,225
+  'bundle literals': 1,      // 2,233 in the 2.1.278 carve; 0 required without a provider
+};
+
+let SKIP = null, STRINGS = null, NATIVE = null, OURS = null, WHAT = '', PARTS = null;
 
 // The carved bundle's non-ASCII literals, or [] when no provider is at hand (named in WHAT).
 function bundleLiterals() {
   const prov = process.env.CLODE_PROVIDER_BIN;
-  if (!prov || !fs.existsSync(prov)) return { strings: [], why: 'no CLODE_PROVIDER_BIN' };
+  if (!prov || !fs.existsSync(prov)) return { strings: [], why: 'no CLODE_PROVIDER_BIN', carved: false };
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'text-diff-carve-'));
   try {
     const cli = path.join(dir, 'cli.cjs');
     const r = spawnSync(process.execPath, [path.join(REPO, 'libexec', 'extract-claude-js.cjs'), prov, cli], { encoding: 'utf8' });
     if (r.status !== 0) throw new Error(`could not carve ${prov}: ${(r.stderr || '').slice(0, 400)}`);
-    return { strings: C.corpusBundleLiterals(fs.readFileSync(cli, 'utf8')), why: prov };
+    return { strings: C.corpusBundleLiterals(fs.readFileSync(cli, 'utf8')), why: `bundle literals from ${prov}`, carved: true };
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 }
 
@@ -94,9 +115,13 @@ before(async () => {
     ['escapes', C.corpusEscapes()], ['slice probes', C.corpusSliceProbes()], ['emoji-test', C.corpusEmojiTest(emoji)],
   ];
   const lit = bundleLiterals();
-  parts.push([`bundle literals (${lit.why})`, lit.strings]);
+  parts.push(['bundle literals', lit.strings]);
   STRINGS = [].concat(...parts.map(([, s]) => s));
-  WHAT = `${v} vs ours under tjs; ${parts.map(([n, s]) => `${s.length} ${n}`).join(', ')}`;
+  PARTS = parts.map(([name, s]) => {
+    if (!(name in PART_FLOORS)) throw new Error(`corpus part '${name}' has no floor in PART_FLOORS: measure it and add one`);
+    return { name, count: s.length, floor: name === 'bundle literals' && !lit.carved ? 0 : PART_FLOORS[name] };
+  });
+  WHAT = `${v} vs ours under tjs; ${parts.map(([n, s]) => `${s.length} ${n}`).join(', ')} (${lit.why})`;
   const wants = { segmenter: true, stringWidth: true, intl: true, sliceAnsi: true };
   NATIVE = runNative(bin, STRINGS, wants);
   OURS = runOurs(STRINGS, wants);
@@ -110,9 +135,17 @@ const judge = (key) => ({
   read() {
     if (SKIP) return { skip: SKIP };
     if (!NATIVE[key]) return { skip: `native (${NATIVE.runtime}) has no ${key} to compare against` };
-    return { strings: STRINGS, native: { [key]: NATIVE[key] }, ours: { [key]: OURS[key] }, what: WHAT };
+    return { strings: STRINGS, native: { [key]: NATIVE[key] }, ours: { [key]: OURS[key] }, what: WHAT, parts: PARTS };
   },
-  scan({ strings, native, ours, what }) {
+  // A part under its floor: nothing counts as examined (so the verdict is BROKEN, with the
+  // note naming the part), because a verdict over a corpus missing a part says nothing about
+  // what that part is in the corpus to judge.
+  scan({ strings, native, ours, what, parts }) {
+    const short = parts.filter((p) => p.count < p.floor);
+    if (short.length) {
+      const named = short.map((p) => `the ${p.name} part has ${p.count} strings, under its floor of ${p.floor}`);
+      return { examined: 0, findings: named, note: `${what}; ${named.join('; ')}` };
+    }
     const d = compareTextResults(strings, native, ours);
     return { examined: d.examined, findings: d.findings, note: `${what}; ${d.counts[key]} differ` };
   },
@@ -125,7 +158,8 @@ const judge = (key) => ({
     };
     const [one, bad] = SHAPES[key];
     const nat = new Array(CORPUS_FLOOR).fill(one); const ours = nat.slice(); ours[97] = bad;
-    return { strings, native: { [key]: nat }, ours: { [key]: ours }, what: 'synthetic control' };
+    return { strings, native: { [key]: nat }, ours: { [key]: ours }, what: 'synthetic control',
+      parts: [{ name: 'synthetic', count: CORPUS_FLOOR, floor: CORPUS_FLOOR }] };
   },
 });
 
@@ -133,3 +167,16 @@ guardTests(defineGuard({ name: 'text-diff-segmenter', ...judge('segmenter') }));
 guardTests(defineGuard({ name: 'text-diff-stringwidth', ...judge('stringWidth') }));
 guardTests(defineGuard({ name: 'text-diff-intl', ...judge('intl') }));
 guardTests(defineGuard({ name: 'text-diff-sliceansi', ...judge('sliceAnsi') }));
+
+// The per-part floor without the four-minute run: a provider whose carve yielded no literals is
+// as BROKEN as an emptied escapes part, and the note names which part.
+test('a corpus part under its own floor makes the gate BROKEN, naming the part', () => {
+  const row = [[['a', 1, 0, []]]];
+  const r = judge('segmenter').scan({ strings: ['a'], native: { segmenter: row }, ours: { segmenter: row }, what: 'x',
+    parts: [{ name: 'code points', count: 0x110000, floor: 0x110000 }, { name: 'bundle literals', count: 0, floor: 1 }] });
+  assert.strictEqual(r.examined, 0);
+  assert.match(r.note, /the bundle literals part has 0 strings, under its floor of 1/);
+  const ok = judge('segmenter').scan({ strings: ['a'], native: { segmenter: row }, ours: { segmenter: row }, what: 'x',
+    parts: [{ name: 'bundle literals', count: 0, floor: 0 }] });
+  assert.strictEqual(ok.examined, 1, 'no provider: the part is not required');
+});
