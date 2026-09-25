@@ -47,6 +47,30 @@ test('isRecordedExclusion throws on a recorded exclusion with a whitespace-only 
   }
 });
 
+// A recorded exclusion must still EXCLUDE something: a file that exists, is scanner-shaped
+// and is not migrated. Otherwise it is a dead entry whose `because` describes source that
+// is gone, and it would silently re-admit that file the day it turns scanner-shaped again.
+// Found 2026-09-25 (CellSegmenter phase 5, task 4): frame-diff.test.cjs moved its PTY-harness
+// check to test/live-frame-gate.cjs, stopped being scanner-shaped, and its exclusion (which
+// named the removed `path.join(REPO, ...)` feature-detect) stayed behind, unnoticed.
+test('every GUARD_EXCLUSIONS entry still excludes a scanner-shaped, unmigrated test file', () => {
+  const byName = new Map(discoverTestFiles(TEST_DIR).map((f) => [path.basename(f), f]));
+  const dead = [];
+  for (const e of GUARD_EXCLUSIONS) {
+    const f = byName.get(e.file);
+    if (!f) { dead.push(`${e.file}: no such test file`); continue; }
+    const src = fs.readFileSync(f, 'utf8');
+    if (!classifyTestFile(src).scannerShaped) dead.push(`${e.file}: not scanner-shaped`);
+    // MIGRATED (deriveMigrated), not isMigratedSource(src): the sweep's own test file holds
+    // the migrated shape as fixture TEXT, and deriveMigrated() is where that is ruled out.
+    else if (MIGRATED.includes(path.relative(TEST_DIR, f).split(path.sep).join('/'))) {
+      dead.push(`${e.file}: migrated through defineGuard`);
+    }
+  }
+  assert.deepStrictEqual(dead, [], 'dead GUARD_EXCLUSIONS entries: remove each one (and its '
+    + '`because`) from test/guards-population.cjs');
+});
+
 test('FLOOR: the sweep re-discovers every already-migrated guard', () => {
   // This is the sweep's own positive control, and it is why the sweep cannot go quietly
   // blind: if the classifier stops recognising guard shape, it stops finding the files we

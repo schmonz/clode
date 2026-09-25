@@ -25,9 +25,11 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { sandbox, REPO } = require('./e2e.cjs');
+const { sandbox } = require('./e2e.cjs');
 const { captureFrame } = require('./e2e-pty.cjs');
 const { diff, describe: describeDiff, corrupt, rowText, cloneFrame } = require('./frame-diff.cjs');
+// The one PTY-harness check every frame test skips on (test/live-frame-gate.cjs).
+const { ptyHarnessSkipReason } = require('./live-frame-gate.cjs');
 
 // tui-screen.cjs loads node-pty/@xterm from the per-platform harness dir, which
 // resolves through $TMPDIR (scripts/build-scratch.cjs). The e2e sandbox env is
@@ -37,16 +39,6 @@ const { diff, describe: describeDiff, corrupt, rowText, cloneFrame } = require('
 // /bin/sh either way, so no subject sees a wider environment than before.
 const DRIVER_ENV = {};
 for (const k of ['TMPDIR', 'CLODE_BUILD_SCRATCH']) if (process.env[k]) DRIVER_ENV[k] = process.env[k];
-
-function harnessMissing() {
-  try {
-    const { harnessDir } = require(path.join(REPO, 'scripts', 'platform-tag.cjs'));
-    require.resolve(path.join(harnessDir(REPO), 'node_modules', 'node-pty'));
-    return null;
-  } catch { /* fall through to bare resolution */ }
-  try { require.resolve('node-pty'); return null; } catch { /* */ }
-  return 'PTY harness (node-pty/@xterm/headless) is not installed for this platform tag';
-}
 
 const ESC = '\x1b';
 const COLS = 40, ROWS = 6;
@@ -74,7 +66,7 @@ const P = {
 
 let SBX = null; let DIR = null; let SKIP = null; const FRAMES = {};
 before(() => {
-  SKIP = harnessMissing();
+  SKIP = ptyHarnessSkipReason();
   if (SKIP) return;
   SBX = sandbox();
   DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'frame-diff-'));

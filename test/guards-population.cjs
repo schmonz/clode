@@ -336,22 +336,6 @@ const GUARD_EXCLUSIONS = [
       + "reports the same constants node does, and whether the generator's own ratchet "
       + 'still fires.',
   },
-  {
-    file: 'frame-diff.test.cjs',
-    because: 'it is the SELF-PROOF of a measuring device, and every byte it judges is a '
-      + 'byte it caused: it writes five /bin/sh fixture scripts into its own mkdtemp, '
-      + 'drives each through a real pty + VT emulator, and compares the frames THOSE RUNS '
-      + 'produced — then corrupts one of them, one cell at a time, and asserts the differ '
-      + 'names the right class at the right row and column. Both classifier signals are '
-      + 'false positives on that shape: READS_ARTIFACT fires on the '
-      + "`path.join(REPO, 'scripts', 'platform-tag.cjs')` used to FEATURE-DETECT whether "
-      + 'the node-pty harness is installed for this platform tag (so the file skips loudly '
-      + 'instead of reporting empty screens as equal), not to scan that file\'s bytes; and '
-      + 'PATTERN_MATCHES fires on `assert.match(describeDiff(...), /hyperlinks NOT '
-      + 'judged/)`, which reads a string this test\'s own diff call just returned. There '
-      + 'is no artifact to scan and no violation pattern to look for; the subject is '
-      + 'whether test/frame-diff.cjs can tell a one-cell difference from a correct frame.',
-  },
 ];
 
 function isRecordedExclusion(file) {
