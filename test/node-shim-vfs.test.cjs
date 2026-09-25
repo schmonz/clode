@@ -4,7 +4,8 @@
 //     /quaude/ members resolve for relative requires, __dirname-anchored
 //     requires, bare specifiers (node_modules members), shim builtins; argv is
 //     [exePath, /quaude/cli.cjs, ...__quaudeArgs]; the module-compiled (strict)
-//     entry can WRITE process.env (the env-proxy fix).
+//     entry can WRITE process.env (the env-proxy fix); Intl.Segmenter's lazy
+//     require('../../unicode-text.cjs') resolves inside the archive.
 //   - No VFS, .qbc entry on disk: `tjs run loader.cjs entry.qbc` evaluates the
 //     bytecode with the .cjs module identity.
 //   - No VFS at all: byte-identical legacy behavior (the rest of the node-shim
@@ -40,6 +41,7 @@ test('VFS mount: /quaude members resolve (relative, __dirname, bare specifier) a
   assert.strictEqual(out.pkg, 'fakepkg-ok');                // bare specifier via /quaude/node_modules
   assert.strictEqual(out.isMain, true);                     // require.main === entry module
   assert.strictEqual(out.envSet, 'wrote');                  // strict-mode env write round-trips
+  assert.deepStrictEqual(out.segments, [2, 1]);             // Intl polyfill -> /quaude/unicode-text.cjs
 });
 
 test('VFS mount: empty entry args yield argv [entry] alone', (t) => {

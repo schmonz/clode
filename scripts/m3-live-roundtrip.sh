@@ -14,6 +14,7 @@ TJS="${CLODE_TJS:-$(node -p "require('$REPO/scripts/platform-tag.cjs').tjsBin('$
 SCRATCH=$(mktemp -d)
 node "$REPO/libexec/extract-claude-js.cjs" "$CLODE_PROVIDER_BIN" "$SCRATCH/cli.cjs"
 cp "$REPO/libexec/bun-shim.cjs" "$SCRATCH/bun-shim.cjs"
+cp "$REPO/libexec/unicode-text.cjs" "$SCRATCH/unicode-text.cjs"   # bun-shim requires its companion beside it
 echo "=== M3 LIVE round-trip (api.anthropic.com) ==="
 START=$(date +%s)
 NODE_PATH="$REPO/node_modules" "$TJS" run "$REPO/libexec/node-shim/loader.cjs" "$SCRATCH/cli.cjs" -p 'say PONG' < /dev/null

@@ -89,13 +89,13 @@ test('an end that splits a surrogate pair never reads past end', () => {
   const s = 'a\u{101fd}b';
   assert.deepStrictEqual(graphemeBoundaries(s, 0, s.length), [3, 4]);
   assert.deepStrictEqual(graphemeBoundaries(s, 0, 2), [1, 2]);
-  // clusterWidth reads the cluster's first code point and then the rest; cut each by end.
+  // clusterWidth reads the cluster's code points up to end, never past it.
   // A lone surrogate's own width is the table's 0 (native gives it no cell).
   assert.strictEqual(codePointWidth(0xd83d), 0);
   assert.strictEqual(clusterWidth('\u{1f600}', 0, 2), 2);
   assert.strictEqual(clusterWidth('\u{1f600}', 0, 1), 0, 'half an emoji is not the emoji');
-  assert.strictEqual(clusterWidth('a\u{1f3fb}', 0, 3), 2, 'a whole emoji modifier widens');
-  assert.strictEqual(clusterWidth('a\u{1f3fb}', 0, 2), 1, 'half of one does not');
+  assert.strictEqual(clusterWidth('\u261d\u{1f3fb}', 0, 3), 2, 'a whole emoji modifier on its base: WIDTH-EMOJI-BASE');
+  assert.strictEqual(clusterWidth('\u261d\u{1f3fb}', 0, 2), 1, 'half of one does not');
 });
 
 test('cluster widths native measured on 2026-09-24', () => {
@@ -131,15 +131,16 @@ test('code point widths come from the generated table', () => {
 // back through its `graphemes` pool — and each test pins ONE named delta
 // (libexec/unicode-text.cjs names them; scripts/cell-profile-diff.cjs is the instrument).
 const B = (s, profile) => graphemeBoundaries(s, 0, s.length, profile);
-const W = (s, profile, narrow = true) => clusterWidth(s, 0, s.length, narrow, profile);
+const W = (s, narrow = true) => clusterWidth(s, 0, s.length, narrow);
 
 test('profiles: uax29 is the default, bun-cell is opt-in, an unknown profile throws', () => {
   assert.throws(() => graphemeBoundaries('ab', 0, 2, 'bun'), /unknown text profile "bun"/);
-  assert.throws(() => clusterWidth('ab', 0, 1, true, 'Bun-Cell'), /unknown text profile "Bun-Cell"/);
+  assert.throws(() => graphemeBoundaries('ab', 0, 2, 'Bun-Cell'), /unknown text profile "Bun-Cell"/);
   assert.throws(() => graphemeBoundaries('ab', 0, 2, 'toString'), /unknown text profile/, 'an inherited name is not a profile');
   const s = '\u1019\u1039\u1018';
   assert.deepStrictEqual(graphemeBoundaries(s), B(s, 'uax29'), 'uax29 is the default');
-  assert.strictEqual(clusterWidth('\u1100\u1100', 0, 2), 2, 'uax29 keeps its 0|1|2 contract');
+  // Widths are bun-cell's only (native's Intl.Segmenter measures nothing): no 0|1|2 cap.
+  assert.strictEqual(clusterWidth('\u1100\u1100', 0, 2), 4, 'WIDTH-SUM, as native CellSegmenter');
 });
 
 test('bun-cell CLUSTER-DATA-16 (InCB): the scripts Unicode 17.0 added to InCB get no GB9c join', () => {
@@ -196,53 +197,53 @@ test('bun-cell CC-CONTROLS-ONLY: GB4/GB5 hold for Cc; every other GCB=Control co
 });
 
 test('bun-cell WIDTH-SUM: a cluster is the UNCAPPED sum of its code points, so 3 and 4 happen', () => {
-  assert.strictEqual(W('\u0915\u094d\u0937\u094d\u092e', 'bun-cell'), 3);
-  assert.strictEqual(W('\u0915\u094d\u0937\u094d\u092e\u094d\u092f', 'bun-cell'), 4);
-  assert.strictEqual(W('\u1100\u1100', 'bun-cell'), 4);
-  assert.strictEqual(W('\u1100\u1100\u1161', 'bun-cell'), 4);
-  assert.strictEqual(W('\u0915\u094d\u0937', 'bun-cell'), 2);
-  assert.strictEqual(W('\u0600a', 'bun-cell'), 1, 'a zero-width lead takes the width that follows');
-  assert.strictEqual(W('\u0308\u0903', 'bun-cell'), 1);
-  assert.strictEqual(W('\u0890\u{1f476}\u{1f3fb}', 'bun-cell'), 5, 'a Prepend base is not an emoji base');
+  assert.strictEqual(W('\u0915\u094d\u0937\u094d\u092e'), 3);
+  assert.strictEqual(W('\u0915\u094d\u0937\u094d\u092e\u094d\u092f'), 4);
+  assert.strictEqual(W('\u1100\u1100'), 4);
+  assert.strictEqual(W('\u1100\u1100\u1161'), 4);
+  assert.strictEqual(W('\u0915\u094d\u0937'), 2);
+  assert.strictEqual(W('\u0600a'), 1, 'a zero-width lead takes the width that follows');
+  assert.strictEqual(W('\u0308\u0903'), 1);
+  assert.strictEqual(W('\u0890\u{1f476}\u{1f3fb}'), 5, 'a Prepend base is not an emoji base');
 });
 
 test('bun-cell WIDTH-RI: a cluster of two or more code points holding a Regional Indicator is 2', () => {
-  assert.strictEqual(W('\u06dd\u{1f1e6}', 'bun-cell'), 2);
-  assert.strictEqual(W('\u{1f1e6}\u0308', 'bun-cell'), 2);
-  assert.strictEqual(W('\u{1f1e6}\u200d', 'bun-cell'), 2);
-  assert.strictEqual(W('\u{1f1e6}', 'bun-cell'), 1, 'alone it is 1');
+  assert.strictEqual(W('\u06dd\u{1f1e6}'), 2);
+  assert.strictEqual(W('\u{1f1e6}\u0308'), 2);
+  assert.strictEqual(W('\u{1f1e6}\u200d'), 2);
+  assert.strictEqual(W('\u{1f1e6}'), 1, 'alone it is 1');
 });
 
 test('bun-cell WIDTH-KEYCAP: a cluster holding U+20E3 is 2', () => {
-  assert.strictEqual(W('#\u20e3', 'bun-cell'), 2);
-  assert.strictEqual(W('a\u20e3', 'bun-cell'), 2);
-  assert.strictEqual(W('\u1100\u1100\u20e3', 'bun-cell'), 2, 'even over a sum of 6');
+  assert.strictEqual(W('#\u20e3'), 2);
+  assert.strictEqual(W('a\u20e3'), 2);
+  assert.strictEqual(W('\u1100\u1100\u20e3'), 2, 'even over a sum of 6');
 });
 
 test('bun-cell WIDTH-EMOJI-BASE: an emoji base with a ZWJ or a modifier is 2, measured exceptions are not', () => {
-  assert.strictEqual(W('\u2764\u200d\u{1f525}', 'bun-cell'), 2, 'sum 3');
-  assert.strictEqual(W('\u{1f600}\u200d\u{1f600}', 'bun-cell'), 2, 'sum 4');
-  assert.strictEqual(W('\u261d\u{1f3fb}', 'bun-cell'), 2, 'sum 3');
-  assert.strictEqual(W('\u2122\u200d', 'bun-cell'), 2, 'sum 1');
+  assert.strictEqual(W('\u2764\u200d\u{1f525}'), 2, 'sum 3');
+  assert.strictEqual(W('\u{1f600}\u200d\u{1f600}'), 2, 'sum 4');
+  assert.strictEqual(W('\u261d\u{1f3fb}'), 2, 'sum 3');
+  assert.strictEqual(W('\u2122\u200d'), 2, 'sum 1');
   // The generator's measured override emoji-not-width-base: Emoji native does not treat
   // as a width base, so the plain sum stands.
-  assert.strictEqual(W('\u00a9\u200d\u{1f600}', 'bun-cell'), 3);
-  assert.strictEqual(W('\u00a9\u200d', 'bun-cell'), 1);
-  assert.strictEqual(W('\u3030\u200d\u{1f600}', 'bun-cell'), 4);
+  assert.strictEqual(W('\u00a9\u200d\u{1f600}'), 3);
+  assert.strictEqual(W('\u00a9\u200d'), 1);
+  assert.strictEqual(W('\u3030\u200d\u{1f600}'), 4);
 });
 
 test('bun-cell WIDTH-VS16: U+FE0F widens an Emoji Extended_Pictographic base to 2, nothing else', () => {
-  assert.strictEqual(W('\u2764\ufe0f', 'bun-cell'), 2);
-  assert.strictEqual(W('\u00a9\ufe0f', 'bun-cell'), 2);
-  assert.strictEqual(W('a\ufe0f', 'bun-cell'), 1);
-  assert.strictEqual(W('#\ufe0f', 'bun-cell'), 1);
+  assert.strictEqual(W('\u2764\ufe0f'), 2);
+  assert.strictEqual(W('\u00a9\ufe0f'), 2);
+  assert.strictEqual(W('a\ufe0f'), 1);
+  assert.strictEqual(W('#\ufe0f'), 1);
 });
 
 test('bun-cell WIDTH-VS16: it widens the BASE to 2, and the rest of the cluster still counts', () => {
   // Found by fuzzing escape-heavy strings against native (task 6, 2026-09-24): a spacing mark
   // in the cluster keeps its column. native: 1F600 0903 FE0F = 3, 2764 0903 FE0F = 3,
   // 2764 0903 0903 FE0F = 4, 2764 FE0F 0903 = 3, 00A9 0903 FE0F = 3, 0600 2764 0903 FE0F = 3.
-  const w = (...cps) => W(String.fromCodePoint(...cps), 'bun-cell');
+  const w = (...cps) => W(String.fromCodePoint(...cps));
   assert.strictEqual(w(0x1f600, 0x903, 0xfe0f), 3);
   assert.strictEqual(w(0x2764, 0x903, 0xfe0f), 3);
   assert.strictEqual(w(0x2764, 0x903, 0x903, 0xfe0f), 4);
@@ -257,21 +258,21 @@ test('bun-cell WIDTH-VS16: it widens the BASE to 2, and the rest of the cluster 
 });
 
 test('bun-cell WIDTH-BASE-IS-FIRST-VISIBLE: the base is the first code point of nonzero width', () => {
-  assert.strictEqual(W('\u0600\u2764\u200d\u{1f600}', 'bun-cell'), 2, 'U+0600 is zero-width, so U+2764 is the base');
-  assert.strictEqual(W('\u0890\u2764\u200d\u{1f600}', 'bun-cell'), 4, 'U+0890 is 1 wide, so it is the base');
-  assert.strictEqual(W('\u0600\u2764\ufe0f', 'bun-cell'), 2);
+  assert.strictEqual(W('\u0600\u2764\u200d\u{1f600}'), 2, 'U+0600 is zero-width, so U+2764 is the base');
+  assert.strictEqual(W('\u0890\u2764\u200d\u{1f600}'), 4, 'U+0890 is 1 wide, so it is the base');
+  assert.strictEqual(W('\u0600\u2764\ufe0f'), 2);
 });
 
 test('bun-cell LONE-SURROGATES-INVISIBLE: a lone surrogate neither breaks nor counts', () => {
   // native: [0061 0308]=1 (the surrogate is gone from the cell's text; the mark joins 'a').
   assert.deepStrictEqual(B('a\udc00\u0308', 'bun-cell'), [3]);
   assert.deepStrictEqual(B('a\udc00\u0308', 'uax29'), [1, 3]);
-  assert.strictEqual(W('a\udc00\u0308', 'bun-cell'), 1);
+  assert.strictEqual(W('a\udc00\u0308'), 1);
   // native: [1F1E6]=1 — the surrogate does not make the RI a two-code-point cluster.
-  assert.strictEqual(W('\u{1f1e6}\udc00', 'bun-cell'), 1);
+  assert.strictEqual(W('\u{1f1e6}\udc00'), 1);
   // native: [2764 FE0F]=2 — nor is it the cluster's base.
   assert.deepStrictEqual(B('\udc00\u2764\ufe0f', 'bun-cell'), [3]);
-  assert.strictEqual(W('\udc00\u2764\ufe0f', 'bun-cell'), 2);
+  assert.strictEqual(W('\udc00\u2764\ufe0f'), 2);
   // Only the surrogate is invisible: native [0061]=1 [0062]=1 for 'a' U+DC00 'b'.
   assert.deepStrictEqual(B('a\udc00b', 'bun-cell'), [2, 3]);
 });

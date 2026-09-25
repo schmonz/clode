@@ -489,11 +489,12 @@ await collect(path.join(shimDir, 'internal'), 'node-shim/internal', members);
 // unicode-text.cjs, the ONE clustering/width implementation, at the archive ROOT in BOTH
 // roles. Two requirers find it there: bun-shim.cjs (quaude role) as its own sibling,
 // `require(__dirname + '/unicode-text.cjs')` from '/quaude/'; and node-shim's Intl
-// polyfill (modules/intl.cjs, loaded eagerly whenever the engine has no Intl — the
-// builder too) as `require('../../unicode-text.cjs')` from '/quaude/node-shim/modules',
-// the same relative climb process.cjs makes to target-env.cjs. A builder that carried it
-// only as `libexec/unicode-text.cjs` could not boot: its loader makes that require while
-// it starts up, before any entry code runs. clode-blobulate.cjs's materialization puts the bare name back at
+// polyfill (modules/intl.cjs, installed eagerly whenever the engine has no Intl — the
+// builder too — and requiring this at its first Intl.Segmenter segment()) as
+// `require('../../unicode-text.cjs')` from '/quaude/node-shim/modules', the same relative
+// climb process.cjs makes to target-env.cjs. A builder that carried it only as
+// `libexec/unicode-text.cjs` would throw at its first segmented string (before 18f74c8
+// made that require lazy, at boot). clode-blobulate.cjs's materialization puts the bare name back at
 // libexec/unicode-text.cjs, beside node-shim/ (again like target-env.cjs), where a
 // self-blobulated builder's extract cache and quaude blobulate read it. Read from
 // libexecDir, NOT stageDir: it is clode's own code, not version-locked to the bundle

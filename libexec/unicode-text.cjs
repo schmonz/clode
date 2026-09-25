@@ -15,6 +15,8 @@
 //   bun-slice native Bun.sliceAnsi — the same Bun clusterer fed without CellSegmenter's
 //             front end: bun-cell plus two named deltas (SLICE-CONTROLS-JOIN,
 //             SLICE-SURROGATES-VISIBLE, at PROFILES).
+// Widths are bun-cell's alone (clusterWidth): native's Intl.Segmenter clusters but measures
+// nothing, so uax29 has no width of its own.
 // scripts/cell-profile-diff.cjs measures uax29 and bun-cell against native;
 // test/fidelity/text-differential.test.cjs judges all three through their consumers.
 //
@@ -277,30 +279,8 @@ function graphemeBoundaries(str, start = 0, end = str.length, profile = 'uax29')
   return out;
 }
 
-// Width of one cluster [start, end) under `profile`. For uax29 it is 0, 1 or 2; for
-// bun-cell it is NOT capped (see cellClusterWidth) — the 0|1|2 contract is uax29's only.
-// The uax29 rule is checked against native over emoji-test.txt by the differential; a
-// case it misses is a finding, and its fix is a named override in the generator, never a
-// special case here.
-function clusterWidth(str, start, end, ambiguousIsNarrow = true, profile = 'uax29') {
-  if (profileOf(profile).cell) return cellClusterWidth(str, start, end, ambiguousIsNarrow);
-  const first = cpAt(str, start, end);
-  let w = codePointWidth(first, ambiguousIsNarrow);
-  if (end - start <= (first > 0xffff ? 2 : 1)) return w;
-  let ri = gcbOf(first) === RI ? 1 : 0;
-  for (let i = start + (first > 0xffff ? 2 : 1); i < end;) {
-    const cp = cpAt(str, i, end);
-    if (cp === 0xfe0f) w = 2;                                      // VS16: emoji presentation
-    else if (gcbOf(cp) === RI) ri++;
-    else if (gcbOf(cp) === ZWJ) { if (isExtPict(first)) w = 2; }  // ZWJ emoji sequence
-    else if (cp >= 0x1f3fb && cp <= 0x1f3ff) w = 2;                // Emoji_Modifier
-    i += cp > 0xffff ? 2 : 1;
-  }
-  // An RI alone is 1 wide (measured 2026-09-24); a pair is a flag, one 2-wide cluster.
-  if (ri >= 2) w = 2;
-  return w;
-}
-
+// The width of one cluster [start, end): native's, which is bun-cell's (exported as
+// clusterWidth; there is no other: native's Intl.Segmenter clusters but does not measure).
 // bun-cell: native CellSegmenter's advance for one cluster [start, end). NOT capped — a
 // cluster can be 3, 4, ... wide. (CellSegmenter's cell stores the advance in 8 bits and
 // saturates it at 255: 128 x U+1100 is a 255 cell where Bun.stringWidth says 256. That is
@@ -328,7 +308,7 @@ function clusterWidth(str, start, end, ambiguousIsNarrow = true, profile = 'uax2
 // WIDTH-BASE-IS-FIRST-VISIBLE (rule): the cluster's base, for the two rules above, is its
 //   first code point of NONZERO width, so a zero-width Prepend is passed over and a 1-wide
 //   one is not: `0600 2764 200D 1F600` is 2, `0890 2764 200D 1F600` is 4 (the sum).
-function cellClusterWidth(str, start, end, ambiguousIsNarrow) {
+function cellClusterWidth(str, start, end, ambiguousIsNarrow = true) {
   // One code point (most clusters): its own width, as the rules below reach for n < 2.
   const first = cpAt(str, start, end);
   if (start + cpLen(first) >= end) return isSurrogate(first) ? 0 : codePointWidth(first, ambiguousIsNarrow);
@@ -1066,5 +1046,5 @@ function sliceAnsi(input, start, end, options, narrowOption) {
   return out + closeStyles(styles);
 }
 
-module.exports = { graphemeBoundaries, clusterWidth, codePointWidth, escapeLayer, textWidth, stringWidth, forEachCell, cellSgr,
+module.exports = { graphemeBoundaries, clusterWidth: cellClusterWidth, codePointWidth, escapeLayer, textWidth, stringWidth, forEachCell, cellSgr,
   sliceAnsi, UNICODE_DATA };

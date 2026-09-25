@@ -3986,7 +3986,7 @@ bytecode registry, falls through to a filesystem/fd load path, and spins on a ba
 NOT missing bundles — `strings tjs | grep internal/bootstrap` = 2, the bundle bytecode C arrays
 (src/bundles/c/core/*.c) are compiled in. So it's builtin-module RESOLUTION under cosmo (why the
 registry lookup misses → openat), plus a loader bug (the pread-EBADF fallback should fail loud, not
-loop). Bisect fact: hang correlates with stdout fd-type (pipe stdout → exits; regular file/​/dev/null/
+loop). Bisect fact: hang correlates with stdout fd-type (pipe stdout → exits; regular file/\u200b/dev/null/
 closed → hang) because the fd table shifts and changes whether the loader lands on fd 2. ROOT CAUSE (2026-07-29, deeper): the hang is `uv_fs_open("tjs:internal/bootstrap")` returning **+2**
 (a bogus fd = ENOENT's runtime value) instead of a NEGATIVE error, so `tjs__load_file` (vm.c:917)
 accepts fd 2 and spins in the `pread(2)->EBADF` loop. (`tjs:internal/bootstrap` legitimately isn't a

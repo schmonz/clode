@@ -143,12 +143,17 @@ test('attest golden: stable manifest fields + full member verification', async (
   // manifest.entry names whichever bytecode member this shape produced (cli.qbc or
   // graph.qbc, asserted above); require THAT one rather than a hardcoded name, so the
   // check keeps meaning the same thing as upstream's packaging changes under us.
-  for (const m of [manifest.entry, 'bun-shim.cjs', 'node-shim/loader.cjs', 'node-shim/modules/process.cjs', 'target-env.cjs', 'target-update-check.cjs']) {
+  // unicode-text.cjs rides at the archive root beside bun-shim.cjs (the one clustering/width/
+  // SGR implementation both bun-shim and the Intl polyfill require).
+  for (const m of [manifest.entry, 'bun-shim.cjs', 'unicode-text.cjs', 'node-shim/loader.cjs', 'node-shim/modules/process.cjs', 'target-env.cjs', 'target-update-check.cjs']) {
     assert.ok(manifest.members[m], `manifest missing member ${m}`);
   }
-  // The shipped loader member must be byte-identical to the committed loader.
+  // The shipped loader member must be byte-identical to the committed loader, and the text
+  // member to the committed unicode-text.cjs (read from libexec, not the stage: clode's own code).
   assert.strictEqual(manifest.members['node-shim/loader.cjs'].sha256,
     sha256File(path.join(REPO, 'libexec/node-shim/loader.cjs')));
+  assert.strictEqual(manifest.members['unicode-text.cjs'].sha256,
+    sha256File(path.join(REPO, 'libexec/unicode-text.cjs')));
 
   // BOM (Task a): the declared closure as name@version — states what this
   // quaude embeds without cross-referencing package.json + node_modules.

@@ -9,8 +9,9 @@
 // The mini cli.cjs exercises every seam the real blobulated bundle relies on:
 // relative require from /quaude, require(__dirname + '/bun-shim.cjs'), a bare
 // specifier resolved from /quaude/node_modules, require.main identity, argv
-// shape, and a process.env read+write (the strict-mode env fix — the entry is
-// compiled as a MODULE, so it runs strict like the real cli.qbc).
+// shape, a process.env read+write (the strict-mode env fix — the entry is
+// compiled as a MODULE, so it runs strict like the real cli.qbc), and one
+// Intl.Segmenter segment() (the polyfill's lazy require of /quaude/unicode-text.cjs).
 import path from 'tjs:path';
 
 const [loaderPath, shimRoot, ...entryArgs] = tjs.args.slice(3);
@@ -44,7 +45,8 @@ files.set('target-env.cjs', await tjs.readFile(path.join(path.dirname(shimRoot),
 // unicode-text.cjs: bare, at the root, in BOTH roles, exactly like the real blobulate —
 // modules/intl.cjs's require('../../unicode-text.cjs') runs at the polyfill's first
 // Intl.Segmenter segment() (and bun-shim requires it when it loads), so without it the
-// first segmented line throws.
+// first segmented line throws. The mini cli below segments once, so that in-VFS climb is
+// exercised, not merely staged.
 files.set('unicode-text.cjs', await tjs.readFile(path.join(path.dirname(shimRoot), 'unicode-text.cjs')));
 
 // Mini members standing in for the extracted bundle + deps.
@@ -69,6 +71,8 @@ console.log(JSON.stringify({
   pkg: pkg.name,
   isMain: require.main === module,
   envSet: process.env.VFS_HARNESS_SET,
+  // e U+0301 b: two clusters, so the polyfill really reached unicode-text.cjs in the archive.
+  segments: Array.from(new Intl.Segmenter().segment(String.fromCodePoint(0x65, 0x301, 0x62)), (x) => x.segment.length),
 }));
 `;
 const wrapped = 'globalThis.__quaude_entry = function (exports, require, module, __filename, __dirname) {\n' + miniCli + '\n};\n';
