@@ -4,13 +4,13 @@
 // Screens are recorded DECODED (grapheme / style key / link / width bits), never as pool
 // indices: native pre-seeds and orders its pools differently from ours, and the caller only
 // ever reads what an index NAMES.
-const fs = require('node:fs');
-const os = require('node:os');
-const path = require('node:path');
 const { runInNative } = require('./native-oracle.cjs');
-const { asciiJson } = require('./text-probe.cjs');
+// batches/runProbeOurs are the SAME scaffolding scripts/lib/text-probe.cjs's own runOurs
+// uses (mkdtemp, ASCII-only JSON input, IIFE-wrap the source, runLoader with NODE_PATH,
+// cleanup) — shared there rather than duplicated here (fix round 1, code review). This module
+// no longer resolves any repo-rooted path itself, so it needs no `path`/REPO of its own.
+const { batches, runProbeOurs } = require('./text-probe.cjs');
 
-const REPO = path.resolve(__dirname, '..', '..');
 const BATCH = 2000;
 
 const PAINT_SOURCE = String.raw`
@@ -95,32 +95,19 @@ const PAINT_SOURCE = String.raw`
   return { runtime: side === 'native' ? 'bun ' + Bun.version : 'shim', results };
 `;
 
-function batches(a) { const b = []; for (let i = 0; i < a.length; i += BATCH) b.push(a.slice(i, i + BATCH)); return b; }
+// merge() stays paint-probe's OWN: its shape (one `results` array, always concatenated) is
+// simpler than text-probe.cjs's per-KEY merge and does not generalize to it, so only the
+// scaffolding above is shared, not the merging (fix round 1, code review).
 function merge(parts) { return { runtime: parts[0].runtime, results: [].concat(...parts.map((p) => p.results)) }; }
 
 function runPaintNative(bin, scenarios) {
   if (scenarios.length === 0) throw new Error('empty corpus: nothing to compare');
-  return merge(batches(scenarios).map((s) => runInNative(bin, PAINT_SOURCE, { input: { scenarios: s, side: 'native' }, timeoutMs: 600000 })));
+  return merge(batches(scenarios, BATCH).map((s) => runInNative(bin, PAINT_SOURCE, { input: { scenarios: s, side: 'native' }, timeoutMs: 600000 })));
 }
 
 function runPaintOurs(scenarios) {
   if (scenarios.length === 0) throw new Error('empty corpus: nothing to compare');
-  const { runLoader } = require(path.join(REPO, 'test', 'node-shim-helper.cjs'));
-  const shim = path.join(REPO, 'libexec', 'bun-shim.cjs');
-  return merge(batches(scenarios).map((s) => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paint-probe-'));
-    try {
-      const inf = path.join(dir, 'in.json'), outf = path.join(dir, 'out.json'), prog = path.join(dir, 'p.cjs');
-      fs.writeFileSync(inf, asciiJson({ scenarios: s, side: 'ours' }));
-      fs.writeFileSync(prog, `require(${JSON.stringify(shim)});\nconst fs = require('fs');\n`
-        + `const input = JSON.parse(fs.readFileSync(${JSON.stringify(inf)}, 'utf8'));\n`
-        + `const r = (function (input) {${PAINT_SOURCE}\n})(input);\n`
-        + `fs.writeFileSync(${JSON.stringify(outf)}, JSON.stringify(r));\n`);
-      const r = runLoader(prog, [], { timeout: 600000, env: { NODE_PATH: path.join(REPO, 'deps', 'claude', 'node_modules') } });
-      if (r.status !== 0) throw new Error(`our paint probe failed under tjs (exit ${r.status}): ${r.stderr.slice(0, 800)}`);
-      return JSON.parse(fs.readFileSync(outf, 'utf8'));
-    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
-  }));
+  return merge(batches(scenarios, BATCH).map((s) => runProbeOurs(PAINT_SOURCE, { scenarios: s, side: 'ours' }, 'paint-probe-')));
 }
 
 function comparePaintResults(scenarios, native, ours) {

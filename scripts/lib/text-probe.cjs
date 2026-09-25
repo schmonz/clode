@@ -92,15 +92,17 @@ function merge(parts) {
   return out;
 }
 
-function batches(strings) {
+// Shared by every probe's native AND ours side (paint-probe.cjs's own BATCH differs, so the
+// size is the caller's, never this module's BATCH).
+function batches(items, size) {
   const b = [];
-  for (let i = 0; i < strings.length; i += BATCH) b.push(strings.slice(i, i + BATCH));
+  for (let i = 0; i < items.length; i += size) b.push(items.slice(i, i + size));
   return b;
 }
 
 function runNative(bin, strings, wants) {
   if (strings.length === 0) throw new Error('empty corpus: nothing to compare');
-  return merge(batches(strings).map((s) => runInNative(bin, PROBE_SOURCE, { input: { strings: s, wants, side: 'native' } })));
+  return merge(batches(strings, BATCH).map((s) => runInNative(bin, PROBE_SOURCE, { input: { strings: s, wants, side: 'native' } })));
 }
 
 // JSON with every non-ASCII UTF-16 unit written as an escape, so the file is pure ASCII.
@@ -113,27 +115,36 @@ function asciiJson(v) {
   return JSON.stringify(v).replace(/[^\x00-\x7f]/g, (c) => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'));
 }
 
-function runOurs(strings, wants) {
-  if (strings.length === 0) throw new Error('empty corpus: nothing to compare');
+// THE shared "run one probe program under tjs with bun-shim loaded" scaffolding — every probe
+// in this repo (this file's runOurs, paint-probe.cjs's runPaintOurs) does the exact same
+// dance: a throwaway dir, the input written as ASCII-only JSON (asciiJson, above — the tjs
+// side must get back exactly what Node wrote), the probe source wrapped in an IIFE and handed
+// its input, run under tjs via node-shim-helper's runLoader with NODE_PATH pointed at
+// deps/claude/node_modules (bun-shim's npm-backed helpers — string-width, etc. — resolve
+// regardless of the caller's own environment, same fix as test/node-shim-vm.test.cjs,
+// test/node-shim-esm.test.cjs and ~8 other call sites in this repo), a thrown Error naming a
+// non-zero exit, and cleanup. `source` is one BATCH's worth already-shaped `input`; `tmpPrefix`
+// names the caller so a stuck run is identifiable in `mktemp -d` listings.
+function runProbeOurs(source, input, tmpPrefix) {
   const { runLoader } = require(path.join(REPO, 'test', 'node-shim-helper.cjs'));
   const shim = path.join(REPO, 'libexec', 'bun-shim.cjs');
-  return merge(batches(strings).map((s) => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'text-probe-'));
-    try {
-      const inf = path.join(dir, 'in.json'); const outf = path.join(dir, 'out.json'); const prog = path.join(dir, 'p.cjs');
-      fs.writeFileSync(inf, asciiJson({ strings: s, wants, side: 'ours' }));
-      fs.writeFileSync(prog, `require(${JSON.stringify(shim)});\nconst fs = require('fs');\n`
-        + `const input = JSON.parse(fs.readFileSync(${JSON.stringify(inf)}, 'utf8'));\n`
-        + `const r = (function (input) {${PROBE_SOURCE}\n})(input);\n`
-        + `fs.writeFileSync(${JSON.stringify(outf)}, JSON.stringify(r));\n`);
-      // NODE_PATH so bun-shim's npm-backed helpers (string-width, etc.) resolve
-      // regardless of the caller's own environment — same fix as test/node-shim-vm.test.cjs,
-      // test/node-shim-esm.test.cjs and ~8 other call sites in this repo.
-      const r = runLoader(prog, [], { timeout: 600000, env: { NODE_PATH: path.join(REPO, 'deps', 'claude', 'node_modules') } });
-      if (r.status !== 0) throw new Error(`our probe failed under tjs (exit ${r.status}): ${r.stderr.slice(0, 800)}`);
-      return JSON.parse(fs.readFileSync(outf, 'utf8'));
-    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
-  }));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), tmpPrefix));
+  try {
+    const inf = path.join(dir, 'in.json'); const outf = path.join(dir, 'out.json'); const prog = path.join(dir, 'p.cjs');
+    fs.writeFileSync(inf, asciiJson(input));
+    fs.writeFileSync(prog, `require(${JSON.stringify(shim)});\nconst fs = require('fs');\n`
+      + `const input = JSON.parse(fs.readFileSync(${JSON.stringify(inf)}, 'utf8'));\n`
+      + `const r = (function (input) {${source}\n})(input);\n`
+      + `fs.writeFileSync(${JSON.stringify(outf)}, JSON.stringify(r));\n`);
+    const r = runLoader(prog, [], { timeout: 600000, env: { NODE_PATH: path.join(REPO, 'deps', 'claude', 'node_modules') } });
+    if (r.status !== 0) throw new Error(`our probe failed under tjs (exit ${r.status}): ${r.stderr.slice(0, 800)}`);
+    return JSON.parse(fs.readFileSync(outf, 'utf8'));
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+}
+
+function runOurs(strings, wants) {
+  if (strings.length === 0) throw new Error('empty corpus: nothing to compare');
+  return merge(batches(strings, BATCH).map((s) => runProbeOurs(PROBE_SOURCE, { strings: s, wants, side: 'ours' }, 'text-probe-')));
 }
 
 const hex = (s) => Array.from(s, (c) => 'U+' + c.codePointAt(0).toString(16).toUpperCase().padStart(4, '0')).join(' ');
@@ -158,4 +169,4 @@ function compareTextResults(strings, native, ours) {
   return { examined: strings.length, findings, counts };
 }
 
-module.exports = { PROBE_SOURCE, runNative, runOurs, compareTextResults, asciiJson, BATCH };
+module.exports = { PROBE_SOURCE, runNative, runOurs, compareTextResults, asciiJson, batches, runProbeOurs, BATCH };
