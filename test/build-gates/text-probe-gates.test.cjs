@@ -99,8 +99,14 @@ function scanCallerStyle({ bundle, probe, what }) {
       findings.push(`ansiCodes() no longer keeps an open code by one regex test and pairs it with its close code: ${at}...`);
       continue;
     }
-    const d = new RegExp(`\\b${t[1]}=/`).exec(bundle);
-    const bundleSc = d ? regexLiteral(bundle, d.index + d[0].length - 1) : null;
+    // Minified names repeat across a carve's modules, so the definition read is the one
+    // NEAREST this method (its module's), not the first in the file.
+    const defs = [];
+    const dre = new RegExp(`(?:^|[^\\w$.])${t[1].replace(/\$/g, '\\$')}=/`, 'g');
+    let d;
+    while ((d = dre.exec(bundle)) !== null) defs.push(d.index + d[0].length - 1);
+    const near = defs.sort((a, b) => Math.abs(a - m.index) - Math.abs(b - m.index))[0];
+    const bundleSc = near === undefined ? null : regexLiteral(bundle, near);
     if (bundleSc === null) findings.push(`ansiCodes() tests ${t[1]}, whose regex literal this scan cannot find`);
     else if (probeSc !== null && bundleSc !== probeSc) {
       findings.push(`the bundle's SC is ${bundleSc} but the probe filters with ${probeSc}: the text gate would judge a style `
@@ -149,6 +155,7 @@ test('the caller-style scan passes the 2.1.278 caller verbatim and names each dr
   assert.strictEqual(run(CALLER.replace('if(n===0)return[];', '')).findings.length, 1, 'index 0 no longer short-circuits');
   assert.strictEqual(run(CALLER.replace('code:p,endCode', 'code:s[0],endCode')).findings.length, 1, 'a test not on the open code');
   assert.strictEqual(run(CALLER.replace('var SC=', 'var XX=')).findings.length, 1, 'an SC this scan cannot find');
+  assert.deepStrictEqual(run('var SC=/other/;' + ' '.repeat(5000) + CALLER).findings, [], 'another module\'s SC is not the caller\'s');
   assert.strictEqual(scanCallerStyle({ bundle: CALLER, probe: 'no regex here', what: 'x' }).findings.length, 1);
   assert.strictEqual(run('').examined, 0, 'no caller at all examines nothing, which the floor reads as BROKEN');
 });
