@@ -10,6 +10,8 @@
 //   fullSuiteSkipReason(env)         this file is running inside the concurrent full
 //                                    suite (test/run.mjs), where a SESSION gate does not
 //   liveFrameGate({ session, env })  -> { skip } | { native }: the whole chain, in order
+//   quaudeBesideNative(native)       -> { skip } | { quaude, version }: the built quaude a
+//                                    gate judges, only when it is the native's version
 //
 // WHERE THE SESSION GATES RUN, AND WHY THE FULL SUITE IS NOT IT (ruling R5, CellSegmenter
 // phase 5). A session gate launches native Claude Code, and later a built quaude too, a
@@ -28,9 +30,10 @@
 // signal the single-frame gate happens to skip on in those legs, "no tjs engine", is a
 // fact about quaude, not about where a native-only check belongs).
 const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 const { liveRenderSkipReason } = require('./live-render-helper.cjs');
 const { skipReason: providerSkipReason } = require('./provider-resolve.cjs');
-const { resolveNativeClaude } = require('../scripts/lib/native-oracle.cjs');
+const { resolveNativeClaude, nativeVersion } = require('../scripts/lib/native-oracle.cjs');
 
 const REPO = path.resolve(__dirname, '..');
 const FULL_SUITE_ENV = 'CLODE_TEST_FULL_SUITE';
@@ -66,4 +69,29 @@ function liveFrameGate({ session = false, env = process.env, platform = process.
   return { native };
 }
 
-module.exports = { liveFrameGate, ptyHarnessSkipReason, fullSuiteSkipReason, FULL_SUITE_ENV };
+// THE QUAUDE a live frame gate judges beside its native: builtQuaude() (CLODE_QUAUDE, else a
+// build of this tree), and only when it reports the native's --version -- frames of two
+// versions are not comparable, so the gate skips naming both. quaudeVersion() is the
+// QUAUDE's and apeCmd-aware (a cosmo/APE quaude cannot be exec'd directly); nativeVersion()
+// is a plain spawnSync for the native side only (controller ruling R2, phase-3 task 1).
+// Required lazily: test/run.mjs loads this file for FULL_SUITE_ENV alone.
+function quaudeVersion(bin) {
+  const { apeCmd } = require('./e2e-pty.cjs');
+  const w = apeCmd([bin, '--version']);
+  const env = { ...process.env, DISABLE_AUTOUPDATER: '1' }; delete env.NODE_PATH;
+  const r = spawnSync(w[0], w.slice(1), { encoding: 'utf8', env, timeout: 60000 });
+  return ((r.stdout || '') + (r.stderr || '')).split('\n')[0].trim();
+}
+
+function quaudeBesideNative(native) {
+  const built = require('./built-binary.cjs').builtQuaude();
+  if (built.skip) return { skip: built.skip };
+  const rv = nativeVersion(native), qv = quaudeVersion(built.path);
+  if (!rv || rv !== qv) {
+    return { skip: 'native and quaude are not the same version, so their frames are not comparable: '
+      + `${native} says ${JSON.stringify(rv)}, ${built.path} says ${JSON.stringify(qv)}` };
+  }
+  return { quaude: built.path, version: rv };
+}
+
+module.exports = { liveFrameGate, quaudeBesideNative, ptyHarnessSkipReason, fullSuiteSkipReason, FULL_SUITE_ENV };

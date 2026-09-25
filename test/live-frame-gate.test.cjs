@@ -4,7 +4,7 @@
 // are proven on any host.
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { liveFrameGate, ptyHarnessSkipReason, fullSuiteSkipReason, FULL_SUITE_ENV } = require('./live-frame-gate.cjs');
+const { liveFrameGate, quaudeBesideNative, ptyHarnessSkipReason, fullSuiteSkipReason, FULL_SUITE_ENV } = require('./live-frame-gate.cjs');
 
 test('fullSuiteSkipReason: only the full suite\'s own declaration skips, and the reason says how to run it', () => {
   assert.strictEqual(FULL_SUITE_ENV, 'CLODE_TEST_FULL_SUITE');
@@ -46,4 +46,39 @@ test('liveFrameGate: with every precondition met, a missing native is its own na
 test('test/run.mjs declares the full suite to every file it runs', (t) => {
   if (!process.env.CLODE_TEST_SECURITY_STUB_DIR) { t.skip('not running under test/run.mjs'); return; }
   assert.strictEqual(process.env[FULL_SUITE_ENV], '1');
+});
+
+// quaudeBesideNative: the quaude a gate judges, only when it is the native's version. Stand-in
+// binaries that print a version, so every branch is proven without building anything.
+test('quaudeBesideNative: a missing CLODE_QUAUDE, a version mismatch and a match', (t) => {
+  if (process.platform === 'win32') {
+    t.skip('the #!/bin/sh stand-ins cannot be exec\'d on Windows, where no live frame gate runs');
+    return;
+  }
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'live-frame-gate-'));
+  const saved = process.env.CLODE_QUAUDE;
+  t.after(() => {
+    if (saved === undefined) delete process.env.CLODE_QUAUDE; else process.env.CLODE_QUAUDE = saved;
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+  const stand = (name, version) => {
+    const p = path.join(dir, name);
+    fs.writeFileSync(p, `#!/bin/sh\necho "${version} (Claude Code)"\n`);
+    fs.chmodSync(p, 0o755);
+    return p;
+  };
+  const native = stand('native', '2.1.278'), same = stand('same', '2.1.278'), older = stand('older', '2.1.251');
+
+  process.env.CLODE_QUAUDE = path.join(dir, 'absent');
+  assert.deepStrictEqual(quaudeBesideNative(native), { skip: `CLODE_QUAUDE=${path.join(dir, 'absent')} does not exist` });
+
+  process.env.CLODE_QUAUDE = older;
+  assert.deepStrictEqual(quaudeBesideNative(native), { skip: 'native and quaude are not the same version, so their '
+    + `frames are not comparable: ${native} says "2.1.278 (Claude Code)", ${older} says "2.1.251 (Claude Code)"` });
+
+  process.env.CLODE_QUAUDE = same;
+  assert.deepStrictEqual(quaudeBesideNative(native), { quaude: same, version: '2.1.278 (Claude Code)' });
 });

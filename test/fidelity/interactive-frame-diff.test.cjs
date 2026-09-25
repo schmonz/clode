@@ -65,14 +65,10 @@
 // default. CI runs it in the linux-x64-pty job against the pinned provider.
 const { before, test } = require('node:test');
 const assert = require('node:assert');
-const { spawnSync } = require('node:child_process');
-const { liveFrameGate } = require('../live-frame-gate.cjs');
-const { builtQuaude } = require('../built-binary.cjs');
-const { apeCmd } = require('../e2e-pty.cjs');
+const { liveFrameGate, quaudeBesideNative } = require('../live-frame-gate.cjs');
 const { captureFrames } = require('../frame-oracle.cjs');
 const { diff, describe, corrupt, cloneFrame, nonBlank, frameShows } = require('../frame-diff.cjs');
 const { defineGuard, guardTests } = require('../guard.cjs');
-const { nativeVersion } = require('../../scripts/lib/native-oracle.cjs');
 
 const ROWS = 40, COLS = 100;
 // Long enough for the late-arriving status line: at 12s the "● high · /effort"
@@ -94,45 +90,30 @@ const LINK_SHOWN = `See the docs and ${LINKS[1]} now.`;
 const LINK_SCENE = { mockText: LINK_REPLY, env: { FORCE_HYPERLINK: '1' }, settings: { showTurnDuration: false },
   thenHex: [`${Buffer.from('hi', 'utf8').toString('hex')}@${TYPE_AT}`, `0d@${TYPE_AT + 1.2}`] };
 
-// versionOf() stays LOCAL, and apeCmd-aware, because it reads the QUAUDE's version — a
-// cosmo/APE quaude cannot be exec'd directly, so it needs the same wrapper the rest of
-// this file uses to run it. nativeVersion() (scripts/lib/native-oracle.cjs) is a plain
-// spawnSync and is for the native side ONLY (controller ruling R2, phase-3 task 1).
-function versionOf(bin) {
-  const w = apeCmd([bin, '--version']);
-  const env = { ...process.env, DISABLE_AUTOUPDATER: '1' }; delete env.NODE_PATH;
-  const r = spawnSync(w[0], w.slice(1), { encoding: 'utf8', env, timeout: 60000 });
-  return ((r.stdout || '') + (r.stderr || '')).split('\n')[0].trim();
-}
-
 let SKIP = null, FRAMES = null, TYPED_FRAMES = null, LINK_FRAMES = null, WHAT = '', TYPED_WHAT = '', LINK_WHAT = '';
 before(async () => {
   const gate = liveFrameGate();
   if (gate.skip) { SKIP = gate.skip; return; }
   const ref = gate.native;
-  const built = builtQuaude();
-  if (built.skip) { SKIP = built.skip; return; }
-  const rv = nativeVersion(ref), qv = versionOf(built.path);
-  if (!rv || rv !== qv) {
-    SKIP = `native and quaude are not the same version, so their frames are not comparable: `
-      + `${ref} says ${JSON.stringify(rv)}, ${built.path} says ${JSON.stringify(qv)}`;
-    return;
-  }
-  WHAT = `native ${ref} (${rv}) vs quaude ${built.path}, ${COLS}x${ROWS}, ${SECONDS}s`;
-  FRAMES = await captureFrames({ ref, sub: built.path, seconds: SECONDS, rows: ROWS, cols: COLS });
+  // The quaude, only when it is the native's version (test/live-frame-gate.cjs).
+  const q = quaudeBesideNative(ref);
+  if (q.skip) { SKIP = q.skip; return; }
+  const sub = q.quaude;
+  WHAT = `native ${ref} (${q.version}) vs quaude ${sub}, ${COLS}x${ROWS}, ${SECONDS}s`;
+  FRAMES = await captureFrames({ ref, sub, seconds: SECONDS, rows: ROWS, cols: COLS });
   // A capture that produced no frame is a harness failure, and it must SAY so
   // rather than skip quietly: the whole point is that this runs.
   if (!FRAMES.ref || !FRAMES.sub) {
     throw new Error(`frame capture failed (${WHAT}): ref=${!!FRAMES.ref} sub=${!!FRAMES.sub}; see stderr`);
   }
   TYPED_WHAT = `${WHAT}, prompt typed at ${TYPE_AT}s`;
-  TYPED_FRAMES = await captureFrames({ ref, sub: built.path, seconds: SECONDS, rows: ROWS, cols: COLS,
+  TYPED_FRAMES = await captureFrames({ ref, sub, seconds: SECONDS, rows: ROWS, cols: COLS,
     thenHex: [`${Buffer.from(TYPED, 'utf8').toString('hex')}@${TYPE_AT}`] });
   if (!TYPED_FRAMES.ref || !TYPED_FRAMES.sub) {
     throw new Error(`frame capture failed (${TYPED_WHAT}): ref=${!!TYPED_FRAMES.ref} sub=${!!TYPED_FRAMES.sub}; see stderr`);
   }
   LINK_WHAT = `${WHAT}, a turn typed at ${TYPE_AT}s answered with two links, FORCE_HYPERLINK=1`;
-  LINK_FRAMES = await captureFrames({ ref, sub: built.path, seconds: SECONDS, rows: ROWS, cols: COLS, ...LINK_SCENE });
+  LINK_FRAMES = await captureFrames({ ref, sub, seconds: SECONDS, rows: ROWS, cols: COLS, ...LINK_SCENE });
   if (!LINK_FRAMES.ref || !LINK_FRAMES.sub) {
     throw new Error(`frame capture failed (${LINK_WHAT}): ref=${!!LINK_FRAMES.ref} sub=${!!LINK_FRAMES.sub}; see stderr`);
   }

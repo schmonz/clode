@@ -25,10 +25,10 @@
 // only from output that step caused.
 //
 // WHAT IT IS A GUARD OVER, and its floor. `examined` is the visibly painted cells over
-// every frame of every session's first run (type-edit: 6 frames, ~2035 cells). The floor
-// is 1000: a native that painted nothing compares identical to itself, and that must read
-// BROKEN, not OK. A blank frame on either run is its own finding (ruling R8, in
-// judgeSessions): two blank frames compare equal and judge nothing.
+// every frame of every session's first run (type-edit: 6 frames, ~2035 cells; resize: 6
+// frames, ~2675). The floor is 1000: a native that painted nothing compares identical to
+// itself, and that must read BROKEN, not OK. A blank frame on either run is its own finding
+// (ruling R8, in judgeSessions): two blank frames compare equal and judge nothing.
 //
 // Gated by test/live-frame-gate.cjs as a SESSION gate: live render (darwin opt-in,
 // CLODE_LIVE_RENDER=1: it spawns the real bundle), not inside the concurrent full suite

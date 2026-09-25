@@ -21,7 +21,8 @@ const BS = '\x7f';
 const SESSIONS = {
   // Type, erase and retype in the prompt: wide CJK, an emoji with a skin tone and base +
   // combining marks, each erased by backspace so the next frame repaints cells the previous
-  // one filled (a too-narrow damage rect leaves exactly those stale). No Enter: no turn.
+  // one filled. No Enter: no turn. (Paint's own damage does not decide these repaints,
+  // measured in task 4: see interactive-session-diff.test.cjs.)
   //
   // THE MARKS, MEASURED (2.1.278, task 3): the prompt NFC-normalises what is typed, so
   // `e U+0301` is painted as the one precomposed code point U+00E9 -- a narrow single-code-
@@ -40,6 +41,29 @@ const SESSIONS = {
     ],
     mockText: 'PONG', settings: { showTurnDuration: false }, env: {},
     mustShow: CP(0xe9) + 'q' + CP(0x301) + ' ok',
+  },
+  // A turn, then the terminal resized under it: narrower, wider, then back. The reply is
+  // long enough to wrap at every width the steps visit (4 rows at 60 columns, 2 at 100 and
+  // at 120, each broken at a different word), and ends in wide CJK and an emoji, which each
+  // reflow moves to another row and column. Shrinking first rewrites every row at fewer
+  // columns; growing then leaves the columns past the old width to be repainted; the last
+  // step returns to the boot geometry, where a layout stuck at a stale width shows (a
+  // quaude that never saw SIGWINCH as 'resize' first differs there, measured in task 4).
+  // showTurnDuration off: the line after a turn carries the wall-clock time otherwise.
+  'resize': {
+    rows: 40, cols: 100,
+    script: [
+      { label: 'ask', send: hex('hi') },
+      { label: 'send', send: hex('\r') },
+      { label: 'shrink 60x30', resize: '60x30' },
+      { label: 'grow 120x40', resize: '120x40' },
+      { label: 'back 100x40', resize: '100x40' },
+    ],
+    mockText: 'A reply long enough to wrap differently at every width the resize steps visit: '
+      + 'alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma tau '
+      + CP(0x4e2d, 0x6587) + ' ' + CP(0x1f44d) + ' end.',
+    settings: { showTurnDuration: false }, env: {},
+    mustShow: 'end.',
   },
 };
 
