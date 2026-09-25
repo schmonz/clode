@@ -11,7 +11,8 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
-const { graphemeBoundaries, clusterWidth, codePointWidth, UNICODE_DATA } = require('../libexec/unicode-text.cjs');
+const { graphemeBoundaries, clusterWidth, codePointWidth, escapeLayer, forEachCell, textWidth, stringWidth, UNICODE_DATA } =
+  require('../libexec/unicode-text.cjs');
 const { clodeCacheDir } = require('../libexec/clode-paths.cjs');
 const ucd = require('../scripts/lib/ucd.cjs');
 
@@ -237,6 +238,24 @@ test('bun-cell WIDTH-VS16: U+FE0F widens an Emoji Extended_Pictographic base to 
   assert.strictEqual(W('#\ufe0f', 'bun-cell'), 1);
 });
 
+test('bun-cell WIDTH-VS16: it widens the BASE to 2, and the rest of the cluster still counts', () => {
+  // Found by fuzzing escape-heavy strings against native (task 6, 2026-09-24): a spacing mark
+  // in the cluster keeps its column. native: 1F600 0903 FE0F = 3, 2764 0903 FE0F = 3,
+  // 2764 0903 0903 FE0F = 4, 2764 FE0F 0903 = 3, 00A9 0903 FE0F = 3, 0600 2764 0903 FE0F = 3.
+  const w = (...cps) => W(String.fromCodePoint(...cps), 'bun-cell');
+  assert.strictEqual(w(0x1f600, 0x903, 0xfe0f), 3);
+  assert.strictEqual(w(0x2764, 0x903, 0xfe0f), 3);
+  assert.strictEqual(w(0x2764, 0x903, 0x903, 0xfe0f), 4);
+  assert.strictEqual(w(0x2764, 0xfe0f, 0x903), 3);
+  assert.strictEqual(w(0xa9, 0x903, 0xfe0f), 3);
+  assert.strictEqual(w(0x600, 0x2764, 0x903, 0xfe0f), 3);
+  // Not an Emoji Extended_Pictographic base: the plain sum. native: 0023 0903 FE0F = 2.
+  assert.strictEqual(w(0x23, 0x903, 0xfe0f), 2);
+  // The exactly-2 rules still win. native: 1F1E6 0903 FE0F = 2, 1F600 0903 20E3 = 2.
+  assert.strictEqual(w(0x1f1e6, 0x903, 0xfe0f), 2);
+  assert.strictEqual(w(0x1f600, 0x903, 0x20e3), 2);
+});
+
 test('bun-cell WIDTH-BASE-IS-FIRST-VISIBLE: the base is the first code point of nonzero width', () => {
   assert.strictEqual(W('\u0600\u2764\u200d\u{1f600}', 'bun-cell'), 2, 'U+0600 is zero-width, so U+2764 is the base');
   assert.strictEqual(W('\u0890\u2764\u200d\u{1f600}', 'bun-cell'), 4, 'U+0890 is 1 wide, so it is the base');
@@ -255,4 +274,191 @@ test('bun-cell LONE-SURROGATES-INVISIBLE: a lone surrogate neither breaks nor co
   assert.strictEqual(W('\udc00\u2764\ufe0f', 'bun-cell'), 2);
   // Only the surrogate is invisible: native [0061]=1 [0062]=1 for 'a' U+DC00 'b'.
   assert.deepStrictEqual(B('a\udc00b', 'bun-cell'), [2, 3]);
+});
+
+// ---------------------------------------------------------------------------------------
+// The layers native runs AROUND the bun-cell clusterer: the escape layer CellSegmenter and
+// Bun.stringWidth share, and the cell shaping CellSegmenter adds. Every literal below was
+// measured against native 2.1.278 (Bun 1.4.3) on 2026-09-24 (CellSegmenter's cells read back
+// through its pool; Bun.stringWidth), and each test pins ONE rule libexec/unicode-text.cjs
+// names. Strings are built from code points, never typed as escapes (an editing tool turned
+// typed escapes into the literal characters; see test/source-invisible-chars.test.cjs).
+// test/fidelity/text-differential.test.cjs walks every parser state against native.
+const H = (...cps) => cps.map((c) => ((c >= 0xd800 && c <= 0xdfff) ? String.fromCharCode(c) : String.fromCodePoint(c))).join('');
+const CPS = (s) => Array.from(s, (c) => c.codePointAt(0));
+const ESC = 0x1b;
+const T = (...cps) => escapeLayer(H(...cps)).text;
+// The SGR parameter strings a string applies: CSIs that END at `m` without being ignored.
+const SGR = (...cps) => escapeLayer(H(...cps)).sequences
+  .filter((q) => q.kind === 'csi' && q.final === 'm' && !q.ignored).map((q) => q.params);
+const BIDI = [[0x61c, 0x61c], [0x202a, 0x202e], [0x2066, 0x2069]];   // the bundle's substitute ranges
+function cellsOf(s, { narrow = true, substitute = [] } = {}) {
+  const out = [];
+  forEachCell(escapeLayer(s).text, narrow, substitute, (g, adv, tab) => out.push([CPS(g), tab ? 'tab' : adv]));
+  return out;
+}
+
+test('ESCAPE-LAYER: after ESC a final ends it, intermediates take any ONE character, a second ESC restarts', () => {
+  // native `a ESC 7 b` -> [a] [b]; `a ESC ( B b` -> [a] [b]
+  assert.strictEqual(T(0x61, ESC, 0x37, 0x62), 'ab');
+  assert.strictEqual(T(0x61, ESC, 0x28, 0x42, 0x62), 'ab');
+  // native `a ESC SP TAB b c` -> [a] [b] [c] (no tab cell); `a ESC SP U+0301 b c` -> [a] [b] [c]
+  assert.strictEqual(T(0x61, ESC, 0x20, 0x09, 0x62, 0x63), 'abc');
+  assert.strictEqual(T(0x61, ESC, 0x20, 0x301, 0x62, 0x63), 'abc');
+  // ONE intermediate: native `a ESC SP SP b c` -> [a] [b] [c], the second SP ended it
+  assert.strictEqual(T(0x61, ESC, 0x20, 0x20, 0x62, 0x63), 'abc');
+  // native `a ESC ESC b c` -> [a] [c]; `a ESC` -> [a]
+  assert.strictEqual(T(0x61, ESC, ESC, 0x62, 0x63), 'ac');
+  assert.strictEqual(T(0x61, ESC), 'a');
+});
+
+test('ESCAPE-LAYER: an ESC nothing valid follows is dropped ALONE and the next character read again', () => {
+  // native `a ESC TAB b c` -> [a] [TAB] [b] [c]; `a ESC U+0301 b` -> [a U+0301] [b]; `a ESC U+4E2D b` -> [a] [4E2D]=2 [b]
+  assert.strictEqual(T(0x61, ESC, 0x09, 0x62, 0x63), H(0x61, 0x09, 0x62, 0x63));
+  assert.strictEqual(T(0x61, ESC, 0x301, 0x62), H(0x61, 0x301, 0x62));
+  assert.strictEqual(T(0x61, ESC, 0x4e2d, 0x62), H(0x61, 0x4e2d, 0x62));
+  // native `a ESC U+009B 1 m b` -> [a] [b], b bold: the C1 CSI takes over
+  assert.strictEqual(T(0x61, ESC, 0x9b, 0x31, 0x6d, 0x62), 'ab');
+  assert.deepStrictEqual(SGR(0x61, ESC, 0x9b, 0x31, 0x6d, 0x62), ['1']);
+  // native `a ESC D83D [ 1 m b` -> [a] [5B] [31] [6D] [b]: a lone surrogate is "anything else" too
+  assert.strictEqual(T(0x61, ESC, 0xd83d, 0x5b, 0x31, 0x6d, 0x62), 'a[1mb');
+});
+
+test('ESCAPE-LAYER: CSI runs to a final byte; a byte it cannot hold makes it IGNORED, not shorter', () => {
+  // native `a ESC[1m b c` -> [a] [b] [c], b and c bold; `a U+009B 1 m b c` the same
+  assert.strictEqual(T(0x61, ESC, 0x5b, 0x31, 0x6d, 0x62, 0x63), 'abc');
+  assert.deepStrictEqual(SGR(0x61, ESC, 0x5b, 0x31, 0x6d, 0x62), ['1']);
+  assert.deepStrictEqual(SGR(0x61, 0x9b, 0x31, 0x6d, 0x62, 0x63), ['1']);
+  // native `a ESC[1 U+0301 m b` -> [a] [b], NOT bold; `a ESC[1 U+1E3F b` -> [a]: `b` was the final
+  assert.strictEqual(T(0x61, ESC, 0x5b, 0x31, 0x301, 0x6d, 0x62), 'ab');
+  assert.deepStrictEqual(SGR(0x61, ESC, 0x5b, 0x31, 0x301, 0x6d, 0x62), []);
+  assert.strictEqual(T(0x61, ESC, 0x5b, 0x31, 0x1e3f, 0x62), 'a');
+  // native `a ESC[1 TAB m b` -> [a] [b]: no tab cell, not bold
+  assert.strictEqual(T(0x61, ESC, 0x5b, 0x31, 0x09, 0x6d, 0x62), 'ab');
+  assert.deepStrictEqual(SGR(0x61, ESC, 0x5b, 0x31, 0x09, 0x6d, 0x62), []);
+  // native `a ESC[1 ESC[2m b` -> [a] [b] dim: ESC abandons the first; `a U+009B 1 U+009C b` -> [a] [b]
+  assert.deepStrictEqual(SGR(0x61, ESC, 0x5b, 0x31, ESC, 0x5b, 0x32, 0x6d, 0x62), ['2']);
+  assert.strictEqual(T(0x61, 0x9b, 0x31, 0x9c, 0x62), 'ab');
+  // native `a ESC[?1m b` -> [a] [b] not bold (the key is only ever `1` for a plain SGR)
+  assert.deepStrictEqual(SGR(0x61, ESC, 0x5b, 0x3f, 0x31, 0x6d, 0x62), ['?1']);
+  // native `a ESC[1` -> [a]: a sequence the string ends inside is removed to the end
+  assert.strictEqual(T(0x61, ESC, 0x5b, 0x31), 'a');
+});
+
+test('ESCAPE-LAYER: OSC ends at BEL, U+009C or an ESC; DCS SOS PM APC do not end at BEL', () => {
+  // native `a ESC]8;;x U+009C b` -> [a] [b]; `a U+009D 8;;x BEL b c` -> [a] [b] [c]
+  assert.strictEqual(T(0x61, ESC, 0x5d, 0x38, 0x3b, 0x3b, 0x78, 0x9c, 0x62), 'ab');
+  assert.strictEqual(T(0x61, 0x9d, 0x38, 0x3b, 0x3b, 0x78, 0x07, 0x62, 0x63), 'abc');
+  // native `a ESC]0;t ESC[1m b` -> [a] [b] bold: the ESC ends the OSC and starts a CSI
+  assert.deepStrictEqual(SGR(0x61, ESC, 0x5d, 0x30, 0x3b, 0x74, ESC, 0x5b, 0x31, 0x6d, 0x62), ['1']);
+  // native `a U+009D x ESC b c` -> [a] [c]: that ESC and `b` are the next sequence
+  assert.strictEqual(T(0x61, 0x9d, 0x78, ESC, 0x62, 0x63), 'ac');
+  // native `a ESC P q ESC \ b` -> [a] [b]; `a U+009F x BEL b` -> [a]; `a ESC P q BEL b` -> [a]
+  assert.strictEqual(T(0x61, ESC, 0x50, 0x71, ESC, 0x5c, 0x62), 'ab');
+  assert.strictEqual(T(0x61, 0x9f, 0x78, 0x07, 0x62), 'a');
+  assert.strictEqual(T(0x61, ESC, 0x50, 0x71, 0x07, 0x62), 'a');
+  // Exactly ESC and the six C1 introducers start a sequence; every other control is text
+  // (a cluster with no cell). native `a X b`: [a] [b] for each of the second list.
+  for (const c of [0x1b, 0x90, 0x98, 0x9b, 0x9d, 0x9e, 0x9f]) assert.notStrictEqual(T(0x61, c, 0x62), H(0x61, c, 0x62), c.toString(16));
+  for (const c of [0x07, 0x08, 0x0d, 0x7f, 0x85, 0x9a, 0x9c]) assert.strictEqual(T(0x61, c, 0x62), H(0x61, c, 0x62), c.toString(16));
+});
+
+test('ESCAPE-LAYER: lone surrogates leave the text too, judged on the string as given', () => {
+  // native `D83D ESC[1m DE00 b` -> [b] bold: the halves a sequence separated do not pair up
+  assert.strictEqual(T(0xd83d, ESC, 0x5b, 0x31, 0x6d, 0xde00, 0x62), 'b');
+  // native `a DC00 U+0308` -> [a U+0308]
+  assert.strictEqual(T(0x61, 0xdc00, 0x308), H(0x61, 0x308));
+});
+
+test('ESCAPE-SPANNED-CLUSTERS: a cluster runs straight across an escape sequence', () => {
+  // native `e ESC[1m U+0301` -> [e U+0301]=1; `e ESC]8;;h BEL U+0301` -> [e U+0301]=1
+  assert.deepStrictEqual(cellsOf(H(0x65, ESC, 0x5b, 0x31, 0x6d, 0x301)), [[[0x65, 0x301], 1]]);
+  assert.deepStrictEqual(cellsOf(H(0x65, ESC, 0x5d, 0x38, 0x3b, 0x3b, 0x68, 0x07, 0x301)), [[[0x65, 0x301], 1]]);
+  // native `1F600 200D ESC[1m 1F600` -> [1F600 200D 1F600]=2 and Bun.stringWidth 2 (not 4)
+  const zwj = H(0x1f600, 0x200d, ESC, 0x5b, 0x31, 0x6d, 0x1f600);
+  assert.deepStrictEqual(cellsOf(zwj), [[[0x1f600, 0x200d, 0x1f600], 2]]);
+  assert.strictEqual(textWidth(escapeLayer(zwj).text), 2);
+  // native `1F1E6 ESC[1m 1F1E7` -> one flag, [1F1E6 1F1E7]=2
+  assert.deepStrictEqual(cellsOf(H(0x1f1e6, ESC, 0x5b, 0x31, 0x6d, 0x1f1e7)), [[[0x1f1e6, 0x1f1e7], 2]]);
+  // A control is not an escape: native `e BEL U+0301` -> [e]
+  assert.deepStrictEqual(cellsOf(H(0x65, 0x07, 0x301)), [[[0x65], 1]]);
+});
+
+test('CELL-TAB and CELL-ZERO-WIDTH: a tab is a cell of its own, any other zero-width cluster is none', () => {
+  // native `a TAB b` -> [a]=1 [TAB]=0/tab [b]=1; `TAB U+0301` -> [TAB]; `a U+0085 b` -> [a] [b]
+  assert.deepStrictEqual(cellsOf(H(0x61, 0x09, 0x62)), [[[0x61], 1], [[0x09], 'tab'], [[0x62], 1]]);
+  assert.deepStrictEqual(cellsOf(H(0x09, 0x301)), [[[0x09], 'tab']]);
+  assert.deepStrictEqual(cellsOf(H(0x61, 0x85, 0x62)), [[[0x61], 1], [[0x62], 1]]);
+  // native U+0301 alone, U+200D alone -> no cells
+  assert.deepStrictEqual(cellsOf(H(0x301)), []);
+  assert.deepStrictEqual(cellsOf(H(0x200d)), []);
+});
+
+test('CELL-SATURATES: a cell advance is 8 bits and stops at 255; the width does not', () => {
+  // native: 128 x U+1100 is ONE cell of 255 while Bun.stringWidth says 256; 200 x U+1100 also 255
+  const s = H(...new Array(128).fill(0x1100));
+  assert.deepStrictEqual(cellsOf(s).map(([, w]) => w), [255]);
+  assert.strictEqual(textWidth(s), 256);
+  assert.deepStrictEqual(cellsOf(H(...new Array(200).fill(0x1100))).map(([, w]) => w), [255]);
+});
+
+test('CELL-SUBSTITUTE: a substituted code point stands alone, as U+FFFD at U+FFFD\'s own width', () => {
+  const FFFD = 0xfffd;
+  const sub = (...cps) => cellsOf(H(...cps), { substitute: BIDI });
+  // native, with the bundle's bidi ranges:
+  assert.deepStrictEqual(sub(0x61, 0x202e, 0x903), [[[0x61], 1], [[FFFD], 1], [[0x903], 1]], 'a mark after it is not joined');
+  assert.deepStrictEqual(sub(0x890, 0x202e), [[[0x890], 1], [[FFFD], 1]], 'a Prepend before it does not take it');
+  assert.deepStrictEqual(sub(0x202e, 0x301), [[[FFFD], 1]]);
+  assert.deepStrictEqual(sub(0x600, 0x202e), [[[FFFD], 1]]);
+  assert.deepStrictEqual(sub(0x61, 0x202e, 0x62, 0x301), [[[0x61], 1], [[FFFD], 1], [[0x62, 0x301], 1]]);
+  assert.deepStrictEqual(sub(0x2066, 0x78, 0x2069), [[[FFFD], 1], [[0x78], 1], [[FFFD], 1]]);
+  // native with ambiguousIsNarrow false: U+202E -> [FFFD]=2 (U+FFFD is East Asian Ambiguous)
+  assert.deepStrictEqual(cellsOf(H(0x202e), { narrow: false, substitute: BIDI }), [[[FFFD], 2]]);
+  // No ranges, no substitution: U+202E is a zero-width cluster (native `a 202E b` with [] -> [a] [b]).
+  assert.deepStrictEqual(cellsOf(H(0x61, 0x202e, 0x62)), [[[0x61], 1], [[0x62], 1]]);
+});
+
+test('BUN-STRINGWIDTH: the uncapped sum of bun-cell cluster widths over the escape layer\'s text', () => {
+  const sw = (...cps) => textWidth(escapeLayer(H(...cps)).text);
+  // native Bun.stringWidth: `a ESC[1 U+1E3F b` 1; `a ESC TAB b c` 3 (a tab is 0); `0600 202E` 0 (no substitution)
+  assert.strictEqual(sw(0x61, ESC, 0x5b, 0x31, 0x1e3f, 0x62), 1);
+  assert.strictEqual(sw(0x61, ESC, 0x09, 0x62, 0x63), 3);
+  assert.strictEqual(sw(0x600, 0x202e), 0);
+  // countAnsiEscapeCodes: the string as given (ESC is 0 wide): native `a ESC[1m b c` -> 6
+  assert.strictEqual(textWidth(H(0x61, ESC, 0x5b, 0x31, 0x6d, 0x62, 0x63)), 6);
+  assert.strictEqual(textWidth(H(0x00a1), false), 2, 'ambiguous is wide when asked');
+});
+
+test('BUN-STRINGWIDTH: stringWidth takes its arguments as native Bun.stringWidth does', () => {
+  // native: () 0, (undefined) 0, (null) 4 ("null"), (123) 3, ({}) 15, ([1, 2]) 3; a Symbol throws
+  assert.strictEqual(stringWidth(), 0);
+  assert.strictEqual(stringWidth(undefined), 0);
+  assert.strictEqual(stringWidth(null), 4);
+  assert.strictEqual(stringWidth(123), 3);
+  assert.strictEqual(stringWidth({}), 15);
+  assert.strictEqual(stringWidth([1, 2]), 3);
+  assert.throws(() => stringWidth(Symbol.iterator), TypeError);
+  // native: `a U+00A1` is 2 by default, with {} and with ambiguousIsNarrow undefined; 3 with 0
+  const amb = H(0x61, 0xa1);
+  assert.strictEqual(stringWidth(amb), 2);
+  assert.strictEqual(stringWidth(amb, {}), 2);
+  assert.strictEqual(stringWidth(amb, { ambiguousIsNarrow: undefined }), 2);
+  assert.strictEqual(stringWidth(amb, { ambiguousIsNarrow: 0 }), 3);
+  assert.strictEqual(stringWidth(amb, null), 2);
+  // native: `ESC[1m a` is 1, and 4 with countAnsiEscapeCodes: 1
+  assert.strictEqual(stringWidth(H(ESC, 0x5b, 0x31, 0x6d, 0x61)), 1);
+  assert.strictEqual(stringWidth(H(ESC, 0x5b, 0x31, 0x6d, 0x61), { countAnsiEscapeCodes: 1 }), 4);
+});
+
+test('ESCAPE-LAYER CANCEL: U+009C, CAN and SUB end any sequence they interrupt, and go with it', () => {
+  // native `a U+009B CAN b c` -> [a] [b] [c]; `a U+0090 SUB b c` -> [a] [b] [c]; `a ESC] SUB b c` -> [a] [b] [c]
+  assert.strictEqual(T(0x61, 0x9b, 0x18, 0x62, 0x63), 'abc');
+  assert.strictEqual(T(0x61, 0x90, 0x1a, 0x62, 0x63), 'abc');
+  assert.strictEqual(T(0x61, ESC, 0x5d, 0x1a, 0x62, 0x63), 'abc');
+  // After a bare ESC they are consumed with it, so a mark still joins what came before:
+  // native `a ESC CAN U+0301 b c` -> [a U+0301] [b] [c]; `a ESC U+009C U+0903` -> [a U+0903]=2
+  assert.deepStrictEqual(cellsOf(H(0x61, ESC, 0x18, 0x301, 0x62, 0x63)), [[[0x61, 0x301], 1], [[0x62], 1], [[0x63], 1]]);
+  assert.deepStrictEqual(cellsOf(H(0x61, ESC, 0x9c, 0x903)), [[[0x61, 0x903], 2]]);
+  // Outside a sequence CAN is an ordinary control and breaks: native `a CAN U+0301` -> [a]
+  assert.deepStrictEqual(cellsOf(H(0x61, 0x18, 0x301)), [[[0x61], 1]]);
 });

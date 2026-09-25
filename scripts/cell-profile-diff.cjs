@@ -16,17 +16,14 @@
 // Exit 0 when every compared pair is identical, 1 when any differs, 2 on harness failure
 // (no native, a native refusal, a UCD input not cached while offline, a bad argument).
 //
-// COMPARING LIKE WITH LIKE, measured against 2.1.278 (Bun 1.4.3) on 2026-09-24:
-// - CellSegmenter emits NO cell for a zero-width cluster, except TAB, whose cell has
-//   advance 0 and flag bit 256; ours is shaped the same way.
-// - Its cell advance is 8 bits and saturates at 255 (128 x U+1100 is 255 while
-//   Bun.stringWidth says 256); ours is clamped the same way, clusterWidth itself is not.
-// - Its cell text never holds a lone surrogate (LONE-SURROGATES-INVISIBLE); ours drops them.
-// - ESC and the C1 introducers DCS, SOS, CSI, OSC, PM, APC start an escape sequence or
-//   control string that CellSegmenter's escape layer consumes (`a ESC b c` -> [a] [c],
-//   `a U+009F b c` -> [a]) before any clustering. That layer is the CellSegmenter shim's
-//   (task 6), not the clusterer's, so a string holding one is not compared for bun-cell and
-//   is counted as `escape-layer`.
+// COMPARING LIKE WITH LIKE: ours is the text bun-shim's CellSegmenter makes, through the
+// SAME functions (libexec/unicode-text.cjs's escapeLayer and forEachCell, where each rule is
+// stated once): the escape layer (ESC and the C1 introducers' sequences taken out, so a
+// cluster can span one), no cell for a zero-width cluster except TAB (advance 0, flag bit
+// 256), the 8-bit advance saturating at 255 (128 x U+1100 is 255 while Bun.stringWidth says
+// 256), lone surrogates left out of the cell text. Both sides run with `substitute: []`.
+// (Until task 6 the escape layer was the shim's alone and strings holding ESC or a C1
+// introducer were counted as `escape-layer` and skipped; now they are compared like any.)
 const fs = require('node:fs');
 const path = require('node:path');
 const C = require('./lib/text-corpus.cjs');
@@ -35,7 +32,6 @@ const { runInNative, nativeVersion } = require('./lib/native-oracle.cjs');
 const { clodeCacheDir } = require('../libexec/clode-paths.cjs');
 const U = require('../libexec/unicode-text.cjs');
 
-const ESCAPE_LAYER = new Set([0x1b, 0x90, 0x98, 0x9b, 0x9d, 0x9e, 0x9f]);
 const CORPORA = ['gbt', 'gbt-cell', 'emoji-test', 'composed', 'probes', 'sweep'];
 const SHOW = 10;
 
@@ -84,33 +80,10 @@ const SWEEP_PROBE = String.raw`${SEGMENTER}
   return out;
 `;
 
-function dropLoneSurrogates(t) {
-  let o = '';
-  for (let i = 0; i < t.length; i++) {
-    const c = t.charCodeAt(i);
-    if (c >= 0xd800 && c <= 0xdbff && i + 1 < t.length) {
-      const d = t.charCodeAt(i + 1);
-      if (d >= 0xdc00 && d <= 0xdfff) { o += t[i] + t[i + 1]; i++; continue; }
-    }
-    if (c >= 0xd800 && c <= 0xdfff) continue;
-    o += t[i];
-  }
-  return o;
-}
-
 // Our cells for one string, shaped as CellSegmenter's (see COMPARING LIKE WITH LIKE).
 function ourCells(s, narrow) {
   const row = [];
-  let p = 0;
-  for (const e of U.graphemeBoundaries(s, 0, s.length, 'bun-cell')) {
-    const t = dropLoneSurrogates(s.slice(p, e));
-    if (t === '\t') row.push([t, 256]);
-    else {
-      const w = U.clusterWidth(s, p, e, narrow, 'bun-cell');
-      if (w > 0) row.push([t, Math.min(w, 255)]);
-    }
-    p = e;
-  }
+  U.forEachCell(U.escapeLayer(s).text, narrow, [], (g, advance, tab) => row.push([g, tab ? 256 : advance]));
   return row;
 }
 
@@ -120,22 +93,16 @@ function ourSegments(s) {
   return out;
 }
 
-function escapeLayer(s) {
-  for (let i = 0; i < s.length; i++) if (ESCAPE_LAYER.has(s.charCodeAt(i))) return true;
-  return false;
-}
-
 const hex = (s) => Array.from(s, (c) => c.codePointAt(0).toString(16).toUpperCase().padStart(4, '0')).join(' ');
 const fmtCells = (row) => row.map(([t, w]) => `[${hex(t)}]=${w & 255}${w & 256 ? '/tab' : ''}`).join(' ') || '(no cells)';
 
 function compareStrings(name, strings, native, cases) {
-  const r = { name, examined: strings.length, escapeLayer: 0, bunCell: 0, uax29: 0, gbt: null, findings: [] };
+  const r = { name, examined: strings.length, bunCell: 0, uax29: 0, gbt: null, findings: [] };
   const note = (f) => { if (r.findings.length < SHOW) r.findings.push(f); };
   strings.forEach((s, i) => {
     const [nNarrow, nWide, nIntl] = native[i];
     const oIntl = ourSegments(s);
     if (JSON.stringify(nIntl) !== JSON.stringify(oIntl)) { r.uax29++; note(`uax29 ${hex(s)}: native Intl ${nIntl.map(hex).join(' | ')} ours ${oIntl.map(hex).join(' | ')}`); }
-    if (escapeLayer(s)) { r.escapeLayer++; return; }
     for (const [narrow, n] of [[true, nNarrow], [false, nWide]]) {
       const o = ourCells(s, narrow);
       if (JSON.stringify(n) !== JSON.stringify(o)) {
@@ -158,7 +125,7 @@ function compareStrings(name, strings, native, cases) {
 function sweep(bin) {
   const T = C.CELL_SWEEP_TEMPLATES;
   const TS = T.map((t) => ({ pre: String.fromCodePoint(...t.pre), post: String.fromCodePoint(...t.post), narrow: t.narrow !== false }));
-  const r = { name: 'sweep', examined: 0, escapeLayer: 0, bunCell: 0, uax29: null, gbt: null, findings: [] };
+  const r = { name: 'sweep', examined: 0, bunCell: 0, uax29: null, gbt: null, findings: [] };
   const CHUNK = 0x10000;
   for (let lo = 0; lo < 0x110000; lo += CHUNK) {
     const hi = lo + CHUNK - 1;
@@ -173,7 +140,6 @@ function sweep(bin) {
         const s = t.pre + x + t.post;
         const h = nat[k++];
         r.examined++;
-        if (escapeLayer(s)) { r.escapeLayer++; continue; }
         const o = ourCells(s, t.narrow);
         if (sig(o) !== h) {
           r.bunCell++;
@@ -231,7 +197,6 @@ async function main(argv, env = process.env) {
     const parts = [`bun-cell=${r.bunCell}`];
     if (r.uax29 !== null) parts.push(`uax29-vs-Intl=${r.uax29}`);
     if (r.gbt) parts.push(`uax29-vs-GraphemeBreakTest ${r.gbt.lines - r.gbt.bad}/${r.gbt.lines}`);
-    if (r.escapeLayer) parts.push(`escape-layer (not compared for bun-cell)=${r.escapeLayer}`);
     process.stdout.write(`${r.name}: examined ${r.examined}, ${parts.join(' ')}\n`);
     for (const f of r.findings) process.stdout.write(`  ${f}\n`);
     if (r.bunCell || r.uax29 || (r.gbt && r.gbt.bad)) differs = true;
@@ -239,7 +204,7 @@ async function main(argv, env = process.env) {
   return differs ? 1 : 0;
 }
 
-module.exports = { ourCells, dropLoneSurrogates, escapeLayer, main };
+module.exports = { ourCells, main };
 
 if (require.main === module) {
   main(process.argv.slice(2)).then((c) => process.exit(c), (e) => { process.stderr.write(`cell-profile-diff: ${e && e.message ? e.message : e}\n`); process.exit(2); });

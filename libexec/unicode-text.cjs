@@ -1,8 +1,9 @@
 'use strict';
 // Extended grapheme clusters and cell widths, the ONE implementation behind
-// Bun.ant.CellSegmenter, Bun.stringWidth and the Intl.Segmenter polyfill. Travels
-// beside bun-shim.cjs everywhere (see test/shim-companions.test.cjs). Pure CommonJS:
-// runs under tjs and under Node alike.
+// Bun.ant.CellSegmenter, Bun.stringWidth and the Intl.Segmenter polyfill — and, at the end,
+// the escape layer and cell shaping native runs around its clusterer. Travels beside
+// bun-shim.cjs everywhere (see test/shim-companions.test.cjs). Pure CommonJS: runs under tjs
+// and under Node alike.
 //
 // TWO PROFILES of the one implementation (controller ruling R15-amended), because native
 // has two clusterers that disagree with each other:
@@ -51,17 +52,37 @@ function lookup(arr, stride, cp, dflt) {
   }
   return dflt;
 }
-const gcbOf = (cp) => lookup(D.gcb, 3, cp, OTHER);
-const isExtPict = (cp) => lookup(D.extPict, 2, cp, 0) === 1;
+// Each property below is such a search, and the hot callers (every code point of every line
+// the TUI measures or segments, many times a frame) ask about the same few thousand BMP code
+// points again and again. So a property remembers its BMP answers, filled lazily: a cache of
+// the generated table that holds nothing the table does not (astral code points are always
+// searched). Measured under tjs on 2026-09-24, 80,000 calls over four TUI-shaped lines: with
+// these caches and the plain-ASCII and single-code-point fast paths below, Bun.stringWidth
+// went from 15.8s to 2.8s (npm string-width, before phase 3: 5.8s) and CellSegmenter.segment
+// from 18.5s to 4.5s (the code-point splitter it replaced: 3.3s).
+function bmpMemo(fn) {
+  let memo = null;
+  return (cp) => {
+    if (cp > 0xffff) return fn(cp);
+    if (memo === null) memo = new Int8Array(0x10000).fill(-1);
+    let v = memo[cp];
+    if (v < 0) { v = fn(cp); memo[cp] = v; }
+    return v;
+  };
+}
+const flag = (arr) => { const f = bmpMemo((cp) => lookup(arr, 2, cp, 0)); return (cp) => f(cp) === 1; };
+
+const gcbOf = bmpMemo((cp) => lookup(D.gcb, 3, cp, OTHER));
+const isExtPict = flag(D.extPict);
 const cpLen = (cp) => (cp > 0xffff ? 2 : 1);
 // cpAt returns a value in this range only for a LONE surrogate (a pair comes back combined).
 const isSurrogate = (cp) => cp >= 0xd800 && cp <= 0xdfff;
 // Two single code points the bun-cell width rules name (a rule, not a table): the only
 // keycap and the emoji presentation selector.
 const KEYCAP = 0x20e3, VS16 = 0xfe0f;
-const isEmojiModifier = (cp) => lookup(D.emojiModifier, 2, cp, 0) === 1;
-const isEmojiModifierBase = (cp) => lookup(D.emojiModifierBase, 2, cp, 0) === 1;
-const isEmoji = (cp) => lookup(D.emoji, 2, cp, 0) === 1;
+const isEmojiModifier = flag(D.emojiModifier);
+const isEmojiModifierBase = flag(D.emojiModifierBase);
+const isEmoji = flag(D.emoji);
 
 // A named override from the generated data. Missing is a stale or hand-edited region, and a
 // silent empty list would quietly change widths, so refuse at load.
@@ -69,8 +90,8 @@ function overrideSpans(name) {
   for (const o of D.overrides) if (o.name === name) return o.spans;
   throw new Error(`UNICODE_DATA has no override ${JSON.stringify(name)}; regenerate it with scripts/gen-unicode-data.cjs`);
 }
-const NOT_WIDTH_BASE = overrideSpans('emoji-not-width-base');
-const isEmojiWidthBase = (cp) => isEmoji(cp) && lookup(NOT_WIDTH_BASE, 2, cp, 0) === 0;
+const isNotWidthBase = flag(overrideSpans('emoji-not-width-base'));
+const isEmojiWidthBase = (cp) => isEmoji(cp) && !isNotWidthBase(cp);
 
 // The profiles: the three rule-table lookups each clusters with, and `cell`, which switches
 // on bun-cell's rule deltas. Every delta below was measured against native 2.1.278 (Bun 1.4.3)
@@ -100,17 +121,29 @@ const isEmojiWidthBase = (cp) => isEmoji(cp) && lookup(NOT_WIDTH_BASE, 2, cp, 0)
 //   offsets and cannot drop code units), so a caller that builds cell TEXT must leave lone
 //   surrogates out of it. (Native Intl.Segmenter, uax29, keeps them: `0061 | DC00 0308`.)
 // bun-cell's Grapheme_Cluster_Break: CLUSTER-DATA-16's table, with CC-CONTROLS-ONLY.
-function cellGcbOf(cp) {
+const cellGcbOf = bmpMemo((cp) => {
   const c = lookup(D.gcbCell, 3, cp, OTHER);
   if ((c === CR || c === LF || c === CONTROL) && !lookup(D.cc, 2, cp, 0)) return OTHER;
   return c;
-}
+});
 
 const PROFILES = {
-  uax29: { gcbOf, incbOf: (cp) => lookup(D.incb, 3, cp, 0), extPictOf: isExtPict, cell: false },
-  'bun-cell': { gcbOf: cellGcbOf, incbOf: (cp) => lookup(D.incbCell, 3, cp, 0),
-    extPictOf: (cp) => lookup(D.extPictCell, 2, cp, 0) === 1, cell: true },
+  uax29: { gcbOf, incbOf: bmpMemo((cp) => lookup(D.incb, 3, cp, 0)), extPictOf: isExtPict, cell: false },
+  'bun-cell': { gcbOf: cellGcbOf, incbOf: bmpMemo((cp) => lookup(D.incbCell, 3, cp, 0)),
+    extPictOf: flag(D.extPictCell), cell: true },
 };
+
+// Printable ASCII is the bulk of what the TUI measures, and under every profile's tables it
+// is plain Other: GCB Other, no InCB, not Extended_Pictographic, not an Emoji_Modifier. So
+// between two of its code points only GB9b (a Prepend before) can join, and nothing it
+// leaves behind feeds a lookbehind. Each profile's `plainAscii` says so, READ FROM THE TABLES
+// at load: it is false, and graphemeBoundaries' fast path off, the day a table says otherwise.
+for (const p of Object.values(PROFILES)) {
+  p.plainAscii = true;
+  for (let cp = 0x20; cp <= 0x7e; cp++) {
+    if (p.gcbOf(cp) !== OTHER || p.incbOf(cp) !== 0 || p.extPictOf(cp) || isEmojiModifier(cp)) p.plainAscii = false;
+  }
+}
 
 function profileOf(name) {
   if (!Object.prototype.hasOwnProperty.call(PROFILES, name)) {
@@ -121,10 +154,11 @@ function profileOf(name) {
 
 // Native's advance for ONE code point. The table records "no cell" as 0 too, so a caller
 // that must tell the two apart (TAB, which native gives a cell) decides that itself.
+const widthOf = bmpMemo((cp) => lookup(D.width, 3, cp, 1));
+const isAmbiguous = flag(D.ambiguous);
 function codePointWidth(cp, ambiguousIsNarrow = true) {
-  const w = lookup(D.width, 3, cp, 1);
-  if (!ambiguousIsNarrow && lookup(D.ambiguous, 2, cp, 0)) return 2;
-  return w;
+  if (!ambiguousIsNarrow && isAmbiguous(cp)) return 2;
+  return widthOf(cp);
 }
 
 // The code point at code-unit offset i, reading no further than `end`: a pair that `end`
@@ -146,7 +180,7 @@ function cpAt(str, i, end) {
 // GB9c (Unicode 15.1+), GB999 otherwise, as `profile` has them. start is sot and end is
 // eot (GB1/GB2) whatever surrounds them, so a caller can cluster a slice without copying it.
 function graphemeBoundaries(str, start = 0, end = str.length, profile = 'uax29') {
-  const { gcbOf: gcbAt, incbOf: incbAt, extPictOf: extPictAt, cell } = profileOf(profile);
+  const { gcbOf: gcbAt, incbOf: incbAt, extPictOf: extPictAt, cell, plainAscii } = profileOf(profile);
   const out = [];
   if (start >= end) return out;
   let i = start;
@@ -168,6 +202,12 @@ function graphemeBoundaries(str, start = 0, end = str.length, profile = 'uax29')
   let conj = incbAt(prevCp) === INCB_CONSONANT ? 1 : 0; // 1 = after consonant, 2 = linker seen
   while (i < end) {
     const cp = cpAt(str, i, end);
+    if (plainAscii && cp >= 0x20 && cp <= 0x7e) {                // plain Other (plainAscii, above)
+      if (prev !== PREPEND) out.push(i);                                            // GB999 (GB9b)
+      prev = OTHER; prevCp = cp; riRun = 0; emoji = 0; conj = 0;
+      i++;
+      continue;
+    }
     if (cell && isSurrogate(cp)) { i++; continue; }              // LONE-SURROGATES-INVISIBLE
     const cur = gcbAt(cp);
     const ic = incbAt(cp);
@@ -242,7 +282,7 @@ function clusterWidth(str, start, end, ambiguousIsNarrow = true, profile = 'uax2
 // the cell encoding's, for the CellSegmenter shim to apply, not this width's.)
 // WIDTH-SUM (rule): a cluster of two or more code points is the plain SUM of its code
 //   points' widths: `0915 094D 0937 094D 092E` is 3, `1100 1100` is 4, `0600 0061` is 1.
-//   Unless one of the rules below makes it exactly 2:
+//   Unless one of the rules below makes it exactly 2, or WIDTH-VS16 widens its base:
 // WIDTH-RI (rule): a Regional Indicator in a cluster of two or more code points: `06DD 1F1E6`,
 //   `1F1E6 0308`, `1F1E6 200D` are 2 (an RI alone is 1, from the table).
 // WIDTH-KEYCAP (rule): U+20E3 COMBINING ENCLOSING KEYCAP anywhere in it: `0023 20E3`,
@@ -254,13 +294,20 @@ function clusterWidth(str, start, end, ambiguousIsNarrow = true, profile = 'uax2
 //   `2122 200D` (sum 1) are 2, while `00A9 200D 1F600` stays 3 and `00A9 200D` 1. The 7
 //   Emoji new in 17.0 are bases too, so this is the width version's Emoji, not 16.0's.
 // WIDTH-VS16 (rule): U+FE0F in a cluster whose base is Emoji AND Extended_Pictographic (both
-//   at the width version): `2764 FE0F` and `00A9 FE0F` are 2; `0061 FE0F` and the keycap
-//   base `0023 FE0F` stay 1. The sweep `X FE0F` widens exactly those 201 narrow bases.
+//   at the width version) makes that BASE count 2 in the sum: `2764 FE0F` and `00A9 FE0F`
+//   are 2; `0061 FE0F` and the keycap base `0023 FE0F` stay 1. The sweep `X FE0F` widens
+//   exactly those 201 narrow bases. Unlike the rules above it is not "exactly 2": the rest
+//   of the cluster still counts, so `2764 0903 FE0F` and `1F600 0903 FE0F` are 3 and
+//   `2764 0903 0903 FE0F` 4 (found by fuzzing escape-heavy text against native, task 6;
+//   the sweep template `X 0903 FE0F` now holds it for every X).
 // WIDTH-BASE-IS-FIRST-VISIBLE (rule): the cluster's base, for the two rules above, is its
 //   first code point of NONZERO width, so a zero-width Prepend is passed over and a 1-wide
 //   one is not: `0600 2764 200D 1F600` is 2, `0890 2764 200D 1F600` is 4 (the sum).
 function cellClusterWidth(str, start, end, ambiguousIsNarrow) {
-  let n = 0, sum = 0, base = -1, ri = false, keycap = false, joiner = false, vs16 = false;
+  // One code point (most clusters): its own width, as the rules below reach for n < 2.
+  const first = cpAt(str, start, end);
+  if (start + cpLen(first) >= end) return isSurrogate(first) ? 0 : codePointWidth(first, ambiguousIsNarrow);
+  let n = 0, sum = 0, base = -1, baseWidth = 0, ri = false, keycap = false, joiner = false, vs16 = false;
   for (let i = start; i < end;) {
     const cp = cpAt(str, i, end);
     i += cpLen(cp);
@@ -268,7 +315,7 @@ function cellClusterWidth(str, start, end, ambiguousIsNarrow) {
     n++;
     const w = codePointWidth(cp, ambiguousIsNarrow);
     sum += w;
-    if (base < 0 && w > 0) base = cp;                                     // WIDTH-BASE-IS-FIRST-VISIBLE
+    if (base < 0 && w > 0) { base = cp; baseWidth = w; }                  // WIDTH-BASE-IS-FIRST-VISIBLE
     const g = cellGcbOf(cp);
     if (g === RI) ri = true;
     else if (g === ZWJ || isEmojiModifier(cp)) joiner = true;
@@ -279,8 +326,207 @@ function cellClusterWidth(str, start, end, ambiguousIsNarrow) {
   if (ri) return 2;                                                       // WIDTH-RI
   if (keycap) return 2;                                                   // WIDTH-KEYCAP
   if (joiner && isEmojiWidthBase(base)) return 2;                         // WIDTH-EMOJI-BASE
-  if (vs16 && isEmoji(base) && isExtPict(base)) return 2;                 // WIDTH-VS16
+  if (vs16 && isEmoji(base) && isExtPict(base)) return sum - baseWidth + 2;   // WIDTH-VS16
   return sum;                                                             // WIDTH-SUM
 }
 
-module.exports = { graphemeBoundaries, clusterWidth, codePointWidth, UNICODE_DATA };
+// ---- The layers native runs AROUND the bun-cell clusterer ------------------------------
+// Bun.ant.CellSegmenter and Bun.stringWidth do not hand their input straight to the
+// clusterer: an ESCAPE LAYER takes the terminal sequences out first, and CellSegmenter then
+// shapes each cluster into a CELL. Both halves are stated here, once, for the shim
+// (libexec/bun-shim.cjs) and for the instrument that re-proves them
+// (scripts/cell-profile-diff.cjs). Measured against native 2.1.278 (Bun 1.4.3) on
+// 2026-09-24; each rule is pinned by a same-named test in test/unicode-text.test.cjs, and
+// test/fidelity/text-differential.test.cjs walks every parser state against native
+// (scripts/lib/text-corpus.cjs, corpusEscapes).
+//
+// ESCAPE-LAYER (rule): ESC and the six C1 introducers U+009B CSI, U+009D OSC, U+0090 DCS,
+//   U+0098 SOS, U+009E PM and U+009F APC start a sequence, which is taken out of the text.
+//   ESC      then `[` is a CSI, `]` an OSC, `P` `X` `^` `_` a DCS/SOS/PM/APC string; a byte
+//            0x30-0x7E, or a CANCEL, ends it (`a ESC 7 b` is `a b`); ONE byte 0x20-0x2F is an
+//            intermediate, and whatever single character follows it ends it (`a ESC SP SP
+//            b` is `a b`, `a ESC SP TAB b` has no tab); a second ESC starts over (`a ESC
+//            ESC b c` is `a c`, and so does one after the intermediate). Anything else
+//            after it (a control, DEL, another C1, a non-ASCII or lone surrogate code unit)
+//            drops the ESC ALONE and is read again: `a ESC TAB` keeps its tab, `a ESC
+//            U+0301` is the one cell `a U+0301`, `a ESC U+009B 1 m b` is a CSI.
+//   CSI      parameter bytes 0x30-0x3F and intermediates 0x20-0x2F up to a final 0x40-0x7E.
+//            Any other character makes it IGNORED: still consumed up to a final, never
+//            applied (`a ESC[1 U+0301 m b` is `a b` unstyled; `a ESC[1 U+1E3F b` is `a`,
+//            because `b` was the final). An ESC abandons it and starts another
+//            (`ESC[1 ESC[2m` is dim).
+//   OSC      its body runs to BEL or U+009C; an ESC ends it and is read again, so `ESC \`
+//            is the ST and `ESC]0;t ESC[1m b` is bold.
+//   DCS SOS PM APC   as OSC, except that BEL does not end them (`a U+009F x BEL b` is `a`).
+//   CANCEL   U+009C, CAN (0x18) and SUB (0x1A) inside any sequence end it and go with it
+//            (`a U+009B CAN b c` is `a b c`; `a ESC CAN U+0301` is the one cell `a U+0301`).
+//            Outside one they are ordinary controls.
+//   A sequence the string ends inside is taken out to the end.
+// ESCAPE-SPANNED-CLUSTERS (rule): the clusterer sees the text with the sequences taken out,
+//   so a cluster runs straight across one: `e ESC[1m U+0301` is the one cell `e U+0301`,
+//   `1F600 200D ESC[1m 1F600` one 2-wide cell (Bun.stringWidth 2, not 4). A control is not
+//   a sequence and still breaks (`e BEL U+0301` is `e`). Which style a cell gets is the
+//   shim's: the one in force where its cluster starts.
+// Lone surrogates are left out of the text as well (LONE-SURROGATES-INVISIBLE), judged on
+//   the string AS GIVEN, so taking a sequence out can never pair up two halves it separated:
+//   `D83D ESC[1m DE00 b` is the one cell `b`.
+const ESC = 0x1b, BEL = 0x07, ST = 0x9c, C1_CSI = 0x9b, C1_OSC = 0x9d;
+const isCancel = (c) => c === ST || c === 0x18 || c === 0x1a;                      // ST CAN SUB
+const isC1String = (c) => c === 0x90 || c === 0x98 || c === 0x9e || c === 0x9f;   // DCS SOS PM APC
+const startsSequence = (c) => c === ESC || c === C1_CSI || c === C1_OSC || isC1String(c);
+
+// A CSI from j (just past its introducer). Returns where the text resumes; a CSI that
+// reaches its final is recorded, `ignored` if it met a character it cannot hold.
+function readCsi(str, j, at, out) {
+  const start = j;
+  let ignored = false;
+  for (; j < str.length; j++) {
+    const c = str.charCodeAt(j);
+    if (c >= 0x40 && c <= 0x7e) { out.push({ at, kind: 'csi', params: str.slice(start, j), final: str[j], ignored }); return j + 1; }
+    if (c === ESC) return j;
+    if (isCancel(c)) return j + 1;
+    if (c < 0x20 || c > 0x3f) ignored = true;
+  }
+  return j;
+}
+
+// An OSC (kind 'osc') or a DCS/SOS/PM/APC string (kind 'string') from j, just past its
+// introducer. Recorded with the terminator it ended at ('' when an ESC ended it).
+function readString(str, j, kind, at, out) {
+  const start = j;
+  for (; j < str.length; j++) {
+    const c = str.charCodeAt(j);
+    if (c === ST || (c === BEL && kind === 'osc')) { out.push({ at, kind, params: str.slice(start, j), final: str[j] }); return j + 1; }
+    if (c === ESC) { out.push({ at, kind, params: str.slice(start, j), final: '' }); return j; }
+    if (isCancel(c)) return j + 1;                                    // CAN, SUB: abandoned
+  }
+  return j;
+}
+
+// One sequence from i (an ESC or a C1 introducer); returns where the text resumes.
+function readSequence(str, i, at, out) {
+  const n = str.length;
+  const c = str.charCodeAt(i);
+  if (c === C1_CSI) return readCsi(str, i + 1, at, out);
+  if (c === C1_OSC) return readString(str, i + 1, 'osc', at, out);
+  if (c !== ESC) return readString(str, i + 1, 'string', at, out);
+  for (;;) {
+    if (i + 1 >= n) return n;
+    const d = str.charCodeAt(i + 1);
+    if (d === ESC) { i++; continue; }
+    if (d === 0x5b) return readCsi(str, i + 2, at, out);
+    if (d === 0x5d) return readString(str, i + 2, 'osc', at, out);
+    if (d === 0x50 || d === 0x58 || d === 0x5e || d === 0x5f) return readString(str, i + 2, 'string', at, out);
+    if ((d >= 0x30 && d <= 0x7e) || isCancel(d)) return i + 2;
+    if (d >= 0x20 && d <= 0x2f) {
+      const j = i + 2;
+      if (j >= n) return n;
+      if (str.charCodeAt(j) === ESC) { i = j; continue; }
+      return j + cpLen(cpAt(str, j, n));
+    }
+    return i + 1;
+  }
+}
+
+// The escape layer over str: `text`, what the clusterer sees (sequences and lone surrogates
+// taken out), and `sequences`: every CSI, OSC and DCS/SOS/PM/APC string that ENDED (not one
+// abandoned or cut off by the end of the string), each { at, kind: 'csi'|'osc'|'string',
+// params, final } (a CSI also `ignored`) with `at` its offset in `text`, so a caller can tell
+// which clusters it comes before. (A two-character ESC sequence carries nothing a caller
+// uses, so it is not recorded.)
+function escapeLayer(str) {
+  const sequences = [];
+  const n = str.length;
+  let text = '';
+  let from = 0;                                  // start of the text run not yet copied
+  for (let i = 0; i < n;) {
+    const c = str.charCodeAt(i);
+    if (startsSequence(c)) {
+      text += str.slice(from, i);
+      i = readSequence(str, i, text.length, sequences);
+      from = i;
+      continue;
+    }
+    const cp = cpAt(str, i, n);
+    if (isSurrogate(cp)) { text += str.slice(from, i); from = i + 1; }   // LONE-SURROGATES-INVISIBLE
+    i += cpLen(cp);
+  }
+  return { text: from === 0 ? str : text + str.slice(from), sequences };
+}
+
+// BUN-STRINGWIDTH (rule): Bun.stringWidth is the UNCAPPED sum of the bun-cell widths of the
+//   bun-cell clusters of its text — the escape layer's text, or the string as given with
+//   countAnsiEscapeCodes (ESC is then a zero-width control like any other). It makes no
+//   cells, so none of the CELL- rules below apply: a tab is 0, nothing is substituted,
+//   128 x U+1100 is 256. (Task 4b: equal to native over 24.5M strings.)
+function textWidth(text, ambiguousIsNarrow = true) {
+  let w = 0, p = 0;
+  for (const e of graphemeBoundaries(text, 0, text.length, 'bun-cell')) { w += cellClusterWidth(text, p, e, ambiguousIsNarrow); p = e; }
+  return w;
+}
+
+// Bun.stringWidth(input, { countAnsiEscapeCodes = false, ambiguousIsNarrow = true }) itself,
+// argument handling included, as native answers it (measured 2026-09-24): no input or
+// undefined is '', anything else is converted as a template literal converts it — ToString,
+// so null is 4 wide ("null"), 123 is 3, and a Symbol throws, where String() would not;
+// countAnsiEscapeCodes counts when truthy; ambiguousIsNarrow is true unless given, and then
+// taken for its truthiness (0 is wide).
+function stringWidth(input, options) {
+  const s = input === undefined ? '' : `${input}`;
+  const o = options || {};
+  const narrow = o.ambiguousIsNarrow === undefined ? true : !!o.ambiguousIsNarrow;
+  return textWidth(o.countAnsiEscapeCodes ? s : escapeLayer(s).text, narrow);
+}
+
+// CellSegmenter's CELLS for `text` (the escape layer's text): fn(grapheme, advance, isTab,
+// at) once per cell, in order, with `at` the offset of its cluster in `text`. One cell per
+// bun-cell cluster, shaped as native shapes it:
+// CELL-TAB (rule): a TAB is a cell of its own, advance 0 and text TAB; the flag that tells
+//   the consumer to resolve it against the column is the shim's to set.
+// CELL-ZERO-WIDTH (rule): any other cluster of width 0 has NO cell: a lone mark or ZWJ, CR
+//   LF, a C0 or C1 control (`a U+0085 b` is `a b`; `TAB U+0301` is the tab alone).
+// CELL-SATURATES (rule): the advance is an 8-bit field and saturates at 255 — 128 x U+1100
+//   is one 255 cell where Bun.stringWidth says 256.
+// CELL-SUBSTITUTE (rule): a code point in one of the caller's `substitute` ranges [lo, hi]
+//   stands ALONE, breaking the text before and after it as a control does — a Prepend does
+//   not take it (`0890 202E` is `0890` `FFFD`), a mark does not join it (`a 202E 0903` is
+//   `a` `FFFD` `0903`) — and its cell is U+FFFD at U+FFFD's own width (1, or 2 when
+//   ambiguousIsNarrow is false: East Asian Ambiguous). The bundle passes the bidi
+//   controls; `[]` substitutes nothing.
+const REPLACEMENT = 0xfffd;
+
+function forEachCell(text, ambiguousIsNarrow, substitute, fn) {
+  const clusters = (s, e) => {
+    let p = s;
+    for (const b of graphemeBoundaries(text, s, e, 'bun-cell')) {
+      if (b - p === 1 && text.charCodeAt(p) === 0x09) fn('\t', 0, true, p);           // CELL-TAB
+      else {
+        const w = cellClusterWidth(text, p, b, ambiguousIsNarrow);
+        if (w > 0) fn(text.slice(p, b), w > 255 ? 255 : w, false, p);               // CELL-ZERO-WIDTH, CELL-SATURATES
+      }
+      p = b;
+    }
+  };
+  if (!substitute || substitute.length === 0) { clusters(0, text.length); return; }
+  const n = text.length;
+  let lowest = Infinity;                          // below every range: no need to look closer
+  for (const r of substitute) if (r[0] < lowest) lowest = r[0];
+  let from = 0;
+  for (let i = 0; i < n;) {
+    const u = text.charCodeAt(i);
+    if (u < lowest && !(u >= 0xd800 && u <= 0xdbff)) { i++; continue; }
+    const cp = cpAt(text, i, n);
+    const len = cpLen(cp);
+    let hit = false;
+    for (const r of substitute) if (cp >= r[0] && cp <= r[1]) { hit = true; break; }
+    if (hit) {                                                                       // CELL-SUBSTITUTE
+      clusters(from, i);
+      fn(String.fromCharCode(REPLACEMENT), codePointWidth(REPLACEMENT, ambiguousIsNarrow), false, i);
+      from = i + len;
+    }
+    i += len;
+  }
+  clusters(from, n);
+}
+
+module.exports = { graphemeBoundaries, clusterWidth, codePointWidth, escapeLayer, textWidth, stringWidth, forEachCell, UNICODE_DATA };
