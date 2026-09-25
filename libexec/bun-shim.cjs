@@ -1036,27 +1036,24 @@ if (!_yaml) YAML.__bunShimStub = true;
 //                         endColumn | damageX1<<20 | damageX2<<36
 //   every screen cell written: BOTH slots, char index and packed word.
 //
-// SCOPE, STATED SO IT IS MEASURABLE RATHER THAN SILENT. This is phases 1 and 2
-// of a plan whose phase 3 is real UAX #29 grapheme clustering plus a width
-// table, and phase 4 is OSC-8. Today:
-//   - CLUSTERING IS PER CODE POINT, not per grapheme cluster. Surrogate pairs
-//     are kept whole, but a combining mark, a ZWJ emoji sequence, a
-//     regional-indicator flag pair and a skin-tone modifier each split into
-//     several graphemes. `Intl.Segmenter` does not exist in bare tjs and the
-//     polyfill we ship (libexec/node-shim/modules/intl.cjs) is itself a code
-//     point splitter, so there is no correct segmenter anywhere in this stack
-//     to call. Phase 3 writes one; approximating it here would hide that.
-//   - EVERY non-control code point is ONE COLUMN WIDE. No width table, on
-//     purpose: a partial table is indistinguishable from a correct one until it
-//     is wrong at the worst moment, and a wrong width is not a wrong cell, it is
-//     a wrong offset for the whole rest of the line.
-//   - HYPERLINKS ARE PARSED BUT NOT INTERNED. OSC sequences are consumed (they
-//     must be, or their bytes would paint as glyphs) and `uris` therefore never
-//     grows past its reserved index 0, so runs[2j+1] is always 0 and the caller
-//     skips interning. Frames containing OSC-8 links differ from native in the
-//     link class and nowhere else.
-// test/bun-shim-cell-segmenter.test.cjs PINS each of these three as currently
-// wrong, so the day one is fixed the pin goes red and has to be re-taken.
+// SCOPE, STATED SO IT IS MEASURABLE RATHER THAN SILENT. Phases 1 and 2 built the
+// contract above; phase 3 made the TEXT native's:
+//   - CLUSTERS AND WIDTHS are native CellSegmenter's own, from the ONE
+//     implementation in unicode-text.cjs (its `bun-cell` profile, NOT the UAX #29
+//     that Intl.Segmenter follows: native's two clusterers disagree), together
+//     with the layers native runs around its clusterer, stated there once: the
+//     ESCAPE LAYER (ESC and the six C1 introducers, taken out before clustering, so
+//     a cluster can span an escape), and the CELL rules (TAB, no cell for a
+//     zero-width cluster, 255 saturation, `substitute`). Judged against native
+//     2.1.278 over every code point, every escape-parser state, emoji-test and the
+//     bundle's own literals by test/fidelity/text-differential.test.cjs.
+//   - HYPERLINKS ARE PARSED BUT NOT INTERNED (phase 4). OSC sequences are consumed
+//     (they must be, or their bytes would paint as glyphs) and `uris` therefore
+//     never grows past its reserved index 0, so runs[2j+1] is always 0 and the
+//     caller skips interning. Frames containing OSC-8 links differ from native in
+//     the link class and nowhere else.
+// test/bun-shim-cell-segmenter.test.cjs PINS the last as currently wrong, so the
+// day it is fixed the pin goes red and has to be re-taken.
 
 // Pool interning. The pools are ARRAYS because the caller indexes and .length
 // them directly; the Map beside each is ours and never escapes.
@@ -1138,8 +1135,9 @@ class _CellSegmenter {
   constructor(options) {
     const o = options || {};
     const s = o.screen || {};
-    // ambiguousIsNarrow is only ever passed `true` and is never re-read by the
-    // caller; recorded so a future width table has it to honour.
+    // ambiguousIsNarrow picks the width of East Asian Ambiguous code points (and of
+    // U+FFFD for a substituted one). The bundle only ever passes `true` and never
+    // re-reads it; the text differential judges both settings' widths.
     this.ambiguousIsNarrow = o.ambiguousIsNarrow !== false;
     this.widthMask = s.widthMask === undefined ? 3 : s.widthMask;
     this.narrow = s.narrow === undefined ? 0 : s.narrow;
@@ -1155,9 +1153,11 @@ class _CellSegmenter {
     this.emptyWord = s.emptyWord === undefined ? 0 : s.emptyWord;
     this.tabWidth = s.tabWidth === undefined ? 8 : s.tabWidth;
 
-    // `substitute` is a list of codepoint RANGES to replace with U+FFFD — the
-    // bidi controls (ALM, LRE..RLO/PDF, LRI..PDI). The module's own JS twin Ec()
+    // `substitute` is a list of codepoint RANGES shown as U+FFFD — the bidi
+    // controls (ALM, LRE..RLO/PDF, LRI..PDI). The module's own JS twin Ec()
     // replaces exactly those. px()'s singleton passes [], i.e. no substitution.
+    // A substituted code point also STANDS ALONE (no Prepend takes it, no mark
+    // joins it): CELL-SUBSTITUTE in unicode-text.cjs, measured.
     this.substitute = [];
     if (Array.isArray(o.substitute)) {
       for (const r of o.substitute) {
@@ -1224,7 +1224,6 @@ class _CellSegmenter {
     const cap = cells.length >>> 1;
     const runCap = runs.length >>> 1;
     const str = typeof text === 'string' ? text : String(text == null ? '' : text);
-    const n = str.length;
 
     let attrs = [];            // active SGR attributes, in application order
     let sgrIdx = 0;            // index into sgrKeys for `attrs`
@@ -1247,88 +1246,52 @@ class _CellSegmenter {
       count++;
     };
 
-    for (let i = 0; i < n;) {
-      const c = str.charCodeAt(i);
-
-      if (c === 0x1b) {
-        const next = i + 1 < n ? str[i + 1] : '';
-        if (next === '[') {
-          // CSI: parameter bytes 0x30-0x3f, intermediates 0x20-0x2f, final 0x40-0x7e.
-          let j = i + 2;
-          while (j < n && str.charCodeAt(j) >= 0x30 && str.charCodeAt(j) <= 0x3f) j++;
-          while (j < n && str.charCodeAt(j) >= 0x20 && str.charCodeAt(j) <= 0x2f) j++;
-          if (j < n) {
-            if (str[j] === 'm') {
-              const body = str.slice(i + 2, j);
-              // Colon sub-parameters (\x1b[4:3m) have no canonical single-code
-              // spelling the caller's SC regex would accept, so a parameter
-              // carrying one is dropped rather than mis-spelled.
-              const params = body === '' ? [] : body.split(';').map((x) => {
-                if (x === '') return 0;
-                if (!/^[0-9]+$/.test(x)) return -1;
-                return parseInt(x, 10);
-              });
-              if (params.indexOf(-1) < 0) {
-                for (const op of _csSgrOps(params)) {
-                  if (op.op === 'reset') attrs = [];
-                  else if (op.op === 'close') attrs = attrs.filter((a) => a.close !== op.close);
-                  else {
-                    const at = attrs.findIndex((a) => a.slot === op.slot);
-                    if (at < 0) attrs.push(op);
-                    else attrs[at] = op;
-                  }
-                }
-                sgrIdx = this._sgrIndexOf(attrs);
-              }
-            }
-            i = j + 1;
-          } else i = n;
-          continue;
+    // An SGR: a CSI that ENDED at `m` and met nothing it could not hold (an ignored
+    // CSI is consumed and never applied — measured). Parameters as the caller spells
+    // them, split so every key passes its SC regex.
+    const applySgr = (body) => {
+      // Colon sub-parameters (\x1b[4:3m) have no canonical single-code spelling the
+      // caller's SC regex would accept, and a private marker (\x1b[?1m) or an
+      // intermediate is not an SGR at all, so a parameter carrying one is dropped
+      // rather than mis-spelled.
+      const params = body === '' ? [] : body.split(';').map((x) => {
+        if (x === '') return 0;
+        if (!/^[0-9]+$/.test(x)) return -1;
+        return parseInt(x, 10);
+      });
+      if (params.indexOf(-1) >= 0) return;
+      for (const op of _csSgrOps(params)) {
+        if (op.op === 'reset') attrs = [];
+        else if (op.op === 'close') attrs = attrs.filter((a) => a.close !== op.close);
+        else {
+          const at = attrs.findIndex((a) => a.slot === op.slot);
+          if (at < 0) attrs.push(op);
+          else attrs[at] = op;
         }
-        if (next === ']') {
-          // OSC: terminated by BEL or ST (ESC \). Consumed, not interned — see
-          // the SCOPE note above; this is phase 4.
-          let j = i + 2;
-          while (j < n) {
-            const d = str.charCodeAt(j);
-            if (d === 0x07) { j++; break; }
-            if (d === 0x1b && j + 1 < n && str[j + 1] === '\\') { j += 2; break; }
-            j++;
-          }
-          i = j;
-          continue;
-        }
-        // Any other escape: two bytes (ESC + final). DCS/APC/PM would need their
-        // own ST scan; the painter never produces one.
-        i += next === '' ? 1 : 2;
-        continue;
       }
+      sgrIdx = this._sgrIndexOf(attrs);
+    };
 
-      if (c === 0x09) {                       // TAB
-        // Bit 8 says "advance is tabWidth - col%tabWidth", which only the
-        // consumer (width(), or our paint()) can resolve because it depends on
-        // the column. The low advance bits are unread for a tab; keep them 0.
-        emit(0, 256);
-        i++;
-        continue;
+    // THE TEXT IS unicode-text.cjs's, stated there once: its escape layer takes ESC
+    // and the C1 introducers' sequences out (OSC is consumed, not interned: phase 4),
+    // and its cells are native's bun-cell clusters with the TAB, zero-width,
+    // 255-saturation and substitute rules. What is left here is the caller's
+    // encoding. A cell's style is the one in force where its cluster STARTS — a
+    // cluster can span an escape (measured: `e ESC[1m U+0301 x` is `e U+0301`
+    // unstyled, then `x` bold) — so a sequence applies before the first cell whose
+    // cluster starts at or after it.
+    const { text: visible, sequences } = _ut.escapeLayer(str);
+    let next = 0;
+    _ut.forEachCell(visible, this.ambiguousIsNarrow, this.substitute, (g, advance, tab, at) => {
+      for (; next < sequences.length && sequences[next].at <= at; next++) {
+        const q = sequences[next];
+        if (q.kind === 'csi' && q.final === 'm' && !q.ignored) applySgr(q.params);
       }
-      if (c < 0x20 || c === 0x7f) { i++; continue; }   // other C0: no cell
-
-      // ONE CODE POINT PER CELL. Surrogate pairs stay whole; clusters do not
-      // exist yet. See the SCOPE note.
-      let cp = c;
-      let len = 1;
-      if (c >= 0xd800 && c <= 0xdbff && i + 1 < n) {
-        const lo = str.charCodeAt(i + 1);
-        if (lo >= 0xdc00 && lo <= 0xdfff) { cp = str.codePointAt(i); len = 2; }
-      }
-      let g = str.substr(i, len);
-      for (const [lo, hi] of this.substitute) {
-        if (cp >= lo && cp <= hi) { g = '�'; break; }
-      }
-      emit(_csIntern(this.graphemes, this._gIndex, g), 1);
-      i += len;
-    }
+      // TAB: bit 8 says "advance is tabWidth - col%tabWidth", which only the
+      // consumer (width(), or our paint()) can resolve because it depends on the
+      // column. The low advance bits are unread for a tab; keep them 0.
+      emit(_csIntern(this.graphemes, this._gIndex, g), tab ? 256 : advance);
+    });
 
     if (overflow) return -count;
     return count;

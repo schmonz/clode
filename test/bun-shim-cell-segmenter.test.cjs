@@ -14,9 +14,11 @@
 // baseline). This file pins the CONTRACT so a later edit cannot drift from what
 // that measurement certified.
 //
-// The last test PINS THREE THINGS AS CURRENTLY WRONG (phase 3 clustering and
-// widths, phase 4 OSC-8 interning). They are asserted as they are today so that
-// the day one is fixed this goes red and the pin gets re-taken on purpose.
+// The last test PINS ONE THING AS CURRENTLY WRONG (phase 4, OSC-8 interning). It
+// is asserted as it is today so that the day it is fixed this goes red and the pin
+// gets re-taken on purpose. Phase 3's two pins (clustering, widths) were re-taken
+// that way: the test before it now asserts native's answers. Clusters and widths
+// themselves are judged against native by test/fidelity/text-differential.test.cjs.
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -119,7 +121,7 @@ const out = {};
   const r = seg(n, 'x\u202ey\u061cz');
   out.substitute = r.cells.map(([g]) => n.graphemes[g]);
   const p = make([]);
-  const q = seg(p, '\u202e');
+  const q = seg(p, 'x\u202ey');
   out.noSubstitute = q.cells.map(([g]) => p.graphemes[g]);
 }
 
@@ -139,8 +141,8 @@ const out = {};
   const u = n.paint(screen, W, 3, 1, r.cellsBuf, r.count, undefined, charIndices, words);
   out.paint = { ...unpack(u), row1: Array.from(screen.slice(W * 2)), row0: Array.from(screen.slice(0, W * 2)) };
 
-  // A wide scratch cell, built by hand: nothing segments to width 2 until phase 3,
-  // but paint's half of the contract (wide + spacerTail) is already fixed.
+  // A wide scratch cell, built by hand, so paint's half of the contract (wide +
+  // spacerTail) is pinned apart from what segment() makes of any text.
   const wide = Int32Array.of(0, 2 | (0 << 10));
   const s2 = new Int32Array(W * 2).fill(-1);
   const u2 = n.paint(s2, W, 1, 0, wide, 1, undefined, charIndices, words);
@@ -162,14 +164,14 @@ const out = {};
     pools: [n.graphemes.length, n.sgrKeys.length, n.uris.length] };
 }
 
-// The three pins (see the header). Stated as they ARE, not as they should be.
+// Clusters and widths, as native 2.1.278 gives them (phase 3; see the header).
 { const n = make(BIDI);
   const combining = seg(n, 'e\u0301');
   const cjk = seg(n, '中');
   const skin = seg(n, '\u{1f44d}\u{1f3fd}');
   out.pins = { combiningCells: combining.count, cjkWidth: width(cjk, 0),
     skinCells: skin.count, skinWidth: width(skin, 0),
-    surrogateWhole: n.graphemes.includes('\u{1f44d}') };
+    wholeCluster: skin.cells.length === 1 && n.graphemes[skin.cells[0][0]] === '\u{1f44d}\u{1f3fd}' };
 }
 
 console.log('JSON:' + JSON.stringify(out));
@@ -267,7 +269,9 @@ test('a TAB is one scratch cell with bit 8, resolved against the column', (t) =>
 test('substitute ranges become U+FFFD, and an empty list substitutes nothing', (t) => {
   const o = results(t); if (!o) return;
   assert.deepStrictEqual(o.substitute, ['x', '�', 'y', '�', 'z']);
-  assert.deepStrictEqual(o.noSubstitute, ['\u202e']);
+  // With no ranges U+202E is itself, and zero-width, so it has no cell at all (native,
+  // 2026-09-24: `a U+202E b` with substitute [] -> [a] [b]).
+  assert.deepStrictEqual(o.noSubstitute, ['x', 'y']);
 });
 
 test('OSC sequences and C0 controls paint nothing', (t) => {
@@ -307,15 +311,20 @@ test('setCell writes one cell, reports its damage, and touches no pool', (t) => 
   assert.deepStrictEqual(o.setCell.pools, [0, 1, 1]);
 });
 
-test('PINNED AS WRONG: code-point clustering, width-1 everywhere, no OSC-8 interning', (t) => {
+test('clusters and widths match native (2026-09-24 measurements)', (t) => {
   const o = results(t); if (!o) return;
-  const retake = ' — if this changed, phase 3/4 landed: re-take the pin and update the SCOPE note '
+  // native 2.1.278: [0065 0301]=1, [4E2D]=2, [1F44D 1F3FD]=2
+  assert.strictEqual(o.pins.combiningCells, 1, '"e"+U+0301 is ONE cluster');
+  assert.strictEqual(o.pins.cjkWidth, 2, 'U+4E2D is 2 columns wide');
+  assert.strictEqual(o.pins.skinCells, 1, 'a skin-tone emoji is ONE cluster');
+  assert.strictEqual(o.pins.skinWidth, 2, 'and 2 columns wide');
+  assert.ok(o.pins.wholeCluster, 'its cell holds the whole sequence, both surrogate pairs intact');
+});
+
+test('PINNED AS WRONG: no OSC-8 interning', (t) => {
+  const o = results(t); if (!o) return;
+  const retake = ' — if this changed, phase 4 landed: re-take the pin and update the SCOPE note '
     + 'beside _CellSegmenter in libexec/bun-shim.cjs';
-  assert.strictEqual(o.pins.combiningCells, 2, `"e"+U+0301 should be ONE cluster; today it is 2${retake}`);
-  assert.strictEqual(o.pins.cjkWidth, 1, `U+4E2D should be 2 columns wide; today it is 1${retake}`);
-  assert.strictEqual(o.pins.skinCells, 2, `a skin-tone emoji should be ONE cluster; today it is 2${retake}`);
-  assert.strictEqual(o.pins.skinWidth, 2, `and 2 columns wide; today its halves sum to 2 by accident${retake}`);
-  assert.ok(o.pins.surrogateWhole, 'a surrogate pair must never be split, even today');
   assert.deepStrictEqual(o.osc.uris, [''], `OSC-8 targets should be interned; today they are not${retake}`);
   assert.ok(o.osc.linkOfRuns.every((l) => l === 0), `so every run's link is 0${retake}`);
 });
