@@ -1020,7 +1020,49 @@ jobs:
           V=$(sed -n 's/^claude-code //p' UPSTREAM_PIN)
           echo "provider pin: @anthropic-ai/claude-code@$V (deliberately behind upstream — see UPSTREAM_PIN)"
           npm i -g @anthropic-ai/claude-code@"$V" 2>&1 | tail -3
+      # THE TEXT ORACLE (CellSegmenter phase 3). libexec/unicode-text.cjs clusters, sizes and
+      # slices text exactly as ONE native Bun does, and its generated header names that
+      # native; every text gate SKIPS against any other version (ruling R11), so without
+      # this step they skipped here forever. It judges, it is never built from, so it is
+      # independent of UPSTREAM_PIN (still 2.1.251 above) and read from the header, the one
+      # place that says which native the tables came from. A header that names no version
+      # refuses (exit 2) rather than install `@undefined`.
+      - name: Install the TEXT ORACLE native (the Claude version the unicode table was generated from)
+        id: oracle
+        run: |
+          set -euo pipefail
+          OV=$(node scripts/oracle-native-version.cjs)
+          echo "text oracle: @anthropic-ai/claude-code-linux-x64@$OV (independent of UPSTREAM_PIN: it judges, it is never built from)"
+          npm i --prefix "$RUNNER_TEMP/oracle" @anthropic-ai/claude-code-linux-x64@"$OV" 2>&1 | tail -2
+          ORACLE="$RUNNER_TEMP/oracle/node_modules/@anthropic-ai/claude-code-linux-x64/claude"
+          test -x "$ORACLE" || { echo "ERROR: no native claude at $ORACLE after installing $OV" >&2; exit 1; }
+          echo "CLODE_NATIVE_ORACLE=$ORACLE" >> "$GITHUB_ENV"
+      # Every pin in scripts/unicode-inputs.json, not only the header's two versions (its
+      # `unicode` and `cell.unicode`): the freshness gate REGENERATES the table, and the
+      # generator's version choice reads every pinned version's EastAsianWidth + emoji-data;
+      # cell-profile-diff reads GraphemeBreakTest at the cell version. The text steps below
+      # run OFFLINE from this cache, so a cache that lacks anything they read shows up as a
+      # skip, which their `skipped 0` assertion turns red. A fetch that fails here (network,
+      # or bytes that no longer hash to their pin) FAILS THIS STEP by name (ruling R17).
+      - name: Warm the pinned UCD cache (online, once — the text gates run offline from it)
+        id: ucd
+        run: |
+          node -e '
+            const path = require("node:path");
+            const ucd = require("./scripts/lib/ucd.cjs");
+            const { clodeCacheDir } = require("./libexec/clode-paths.cjs");
+            const cacheDir = path.join(clodeCacheDir(process.env), "unicode");
+            (async () => {
+              for (const [ver, files] of Object.entries(ucd.pins())) {
+                for (const name of Object.keys(files)) {
+                  await ucd.fetchVerified(ver, name, { cacheDir });
+                  console.log("verified " + ver + "/" + name);
+                }
+              }
+            })().catch((e) => { console.error("UCD warm-up FAILED: " + e.message); process.exit(1); });
+          '
       - name: Install the runtime dep closure (the blobulate's ext-dep closure)
+        id: deps
         run: npm ci --prefix deps/claude
       - name: Install the PTY harness (node-pty + @xterm/headless)
         run: npm install --prefix test
@@ -1062,6 +1104,44 @@ jobs:
         env:
           CLODE_QUAUDE: ${{ runner.temp }}/quaude-notify/quaude
         run: node --test --test-concurrency=1 test/fidelity/update-notify.pty.test.cjs
+      # THE TEXT GATES against the oracle installed above: Bun.ant.CellSegmenter,
+      # Bun.stringWidth, Intl.Segmenter and Bun.sliceAnsi, ours under the tjs engine quaude
+      # ships vs native Bun, exact equality over ~1.18M strings; the freshness gate (the
+      # generated table is what the generator makes from the pinned UCD + that native); the
+      # UAX #29 conformance test; and the carve-time tripwire that no Bun.sliceAnsi call in
+      # the oracle's bundle passes an ellipsis (CLODE_PROVIDER_BIN is the oracle here, so the
+      # bundle literals and the tripwire read the bundle the tables were generated from).
+      # They run whenever their own preconditions succeeded, not only when every PTY step
+      # above did: a broken PTY gate must not mask working text gates, or the reverse.
+      # `skipped 0` is asserted because every one of these SKIPS without its oracle or its
+      # cache, and a green run whose gates skipped is the lie this job keeps catching.
+      - name: Text gates — ours vs the TEXT ORACLE native, per consumer (offline, from the warm cache)
+        if: ${{ !cancelled() && steps.oracle.outcome == 'success' && steps.ucd.outcome == 'success' && steps.deps.outcome == 'success' }}
+        env:
+          CLODE_TJS: ${{ runner.temp }}/tjs/tjs
+          CLODE_OFFLINE: '1'
+        run: |
+          set -euo pipefail
+          CLODE_PROVIDER_BIN="$CLODE_NATIVE_ORACLE" \
+            node --test --test-concurrency=1 \
+              test/native-oracle.test.cjs \
+              test/unicode-data-fresh.test.cjs \
+              test/unicode-text.test.cjs \
+              test/fidelity/text-differential.test.cjs \
+              test/bun-slice-ansi-arity.test.cjs 2>&1 | tee text-gates.out
+          grep -qE '^(ℹ|#) skipped 0$' text-gates.out \
+            || { echo "ERROR: a text gate SKIPPED (see its reason above) — it judged nothing, so this is not a pass" >&2; grep -E 'skipped' text-gates.out >&2; exit 1; }
+      # The detector the freshness gate cannot be (ruling R24): CELL_UNICODE is a measured
+      # constant, so a Bun clusterer bump moves nothing the generator reads. This re-measures
+      # bun-cell and uax29 against the oracle's own two clusterers (GraphemeBreakTest at both
+      # versions, emoji-test, probes and the 25.6M-string sweep; ~30 s). It REFUSES (exit 2)
+      # a native of another version than the header names, so it cannot pass by judging
+      # against the wrong one.
+      - name: cell-profile-diff — both clusterer profiles vs the oracle's own (offline)
+        if: ${{ !cancelled() && steps.oracle.outcome == 'success' && steps.ucd.outcome == 'success' }}
+        env:
+          CLODE_OFFLINE: '1'
+        run: node scripts/cell-profile-diff.cjs --native "$CLODE_NATIVE_ORACLE"
 
   # node-shim oracle on DARWIN — the same node-vs-tjs behavioral diff as
   # node-shim-oracle above, but on macOS against a real darwin tjs.

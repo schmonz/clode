@@ -38,3 +38,22 @@ test('a bad invocation is a harness failure (exit 2), not a difference', async (
     assert.strictEqual(await main(['--bogus']), 2);
   } finally { process.stderr.write = quiet; }
 });
+
+// A native of ANOTHER version is a different oracle (ruling R11), so the CLI refuses it
+// before comparing anything, naming both versions. It used to warn and compare, which as a
+// CI step would pass. Node stands in for the wrong native: it answers --version (v24...),
+// and exits 0 without running any preload, so only the version check can name the reason.
+test('a native of another version than the tables were generated from is refused (exit 2), naming both', async () => {
+  const quiet = process.stderr.write;
+  let err = '';
+  process.stderr.write = (s) => { err += s; return true; };
+  let code;
+  try {
+    code = await main(['--native', process.execPath, '--corpus', 'composed']);
+  } finally { process.stderr.write = quiet; }
+  assert.strictEqual(code, 2);
+  const { UNICODE_DATA } = require('../libexec/unicode-text.cjs');
+  assert.ok(err.includes(JSON.stringify(process.version)), `the refusal names the native's version: ${err}`);
+  assert.ok(err.includes(JSON.stringify(UNICODE_DATA.header.nativeClaude)), `and the table's: ${err}`);
+  assert.match(err, /different native is a different oracle/);
+});

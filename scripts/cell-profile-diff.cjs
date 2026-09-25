@@ -14,7 +14,8 @@
 //           emoji-test, composed, probes, sweep; default all six
 //
 // Exit 0 when every compared pair is identical, 1 when any differs, 2 on harness failure
-// (no native, a native refusal, a UCD input not cached while offline, a bad argument).
+// (no native, a native of another version than the tables were generated from, a native
+// refusal, a UCD input not cached while offline, a bad argument).
 //
 // COMPARING LIKE WITH LIKE: ours is the text bun-shim's CellSegmenter makes, through the
 // SAME functions (libexec/unicode-text.cjs's escapeLayer and forEachCell, where each rule is
@@ -170,11 +171,17 @@ async function main(argv, env = process.env) {
   const results = [];
   try {
     // The tables were generated from one native (ruling R11); another one is a different
-    // oracle, so say which is which up front rather than let its differences read as ours.
+    // oracle, so it is REFUSED (exit 2), not compared. Until task 8 this only warned, and
+    // as a CI step a warning is a pass: a mismatched oracle would have gone green having
+    // judged nothing it was meant to. Point --native at the version the header names.
     if (!fs.existsSync(o.native)) throw new Error(`native claude ${o.native} does not exist`);
     const v = nativeVersion(o.native);
     const from = U.UNICODE_DATA.header.nativeClaude;
-    process.stdout.write(`native ${v}; libexec/unicode-text.cjs was generated from ${from}${v === from ? '' : ' -- A DIFFERENT NATIVE: differences below may be the version, not a bug'}\n`);
+    if (v !== from) {
+      throw new Error(`native ${o.native} says ${JSON.stringify(v)}, but libexec/unicode-text.cjs was generated from `
+        + `${JSON.stringify(from)}: a different native is a different oracle, not a verdict on ours (ruling R11)`);
+    }
+    process.stdout.write(`native ${v}; libexec/unicode-text.cjs was generated from ${from}\n`);
     for (const name of corpora) {
       if (name === 'sweep') { results.push(sweep(o.native)); continue; }
       let strings; let cases = null;

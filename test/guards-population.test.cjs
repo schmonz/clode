@@ -549,6 +549,14 @@ test('the controlled set is EXACTLY the modules a guard was deliberately written
   // which upstream does NOT tolerate being absent, and the gate said nothing because the
   // accepted sentence was still true about the NAME. Uncontrolled therefore falls to 28
   // and the baseline moves with it; this is the ratchet doing the thing it is for.
+  //
+  // scripts/oracle-native-version.cjs ADDED 2026-09-25 (CellSegmenter phase 3, task 8), the
+  // carve-probe mechanism a fifth time: gate-shaped the day it was written. It derives the
+  // version CI installs as its TEXT ORACLE native from the generated table's header and
+  // REFUSES (exit 2) when it cannot, so the job fails instead of installing `@undefined`. It
+  // pushed uncontrolled to 29 against the baseline of 28 and went red at authoring time;
+  // test/build-gates/oracle-native-version-gates.test.cjs controls both refusals, which
+  // returned the count to 28. The baseline did not move.
   assert.deepStrictEqual([...controlledProductionModules().keys()].sort(), [
     'libexec/clode-build.cjs',
     'libexec/host-provision.cjs',
@@ -558,6 +566,7 @@ test('the controlled set is EXACTLY the modules a guard was deliberately written
     'scripts/build-graph.cjs',
     'scripts/build-runner.cjs',
     'scripts/carve-probe.mjs',
+    'scripts/oracle-native-version.cjs',
     'scripts/render-build-graph.cjs',
   ].sort(),
   'the set of production modules counted as CONTROLLED changed. If a successor phase wrote '
