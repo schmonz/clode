@@ -1053,7 +1053,8 @@ if (!_yaml) YAML.__bunShimStub = true;
 //     rule (the one Bun.sliceAnsi's SLICE-LINKS reads as well), and which cell takes
 //     it, what `uris` holds and when a URI is interned is CELL-LINK. Judged by the
 //     same gate on the link the caller PAINTS (each cell's run's uris entry, as
-//     runWords() reads it).
+//     runWords() reads it), and on the screen by the frame gate's link scene
+//     (test/fidelity/interactive-frame-diff.test.cjs, tui-reply-hyperlinks).
 // What is still NOT native's is named in BACKLOG.md's CellSegmenter section (phase 5:
 // the stateful surfaces; phase 6: `reordered`, and performance).
 

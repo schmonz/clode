@@ -25,7 +25,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { sandbox } = require('./e2e.cjs');
-const { captureFrame, seedClaudeProfile } = require('./e2e-pty.cjs');
+const { captureFrameAsync, seedClaudeProfile } = require('./e2e-pty.cjs');
 const { diff, describe } = require('./frame-diff.cjs');
 const { startMockAnthropic } = require('./mock-anthropic-helper.cjs');
 
@@ -46,8 +46,14 @@ function parse(argv) {
 // reason written to stderr). Shared by the CLI below and by
 // test/fidelity/interactive-frame-diff.test.cjs, so the gate measures exactly
 // what an operator measures by hand.
+//
+// Both sides get the same scene: `mockText` is what the canned mock answers a turn
+// with (default PONG), `env` is extra environment for the child, and `settings` is
+// written to its ~/.claude/settings.json. The capture is ASYNCHRONOUS: the mock lives
+// in this process, and a synchronous capture froze it for the whole run, so a typed
+// turn spun forever without the mock ever seeing a request (measured 2026-09-25).
 async function captureFrames(o) {
-  const mock = await startMockAnthropic({ text: 'PONG' });
+  const mock = await startMockAnthropic({ text: o.mockText || 'PONG' });
   const out = o.out || null;
   if (out) fs.mkdirSync(out, { recursive: true });
 
@@ -61,6 +67,7 @@ async function captureFrames(o) {
     DISABLE_ERROR_REPORTING: '1',
   };
   for (const k of ['TMPDIR', 'CLODE_BUILD_SCRATCH']) if (process.env[k]) env[k] = process.env[k];
+  Object.assign(env, o.env || {});
 
   const opts = { seconds: o.seconds, rows: o.rows, cols: o.cols, sendHex: o.sendHex, thenHex: o.thenHex || [], env };
   // A FRESH HOME PER CAPTURE, not one shared sandbox. tui-screen ends a capture
@@ -70,11 +77,15 @@ async function captureFrames(o) {
   // therefore compares the reference's fullscreen frame against the subject's
   // classic-renderer frame — measured here on 2026-09-22, and it made a
   // native-vs-native run differ in 1431 cells. Same seed, separate state.
-  const shoot = (label, bin) => {
+  const shoot = async (label, bin) => {
     const sbx = sandbox();
     try {
       seedClaudeProfile(sbx.home, { cwd: process.cwd(), apiKey: 'sk-ant-mock-0000000000000000000000' });
-      const f = captureFrame(sbx, { ...opts, cmd: [bin] });
+      if (o.settings) {
+        fs.mkdirSync(path.join(sbx.home, '.claude'), { recursive: true });
+        fs.writeFileSync(path.join(sbx.home, '.claude', 'settings.json'), JSON.stringify(o.settings));
+      }
+      const f = await captureFrameAsync(sbx, { ...opts, cmd: [bin] });
       if (out) fs.writeFileSync(path.join(out, `${label}.json`), JSON.stringify(f));
       return f;
     } catch (e) {
@@ -85,7 +96,7 @@ async function captureFrames(o) {
     }
   };
   try {
-    return { ref: shoot('ref', o.ref), sub: shoot('sub', o.sub) };
+    return { ref: await shoot('ref', o.ref), sub: await shoot('sub', o.sub) };
   } finally {
     await mock.close();
   }

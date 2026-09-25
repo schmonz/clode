@@ -3,7 +3,7 @@
 // _tui_capture / _doctor_capture. Drives a TUI command under a real pseudo-terminal by
 // spawning the existing test/tui-screen.cjs driver (node-pty + @xterm/headless) with the
 // Spec 2a constructed-clean sandbox env, and returns the rendered screen as a string.
-const { spawnSync } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const { REPO, NODE } = require('./e2e.cjs');
@@ -47,10 +47,13 @@ function seedClaudeProfile(home, opts = {}) {
   // Pre-approve an ANTHROPIC_API_KEY so the interactive TUI treats it as logged
   // in (the bundle stores the last-20 chars of the approved key — `JQ(e) =
   // e.trim().slice(-20)`; `-p` auto-approves, the TUI does not). This clears
-  // the "Not logged in" gate; note the interactive first turn additionally
-  // blocks on a startup gate that needs real network, so a live mock turn in
-  // the TUI is not reachable offline (see RECIPE G2). Opt-in for future
-  // interactive-turn harnesses that run online.
+  // the "Not logged in" gate. A live mock turn in the TUI IS reachable offline
+  // (measured 2026-09-25, native 2.1.278: HEAD /api/hello, then POST
+  // /v1/messages, and the canned answer painted) — but only when the mock can
+  // answer, i.e. NOT from the process that is blocked in a synchronous capture
+  // below: an in-process mock never runs while spawnSync waits, so the turn
+  // spins forever without a request ever being seen. Capture with
+  // captureFrameAsync when the mock lives in this process.
   if (opts.apiKey) {
     profile.customApiKeyResponses = { approved: [String(opts.apiKey).trim().slice(-20)], rejected: [] };
   }
@@ -62,7 +65,7 @@ function seedClaudeProfile(home, opts = {}) {
 // tui-screen self-terminates after opts.seconds, so no external timeout is needed.
 // opts: { seconds, cmd:[...], sendHex?, thenHex?:[...], resize?:['COLSxROWS@DELAY'], rows?, cols?, env? }. cmd[0] is
 // the absolute program to run under the PTY (e.g. a built quaude, or a native binary).
-function drive(sbx, opts) {
+function driveArgs(sbx, opts) {
   const args = [String(opts.seconds)];
   if (opts.cells) args.push('--cells');
   if (opts.sendHex) args.push('--send-hex', opts.sendHex);
@@ -73,8 +76,26 @@ function drive(sbx, opts) {
   args.push('--', ...apeCmd(opts.cmd));
   const env = { ...sbx.env, ...(opts.env || {}), TERM: 'xterm-256color' };
   for (const k of ['TMUX', 'TMUX_PANE', 'TERM_PROGRAM', 'NODE_PATH']) delete env[k];
-  const r = spawnSync(NODE, [TUI_SCREEN, ...args], { encoding: 'utf8', env, maxBuffer: 8 * 1024 * 1024 });
+  return { args: [TUI_SCREEN, ...args], env };
+}
+function drive(sbx, opts) {
+  const { args, env } = driveArgs(sbx, opts);
+  const r = spawnSync(NODE, args, { encoding: 'utf8', env, maxBuffer: 8 * 1024 * 1024 });
   return { stdout: r.stdout || '', stderr: r.stderr || '', status: r.status, signal: r.signal, error: r.error };
+}
+// The same drive, leaving this process's event loop running while the TUI does, so a
+// server in this process (the canned mock) can answer it. Resolves to drive()'s shape.
+function driveAsync(sbx, opts) {
+  const { args, env } = driveArgs(sbx, opts);
+  return new Promise((resolve) => {
+    let stdout = '', stderr = '', error;
+    const c = spawn(NODE, args, { env });
+    c.stdout.setEncoding('utf8'); c.stderr.setEncoding('utf8');
+    c.stdout.on('data', (d) => { stdout += d; });
+    c.stderr.on('data', (d) => { stderr += d; });
+    c.on('error', (e) => { error = e; });
+    c.on('close', (status, signal) => resolve({ stdout, stderr, status, signal, error }));
+  });
 }
 function capture(sbx, opts) { return drive(sbx, opts).stdout; }
 
@@ -88,7 +109,12 @@ function capture(sbx, opts) { return drive(sbx, opts).stdout; }
 // frame (Unexpected end of JSON input); output was:" followed by NOTHING,
 // because the reason was on stderr and capture() threw stderr away.
 function captureFrame(sbx, opts) {
-  const r = drive(sbx, { ...opts, cells: true });
+  return parseFrame(drive(sbx, { ...opts, cells: true }));
+}
+async function captureFrameAsync(sbx, opts) {
+  return parseFrame(await driveAsync(sbx, { ...opts, cells: true }));
+}
+function parseFrame(r) {
   const out = r.stdout;
   let frame;
   try { frame = JSON.parse(out); } catch (e) {
@@ -100,4 +126,4 @@ function captureFrame(sbx, opts) {
   return frame;
 }
 
-module.exports = { seedClaudeProfile, capture, captureFrame, apeCmd, TUI_SCREEN };
+module.exports = { seedClaudeProfile, capture, captureFrame, captureFrameAsync, apeCmd, TUI_SCREEN };

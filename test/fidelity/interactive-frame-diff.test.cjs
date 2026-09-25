@@ -24,7 +24,7 @@
 // which is exactly how quaude-from-2.1.278 painted nothing for a day while the
 // build smoke said PONG.
 //
-// TWO SCENES, two guards. `tui-initial-frame-cells` is the welcome screen as it
+// THREE SCENES, three guards. `tui-initial-frame-cells` is the welcome screen as it
 // boots. `tui-prompt-wide-glyphs` (CellSegmenter phase 3, 2026-09-25) types
 // `U+4E2D U+6587 SP U+1F44D U+1F3FD SP U+1F1FA U+1F1F8 SP e U+0301 SP U+2764 U+FE0F`
 // into the prompt, NO Enter, well after boot (typed at t=0 it races the TUI's
@@ -34,9 +34,21 @@
 // native-vs-native identical; the pre-phase-3 quaude (per-code-point clusters, all
 // width 1) differs from native on that row. The scene's reference must SHOW the
 // typed glyphs, or the guard says so instead of comparing two frames without them.
+// `tui-reply-hyperlinks` (CellSegmenter phase 4, 2026-09-25) types a turn and the canned
+// mock answers it with a markdown link and a bare URL, which the TUI paints as OSC 8
+// hyperlinks — the cells whose link a segmenter that interned none paints as plain text.
+// Upstream paints hyperlinks only where it detects support, and under this harness
+// (TERM=xterm-256color, TERM_PROGRAM removed) it detects none: measured, native then
+// paints `the docs (https://example.com/docs)` as plain text. So both sides get
+// FORCE_HYPERLINK=1, the switch upstream's own detection reads first (supports-hyperlinks),
+// and showTurnDuration off, because the line it paints after a turn carries the wall-clock
+// time ("done 10:37 AM"), which differs whenever the two captures straddle a minute. The
+// reference must PAINT both links, or the guard says so instead of comparing two frames
+// with none. Measured: native-vs-native identical; the pre-phase-4 quaude differs on the
+// reply row (link 32, sgr 32: native underlines what it links).
 //
 // WHAT IT DOES NOT COVER, deliberately named: no resize, no scroll, no damage
-// under partial repaint (phase 5 of the CellSegmenter work), no hyperlinks (phase 4).
+// under partial repaint (phase 5 of the CellSegmenter work).
 //
 // THE REFERENCE IS A RUNNABLE NATIVE CLAUDE, NOT THE BUILD PROVIDER.
 // CLODE_NATIVE_CLAUDE, else `claude` on PATH (what CI's `npm i -g` installs), and
@@ -51,7 +63,8 @@
 // Same gating as interactive-render-diff: spawns the real bundle, so darwin is
 // opt-in (CLODE_LIVE_RENDER=1, Keychain); every other platform runs it by
 // default. CI runs it in the linux-x64-pty job against the pinned provider.
-const { before } = require('node:test');
+const { before, test } = require('node:test');
+const assert = require('node:assert');
 const { spawnSync } = require('node:child_process');
 const { liveRenderSkipReason } = require('../live-render-helper.cjs');
 const { skipReason: providerSkipReason } = require('../provider-resolve.cjs');
@@ -74,6 +87,13 @@ const FLOOR = 200;
 const TYPED_CPS = [0x4e2d, 0x6587, 0x20, 0x1f44d, 0x1f3fd, 0x20, 0x1f1fa, 0x1f1f8, 0x20, 0x65, 0x301, 0x20, 0x2764, 0xfe0f];
 const TYPED = String.fromCodePoint(...TYPED_CPS);
 const TYPE_AT = 6;
+// The link scene: a turn (`hi`, then Enter a moment later, as a person types), answered by
+// the mock with one markdown link and one bare URL.
+const LINKS = ['https://example.com/docs', 'https://example.com/bare'];
+const LINK_REPLY = `See [the docs](${LINKS[0]}) and ${LINKS[1]} now.`;
+const LINK_SHOWN = `See the docs and ${LINKS[1]} now.`;
+const LINK_SCENE = { mockText: LINK_REPLY, env: { FORCE_HYPERLINK: '1' }, settings: { showTurnDuration: false },
+  thenHex: [`${Buffer.from('hi', 'utf8').toString('hex')}@${TYPE_AT}`, `0d@${TYPE_AT + 1.2}`] };
 
 function harnessMissing() {
   const path = require('node:path');
@@ -104,7 +124,7 @@ function nonBlank(frame) {
   return n;
 }
 
-let SKIP = null, FRAMES = null, TYPED_FRAMES = null, WHAT = '', TYPED_WHAT = '';
+let SKIP = null, FRAMES = null, TYPED_FRAMES = null, LINK_FRAMES = null, WHAT = '', TYPED_WHAT = '', LINK_WHAT = '';
 before(async () => {
   SKIP = liveRenderSkipReason() || harnessMissing() || providerSkipReason(process.env) || null;
   if (SKIP) return;
@@ -131,13 +151,19 @@ before(async () => {
   if (!TYPED_FRAMES.ref || !TYPED_FRAMES.sub) {
     throw new Error(`frame capture failed (${TYPED_WHAT}): ref=${!!TYPED_FRAMES.ref} sub=${!!TYPED_FRAMES.sub}; see stderr`);
   }
+  LINK_WHAT = `${WHAT}, a turn typed at ${TYPE_AT}s answered with two links, FORCE_HYPERLINK=1`;
+  LINK_FRAMES = await captureFrames({ ref, sub: built.path, seconds: SECONDS, rows: ROWS, cols: COLS, ...LINK_SCENE });
+  if (!LINK_FRAMES.ref || !LINK_FRAMES.sub) {
+    throw new Error(`frame capture failed (${LINK_WHAT}): ref=${!!LINK_FRAMES.ref} sub=${!!LINK_FRAMES.sub}; see stderr`);
+  }
 });
 
-// Both guards judge the same way: exact equality, cell for cell, and no claim about
-// hyperlinks from a capture that could not see them. `mustShow` (the typed scene) is text
-// the REFERENCE must paint on some row, or that scene compared two frames that never had
-// the glyphs it exists for — reported as a finding, never as a pass.
-function scanFrames({ ref, sub, what, mustShow }) {
+// Every guard judges the same way: exact equality, cell for cell, and no claim about
+// hyperlinks from a capture that could not see them. `mustShow` (the typed and link scenes)
+// is text the REFERENCE must paint on some row, and `mustLink` targets it must paint at
+// least one cell linked to, or that scene compared two frames that never had what it exists
+// for — reported as a finding, never as a pass.
+function scanFrames({ ref, sub, what, mustShow, mustLink }) {
   const d = diff(ref, sub, { maxDetail: 30 });
   const findings = [];
   if (mustShow) {
@@ -145,6 +171,11 @@ function scanFrames({ ref, sub, what, mustShow }) {
     for (let y = 0; y < ref.rows; y++) rows.push(rowText(ref, y));
     if (!rows.some((t) => t.includes(mustShow))) {
       findings.push(`the reference never painted the typed text ${JSON.stringify(mustShow)}, so this scene judged nothing wide`);
+    }
+  }
+  for (const uri of mustLink || []) {
+    if (!ref.cells.some((row) => row.some((c) => c && c.l === uri))) {
+      findings.push(`the reference painted no cell linked to ${uri}, so this scene judged no hyperlink`);
     }
   }
   // Refuse to claim link equality from a capture that could not see links.
@@ -211,3 +242,35 @@ guardTests(defineGuard({
     return { ref, sub, what: 'synthetic control', mustShow: String.fromCodePoint(0x4e2d) };
   },
 }));
+
+// The link scene: a turn answered with a markdown link and a bare URL (see the header). The
+// reference must show the reply and paint both links. The control is the phase-4 regression
+// itself, spelled as a frame: the cells a link covers painted with no link.
+guardTests(defineGuard({
+  name: 'tui-reply-hyperlinks',
+  floor: FLOOR,
+  read() {
+    if (SKIP) return { skip: SKIP };
+    return { ref: LINK_FRAMES.ref, sub: LINK_FRAMES.sub, what: LINK_WHAT, mustShow: LINK_SHOWN, mustLink: LINKS };
+  },
+  scan: scanFrames,
+  control() {
+    const ref = controlFrame();
+    for (let x = 0; x < 8; x++) ref.cells[3][x] = { ...ref.cells[3][x], l: LINKS[0] };
+    const sub = cloneFrame(ref);
+    for (let x = 0; x < 8; x++) sub.cells[3][x] = { ...sub.cells[3][x], l: null };
+    return { ref, sub, what: 'synthetic control', mustLink: [LINKS[0]] };
+  },
+}));
+
+// The scene's own precondition, without a capture: a reference that paints none of the links
+// the scene exists for (upstream stopped honouring FORCE_HYPERLINK, say) is a finding, never
+// two link-free frames compared equal.
+test('a link scene whose reference paints no link is a finding, not a pass', () => {
+  const ref = controlFrame();
+  const r = scanFrames({ ref, sub: cloneFrame(ref), what: 'x', mustLink: LINKS });
+  assert.deepStrictEqual(r.findings, LINKS.map((u) => `the reference painted no cell linked to ${u}, so this scene judged no hyperlink`));
+  ref.cells[0][0] = { ...ref.cells[0][0], l: LINKS[0] };
+  ref.cells[0][1] = { ...ref.cells[0][1], l: LINKS[1] };
+  assert.deepStrictEqual(scanFrames({ ref, sub: cloneFrame(ref), what: 'x', mustLink: LINKS }).findings, []);
+});
