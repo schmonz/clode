@@ -1,9 +1,13 @@
 'use strict';
-// Ours vs NATIVE Bun, per consumer, exact equality. The three text consumers the bundle
+// Ours vs NATIVE Bun, per consumer, exact equality. The four text consumers the bundle
 // calls, each against the native it stands in for:
 //   text-diff-segmenter    Bun.ant.CellSegmenter's cells (grapheme text, advance, tab bit)
 //   text-diff-stringwidth  Bun.stringWidth, both ambiguousIsNarrow settings
 //   text-diff-intl         Intl.Segmenter's grapheme segments
+//   text-diff-sliceansi    Bun.sliceAnsi, eleven cuts of each string in columns: the edges
+//                          of its first cluster, both negative forms, the whole string, and
+//                          the string inside a bold run, an OSC-8 link and before an escape
+//                          (scripts/lib/text-probe.cjs says which)
 // Ours is bun-shim + the node-shim Intl polyfill under tjs, so the shipped code is what is
 // judged; native runs the SAME probe program (scripts/lib/text-probe.cjs) inside native
 // Claude's own Bun through scripts/lib/native-oracle.cjs (BUN_OPTIONS --preload).
@@ -17,6 +21,9 @@
 //                     clusterer: every parser state x every two-token continuation, and
 //                     clusters that span an escape. Without it the differential could not
 //                     judge the layer at all.
+//   corpusSliceProbes Bun.sliceAnsi's own rules: SGR and OSC 8 variety around a cut, a
+//                     1-wide Prepend before each control, its scan horizon. Without it that
+//                     gate stayed green with several of those rules switched off.
 //   emoji-test        every sequence in the pinned emoji-test.txt
 //   bundle literals   the carved bundle's own non-ASCII snippets, when CLODE_PROVIDER_BIN
 //                     names a provider (CI's provider-min carves; it need not run)
@@ -82,19 +89,19 @@ before(async () => {
   }
   const parts = [
     ['code points', C.corpusCodePoints()], ['composed', C.corpusComposed()], ['cell probes', C.corpusCellProbes()],
-    ['escapes', C.corpusEscapes()], ['emoji-test', C.corpusEmojiTest(emoji)],
+    ['escapes', C.corpusEscapes()], ['slice probes', C.corpusSliceProbes()], ['emoji-test', C.corpusEmojiTest(emoji)],
   ];
   const lit = bundleLiterals();
   parts.push([`bundle literals (${lit.why})`, lit.strings]);
   STRINGS = [].concat(...parts.map(([, s]) => s));
   WHAT = `${v} vs ours under tjs; ${parts.map(([n, s]) => `${s.length} ${n}`).join(', ')}`;
-  const wants = { segmenter: true, stringWidth: true, intl: true };
+  const wants = { segmenter: true, stringWidth: true, intl: true, sliceAnsi: true };
   NATIVE = runNative(bin, STRINGS, wants);
   OURS = runOurs(STRINGS, wants);
 });
 
-// One guard per consumer: the three share their read/scan/control shapes, differing only in
-// which of the probe's answers they judge. Three literal calls to defineGuard, one per
+// One guard per consumer: the four share their read/scan/control shapes, differing only in
+// which of the probe's answers they judge. Four literal calls to defineGuard, one per
 // guard, because test/guards-population.cjs counts guards by their call sites.
 const judge = (key) => ({
   floor: CORPUS_FLOOR,
@@ -110,8 +117,11 @@ const judge = (key) => ({
   // One string of the floor-sized corpus differs, in the shape this consumer reports.
   control() {
     const strings = new Array(CORPUS_FLOOR).fill('a');
-    const one = key === 'segmenter' ? [['a', 1, 0]] : key === 'stringWidth' ? [1, 1] : ['a'];
-    const bad = key === 'segmenter' ? [['a', 2, 0]] : key === 'stringWidth' ? [2, 2] : ['', 'a'];
+    const SHAPES = {
+      segmenter: [[['a', 1, 0]], [['a', 2, 0]]], stringWidth: [[1, 1], [2, 2]], intl: [['a'], ['', 'a']],
+      sliceAnsi: [['a', '', '\x1b[1ma\x1b[22m'], ['a', 'a', '\x1b[1ma\x1b[22m']],
+    };
+    const [one, bad] = SHAPES[key];
     const nat = new Array(CORPUS_FLOOR).fill(one); const ours = nat.slice(); ours[97] = bad;
     return { strings, native: { [key]: nat }, ours: { [key]: ours }, what: 'synthetic control' };
   },
@@ -120,3 +130,4 @@ const judge = (key) => ({
 guardTests(defineGuard({ name: 'text-diff-segmenter', ...judge('segmenter') }));
 guardTests(defineGuard({ name: 'text-diff-stringwidth', ...judge('stringWidth') }));
 guardTests(defineGuard({ name: 'text-diff-intl', ...judge('intl') }));
+guardTests(defineGuard({ name: 'text-diff-sliceansi', ...judge('sliceAnsi') }));
