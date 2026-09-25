@@ -66,3 +66,28 @@ test('apeCmd: non-arrays and empty commands pass through untouched', () => {
   assert.strictEqual(apeCmd(undefined, 'linux'), undefined);
   assert.deepStrictEqual(apeCmd([], 'linux'), []);
 });
+
+// captureSession's two pure halves: the driver arguments a script turns into, and the
+// refusal to read anything but a whole frame sequence out of the driver's stdout.
+const { driveArgs, parseSession, TUI_SCREEN } = require('./e2e-pty.cjs');
+
+test('driveArgs: a script run passes the script file and every settle limit to the driver', (t) => {
+  const sbx = sandbox(t);
+  const { args } = driveArgs(sbx, { seconds: 0, scriptFile: '/tmp/steps.json', settleMs: 300, maxSettleMs: 5000,
+    bootSettleMs: 2000, bootMaxMs: 9000, rows: 8, cols: 40, cmd: [process.execPath, 'x.cjs'] });
+  assert.deepStrictEqual(args, [TUI_SCREEN, '0', '--script', '/tmp/steps.json', '--settle-ms', '300',
+    '--max-settle-ms', '5000', '--boot-settle-ms', '2000', '--boot-max-ms', '9000',
+    '--rows', '8', '--cols', '40', '--', process.execPath, 'x.cjs']);
+  const plain = driveArgs(sbx, { seconds: 12, cells: true, cmd: [process.execPath] }).args;
+  assert.deepStrictEqual(plain, [TUI_SCREEN, '12', '--cells', '--', process.execPath], 'a single-frame drive is unchanged');
+});
+
+test('parseSession: anything but a whole frame sequence throws, carrying the driver\'s stderr', () => {
+  const r = (stdout, extra = {}) => ({ stdout, stderr: 'tui-screen: boom', status: 2, signal: null, ...extra });
+  assert.throws(() => parseSession(r('')), /produced no frame sequence .*exit 2.*tui-screen: boom/s);
+  assert.throws(() => parseSession(r('{"format":"clode-frames-v1","fr')), /produced no frame sequence/);
+  assert.throws(() => parseSession(r('{"format":"clode-frame-v1","cells":[]}')), /unexpected frame-sequence format/);
+  assert.throws(() => parseSession(r('{"format":"clode-frames-v1"}')), /unexpected frame-sequence format/);
+  const ok = { format: 'clode-frames-v1', exit: null, frames: [{ label: 'boot', settled: true, ms: 5, frame: { format: 'clode-frame-v1' } }] };
+  assert.deepStrictEqual(parseSession(r(JSON.stringify(ok))), ok);
+});

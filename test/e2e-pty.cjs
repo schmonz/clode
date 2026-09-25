@@ -5,6 +5,7 @@
 // Spec 2a constructed-clean sandbox env, and returns the rendered screen as a string.
 const { spawn, spawnSync } = require('node:child_process');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { REPO, NODE } = require('./e2e.cjs');
 const { isApeFile, wantsTrampoline } = require('./node-shim-helper.cjs');
@@ -65,9 +66,15 @@ function seedClaudeProfile(home, opts = {}) {
 // tui-screen self-terminates after opts.seconds, so no external timeout is needed.
 // opts: { seconds, cmd:[...], sendHex?, thenHex?:[...], resize?:['COLSxROWS@DELAY'], rows?, cols?, env? }. cmd[0] is
 // the absolute program to run under the PTY (e.g. a built quaude, or a native binary).
+// A scripted session (captureSession) passes scriptFile and the settle limits instead.
 function driveArgs(sbx, opts) {
   const args = [String(opts.seconds)];
   if (opts.cells) args.push('--cells');
+  if (opts.scriptFile) args.push('--script', opts.scriptFile);
+  for (const [k, flag] of [['settleMs', '--settle-ms'], ['maxSettleMs', '--max-settle-ms'],
+    ['bootSettleMs', '--boot-settle-ms'], ['bootMaxMs', '--boot-max-ms']]) {
+    if (opts[k] != null) args.push(flag, String(opts[k]));
+  }
   if (opts.sendHex) args.push('--send-hex', opts.sendHex);
   for (const th of opts.thenHex || []) args.push('--then-hex', th);
   for (const rz of opts.resize || []) args.push('--resize', rz);
@@ -126,4 +133,37 @@ function parseFrame(r) {
   return frame;
 }
 
-module.exports = { seedClaudeProfile, capture, captureFrame, captureFrameAsync, apeCmd, TUI_SCREEN };
+// A SCRIPTED SESSION: a frame per step, each taken when the TUI's output settles (see
+// tui-screen.cjs --script). opts: { script, settleMs?, maxSettleMs?, bootSettleMs?,
+// bootMaxMs?, rows?, cols?, cmd, env? }; unset limits take tui-screen's measured defaults.
+// Resolves to { format, exit, frames: [{ label, settled, ms, frame }] }. ASYNC, like
+// captureFrameAsync and for the same reason: the canned mock that answers the TUI lives in
+// this process, and a synchronous capture would freeze it for the whole session.
+async function captureSession(sbx, opts) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tui-session-'));
+  try {
+    const scriptFile = path.join(dir, 'script.json');
+    fs.writeFileSync(scriptFile, JSON.stringify(opts.script));
+    return parseSession(await driveAsync(sbx, { ...opts, seconds: 0, scriptFile, script: undefined }));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+// The session form of parseFrame: a driver result that is not a whole frame sequence
+// throws, with the driver's stderr and exit status, rather than reading as a session.
+function parseSession(r) {
+  const out = r.stdout;
+  let s;
+  try { s = JSON.parse(out); } catch (e) {
+    const how = r.error ? `spawn error ${r.error.message}` : r.signal ? `killed by ${r.signal}` : `exit ${r.status}`;
+    throw new Error(`tui-screen --script produced no frame sequence (${e.message}; driver ${how}); `
+      + `stdout was:\n${out.slice(0, 400)}\nstderr was:\n${r.stderr.slice(0, 1200)}`);
+  }
+  if (!s || s.format !== 'clode-frames-v1' || !Array.isArray(s.frames)) {
+    throw new Error(`unexpected frame-sequence format: ${out.slice(0, 200)}`);
+  }
+  return s;
+}
+
+module.exports = { seedClaudeProfile, capture, captureFrame, captureFrameAsync, captureSession, parseSession,
+  driveArgs, apeCmd, TUI_SCREEN };

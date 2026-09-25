@@ -343,3 +343,87 @@ test('typed hex reaches the pty as exactly its bytes, UTF-8 or not', () => {
   }
   assert.strictEqual(typeof hexPayload('0d'), 'string', 'an ASCII fixture is written as the string it always was');
 });
+
+// ---- sessions: a frame per scripted step (CellSegmenter phase 5) ------------------
+// Pure, synthetic, every platform. The session gates compare two frame SEQUENCES step by
+// step, so these prove the sequence comparison can fail in each way a sequence can differ:
+// a cell in one step, a step missing, a step that ran a different script, a step that never
+// settled.
+const { diffSessions, describeSessions, nonBlank, frameShows, syntheticSession } = require('./frame-diff.cjs');
+
+test('syntheticSession: n settled, labelled frames of a painted screen, independent copies', () => {
+  const s = syntheticSession(4);
+  assert.strictEqual(s.format, 'clode-frames-v1');
+  assert.deepStrictEqual(s.frames.map((f) => [f.label, f.settled]), [['boot', true], ['step 1', true], ['step 2', true], ['step 3', true]]);
+  for (const f of s.frames) assert.ok(nonBlank(f.frame) >= 250, `a synthetic frame is painted (${nonBlank(f.frame)})`);
+  s.frames[2].frame.cells[0][0].c = 'Q';
+  assert.notStrictEqual(s.frames[1].frame.cells[0][0].c, 'Q', 'planting in one frame must not touch another');
+});
+
+test('nonBlank counts visible glyphs only; frameShows finds text on any row, spacers skipped', () => {
+  const s = syntheticSession(1);
+  const f = s.frames[0].frame;
+  const blank = cloneFrame(f);
+  for (const row of blank.cells) for (const c of row) c.c = ' ';
+  assert.strictEqual(nonBlank(blank), 0, 'written spaces are not painted content');
+  blank.cells[3][0] = { ...blank.cells[3][0], c: String.fromCodePoint(0x4e2d), w: 2 };
+  blank.cells[3][1] = { ...blank.cells[3][1], c: '', w: 0 };
+  blank.cells[3][2] = { ...blank.cells[3][2], c: 'e' + String.fromCodePoint(0x301) };
+  assert.strictEqual(nonBlank(blank), 2, 'a wide glyph is one cell of content; its spacer is none');
+  assert.strictEqual(frameShows(blank, String.fromCodePoint(0x4e2d) + 'e' + String.fromCodePoint(0x301)), true);
+  assert.strictEqual(frameShows(blank, 'nowhere'), false);
+});
+
+test('diffSessions: two identical sequences are equal, every step judged', () => {
+  const a = syntheticSession(4), b = syntheticSession(4);
+  const d = diffSessions(a, b);
+  assert.strictEqual(d.equal, true);
+  assert.strictEqual(d.firstDiff, null);
+  assert.deepStrictEqual(d.steps.map((s) => [s.label, s.d.equal]), [['boot', true], ['step 1', true], ['step 2', true], ['step 3', true]]);
+  assert.deepStrictEqual(d.unsettled, []);
+  assert.strictEqual(d.linksJudged, true);
+});
+
+test('diffSessions: one planted cell in frame 2 is the first difference, named by its step', () => {
+  const a = syntheticSession(4), b = syntheticSession(4);
+  b.frames[2].frame = corrupt(b.frames[2].frame, 'glyph', { y: 1, x: 5 });
+  const d = diffSessions(a, b);
+  assert.strictEqual(d.equal, false);
+  assert.strictEqual(d.firstDiff.label, 'step 2');
+  assert.strictEqual(d.firstDiff.d.counts.glyph, 1);
+  assert.deepStrictEqual([d.firstDiff.d.detail[0].y, d.firstDiff.d.detail[0].x], [1, 5]);
+  assert.deepStrictEqual(d.steps.map((s) => s.d.equal), [true, true, false, true], 'the frames around it still compare equal');
+  const text = describeSessions(a, b, d);
+  assert.match(text, /first difference at step "step 2" \(frame 2 of 0-3\)/);
+  assert.match(text, /\[glyph\] col 5/);
+});
+
+test('diffSessions: a missing frame is a difference, and so is a step that ran something else', () => {
+  const a = syntheticSession(4), b = syntheticSession(3);
+  const d = diffSessions(a, b);
+  assert.strictEqual(d.equal, false);
+  assert.strictEqual(d.firstDiff.label, 'step 3');
+  assert.strictEqual(d.firstDiff.missing, 'B');
+  assert.match(describeSessions(a, b, d), /step "step 3" \(frame 3 of 0-3\): B has no frame \(A has 4 frames, B has 3\)/);
+  const c = syntheticSession(4);
+  c.frames[1].label = 'typed something else';
+  const e = diffSessions(a, c);
+  assert.strictEqual(e.equal, false, 'identical screens under different step labels are two different scripts');
+  assert.strictEqual(e.firstDiff.label, 'step 1');
+  assert.match(describeSessions(a, c, e), /A ran "step 1", B ran "typed something else"/);
+});
+
+test('diffSessions: unsettled steps are listed, on either side, without deciding equality', () => {
+  const a = syntheticSession(4), b = syntheticSession(4);
+  a.frames[1].settled = false;
+  b.frames[3].settled = false;
+  const d = diffSessions(a, b);
+  assert.deepStrictEqual(d.unsettled, ['step 1', 'step 3']);
+  assert.strictEqual(d.equal, true, 'settledness is the caller\'s finding; the frames themselves are the same');
+});
+
+test('diffSessions: a frame that could not observe links makes the sequence refuse link claims', () => {
+  const a = syntheticSession(2), b = syntheticSession(2);
+  b.frames[1].frame.links = false;
+  assert.strictEqual(diffSessions(a, b).linksJudged, false);
+});

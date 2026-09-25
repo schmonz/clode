@@ -71,7 +71,7 @@ const { skipReason: providerSkipReason } = require('../provider-resolve.cjs');
 const { builtQuaude } = require('../built-binary.cjs');
 const { apeCmd } = require('../e2e-pty.cjs');
 const { captureFrames } = require('../frame-oracle.cjs');
-const { diff, describe, corrupt, cloneFrame, rowText } = require('../frame-diff.cjs');
+const { diff, describe, corrupt, cloneFrame, nonBlank, frameShows } = require('../frame-diff.cjs');
 const { defineGuard, guardTests } = require('../guard.cjs');
 const { resolveNativeClaude, nativeVersion } = require('../../scripts/lib/native-oracle.cjs');
 
@@ -118,12 +118,6 @@ function versionOf(bin) {
   return ((r.stdout || '') + (r.stderr || '')).split('\n')[0].trim();
 }
 
-function nonBlank(frame) {
-  let n = 0;
-  for (const row of frame.cells) for (const c of row) if (c && c.c !== '' && c.c !== ' ') n++;
-  return n;
-}
-
 let SKIP = null, FRAMES = null, TYPED_FRAMES = null, LINK_FRAMES = null, WHAT = '', TYPED_WHAT = '', LINK_WHAT = '';
 before(async () => {
   SKIP = liveRenderSkipReason() || harnessMissing() || providerSkipReason(process.env) || null;
@@ -166,12 +160,8 @@ before(async () => {
 function scanFrames({ ref, sub, what, mustShow, mustLink }) {
   const d = diff(ref, sub, { maxDetail: 30 });
   const findings = [];
-  if (mustShow) {
-    const rows = [];
-    for (let y = 0; y < ref.rows; y++) rows.push(rowText(ref, y));
-    if (!rows.some((t) => t.includes(mustShow))) {
-      findings.push(`the reference never painted the typed text ${JSON.stringify(mustShow)}, so this scene judged nothing wide`);
-    }
+  if (mustShow && !frameShows(ref, mustShow)) {
+    findings.push(`the reference never painted the typed text ${JSON.stringify(mustShow)}, so this scene judged nothing wide`);
   }
   for (const uri of mustLink || []) {
     if (!ref.cells.some((row) => row.some((c) => c && c.l === uri))) {

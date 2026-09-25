@@ -25,7 +25,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { sandbox } = require('./e2e.cjs');
-const { captureFrameAsync, seedClaudeProfile } = require('./e2e-pty.cjs');
+const { captureFrameAsync, captureSession, seedClaudeProfile } = require('./e2e-pty.cjs');
 const { diff, describe } = require('./frame-diff.cjs');
 const { startMockAnthropic } = require('./mock-anthropic-helper.cjs');
 
@@ -53,6 +53,26 @@ function parse(argv) {
 // in this process, and a synchronous capture froze it for the whole run, so a typed
 // turn spun forever without the mock ever seeing a request (measured 2026-09-25).
 async function captureFrames(o) {
+  const opts = { seconds: o.seconds, rows: o.rows, cols: o.cols, sendHex: o.sendHex, thenHex: o.thenHex || [] };
+  return inScene(o, (sbx, env, bin) => captureFrameAsync(sbx, { ...opts, env, cmd: [bin] }));
+}
+
+// The same two-sided capture for a SCRIPTED SESSION (tui-screen.cjs --script): a frame
+// per step, each taken when output settles. o: { ref, sub, script, settleMs, maxSettleMs,
+// bootSettleMs, bootMaxMs, rows, cols, mockText, env, settings, out }; unset limits take
+// tui-screen's measured defaults. Returns { ref, sub }, each { format, exit, frames } or
+// null. Same scene, mock and fresh-HOME rule as captureFrames, because it is inScene too.
+async function captureSessions(o) {
+  const opts = { script: o.script, settleMs: o.settleMs, maxSettleMs: o.maxSettleMs,
+    bootSettleMs: o.bootSettleMs, bootMaxMs: o.bootMaxMs, rows: o.rows, cols: o.cols };
+  return inScene(o, (sbx, env, bin) => captureSession(sbx, { ...opts, env, cmd: [bin] }));
+}
+
+// THE SCENE both captures run in, stated once: one canned mock for both sides, the same
+// environment and settings, a fresh identically seeded HOME per side, the reference first
+// and then the subject (sequential, so the two never compete for the machine).
+// capture(sbx, env, bin) takes one side's shot; a shot that throws is reported and null.
+async function inScene(o, capture) {
   const mock = await startMockAnthropic({ text: o.mockText || 'PONG' });
   const out = o.out || null;
   if (out) fs.mkdirSync(out, { recursive: true });
@@ -69,7 +89,6 @@ async function captureFrames(o) {
   for (const k of ['TMPDIR', 'CLODE_BUILD_SCRATCH']) if (process.env[k]) env[k] = process.env[k];
   Object.assign(env, o.env || {});
 
-  const opts = { seconds: o.seconds, rows: o.rows, cols: o.cols, sendHex: o.sendHex, thenHex: o.thenHex || [], env };
   // A FRESH HOME PER CAPTURE, not one shared sandbox. tui-screen ends a capture
   // with SIGKILL, and a Claude Code killed inside the fullscreen renderer leaves
   // a "didn't finish starting" marker in its profile; the NEXT process to read
@@ -85,7 +104,7 @@ async function captureFrames(o) {
         fs.mkdirSync(path.join(sbx.home, '.claude'), { recursive: true });
         fs.writeFileSync(path.join(sbx.home, '.claude', 'settings.json'), JSON.stringify(o.settings));
       }
-      const f = await captureFrameAsync(sbx, { ...opts, cmd: [bin] });
+      const f = await capture(sbx, env, bin);
       if (out) fs.writeFileSync(path.join(out, `${label}.json`), JSON.stringify(f));
       return f;
     } catch (e) {
@@ -115,7 +134,7 @@ async function main() {
   process.exit(d.equal ? 0 : 1);
 }
 
-module.exports = { captureFrames };
+module.exports = { captureFrames, captureSessions };
 
 if (require.main === module) {
   main().catch((e) => { process.stderr.write('frame-oracle: ' + ((e && e.stack) || e) + '\n'); process.exit(2); });

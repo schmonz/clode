@@ -159,7 +159,89 @@ function corrupt(frame, kind, at = {}) {
   return f;
 }
 
-module.exports = { diff, describe, assertFramesEqual, rowText, corrupt, cloneFrame, classifyCell, CLASSES };
+// ---- sessions: a frame per scripted step (CellSegmenter phase 5) ------------------
+// A session is tui-screen.cjs --script's output: { format: 'clode-frames-v1', exit,
+// frames: [{ label, settled, ms, frame }] }, frame 0 labelled 'boot'.
+
+// Visibly painted cells: not unwritten, not a written space, not a wide glyph's spacer.
+// A gate's `examined` is counted in these, so a blank screen can never clear a floor.
+function nonBlank(frame) {
+  let n = 0;
+  for (const row of frame.cells) for (const c of row) if (c && c.c !== '' && c.c !== ' ') n++;
+  return n;
+}
+
+// Whether `text` appears on some row of the frame (rowText: spacers dropped, unwritten
+// cells read as spaces). How a gate proves its reference painted what the scene exists for.
+function frameShows(frame, text) {
+  for (let y = 0; y < frame.rows; y++) if (rowText(frame, y).includes(text)) return true;
+  return false;
+}
+
+// A synthetic session for a guard's control: n settled, labelled copies of a painted
+// rows x cols frame ('boot', 'step 1', ...), each an independent deep copy so a control can
+// plant a difference in one frame only. `painted` cells per frame (default 300, so four
+// frames clear a 1000-cell floor and a control's finding is its planted cell, not the floor).
+function syntheticSession(n, { rows = 40, cols = 100, painted = 300 } = {}) {
+  const cells = [];
+  let k = 0;
+  for (let y = 0; y < rows; y++) {
+    const row = [];
+    for (let x = 0; x < cols; x++) {
+      const on = k < painted && x < 60;
+      if (on) k++;
+      row.push({ c: on ? String.fromCharCode(0x41 + (x % 26)) : '', w: 1, f: '0:-1', b: '0:-1', a: 0, l: null });
+    }
+    cells.push(row);
+  }
+  const frame = { format: 'clode-frame-v1', cols, rows, links: true, cells };
+  const frames = [];
+  for (let i = 0; i < n; i++) frames.push({ label: i === 0 ? 'boot' : `step ${i}`, settled: true, ms: 0, frame: cloneFrame(frame) });
+  return { format: 'clode-frames-v1', exit: null, frames };
+}
+
+// Compare two sessions step by step with diff(). Different frame counts, or the same
+// position carrying different step labels, are differences (the two ran different scripts,
+// or one stopped early): such a step has d:null and says which side is `missing` or that
+// the `labels` disagree. `firstDiff` is the earliest differing step, since a stale cell's
+// cause is usually the step BEFORE the frame that shows it. `unsettled` lists the labels
+// whose frame did not settle on either side; it does not decide `equal` (a gate reports it
+// as its own finding). `linksJudged` is false if any compared frame could not see links.
+function diffSessions(a, b, opts = {}) {
+  const fa = a.frames, fb = b.frames;
+  const steps = [];
+  let firstDiff = null, linksJudged = true;
+  const unsettled = [];
+  for (let i = 0; i < Math.max(fa.length, fb.length); i++) {
+    const x = fa[i], y = fb[i];
+    const label = (x || y).label;
+    let step;
+    if (!x || !y) step = { label, d: null, missing: x ? 'B' : 'A' };
+    else if (x.label !== y.label) step = { label, d: null, labels: [x.label, y.label] };
+    else {
+      step = { label, d: diff(x.frame, y.frame, opts) };
+      if (!step.d.linksJudged) linksJudged = false;
+    }
+    steps.push(step);
+    if ((x && x.settled === false) || (y && y.settled === false)) unsettled.push(label);
+    if (!firstDiff && (!step.d || !step.d.equal)) firstDiff = { ...step, index: i };
+  }
+  return { equal: firstDiff === null, steps, firstDiff, unsettled, linksJudged };
+}
+
+// The human-readable first difference of a session diff: which step, which frame of how
+// many, and then describe()'s cell detail -- or why there was no pair of frames to compare.
+function describeSessions(a, b, ds) {
+  if (ds.equal) return `sessions IDENTICAL over ${ds.steps.length} frames`;
+  const f = ds.firstDiff;
+  const where = `first difference at step "${f.label}" (frame ${f.index} of 0-${Math.max(a.frames.length, b.frames.length) - 1})`;
+  if (f.missing) return `${where}: ${f.missing} has no frame (A has ${a.frames.length} frames, B has ${b.frames.length})`;
+  if (f.labels) return `${where}: A ran "${f.labels[0]}", B ran "${f.labels[1]}" -- not the same script`;
+  return `${where}:\n${describe(a.frames[f.index].frame, b.frames[f.index].frame, f.d)}`;
+}
+
+module.exports = { diff, describe, assertFramesEqual, rowText, corrupt, cloneFrame, classifyCell, CLASSES,
+  nonBlank, frameShows, syntheticSession, diffSessions, describeSessions };
 
 // CLI: frame-diff.cjs A.json B.json — exits 0 when identical, 1 when they differ.
 if (require.main === module) {
