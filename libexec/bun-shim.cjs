@@ -1045,6 +1045,10 @@ if (!_yaml) YAML.__bunShimStub = true;
 //     zero-width cluster, 255 saturation, `substitute`). Judged against native
 //     2.1.278 over every code point, every escape-parser state, emoji-test and the
 //     bundle's own literals by test/fidelity/text-differential.test.cjs.
+//   - STYLES are native's too: which SGR opens, closes and replaces what, how each
+//     style is spelled and in what order the run's key lists them are unicode-text.cjs's
+//     SGR- and CELL-SGR rules, judged by the same gate on the style the caller PAINTS
+//     (each cell's key through its own ansiCodes()/SC filter, close codes included).
 //   - HYPERLINKS ARE PARSED BUT NOT INTERNED (phase 4). OSC sequences are consumed
 //     (they must be, or their bytes would paint as glyphs) and `uris` therefore
 //     never grows past its reserved index 0, so runs[2j+1] is always 0 and the
@@ -1059,74 +1063,6 @@ function _csIntern(pool, index, s) {
   let i = index.get(s);
   if (i === undefined) { i = pool.length; pool.push(s); index.set(s, i); }
   return i;
-}
-
-// SGR attribute table: which slot an opening code occupies, and the closing code
-// the caller compares BY STRING IDENTITY against its own fixed set (\x1b[22m
-// bold/dim, 23m italic, 24m underline, 27m inverse, 29m strikethrough, 39m
-// foreground, 49m background, 55m overline). A wrong close code is not cosmetic:
-// `sx` drives "does this run carry a background-ish attribute" and
-// withSelectionBg filters on it, so it changes selection highlighting.
-//
-// Slots are per ATTRIBUTE, not per close code, because bold and dim both close
-// with 22m and must be able to coexist. Closing removes every attribute whose
-// close code matches, which is exactly what 22m means.
-const _CS_SIMPLE = {
-  1: 'bold', 2: 'dim', 3: 'italic', 4: 'underline',
-  7: 'inverse', 8: 'hidden', 9: 'strike', 53: 'overline',
-};
-const _CS_CLOSE_OF = {
-  bold: 22, dim: 22, italic: 23, underline: 24,
-  inverse: 27, hidden: 28, strike: 29, overline: 55,
-  fg: 39, bg: 49,
-};
-// Closing codes that clear a slot, and the slot(s) they clear.
-const _CS_CLOSERS = { 22: 22, 23: 23, 24: 24, 27: 27, 28: 28, 29: 29, 39: 39, 49: 49, 55: 55 };
-
-// Parse ONE SGR sequence's parameters into a list of operations. Upstream emits
-// one attribute per escape, but a compound `\x1b[1;31m` must still be split:
-// the caller's own SC regex accepts only `\x1b[<n>m`, `\x1b[<n>;5;<i>m` and
-// `\x1b[<n>;2;<r>;<g>;<b>m`, so a non-canonical spelling is not an error, it is
-// an INVISIBLE loss of styling. Canonicalising here is what keeps that from
-// happening. Unrecognised codes are dropped, which is what SC would do anyway.
-function _csSgrOps(params) {
-  const ops = [];
-  const p = params.length === 0 ? [0] : params;
-  for (let i = 0; i < p.length; i++) {
-    const n = p[i];
-    if (n === 0) { ops.push({ op: 'reset' }); continue; }
-    if (_CS_SIMPLE[n]) {
-      const slot = _CS_SIMPLE[n];
-      ops.push({ op: 'open', slot, code: `\x1b[${n}m`, close: `\x1b[${_CS_CLOSE_OF[slot]}m` });
-      continue;
-    }
-    if (_CS_CLOSERS[n]) { ops.push({ op: 'close', close: `\x1b[${n}m` }); continue; }
-    if ((n >= 30 && n <= 37) || (n >= 90 && n <= 97)) {
-      ops.push({ op: 'open', slot: 'fg', code: `\x1b[${n}m`, close: '\x1b[39m' }); continue;
-    }
-    if ((n >= 40 && n <= 47) || (n >= 100 && n <= 107)) {
-      ops.push({ op: 'open', slot: 'bg', code: `\x1b[${n}m`, close: '\x1b[49m' }); continue;
-    }
-    if (n === 38 || n === 48) {
-      const slot = n === 38 ? 'fg' : 'bg';
-      const close = n === 38 ? '\x1b[39m' : '\x1b[49m';
-      const kind = p[i + 1];
-      if (kind === 5 && i + 2 < p.length) {
-        ops.push({ op: 'open', slot, code: `\x1b[${n};5;${p[i + 2]}m`, close }); i += 2; continue;
-      }
-      if (kind === 2 && i + 4 < p.length) {
-        ops.push({ op: 'open', slot, code: `\x1b[${n};2;${p[i + 2]};${p[i + 3]};${p[i + 4]}m`, close });
-        i += 4; continue;
-      }
-      // Malformed extended colour: consume what is there and emit nothing,
-      // rather than leaving the parameters to be read as separate attributes.
-      i = p.length; continue;
-    }
-    // Anything else (21 double-underline, 51/52 frames, 4:3 style sub-params
-    // which never reach here because they are not plain digits): dropped. SC
-    // drops them too, so tracking them could only produce a key nobody reads.
-  }
-  return ops;
 }
 
 class _CellSegmenter {
@@ -1181,21 +1117,22 @@ class _CellSegmenter {
     this._uriIndex = new Map([['', 0]]);
   }
 
-  // The style key for the currently-active attribute list: the NUL-joined open
-  // codes and the parallel NUL-joined close codes. ORDER IS OBSERVED (the
-  // caller interns the decoded list and the interned identity is
-  // order-sensitive), so this is the order the attributes were applied in, with
-  // a re-applied slot replaced in place. In place rather than moved to the end
-  // is a CHOICE, not a measurement: chalk re-opens an outer colour after every
-  // nested one, and moving it would mint a second style id for an identical
-  // appearance. The initial-frame oracle does not exercise re-application, so
-  // what native does here is still an open experiment.
-  _sgrIndexOf(attrs) {
-    if (attrs.length === 0) return 0;
-    let open = attrs[0].code, close = attrs[0].close;
-    for (let i = 1; i < attrs.length; i++) {
-      open += '\x00' + attrs[i].code;
-      close += '\x00' + attrs[i].close;
+  // The style key for the styles in force: their NUL-joined open spellings and the
+  // parallel NUL-joined close codes, in their order. What the styles are, how they are
+  // spelled and in what order they stand is CELL-SGR in unicode-text.cjs (measured
+  // against native); ORDER IS OBSERVED (the caller interns the decoded list and the
+  // interned identity is order-sensitive) and so are the close codes (compared by
+  // identity against its fixed set; a wrong one is not cosmetic: `sx` and
+  // withSelectionBg filter on 49m/27m, so it changes selection highlighting), and the
+  // caller's ansiCodes() paints only the entries its SC regex accepts, so an entry SC
+  // refuses still takes its attribute's place: native's own `ESC[4:3m` after `ESC[4m`
+  // leaves the cell NOT underlined, and so does ours.
+  _sgrIndexOf(styles) {
+    if (styles.length === 0) return 0;
+    let open = styles[0].open, close = styles[0].close;
+    for (let i = 1; i < styles.length; i++) {
+      open += '\x00' + styles[i].open;
+      close += '\x00' + styles[i].close;
     }
     let i = this._sgrIndex.get(open);
     if (i === undefined) {
@@ -1223,8 +1160,8 @@ class _CellSegmenter {
     const runCap = runs.length >>> 1;
     const str = typeof text === 'string' ? text : String(text == null ? '' : text);
 
-    let attrs = [];            // active SGR attributes, in application order
-    let sgrIdx = 0;            // index into sgrKeys for `attrs`
+    const styles = [];         // the styles in force, in order (CELL-SGR)
+    let sgrIdx = 0;            // index into sgrKeys for `styles`
     let uriIdx = 0;            // index into uris; 0 = no hyperlink (see SCOPE)
     let runIdx = -1;           // last emitted run
     let runSgr = -1, runUri = -1;
@@ -1244,32 +1181,6 @@ class _CellSegmenter {
       count++;
     };
 
-    // An SGR: a CSI that ENDED at `m` and met nothing it could not hold (an ignored
-    // CSI is consumed and never applied — measured). Parameters as the caller spells
-    // them, split so every key passes its SC regex.
-    const applySgr = (body) => {
-      // Colon sub-parameters (\x1b[4:3m) have no canonical single-code spelling the
-      // caller's SC regex would accept, and a private marker (\x1b[?1m) or an
-      // intermediate is not an SGR at all, so a parameter carrying one is dropped
-      // rather than mis-spelled.
-      const params = body === '' ? [] : body.split(';').map((x) => {
-        if (x === '') return 0;
-        if (!/^[0-9]+$/.test(x)) return -1;
-        return parseInt(x, 10);
-      });
-      if (params.indexOf(-1) >= 0) return;
-      for (const op of _csSgrOps(params)) {
-        if (op.op === 'reset') attrs = [];
-        else if (op.op === 'close') attrs = attrs.filter((a) => a.close !== op.close);
-        else {
-          const at = attrs.findIndex((a) => a.slot === op.slot);
-          if (at < 0) attrs.push(op);
-          else attrs[at] = op;
-        }
-      }
-      sgrIdx = this._sgrIndexOf(attrs);
-    };
-
     // THE TEXT IS unicode-text.cjs's, stated there once: its escape layer takes ESC
     // and the C1 introducers' sequences out (OSC is consumed, not interned: phase 4),
     // and its cells are native's bun-cell clusters with the TAB, zero-width,
@@ -1283,7 +1194,9 @@ class _CellSegmenter {
     _ut.forEachCell(visible, this.ambiguousIsNarrow, this.substitute, (g, advance, tab, at) => {
       for (; next < sequences.length && sequences[next].at <= at; next++) {
         const q = sequences[next];
-        if (q.kind === 'csi' && q.final === 'm' && !q.ignored) applySgr(q.params);
+        // An SGR: a CSI that ENDED at `m` and met nothing it could not hold (an ignored CSI
+        // is consumed and never applied: ESCAPE-LAYER). What it does is CELL-SGR's.
+        if (q.kind === 'csi' && q.final === 'm' && !q.ignored) { _ut.cellSgr(styles, q.params); sgrIdx = this._sgrIndexOf(styles); }
       }
       // TAB: bit 8 says "advance is tabWidth - col%tabWidth", which only the
       // consumer (width(), or our paint()) can resolve because it depends on the

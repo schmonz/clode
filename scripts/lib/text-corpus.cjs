@@ -173,8 +173,9 @@ function corpusEscapes() {
 // keeps and closes needs a variety of SGR and OSC 8 sequences AROUND the cut, and two of its
 // clustering rules show only after a 1-wide Prepend. Measured 2026-09-25: with only the
 // corpora above, the sliceAnsi gate stayed green with any one of SLICE-CONTROLS-JOIN,
-// SLICE-IDENTITY, the SLICE-ASCII-RUNS horizon, or the SLICE-STYLES attribute, close and
-// replay rules switched off.
+// SLICE-IDENTITY, the SLICE-ASCII-RUNS horizon, SGR-ATTRIBUTES, SGR-CLOSES or the SLICE-STYLES
+// replay switched off. The same strings judge CellSegmenter's painted style (CELL-SGR): the
+// segmenter gate differed from native on 2,010 of them until its rows carried the style.
 //   AROUND  every sequence below before `a` and again between `a` and `bc`: the probe cuts
 //           columns (1) (the first replayed), (0, 1) (the second met at the cut) and (1, 2).
 //   PREPEND a 1-wide Prepend, then each Cc (and a few other would-be controls), then `x`:

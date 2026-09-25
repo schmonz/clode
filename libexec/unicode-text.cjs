@@ -554,6 +554,141 @@ function forEachCell(text, ambiguousIsNarrow, substitute, fn) {
   clusters(from, n);
 }
 
+// ---- SGR ----------------------------------------------------------------------------------
+// What an SGR (a CSI ending at `m`) does to the styles in force. Native Bun reads SGR in two
+// places: Bun.sliceAnsi, which replays the styles open before a slice and closes them at the
+// cut, and Bun.ant.CellSegmenter, whose sgrKeys/sgrCloseKeys name the styles of each run of
+// cells. The SGR- rules are what the two share; what each does differently is its own rule
+// (SLICE-STYLES, CELL-SGR). Measured against native 2.1.278 (Bun 1.4.3) on 2026-09-25: every
+// code 0-130 on its own and after another, compound, extended, colon and over-long forms,
+// parameter values to 2^32 and beyond; each rule is pinned by a same-named test in
+// test/unicode-text.test.cjs.
+// SGR-PARAMETERS (rule): an SGR's parameters are digits, `;` and `:` alone -- any other
+//   character makes the CSI a control, not an SGR (`ESC[?0m` and `ESC[0 m` change no style) --
+//   split at `;` or `:`. An empty one is 0, leading zeros are nothing (`0031` is 31), and a
+//   value stops growing once past 99999.
+// SGR-CLOSES (rule): the close code of an opening code: 1 2 -> 22; 3 20 -> 23; 4 21 -> 24;
+//   5 6 -> 25; 7 -> 27; 8 -> 28; 9 -> 29; 30-38 90-97 -> 39; 40-48 100-107 -> 49; 51 52 -> 54;
+//   53 -> 55; 58 -> 59; 73 74 -> 75. Any other code has none: only 0 closes it, and its close is
+//   spelled `ESC[0m`. The close codes themselves (22 23 24 25 27 28 29 39 49 54 55 59 75) open
+//   nothing.
+// SGR-ATTRIBUTES (rule): one style per attribute; a new one replaces the old and goes to the
+//   end of the order (`31 1 32` is `1 32`). Codes with the same close code are one attribute
+//   (5 and 6, 73 and 74, every foreground colour, every code with no close), except that bold
+//   and dim, italic and fraktur (20), underline and double underline (21), framed (51) and
+//   encircled (52) are each an attribute of their own.
+// SGR-APPLY (rule): the parameters act in order. 0 clears every style; a close code removes
+//   every style it closes (22: bold and dim both); 38, 48 and 58 take `5;n` when one more
+//   parameter follows and `2;r;g;b` when three more do, and otherwise stand bare, what follows
+//   read as codes of their own (`38;5` is 38, then blink); any other code opens a style spelled
+//   with the code as a number (`01` is `1`).
+// SGR-WHOLE (rule): an SGR with a colon, or with more than 32 parameters, is not taken apart. It
+//   is ONE style, in the attribute of its first parameter and closed by that parameter's close
+//   code: `4:3` replaces underline and closes with 24; `0;1:2` has no close and clears nothing;
+//   `22:1` closes nothing either (a close code, as a first parameter, has no close).
+
+// SGR-PARAMETERS over [from, to): { codes, opaque } (opaque: SGR-WHOLE's colon or count), or
+// null when the CSI is not an SGR.
+function sgrParams(str, from, to) {
+  for (let i = from; i < to; i++) {
+    const c = str.charCodeAt(i);
+    if (!((c >= 0x30 && c <= 0x39) || c === 0x3b || c === 0x3a)) return null;
+  }
+  const codes = [];
+  let cur = 0, opaque = false;
+  for (let i = from; i < to; i++) {
+    const c = str.charCodeAt(i);
+    if (c >= 0x30 && c <= 0x39) { if (cur < 100000) cur = cur * 10 + (c - 0x30); continue; }
+    if (c === 0x3a) opaque = true;
+    if (codes.length >= 32) return { codes, opaque: true };
+    codes.push(cur);
+    cur = 0;
+  }
+  if (codes.length >= 32) return { codes, opaque: true };
+  codes.push(cur);
+  return { codes, opaque };
+}
+
+// SGR-CLOSES (0 for a code with no close), and SGR-ATTRIBUTES' attribute of a code.
+function sgrCloseCode(code) {
+  if (code === 1 || code === 2) return 22;
+  if (code === 3 || code === 20) return 23;
+  if (code === 4 || code === 21) return 24;
+  if (code === 5 || code === 6) return 25;
+  if (code === 7) return 27;
+  if (code === 8) return 28;
+  if (code === 9) return 29;
+  if ((code >= 30 && code <= 38) || (code >= 90 && code <= 97)) return 39;
+  if ((code >= 40 && code <= 48) || (code >= 100 && code <= 107)) return 49;
+  if (code === 51 || code === 52) return 54;
+  if (code === 53) return 55;
+  if (code === 58) return 59;
+  if (code === 73 || code === 74) return 75;
+  return 0;
+}
+const isSgrEndCode = (code) => code === 0 || code === 22 || code === 23 || code === 24 || code === 25 || code === 27
+  || code === 28 || code === 29 || code === 39 || code === 49 || code === 54 || code === 55 || code === 59 || code === 75;
+function sgrSlot(code) {
+  const close = sgrCloseCode(code);
+  return (close === 22 || close === 23 || close === 24 || close === 54) ? code : close;
+}
+const escSgr = (code) => '\x1b[' + code + 'm';
+
+// SGR-ATTRIBUTES: `st` replaces its attribute's style in `styles` (the ordered styles in force,
+// each { slot, open, close, whole }) and goes to the end.
+function replaceStyle(styles, st) {
+  for (let k = styles.length - 1; k >= 0; k--) if (styles[k].slot === st.slot) styles.splice(k, 1);
+  styles.push(st);
+}
+
+// SGR-APPLY and SGR-WHOLE: `codes` (sgrParams') applied to `styles`. `whole` is the reader's
+// spelling of the one style when the SGR is whole, else null; `intro` is what an opened code is
+// spelled with; `start(styles, st)` is how the reader puts a style in its attribute's place.
+function applySgr(styles, codes, whole, intro, start) {
+  const open = (code, spelled) => {
+    const close = sgrCloseCode(code);
+    start(styles, { slot: sgrSlot(code), open: spelled, close: close ? escSgr(close) : '\x1b[0m', whole: whole !== null });
+  };
+  if (whole !== null) { open(codes[0], whole); return; }
+  for (let i = 0; i < codes.length;) {
+    const code = codes[i];
+    if (code === 0) { styles.length = 0; i++; continue; }
+    if (code === 38 || code === 48 || code === 58) {
+      if (codes[i + 1] === 5 && i + 2 < codes.length) { open(code, intro + code + ';5;' + codes[i + 2] + 'm'); i += 3; continue; }
+      if (codes[i + 1] === 2 && i + 4 < codes.length) {
+        open(code, intro + code + ';2;' + codes[i + 2] + ';' + codes[i + 3] + ';' + codes[i + 4] + 'm'); i += 5; continue;
+      }
+      open(code, intro + code + 'm'); i++; continue;
+    }
+    if (isSgrEndCode(code)) {
+      const close = escSgr(code);
+      for (let k = styles.length - 1; k >= 0; k--) if (styles[k].close === close) styles.splice(k, 1);
+      i++; continue;
+    }
+    open(code, intro + code + 'm'); i++;
+  }
+}
+
+// CELL-SGR (rule): CellSegmenter's styles, which the shim keys each run by (bun-shim.cjs), are the
+//   SGR- rules with three differences of their own:
+//   - every style is spelled `ESC[`, a C1 CSI's too (`U+009B 1m` is `ESC[1m`), and a whole one
+//     with its parameters as written (`U+009B 04:3m` is `ESC[04:3m`);
+//   - a parameter over 255 makes the SGR whole too (`1;256` is the one style `ESC[1;256m`, in
+//     bold's place and closed with 22; `0255` is still 255, `0256` whole);
+//   - a style opened again exactly as it is already in force stays where it is (`31 1 31` is
+//     `31 1`), where any other replacement, a whole one included, goes to the end (`4:3 1 4:3`
+//     is `1 4:3`).
+function cellSgr(styles, params) {
+  const p = sgrParams(params, 0, params.length);
+  if (p === null) return;
+  let whole = p.opaque;
+  for (const v of p.codes) if (v > 255) whole = true;
+  applySgr(styles, p.codes, whole ? '\x1b[' + params + 'm' : null, '\x1b[', (list, st) => {
+    if (!st.whole) for (const e of list) if (!e.whole && e.slot === st.slot && e.open === st.open) return;
+    replaceStyle(list, st);
+  });
+}
+
 // ---- Bun.sliceAnsi ------------------------------------------------------------------------
 // Bun.sliceAnsi(input, start, end, options): `input` cut to the display COLUMNS [start, end),
 // its escape sequences kept and its styles closed at the cut. New in upstream 2.1.278, whose
@@ -585,15 +720,13 @@ function forEachCell(text, ambiguousIsNarrow, substitute, fn) {
 //   bun-slice's, sized by bun-cell's widths (cellClusterWidth), and run across the escape
 //   sequences between their code points, as Bun.stringWidth's do.
 // SLICE-STYLES (rule): the SGR sequences before the first cluster in the slice are not copied
-//   but REPLAYED: each parameter becomes its own sequence (`ESC[1;31m` -> `ESC[1m ESC[31m`;
-//   38/48/58 keep their 5;n or 2;r;g;b; a colon form, or more than 32 parameters, stays whole),
-//   one per attribute (a later colour replaces an earlier one; bold and dim, italic and
-//   fraktur, underline and double underline, framed and encircled stay separate; codes with no
-//   known close share one attribute), 0 clears them all, a close code removes what it closes.
-//   A C1 CSI replays as C1. Sequences inside the slice are copied as they are. At the cut the
-//   styles still open are closed, last opened first, each close once (`ESC[1m ESC[2m` closes
-//   with one `ESC[22m`), always in the ESC form; a code with no known close closes with
-//   `ESC[0m`.
+//   but REPLAYED, one sequence per style in force by the SGR- rules (`ESC[1;31m` ->
+//   `ESC[1m ESC[31m`), each in the introducer it was written with (a C1 CSI replays as C1), a
+//   whole one exactly as it was written. A style opened again goes to the end even when it is
+//   the same (`31 1 31` replays `1 31`; CELL-SGR keeps `31 1`). Sequences inside the slice are
+//   copied as they are. At the cut the styles still open are closed, last opened first, each
+//   close once (`ESC[1m ESC[2m` closes with one `ESC[22m`), always in the ESC form, by their
+//   SGR-CLOSES close (`ESC[0m` for a code with none).
 // SLICE-LINKS (rule): an OSC 8 hyperlink open before the slice is replayed as it was written,
 //   and one still open at the cut is closed with `ESC]8;;` (or C1 OSC `8;;`) and the
 //   terminator it was opened with.
@@ -710,29 +843,6 @@ function sliceEscape(str, i, n) {
   return -1;
 }
 
-// An SGR's parameters as native reads them, or null when [from, to) holds anything but
-// digits, `;` and `:` (the CSI is then a control, not an SGR): digits (a value stops growing
-// past 99999), split at `;` or `:`; a colon, or more than 32 of them, makes it opaque.
-function sgrParams(str, from, to) {
-  for (let i = from; i < to; i++) {
-    const c = str.charCodeAt(i);
-    if (!((c >= 0x30 && c <= 0x39) || c === 0x3b || c === 0x3a)) return null;
-  }
-  const codes = [];
-  let cur = 0, opaque = false;
-  for (let i = from; i < to; i++) {
-    const c = str.charCodeAt(i);
-    if (c >= 0x30 && c <= 0x39) { if (cur < 100000) cur = cur * 10 + (c - 0x30); continue; }
-    if (c === 0x3a) opaque = true;
-    if (codes.length >= 32) return { codes, opaque: true };
-    codes.push(cur);
-    cur = 0;
-  }
-  if (codes.length >= 32) return { codes, opaque: true };
-  codes.push(cur);
-  return { codes, opaque };
-}
-
 // The sequence at i (an introducer), or null when it starts none and is a visible character.
 // Tried in native's order: hyperlink, string, CSI, the other ESC forms.
 function sliceToken(str, i, n) {
@@ -754,63 +864,9 @@ function sliceToken(str, i, n) {
   return null;
 }
 
-// SGR codes -> close codes (0 when native knows none), and the attribute a code occupies.
-function sgrCloseCode(code) {
-  if (code === 1 || code === 2) return 22;
-  if (code === 3 || code === 20) return 23;
-  if (code === 4 || code === 21) return 24;
-  if (code === 5 || code === 6) return 25;
-  if (code === 7) return 27;
-  if (code === 8) return 28;
-  if (code === 9) return 29;
-  if ((code >= 30 && code <= 38) || (code >= 90 && code <= 97)) return 39;
-  if ((code >= 40 && code <= 48) || (code >= 100 && code <= 107)) return 49;
-  if (code === 51 || code === 52) return 54;
-  if (code === 53) return 55;
-  if (code === 58) return 59;
-  if (code === 73 || code === 74) return 75;
-  return 0;
-}
-const isSgrEndCode = (code) => code === 0 || code === 22 || code === 23 || code === 24 || code === 25 || code === 27
-  || code === 28 || code === 29 || code === 39 || code === 49 || code === 54 || code === 55 || code === 59 || code === 75;
-function sgrSlot(code) {
-  const close = sgrCloseCode(code);
-  return (close === 22 || close === 23 || close === 24 || close === 54) ? code : close;
-}
-const escSgr = (code) => '\x1b[' + code + 'm';
-
-// SLICE-STYLES: `styles` is the ordered list of open styles, { slot, open, close }.
-function styleStart(styles, slot, open, close) {
-  for (let k = styles.length - 1; k >= 0; k--) if (styles[k].slot === slot) styles.splice(k, 1);
-  styles.push({ slot, open, close });
-}
-function applySgr(styles, t) {
-  const c = t.codes;
-  if (t.opaque) {
-    const close = sgrCloseCode(c[0]);
-    styleStart(styles, sgrSlot(c[0]), t.text, close ? escSgr(close) : '\x1b[0m');
-    return;
-  }
-  const intro = t.c1 ? String.fromCharCode(C1_CSI) : '\x1b[';
-  for (let i = 0; i < c.length;) {
-    const code = c[i];
-    if (code === 0) { styles.length = 0; i++; continue; }
-    if (code === 38 || code === 48 || code === 58) {
-      const slot = sgrSlot(code), close = escSgr(sgrCloseCode(code));
-      if (c[i + 1] === 5 && i + 2 < c.length) { styleStart(styles, slot, intro + code + ';5;' + c[i + 2] + 'm', close); i += 3; continue; }
-      if (c[i + 1] === 2 && i + 4 < c.length) { styleStart(styles, slot, intro + code + ';2;' + c[i + 2] + ';' + c[i + 3] + ';' + c[i + 4] + 'm', close); i += 5; continue; }
-      styleStart(styles, slot, intro + code + 'm', close); i++; continue;
-    }
-    if (isSgrEndCode(code)) {
-      const close = escSgr(code);
-      for (let k = styles.length - 1; k >= 0; k--) if (styles[k].close === close) styles.splice(k, 1);
-      i++; continue;
-    }
-    const close = sgrCloseCode(code);
-    styleStart(styles, sgrSlot(code), intro + code + 'm', close ? escSgr(close) : '\x1b[0m');
-    i++;
-  }
-}
+// SLICE-STYLES: an SGR token applied to the styles in force.
+const sliceSgr = (styles, t) => applySgr(styles, t.codes, t.opaque ? t.text : null,
+  t.c1 ? String.fromCharCode(C1_CSI) : '\x1b[', replaceStyle);
 // SLICE-AFTER-END: an SGR past the cut is kept only when it closes something and opens nothing.
 function sgrOnlyCloses(t, styles) {
   const c = t.codes;
@@ -933,7 +989,7 @@ function sliceAnsi(input, start, end, options, narrowOption) {
     for (const t of pending) {
       if (t.kind === SLICE_SGR) {
         if (closeOnly && (t.opaque || !sgrOnlyCloses(t, styles))) continue;
-        applySgr(styles, t);
+        sliceSgr(styles, t);
       } else if (t.kind === SLICE_LINK) {
         if (closeOnly && (t.open || link === null)) continue;
         link = t.open ? t : null;
@@ -995,7 +1051,7 @@ function sliceAnsi(input, start, end, options, narrowOption) {
     if (tk < tokens.length && tokens[tk].at === p) {
       const t = tokens[tk++];
       if (include) { spill(); pending.push(t); }
-      else if (t.kind === SLICE_SGR) applySgr(styles, t);
+      else if (t.kind === SLICE_SGR) sliceSgr(styles, t);
       else if (t.kind === SLICE_LINK) link = t.open ? t : null;
       p = t.end;
       continue;
@@ -1010,5 +1066,5 @@ function sliceAnsi(input, start, end, options, narrowOption) {
   return out + closeStyles(styles);
 }
 
-module.exports = { graphemeBoundaries, clusterWidth, codePointWidth, escapeLayer, textWidth, stringWidth, forEachCell, sliceAnsi,
-  UNICODE_DATA };
+module.exports = { graphemeBoundaries, clusterWidth, codePointWidth, escapeLayer, textWidth, stringWidth, forEachCell, cellSgr,
+  sliceAnsi, UNICODE_DATA };

@@ -102,13 +102,20 @@ const out = {};
 
 { const n = make(BIDI);
   const r = seg(n, '\x1b[31m\x1b[1mA\x1b[32mB\x1b[31mC');
-  out.reapply = { a: key(n, r.runs[0][0]), b: key(n, r.runs[1][0]),
-    cSameIdAsA: r.runs[2][0] === r.runs[0][0] };
+  out.reapply = { a: key(n, r.runs[0][0]), b: key(n, r.runs[1][0]), c: key(n, r.runs[2][0]) };
+  const same = seg(n, '\x1b[31m\x1b[1mA\x1b[31mB');
+  out.reapply.sameRuns = same.runs.length;
+  out.reapply.sameIdAsA = same.runs[0][0] === r.runs[0][0];
 }
 
 { const n = make(BIDI);
   const r = seg(n, '\x1b[4:3mU\x1b[99mV');
-  out.dropped = r.runs.map(([s]) => s);
+  out.kept = r.runs.map(([s]) => key(n, s));
+}
+
+{ const n = make(BIDI);
+  const r = seg(n, '\x9b1;31mX\x9b4:3mY');
+  out.c1 = r.runs.map(([s]) => key(n, s));
 }
 
 { const n = make(BIDI);
@@ -245,17 +252,39 @@ test('bold and dim coexist, and 22m closes both', (t) => {
   assert.strictEqual(o.boldDim.bStyle, 0);
 });
 
-test('a re-applied slot is replaced IN PLACE, so re-opening a colour reuses its style id', (t) => {
+// The next three are native 2.1.278's own keys (measured 2026-09-25 through the same caller
+// arithmetic); the rules are unicode-text.cjs's SGR- and CELL-SGR, pinned one by one in
+// test/unicode-text.test.cjs. They were once a CHOICE here (a replaced colour kept its
+// place; colon forms and codes SC refuses were dropped), and the painted style differed
+// from native's on 2,014 strings of the text gate's corpora until the gate compared it.
+test('CELL-SGR: a replaced style goes to the END; an identical re-open stays where it is', (t) => {
   const o = results(t); if (!o) return;
-  assert.deepStrictEqual(o.reapply.a.open, ['\x1b[31m', '\x1b[1m']);
-  assert.deepStrictEqual(o.reapply.b.open, ['\x1b[32m', '\x1b[1m']);
-  assert.ok(o.reapply.cSameIdAsA,
-    'chalk re-opens the outer colour after a nested one; the result must be the SAME style');
+  assert.deepStrictEqual(o.reapply.a, { open: ['\x1b[31m', '\x1b[1m'], close: ['\x1b[39m', '\x1b[22m'] });
+  assert.deepStrictEqual(o.reapply.b, { open: ['\x1b[1m', '\x1b[32m'], close: ['\x1b[22m', '\x1b[39m'] });
+  assert.deepStrictEqual(o.reapply.c, { open: ['\x1b[1m', '\x1b[31m'], close: ['\x1b[22m', '\x1b[39m'] },
+    're-opening the outer colour after another is a NEW order, so a new style id, as in native');
+  assert.strictEqual(o.reapply.sameRuns, 1, '31 1 A 31 B: re-opening 31 as it already is changes nothing');
+  assert.ok(o.reapply.sameIdAsA, 'and it is the very same key as 31 1');
 });
 
-test('colon sub-parameters and unknown codes are dropped, not mis-spelled', (t) => {
+test('SGR-WHOLE and SGR-CLOSES: a colon form and a code SC refuses are KEPT, as native keeps them', (t) => {
   const o = results(t); if (!o) return;
-  assert.deepStrictEqual(o.dropped, [0]);
+  // The caller's ansiCodes() drops what its SC regex refuses; the key still holds the
+  // attribute's place, so a colon form after `ESC[4m` stops the underline painting.
+  assert.deepStrictEqual(o.kept, [
+    { open: ['\x1b[4:3m'], close: ['\x1b[24m'] },
+    { open: ['\x1b[4:3m', '\x1b[99m'], close: ['\x1b[24m', '\x1b[0m'] },
+  ]);
+  assert.doesNotMatch(o.kept[1].open[0], SC);
+  assert.match(o.kept[1].open[1], SC);
+});
+
+test('CELL-SGR: a C1 CSI is keyed in the ESC spelling, a whole one with its parameters as written', (t) => {
+  const o = results(t); if (!o) return;
+  assert.deepStrictEqual(o.c1, [
+    { open: ['\x1b[1m', '\x1b[31m'], close: ['\x1b[22m', '\x1b[39m'] },
+    { open: ['\x1b[1m', '\x1b[31m', '\x1b[4:3m'], close: ['\x1b[22m', '\x1b[39m', '\x1b[24m'] },
+  ]);
 });
 
 test('a TAB is one scratch cell with bit 8, resolved against the column', (t) => {

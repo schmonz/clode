@@ -11,8 +11,8 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
-const { graphemeBoundaries, clusterWidth, codePointWidth, escapeLayer, forEachCell, textWidth, stringWidth, sliceAnsi, UNICODE_DATA } =
-  require('../libexec/unicode-text.cjs');
+const { graphemeBoundaries, clusterWidth, codePointWidth, escapeLayer, forEachCell, cellSgr, textWidth, stringWidth, sliceAnsi,
+  UNICODE_DATA } = require('../libexec/unicode-text.cjs');
 const { clodeCacheDir } = require('../libexec/clode-paths.cjs');
 const ucd = require('../scripts/lib/ucd.cjs');
 
@@ -608,6 +608,8 @@ test('SLICE-STYLES: SGRs before the slice are replayed one parameter and one att
   assert.strictEqual(sliceAnsi('\x1b[1234567mab', 1), '\x1b[123456mb\x1b[0m');
   assert.strictEqual(sliceAnsi('a\x9b31;1mbc', 1, 2), '\x9b31m\x9b1mb\x1b[22m\x1b[39m');
   assert.strictEqual(sliceAnsi('\x1b[4m\x1b[21mab', 1), '\x1b[4m\x1b[21mb\x1b[24m');
+  // a style opened again goes to the end even when it is the same (CELL-SGR keeps it in place)
+  assert.strictEqual(sliceAnsi('x\x1b[31m\x1b[1m\x1b[31my', 1, 2), '\x1b[1m\x1b[31my\x1b[39m\x1b[22m');
 });
 
 test('SLICE-LINKS: an OSC 8 link open before the slice is replayed, and closed at the cut as it was opened', () => {
@@ -673,4 +675,140 @@ test('SLICE-ASCII-RUNS: two or more printable ASCII leading a run end the cluste
   assert.strictEqual(sliceAnsi(H(0x301, 0x301, 0x301, 0x301, 0x301, 0x890) + 'ab', 0, 1), H(0x301, 0x301, 0x301, 0x301, 0x301, 0x890));
   assert.strictEqual(sliceAnsi(H(0x301, 0x301, 0x301, 0x301, 0x301, 0x301, 0x890) + 'ab', 0, 1), H(0x301, 0x301, 0x301, 0x301, 0x301, 0x301, 0x890) + 'a');
   assert.strictEqual(sliceAnsi('x' + H(0x301, 0x301, 0x301, 0x301, 0x301, 0x890) + 'abc', 1, 2), H(0x890));
+});
+
+// ---- SGR (sliceAnsi's and CellSegmenter's) and CELL-SGR -----------------------------------
+// Every expectation is native 2.1.278's CellSegmenter, measured 2026-09-25: the sgrKeys and
+// sgrCloseKeys entry of the cell `x` after the SGRs given (`ESC[<body>m ... x`). cellSgr is
+// what bun-shim keys each run by; test/fidelity/text-differential.test.cjs judges the whole
+// against native, the style included.
+const K = (...codes) => codes.map((c) => '\x1b[' + c + 'm');
+const R = (n, v) => new Array(n).fill(v).join(';');
+// The styles in force after each SGR body in turn: [opens, closes].
+function cellStyles(...bodies) {
+  const st = [];
+  for (const b of bodies) cellSgr(st, b);
+  return [st.map((e) => e.open), st.map((e) => e.close)];
+}
+
+test('SGR-PARAMETERS: digits, `;` and `:` alone make an SGR; an empty parameter is 0; leading zeros are nothing', () => {
+  assert.deepStrictEqual(cellStyles('1', '?0'), [K(1), K(22)]);
+  assert.deepStrictEqual(cellStyles('1', '0 '), [K(1), K(22)]);
+  assert.deepStrictEqual(cellStyles('1', '>0'), [K(1), K(22)]);
+  assert.deepStrictEqual(cellStyles('1', '0;?'), [K(1), K(22)]);
+  assert.deepStrictEqual(cellStyles(';1'), [K(1), K(22)]);
+  assert.deepStrictEqual(cellStyles('1;'), [[], []]);
+  assert.deepStrictEqual(cellStyles('1', ''), [[], []]);
+  assert.deepStrictEqual(cellStyles('1', ';'), [[], []]);
+  assert.deepStrictEqual(cellStyles('01'), [K(1), K(22)]);
+  assert.deepStrictEqual(cellStyles('0031'), [K(31), K(39)]);
+  assert.deepStrictEqual(cellStyles('00000000000000000001'), [K(1), K(22)]);
+  assert.deepStrictEqual(cellStyles('38;5;0208'), [K('38;5;208'), K(39)]);
+  // sliceAnsi reads them the same way (native, same day)
+  assert.strictEqual(sliceAnsi('\x1b[0031mab', 1), '\x1b[31mb\x1b[39m');
+  assert.strictEqual(sliceAnsi('\x1b[1m\x1b[?0mab', 1), '\x1b[1mb\x1b[22m');
+  assert.strictEqual(sliceAnsi('\x1b[1m\x1b[0 mab', 1), '\x1b[1mb\x1b[22m');
+});
+
+test('SGR-CLOSES: each code 0-130 on its own opens what native opens, closed as native closes it', () => {
+  // native, `ESC[<n>m x` for every n: the close of each code that opens a style; 0 and the
+  // close codes open nothing; every other code opens a style closed by ESC[0m.
+  const closes = {
+    22: [1, 2], 23: [3, 20], 24: [4, 21], 25: [5, 6], 27: [7], 28: [8], 29: [9],
+    39: [30, 31, 32, 33, 34, 35, 36, 37, 38, 90, 91, 92, 93, 94, 95, 96, 97],
+    49: [40, 41, 42, 43, 44, 45, 46, 47, 48, 100, 101, 102, 103, 104, 105, 106, 107],
+    54: [51, 52], 55: [53], 59: [58], 75: [73, 74],
+  };
+  const none = [0, 22, 23, 24, 25, 27, 28, 29, 39, 49, 54, 55, 59, 75];
+  for (let n = 0; n <= 130; n++) {
+    const c = Object.keys(closes).find((k) => closes[k].includes(n));
+    const want = none.includes(n) ? [[], []] : [K(n), K(c === undefined ? 0 : c)];
+    assert.deepStrictEqual(cellStyles(String(n)), want, `ESC[${n}m`);
+  }
+});
+
+test('SGR-ATTRIBUTES: one style per attribute, a new one at the end; bold/dim, 3/20, 4/21, 51/52 apart', () => {
+  assert.deepStrictEqual(cellStyles('1', '2'), [K(1, 2), K(22, 22)]);
+  assert.deepStrictEqual(cellStyles('2', '1'), [K(2, 1), K(22, 22)]);
+  assert.deepStrictEqual(cellStyles('3', '20'), [K(3, 20), K(23, 23)]);
+  assert.deepStrictEqual(cellStyles('21', '4'), [K(21, 4), K(24, 24)]);
+  assert.deepStrictEqual(cellStyles('51', '52'), [K(51, 52), K(54, 54)]);
+  assert.deepStrictEqual(cellStyles('5', '6'), [K(6), K(25)]);
+  assert.deepStrictEqual(cellStyles('73', '74'), [K(74), K(75)]);
+  assert.deepStrictEqual(cellStyles('10', '11'), [K(11), K(0)]);
+  assert.deepStrictEqual(cellStyles('10', '1', '99'), [K(1, 99), K(22, 0)]);
+  assert.deepStrictEqual(cellStyles('31', '38'), [K(38), K(39)]);
+  assert.deepStrictEqual(cellStyles('41', '48'), [K(48), K(49)]);
+  assert.deepStrictEqual(cellStyles('31', '1', '32'), [K(1, 32), K(22, 39)]);
+  assert.deepStrictEqual(cellStyles('38;5;1', '1', '38;5;2'), [K(1, '38;5;2'), K(22, 39)]);
+  assert.deepStrictEqual(cellStyles('5', '1', '6'), [K(1, 6), K(22, 25)]);
+});
+
+test('SGR-APPLY: in order; 0 clears, a close code removes what it closes, 38/48/58 take 5;n or 2;r;g;b or stand bare', () => {
+  assert.deepStrictEqual(cellStyles('1;31;4'), [K(1, 31, 4), K(22, 39, 24)]);
+  assert.deepStrictEqual(cellStyles('31;1'), [K(31, 1), K(39, 22)]);
+  assert.deepStrictEqual(cellStyles('1;0;31'), [K(31), K(39)]);
+  assert.deepStrictEqual(cellStyles('10', '0'), [[], []]);
+  assert.deepStrictEqual(cellStyles('1', '2', '22'), [[], []]);
+  assert.deepStrictEqual(cellStyles('1', '10', '22'), [K(10), K(0)]);
+  assert.deepStrictEqual(cellStyles('10', '1;22'), [K(10), K(0)]);
+  assert.deepStrictEqual(cellStyles('5', '25'), [[], []]);
+  assert.deepStrictEqual(cellStyles('58', '59'), [[], []]);
+  assert.deepStrictEqual(cellStyles('51', '54'), [[], []]);
+  assert.deepStrictEqual(cellStyles('38;5;208'), [K('38;5;208'), K(39)]);
+  assert.deepStrictEqual(cellStyles('38;2;1;2;3'), [K('38;2;1;2;3'), K(39)]);
+  assert.deepStrictEqual(cellStyles('58;5;3'), [K('58;5;3'), K(59)]);
+  assert.deepStrictEqual(cellStyles('58;2;1;2;3'), [K('58;2;1;2;3'), K(59)]);
+  assert.deepStrictEqual(cellStyles('58'), [K(58), K(59)]);
+  assert.deepStrictEqual(cellStyles('38;5'), [K(38, 5), K(39, 25)]);
+  assert.deepStrictEqual(cellStyles('38;2;1;2'), [K(38, 2, 1), K(39, 22, 22)]);
+  assert.deepStrictEqual(cellStyles('38;7'), [K(38, 7), K(39, 27)]);
+  assert.deepStrictEqual(cellStyles('38;;5'), [K(5), K(25)]);
+  assert.deepStrictEqual(cellStyles('38;5;;1'), [K('38;5;0', 1), K(39, 22)]);
+  assert.deepStrictEqual(cellStyles('38;5;1;1'), [K('38;5;1', 1), K(39, 22)]);
+  assert.deepStrictEqual(cellStyles('38;2;1;2;3;4'), [K('38;2;1;2;3', 4), K(39, 24)]);
+  assert.deepStrictEqual(cellStyles('1;38;5'), [K(1, 38, 5), K(22, 39, 25)]);
+});
+
+test('SGR-WHOLE: a colon or more than 32 parameters is ONE style, in its first parameter\'s attribute', () => {
+  assert.deepStrictEqual(cellStyles('4:3'), [K('4:3'), K(24)]);
+  assert.deepStrictEqual(cellStyles('4', '4:3'), [K('4:3'), K(24)]);
+  assert.deepStrictEqual(cellStyles('31', '38:5:208'), [K('38:5:208'), K(39)]);
+  assert.deepStrictEqual(cellStyles('1', '1;4:3'), [K('1;4:3'), K(22)]);
+  assert.deepStrictEqual(cellStyles('4:3;1'), [K('4:3;1'), K(24)]);
+  assert.deepStrictEqual(cellStyles('1', ':1'), [K(1, ':1'), K(22, 0)]);
+  assert.deepStrictEqual(cellStyles('1', '0;1:2'), [K(1, '0;1:2'), K(22, 0)]);
+  assert.deepStrictEqual(cellStyles('10', '0;1:2'), [K('0;1:2'), K(0)]);
+  assert.deepStrictEqual(cellStyles('1', '22:1'), [K(1, '22:1'), K(22, 0)]);
+  assert.deepStrictEqual(cellStyles('31', '39:0'), [K(31, '39:0'), K(39, 0)]);
+  assert.deepStrictEqual(cellStyles('4:3', '24'), [[], []]);
+  assert.deepStrictEqual(cellStyles('4:3', '0'), [[], []]);
+  assert.deepStrictEqual(cellStyles('4:3', '4'), [K(4), K(24)]);
+  assert.deepStrictEqual(cellStyles('1', R(32, 1)), [K(1), K(22)]);
+  assert.deepStrictEqual(cellStyles('1', R(33, 1)), [K(R(33, 1)), K(22)]);
+  assert.deepStrictEqual(cellStyles('4', '31;' + R(32, 1)), [K(4, '31;' + R(32, 1)), K(24, 39)]);
+  assert.deepStrictEqual(cellStyles('1', '0;' + R(32, 4)), [K(1, '0;' + R(32, 4)), K(22, 0)]);
+  assert.deepStrictEqual(cellStyles('1', R(31, 1) + ';'), [[], []]);
+  assert.deepStrictEqual(cellStyles('1', R(32, 1) + ';'), [K(R(32, 1) + ';'), K(22)]);
+});
+
+test('CELL-SGR: ESC spellings, a parameter over 255 is whole, an identical re-open stays where it is', () => {
+  assert.deepStrictEqual(cellStyles('1;256'), [K('1;256'), K(22)]);
+  assert.deepStrictEqual(cellStyles('1;255'), [K(1, 255), K(22, 0)]);
+  assert.deepStrictEqual(cellStyles('1', '0256'), [K(1, '0256'), K(22, 0)]);
+  assert.deepStrictEqual(cellStyles('00255;1'), [K(255, 1), K(0, 22)]);
+  assert.deepStrictEqual(cellStyles('38;5;256;1'), [K('38;5;256;1'), K(39)]);
+  assert.deepStrictEqual(cellStyles('31', '286;1'), [K(31, '286;1'), K(39, 0)]);
+  assert.deepStrictEqual(cellStyles('10', '1000001'), [K(1000001), K(0)]);
+  assert.deepStrictEqual(cellStyles('04:3'), [K('04:3'), K(24)]);
+  assert.deepStrictEqual(cellStyles('31', '1', '31'), [K(31, 1), K(39, 22)]);
+  assert.deepStrictEqual(cellStyles('1', '2', '1'), [K(1, 2), K(22, 22)]);
+  assert.deepStrictEqual(cellStyles('10', '1', '10'), [K(10, 1), K(0, 22)]);
+  assert.deepStrictEqual(cellStyles('38;5;200', '1', '38;5;200'), [K('38;5;200', 1), K(39, 22)]);
+  assert.deepStrictEqual(cellStyles('38;5;1', '1', '38;5;01'), [K('38;5;1', 1), K(39, 22)]);
+  assert.deepStrictEqual(cellStyles('4:3', '1', '4:3'), [K(1, '4:3'), K(22, 24)]);
+  assert.deepStrictEqual(cellStyles('999', '1', '999'), [K(1, 999), K(22, 0)]);
+  // A C1 CSI's parameters reach cellSgr as an ESC CSI's do (ESCAPE-LAYER), so its style is
+  // spelled ESC[ too: native `U+009B 04:3m x` is `ESC[04:3m`.
+  assert.deepStrictEqual(cellStyles(...SGR(0x9b, 0x30, 0x34, 0x3a, 0x33, 0x6d, 0x78)), [K('04:3'), K(24)]);
 });
