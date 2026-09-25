@@ -236,8 +236,9 @@ function mergeStagedGraph(doc, docPath, opts) {
 //    test/shim-companions.test.cjs — bun-shim.cjs requires it from its own directory,
 //    so anywhere the shim is staged, this must be staged too) all exist AND
 //    .extractor-sig matches the current extractor sig: still refresh the cached shim
-//    (and its unicode-text.cjs companion, together) if the installed source differs,
-//    then return.
+//    and, INDEPENDENTLY, its unicode-text.cjs companion, whichever one's installed
+//    source differs (neither is part of the sig — see the code comment below), then
+//    return.
 //  - CACHE MISS: log (first-extract vs extractor-changed), run the extractor
 //    in-process to (re)write cli.cjs, `node --check` it, copy the shim and its
 //    unicode-text.cjs companion, write the sig. Any extraction/verify/check problem
@@ -284,14 +285,24 @@ function extractIfNeeded(opts) {
   const sigPath = path.join(cacheDir, '.extractor-sig');
 
   if (isFile(cliPath) && isFile(cacheShim) && isFile(cacheUnicode) && readSig(sigPath) === extractorSig) {
-    // Cache hit on the bundle. Refresh the cached shim (and its unicode-text.cjs
-    // companion, together — a shim with no companion is a shim that dies at load) if
-    // the installed source differs, so a shim fix reaches existing per-version caches
-    // without waiting for a provider update to trigger a re-extract.
+    // Cache hit on the bundle. Refresh EACH companion INDEPENDENTLY if its installed
+    // source differs, so a shim fix or a standalone unicode-text.cjs table regen each
+    // reach existing per-version caches without waiting for a provider update to
+    // trigger a re-extract. Independent, not nested one-inside-the-other (fix round 1,
+    // task-5 review): neither companion's bytes are part of .extractor-sig
+    // (extractorSigOf covers only the extractor/merger files), which is exactly why
+    // this refresh exists at all — a sig match says nothing about whether bun-shim.cjs
+    // or unicode-text.cjs individually changed, and nesting the unicode-text.cjs copy
+    // inside "the shim differs" left a warm cache with an unchanged shim serving a
+    // STALE unicode-text.cjs forever after a routine table regen. See
+    // test/clode-extract.test.cjs's "changed unicode-text.cjs ALONE" case.
     if (!filesEqual(srcShim, cacheShim)) {
       fs.copyFileSync(srcShim, cacheShim);
-      fs.copyFileSync(srcUnicode, cacheUnicode);
       clodeLog(`clode: refreshed cached bun-shim for ${key}`);
+    }
+    if (!filesEqual(srcUnicode, cacheUnicode)) {
+      fs.copyFileSync(srcUnicode, cacheUnicode);
+      clodeLog(`clode: refreshed cached unicode-text for ${key}`);
     }
     return;
   }

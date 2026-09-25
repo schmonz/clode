@@ -136,6 +136,39 @@ test('changed shim: cache hit but the cached bun-shim is refreshed from source',
   } finally { cleanup(s); }
 });
 
+// Fix round 1 (task-5 review, Important): the cache-hit branch used to copy
+// unicode-text.cjs ONLY as a side effect of the SHIM differing (nested inside
+// `if (!filesEqual(srcShim, cacheShim))`). Neither companion's bytes are part of
+// .extractor-sig (extractorSigOf covers only the extractor/merger), so a warm cache
+// with an UNCHANGED bun-shim.cjs but a regenerated unicode-text.cjs (a routine table
+// update) kept serving the STALE cached copy forever — silently mis-sizing text. This
+// mirrors the "changed shim" case just above, but changes the OTHER companion alone,
+// leaving the shim untouched, so it can only pass if each companion is refreshed
+// independently.
+test('changed unicode-text.cjs ALONE: cache hit but the cached companion is refreshed from source, shim untouched', () => {
+  const s = setup('v1');
+  try {
+    run(s); // warm
+    const cli = path.join(s.cacheDir, 'cli.cjs');
+    const cliMtime = fs.statSync(cli).mtimeMs;
+    const cachedShim = path.join(s.cacheDir, 'bun-shim.cjs');
+    const shimBytesBefore = fs.readFileSync(cachedShim);
+    // Simulate a stale cached unicode-text.cjs — the shim is left EXACTLY as the
+    // cache-hit path last wrote it, so filesEqual(srcShim, cacheShim) stays true.
+    const cachedUnicode = path.join(s.cacheDir, 'unicode-text.cjs');
+    fs.writeFileSync(cachedUnicode, 'STALE-UNICODE-TEXT\n');
+    const logs = run(s);
+    assert.ok(logs.some((l) => l.includes('refreshed cached unicode-text')), 'unicode-text refreshed');
+    assert.ok(!logs.some((l) => l.includes('extracting JS')), 'not re-extracted');
+    // The cached companion matches source again, cli.cjs was left alone, and the
+    // shim — never touched by this scenario — is byte-identical to what it was.
+    const src = fs.readFileSync(path.join(s.libexec, 'unicode-text.cjs'));
+    assert.ok(fs.readFileSync(cachedUnicode).equals(src), 'cached unicode-text == source');
+    assert.strictEqual(fs.statSync(cli).mtimeMs, cliMtime, 'cli.cjs untouched');
+    assert.ok(fs.readFileSync(cachedShim).equals(shimBytesBefore), 'shim untouched');
+  } finally { cleanup(s); }
+});
+
 test('loud failure: a non-bundle binary throws and does not cache cli.cjs', () => {
   const s = setup('v1');
   try {
