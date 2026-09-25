@@ -234,7 +234,7 @@ if (role === 'builder') {
   // above — never require()'d from this materialized dir, only carried so a
   // self-blobulated clode-native can re-blobulate targets. The quaude-product role below
   // deliberately omits it: no runtime provision() consumer on that side.
-  for (const f of ['bun-shim.cjs', 'unicode-text.cjs', 'extract-claude-js.cjs', 'quaude-blobulate.js', 'quaude-bootstrap.mjs', 'host-provision.cjs', 'target-update-check.cjs', 'bun-graph-plan.cjs', 'scc-merge.cjs', 'build-report.cjs', 'graph-scc-merge.cjs', 'graph-meta.js']) {
+  for (const f of ['bun-shim.cjs', 'extract-claude-js.cjs', 'quaude-blobulate.js', 'quaude-bootstrap.mjs', 'host-provision.cjs', 'target-update-check.cjs', 'bun-graph-plan.cjs', 'scc-merge.cjs', 'build-report.cjs', 'graph-scc-merge.cjs', 'graph-meta.js']) {
     members.push({ name: `libexec/${f}`, data: await mustRead(path.join(libexecDir, f), `libexec member ${f}`) });
   }
   // target-env.cjs member name is BARE (no libexec/ prefix), matching how
@@ -465,15 +465,6 @@ if (role === 'builder') {
   // shim over the cached one on every cache hit).
   members.push({ name: 'bun-shim.cjs', data: await mustRead(path.join(stageDir, 'bun-shim.cjs'), 'staged bun-shim') });
 
-  // bun-shim.cjs's own require(__dirname + '/unicode-text.cjs') companion (Task 5 —
-  // see test/shim-companions.test.cjs): rides at the archive root beside bun-shim.cjs,
-  // like target-update-check.cjs below, so the require resolves at '/quaude/'. Read
-  // from libexecDir, NOT stageDir like bun-shim above — unlike the shim, this is
-  // clode's own code, not version-locked to the bundle (clode-extract.cjs's cache
-  // still keeps a copy beside the cached shim, but there is nothing bundle-specific
-  // to reach back for here).
-  members.push({ name: 'unicode-text.cjs', data: await mustRead(path.join(libexecDir, 'unicode-text.cjs'), 'unicode-text.cjs member') });
-
   // The env contract the bootstrap applies before booting the bundle.
   // BARE member name (no libexec/ prefix) — see the builder branch's comment
   // above for why: the node-shim loader's blobulated SHIM_DIR has no 'libexec'
@@ -494,6 +485,20 @@ if (role === 'builder') {
 members.push({ name: 'node-shim/loader.cjs', data: await mustRead(path.join(shimDir, 'loader.cjs'), 'node-shim loader') });
 await collect(path.join(shimDir, 'modules'), 'node-shim/modules', members);
 await collect(path.join(shimDir, 'internal'), 'node-shim/internal', members);
+
+// unicode-text.cjs, the ONE clustering/width implementation, at the archive ROOT in BOTH
+// roles. Two requirers find it there: bun-shim.cjs (quaude role) as its own sibling,
+// `require(__dirname + '/unicode-text.cjs')` from '/quaude/'; and node-shim's Intl
+// polyfill (modules/intl.cjs, loaded eagerly whenever the engine has no Intl — the
+// builder too) as `require('../../unicode-text.cjs')` from '/quaude/node-shim/modules',
+// the same relative climb process.cjs makes to target-env.cjs. A builder that carried it
+// only as `libexec/unicode-text.cjs` could not boot: its loader makes that require while
+// it starts up, before any entry code runs. clode-blobulate.cjs's materialization puts the bare name back at
+// libexec/unicode-text.cjs, beside node-shim/ (again like target-env.cjs), where a
+// self-blobulated builder's extract cache and quaude blobulate read it. Read from
+// libexecDir, NOT stageDir: it is clode's own code, not version-locked to the bundle
+// (see test/shim-companions.test.cjs).
+members.push({ name: 'unicode-text.cjs', data: await mustRead(path.join(libexecDir, 'unicode-text.cjs'), 'unicode-text.cjs member') });
 
 // ext-dep closure (DEPS = extras.deps, derived node-side — see above). The
 // node side already fails the build if a listed package is missing from

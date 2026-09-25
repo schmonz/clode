@@ -36,6 +36,8 @@ files.set('node-shim/loader.cjs', await tjs.readFile(loaderPath));
 await collect(path.join(shimRoot, 'modules'), 'node-shim/modules');
 await collect(path.join(shimRoot, 'internal'), 'node-shim/internal');
 files.set('target-env.cjs', await tjs.readFile(path.join(path.dirname(shimRoot), 'target-env.cjs')));
+// unicode-text.cjs rides at the root too (see vfs-harness.js): the Intl polyfill needs it at boot.
+files.set('unicode-text.cjs', await tjs.readFile(path.join(path.dirname(shimRoot), 'unicode-text.cjs')));
 
 const miniCli = `
 const tls = require('tls');

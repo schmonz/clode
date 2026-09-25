@@ -917,19 +917,12 @@ globalThis.clearImmediate ??= (h) => clearTimeout(h);
 // identifier (e.g. `global.TEST...`). tjs exposes only globalThis, so alias it.
 globalThis.global ??= globalThis;
 
-// Intl.Segmenter polyfill: this tjs build ships NO `Intl` global at all, but the
-// bundle's `string-width` dep does `new Intl.Segmenter()` at load to split text
-// into grapheme clusters for display-width math. Provide a minimal Segmenter that
-// yields one segment per Unicode CODE POINT (String iteration is code-point aware).
-// DIVERGENCE: real grapheme clustering keeps combining marks / ZWJ-emoji / flag
-// pairs together in ONE cluster; a code-point split separates them. For width
-// this stays correct for ASCII, CJK, and per-code-point combining marks (they
-// re-join as zero-width by string-width's own rules), and only over-counts
-// multi-code-point emoji sequences — off the -p PONG path. A future path needing
-// true grapheme segmentation (or Intl.DateTimeFormat/NumberFormat/Collator, also
-// absent) is a real wall: wire a fuller Intl then. Locked by
-// test/node-shim-esm.test.cjs (which compares transpiled string-width to host).
-// quickjs-ng ships no Intl. The bundle uses Segmenter, NumberFormat,
+// Intl polyfill: this tjs build ships NO `Intl` global at all, but the bundle's
+// text deps (string-width, slice-ansi) do `new Intl.Segmenter()` to split text into
+// grapheme clusters. modules/intl.cjs's Segmenter is real UAX #29 clustering, from
+// the ONE implementation in libexec/unicode-text.cjs (which is why that file must
+// ride two levels above modules/ in every packaging), judged against native Bun by
+// test/fidelity/text-differential.test.cjs. The bundle uses Segmenter, NumberFormat,
 // DateTimeFormat, RelativeTimeFormat, Collator, DisplayNames and Locale — all
 // polyfilled (en-US/en, scoped to the bundle's option shapes) in modules/intl.cjs.
 // Without NumberFormat the interactive TUI throws "not a function" the instant a

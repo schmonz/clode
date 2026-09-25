@@ -41,6 +41,10 @@ await collect(path.join(shimRoot, 'internal'), 'node-shim/internal');
 // the archive root. Without this member, loading the 'process' builtin
 // (which the loader does eagerly, before any entry code runs) throws.
 files.set('target-env.cjs', await tjs.readFile(path.join(path.dirname(shimRoot), 'target-env.cjs')));
+// unicode-text.cjs: bare, at the root, in BOTH roles, exactly like the real blobulate —
+// modules/intl.cjs's require('../../unicode-text.cjs') runs when the loader installs the
+// Intl polyfill (eagerly, tjs has no Intl), so without it every boot throws.
+files.set('unicode-text.cjs', await tjs.readFile(path.join(path.dirname(shimRoot), 'unicode-text.cjs')));
 
 // Mini members standing in for the extracted bundle + deps.
 files.set('lib.cjs', enc.encode(`module.exports = { value: 'vfs-lib-ok' };\n`));

@@ -11,26 +11,26 @@
 // a way that renders rather than throws, and say so at the call site. This is
 // the "wire a fuller Intl" the loader's Segmenter comment anticipated.
 
-// ---- Intl.Segmenter (grapheme) — moved here from loader.cjs verbatim ----
-const MARK = /\p{Mark}/u; // combining marks (accents, etc.)
-const ZWJ = '\u200d';
+// ---- Intl.Segmenter (grapheme) ----
+// UAX #29 extended grapheme clusters from the ONE clustering implementation,
+// libexec/unicode-text.cjs, in its `uax29` profile: native Intl.Segmenter is ICU's
+// UAX #29, and that profile is exactly it (GraphemeBreakTest 766/766; judged against
+// native Bun over every code point by test/fidelity/text-differential.test.cjs). It used
+// to be a code-point splitter that re-joined \p{Mark} and ZWJ pairs, which split flags,
+// Hangul syllables, conjuncts and Prepends. Required RELATIVELY, the way process.cjs
+// requires ../../target-env.cjs: from this modules/ dir that is libexec/ in a checkout
+// and the archive root in a quaude or a native builder, where unicode-text.cjs rides
+// beside bun-shim.cjs (libexec/quaude-blobulate.js).
+const { graphemeBoundaries } = require('../../unicode-text.cjs');
 class Segmenter {
   constructor(_locales, options) { this._granularity = (options && options.granularity) || 'grapheme'; }
   segment(input) {
     const str = String(input);
-    const cps = Array.from(str); // code-point aware
     const clusters = [];
-    let i = 0, index = 0;
-    while (i < cps.length) {
-      let seg = cps[i]; i++;
-      // extend the cluster with trailing combining marks and ZWJ joins so a
-      // base+accent (and simple ZWJ emoji sequences) form ONE cluster.
-      for (;;) {
-        if (i < cps.length && MARK.test(cps[i])) { seg += cps[i]; i++; continue; }
-        if (i < cps.length && cps[i] === ZWJ && i + 1 < cps.length) { seg += cps[i] + cps[i + 1]; i += 2; continue; }
-        break;
-      }
-      clusters.push({ segment: seg, index, input: str }); index += seg.length;
+    let index = 0;
+    for (const end of graphemeBoundaries(str)) {
+      clusters.push({ segment: str.slice(index, end), index, input: str });
+      index = end;
     }
     // ECMA-402 %SegmentsPrototype% has TWO members: [Symbol.iterator] and
     // containing(). This polyfill shipped only the iterator, which is a gap that

@@ -2,8 +2,9 @@
 // Extended grapheme clusters and cell widths, the ONE implementation behind
 // Bun.ant.CellSegmenter, Bun.stringWidth and the Intl.Segmenter polyfill — and, at the end,
 // the escape layer and cell shaping native runs around its clusterer. Travels beside
-// bun-shim.cjs everywhere (see test/shim-companions.test.cjs). Pure CommonJS: runs under tjs
-// and under Node alike.
+// bun-shim.cjs everywhere (see test/shim-companions.test.cjs), and two levels above
+// node-shim's modules/ (whose Intl polyfill requires it). Pure CommonJS: runs under tjs and
+// under Node alike.
 //
 // TWO PROFILES of the one implementation (controller ruling R15-amended), because native
 // has two clusterers that disagree with each other:

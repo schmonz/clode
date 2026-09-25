@@ -333,6 +333,7 @@ test('materializeBlobPayload: each member name lands at its documented on-disk h
     put('libexec/quaude-blobulate.js');
     put('node_modules/yaml/package.json');
     put('target-env.cjs');
+    put('unicode-text.cjs');
     put('deps/claude/package-lock.json');
     put('scripts/build-naude.mjs');
     put('naude-entry.bundle.cjs');
@@ -344,11 +345,13 @@ test('materializeBlobPayload: each member name lands at its documented on-disk h
       const p = path.join(dir, rel);
       return fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : null;
     };
-    // node-shim/ and the bare target-env.cjs both land BESIDE each other under
-    // libexec/, which is what the shim loader's '../../target-env.cjs' relative
-    // require needs; everything else keeps its archive path verbatim.
+    // node-shim/ and the bare target-env.cjs and unicode-text.cjs all land BESIDE each
+    // other under libexec/, which is what the shim modules' '../../target-env.cjs' and
+    // '../../unicode-text.cjs' relative requires need; everything else keeps its archive
+    // path verbatim.
     assert.strictEqual(at(path.join('libexec', 'node-shim', 'loader.cjs')), 'node-shim/loader.cjs');
     assert.strictEqual(at(path.join('libexec', 'target-env.cjs')), 'target-env.cjs');
+    assert.strictEqual(at(path.join('libexec', 'unicode-text.cjs')), 'unicode-text.cjs', 'beside node-shim/, for intl.cjs\'s ../../ climb');
     assert.strictEqual(at(path.join('libexec', 'quaude-blobulate.js')), 'libexec/quaude-blobulate.js');
     assert.strictEqual(at(path.join('node_modules', 'yaml', 'package.json')), 'node_modules/yaml/package.json');
     assert.strictEqual(at(path.join('deps', 'claude', 'package-lock.json')), 'deps/claude/package-lock.json');

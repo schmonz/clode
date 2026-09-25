@@ -61,8 +61,8 @@ const path = require('node:path');
 // (quaude/bootstrap), plus the prebuilt naude bundle, postject, and the naude
 // assembler scripts (build naude). Extra members a given target doesn't use
 // are harmless. Member-name -> on-disk-home mapping mirrors quaude-blobulate.js's
-// archive namespace (target-env.cjs and the naude bundle ride at the archive
-// ROOT; everything else keeps its path).
+// archive namespace (target-env.cjs, unicode-text.cjs and the naude bundle ride at
+// the archive ROOT; everything else keeps its path).
 function materializeBlobPayload(vfs, mat) {
   for (const [name, bytes] of vfs.files) {
     let dest;
@@ -72,6 +72,10 @@ function materializeBlobPayload(vfs, mat) {
     // target-env.cjs rides at the archive ROOT (bare name) but belongs beside
     // node-shim/ on disk, i.e. libexec/target-env.cjs — see quaude-blobulate.js.
     else if (name === 'target-env.cjs') dest = path.join(mat, 'libexec', name);
+    // unicode-text.cjs rides at the archive ROOT too (both roles: node-shim's Intl
+    // polyfill climbs '../../unicode-text.cjs' to it) and belongs at libexec/ on disk,
+    // where the extract cache and the blobulate worker read it — see quaude-blobulate.js.
+    else if (name === 'unicode-text.cjs') dest = path.join(mat, 'libexec', name);
     // deps/claude (ext-dep closure + lockfile sources of truth) AND deps/clode
     // (postject's carried JS — build naude's --postject) keep their paths.
     else if (name.startsWith('deps/')) dest = path.join(mat, name);
