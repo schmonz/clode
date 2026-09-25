@@ -1,6 +1,7 @@
 'use strict';
 // Run fail-loud shim children with module resolution ISOLATED from the repo's own
-// node_modules: copy the (self-contained) bun-shim.cjs into a temp dir OUTSIDE the
+// node_modules: copy bun-shim.cjs (and unicode-text.cjs, the one companion it requires
+// from its own directory; see test/shim-companions.test.cjs) into a temp dir OUTSIDE the
 // repo and require it from there, with cwd in that temp dir. Then `require("ws")`
 // (in the shim AND in the body) walks up a clean chain and can't reach
 // <repo>/node_modules — so a stray root `npm install` can't make the deps
@@ -16,6 +17,7 @@ function isoDir() {
   if (_dir && fs.existsSync(_dir)) return _dir;
   _dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-shimiso-'));
   fs.copyFileSync(path.resolve(__dirname, '../libexec/bun-shim.cjs'), path.join(_dir, 'bun-shim.cjs'));
+  fs.copyFileSync(path.resolve(__dirname, '../libexec/unicode-text.cjs'), path.join(_dir, 'unicode-text.cjs'));
   return _dir;
 }
 // Run `node -e '<prelude requiring the isolated shim as Bun>; <body>'`. env overrides

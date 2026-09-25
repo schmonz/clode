@@ -53,6 +53,7 @@ function writeRunner(doc) {
   const f = path.join(dir, 'cli.cjs');
   fs.writeFileSync(f, graphRunnerSource(doc));
   fs.copyFileSync(path.join(REPO, 'libexec', 'bun-shim.cjs'), path.join(dir, 'bun-shim.cjs'));
+  fs.copyFileSync(path.join(REPO, 'libexec', 'unicode-text.cjs'), path.join(dir, 'unicode-text.cjs'));   // its companion
   return { dir, f };
 }
 

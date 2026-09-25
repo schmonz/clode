@@ -1607,9 +1607,10 @@ const BUN_BUILTINS = {
 // which is NATIVE under the classic Node launcher and provided by
 // node-shim/modules/sqlite.cjs (over tjs:sqlite) under quaude. node:sqlite is a
 // rich modern API (get/all/run natively), so this mapping is thin. INLINED so
-// bun-shim stays self-contained (the extractor cache + isolated-shim test copy
-// bun-shim.cjs ALONE); node:sqlite is a builtin, not a sibling file. Fail-loud if
-// no SQLite backend exists. Tests: test/bun-sqlite.test.cjs.
+// bun-shim needs no sibling beyond unicode-text.cjs, the one companion every
+// packaging carries beside it (test/shim-companions.test.cjs); node:sqlite is a
+// builtin, not a sibling file. Fail-loud if no SQLite backend exists. Tests:
+// test/bun-sqlite.test.cjs.
 BUN_BUILTINS['bun:sqlite'] = (() => {
   let NodeDb;
   try { NodeDb = require('node:sqlite').DatabaseSync; } catch (_) { NodeDb = null; }

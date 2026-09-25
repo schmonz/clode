@@ -149,6 +149,9 @@ function stageCli(bin, opts = {}) {
   });
   fs.copyFileSync(path.join(cacheDir, 'cli.cjs'), cli);
   fs.copyFileSync(path.join(cacheDir, 'bun-shim.cjs'), path.join(dir, 'bun-shim.cjs'));
+  // bun-shim.cjs requires its companion from its own directory; the extract cache keeps
+  // one beside it (libexec/clode-extract.cjs, test/shim-companions.test.cjs).
+  fs.copyFileSync(path.join(cacheDir, 'unicode-text.cjs'), path.join(dir, 'unicode-text.cjs'));
   return { dir, cli, cacheDir };
 }
 

@@ -28,14 +28,26 @@ const REPO = path.resolve(__dirname, '..');
 // quaude VFS root member list (quaude-blobulate.js — both the builder-role libexec
 // loop AND the quaude-role member push), the naude SEA asset maps (build-naude.mjs),
 // and the SEA-materialize call naude-entry.cjs makes at boot.
+//
+// PLUS the test harnesses that stage the REAL bun-shim.cjs beside a bundle or a probe
+// (task 6, 2026-09-24). They are packagings too, and this list missed them: the day
+// bun-shim.cjs began to require its companion, 33 suite tests died with "Cannot find
+// module .../unicode-text.cjs" (isolated-shim.cjs's fail-loud children, oracle-models.cjs's
+// staged provider for every agentic/model oracle, the e2e fixture, the graph runner).
+// Harnesses that write a FAKE bun-shim.cjs (naude-build, dep-closure) stage nothing real
+// and are not sites.
 const SITES = [
   'libexec/clode-extract.cjs',
   'libexec/quaude-blobulate.js',
   'scripts/build-naude.mjs',
   'libexec/naude-entry.cjs',
+  'test/isolated-shim.cjs',
+  'test/oracle-models.cjs',
+  'test/e2e-fixture.test.cjs',
+  'test/graph-runner.test.cjs',
 ];
 
-// read() — the only I/O: this repo's own four site sources. Nothing this guard could
+// read() — the only I/O: this repo's own site sources. Nothing this guard could
 // write to; it never touches ~/.local/share/clode or any build output.
 function readSites() {
   return { sites: SITES.map((rel) => ({ rel, src: fs.readFileSync(path.join(REPO, rel), 'utf8') })) };
@@ -73,7 +85,7 @@ function controlInputs() {
 
 const guard = defineGuard({
   name: 'shim-companions',
-  floor: 4,
+  floor: 8,
   read: readSites,
   scan: scanCompanions,
   control: controlInputs,
@@ -89,7 +101,7 @@ test('a site that no longer names bun-shim.cjs at all is its own finding', () =>
   assert.match(r.findings[0], /synthetic\/renamed\.cjs: no longer names 'bun-shim\.cjs'/);
 });
 
-// A site naming both is clean — the guard does not flag the four real sites once
+// A site naming both is clean — the guard does not flag the real sites once
 // they have been fixed (proven again for real below, but this pins the shape with a
 // synthetic input independent of the real tree).
 test('a site naming both bun-shim.cjs and unicode-text.cjs is clean', () => {
@@ -100,7 +112,7 @@ test('a site naming both bun-shim.cjs and unicode-text.cjs is clean', () => {
   assert.strictEqual(r.examined, 1);
 });
 
-test('floor fires: shim-companions goes BROKEN if fewer than 4 sites are examined', () => {
+test('floor fires: shim-companions goes BROKEN if fewer than 8 sites are examined', () => {
   const r = checkGate({
     name: 'floor-probe', floor: guard.floor,
     read: () => ({ sites: [] }),
