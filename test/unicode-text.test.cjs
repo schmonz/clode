@@ -11,7 +11,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
-const { graphemeBoundaries, clusterWidth, codePointWidth, escapeLayer, forEachCell, cellSgr, textWidth, stringWidth, sliceAnsi,
+const { graphemeBoundaries, clusterWidth, codePointWidth, escapeLayer, forEachCell, cellSgr, oscLink, textWidth, stringWidth, sliceAnsi,
   UNICODE_DATA } = require('../libexec/unicode-text.cjs');
 const { clodeCacheDir } = require('../libexec/clode-paths.cjs');
 const ucd = require('../scripts/lib/ucd.cjs');
@@ -812,4 +812,49 @@ test('CELL-SGR: ESC spellings, a parameter over 255 is whole, an identical re-op
   // A C1 CSI's parameters reach cellSgr as an ESC CSI's do (ESCAPE-LAYER), so its style is
   // spelled ESC[ too: native `U+009B 04:3m x` is `ESC[04:3m`.
   assert.deepStrictEqual(cellStyles(...SGR(0x9b, 0x30, 0x34, 0x3a, 0x33, 0x6d, 0x78)), [K('04:3'), K(24)]);
+});
+
+// ---- OSC-8 (sliceAnsi's and CellSegmenter's) ----------------------------------------------
+// Every expectation is native 2.1.278's, measured 2026-09-25: CellSegmenter's `uris` entry for
+// the cell after the sequence (through escapeLayer, as bun-shim reads it: the OSCs it records,
+// judged by oscLink), and Bun.sliceAnsi's answer for the same sequences. CELL-LINK, which is
+// the shim's, is pinned in test/bun-shim-cell-segmenter.test.cjs.
+const LINKS = (s) => escapeLayer(s).sequences.filter((q) => q.kind === 'osc').map((q) => oscLink(q.params, q.final));
+
+test('OSC-8: `8;`, parameters to the next `;`, the URI verbatim, ended by BEL, U+009C or ESC \\', () => {
+  // native CellSegmenter: each of the three terminators, after either introducer, links `u`
+  assert.deepStrictEqual(LINKS('\x1b]8;;u\x07a\x1b]8;;u\x9cb\x1b]8;;u\x1b\\c\x9d8;;u\x07d\x9d8;;u\x1b\\e'), ['u', 'u', 'u', 'u', 'u']);
+  // the parameters run to the next `;` and are not the URI: `8;a;b;u` links `b;u`, `8;;;` links `;`
+  assert.deepStrictEqual(LINKS('\x1b]8;id=1:foo=bar;u\x07\x1b]8;a;b;u\x07\x1b]8;;;\x07\x1b]8;;u;v;w\x07'), ['u', 'b;u', ';', 'u;v;w']);
+  // an empty URI closes, with or without parameters
+  assert.deepStrictEqual(LINKS('\x1b]8;;\x07\x1b]8;id=1;\x1b\\\x9d8;;\x9c'), ['', '', '']);
+  // the URI is verbatim: TAB, NEL, CSI, DEL, NUL, U+009D, a lone surrogate, non-ASCII
+  for (const cp of [0x09, 0x85, 0x9b, 0x7f, 0x00, 0x9d, 0xd800, 0x4e2d, 0x1f600]) {
+    assert.deepStrictEqual(LINKS('\x1b]8;;u' + H(cp) + 'v\x07a'), ['u' + H(cp) + 'v'], `U+${cp.toString(16)}`);
+  }
+  // not links: one `;`, none, `08`, `88`, `8 `, another OSC; ended by an ESC that is not ST
+  assert.deepStrictEqual(LINKS('\x1b]8;v\x07\x1b]8\x07\x1b]08;;v\x07\x1b]88;;v\x07\x1b]8 ;;v\x07\x1b]0;t\x07\x1b]8;;v\x1b[1m'),
+    [null, null, null, null, null, null, null]);
+  // ... by CAN, SUB or the end of the text (the escape layer records none of those at all)
+  assert.deepStrictEqual(LINKS('\x1b]8;;v\x18a\x1b]8;;v\x1aa\x1b]8;;v'), []);
+});
+
+test('OSC-8 through sliceAnsi: the same links, replayed as written (SLICE-LINKS)', () => {
+  // native Bun.sliceAnsi
+  assert.strictEqual(sliceAnsi('a\x1b]8;a;b;u\x07bc', 1), '\x1b]8;a;b;u\x07bc\x1b]8;;\x07');
+  assert.strictEqual(sliceAnsi('a\x1b]8;;;\x07bc', 1), '\x1b]8;;;\x07bc\x1b]8;;\x07');
+  assert.strictEqual(sliceAnsi('a\x1b]8;;u\x85v\x07bc', 1, 2), '\x1b]8;;u\x85v\x07b\x1b]8;;\x07');
+  assert.strictEqual(sliceAnsi('a\x1b]8;u\x07bc', 1), 'bc');
+  assert.strictEqual(sliceAnsi('a\x1b]08;;u\x07bc', 1), 'bc');
+  assert.strictEqual(sliceAnsi('a\x1b]8;;u\x1b[1mbc', 1), '\x1b[1mbc\x1b[22m');
+  // no nesting, and SGR 0 closes no link
+  assert.strictEqual(sliceAnsi('\x1b]8;;u\x07a\x1b]8;;v\x07b\x1b]8;;\x07c', 1, 2), '\x1b]8;;v\x07b\x1b]8;;\x07');
+  assert.strictEqual(sliceAnsi('\x1b]8;;u\x07a\x1b[0mbc', 1, 2), '\x1b]8;;u\x07b\x1b]8;;\x07');
+});
+
+test('ESCAPE-LAYER: an OSC ended by ESC \\ is recorded with that terminator; by another ESC, with none', () => {
+  const finals = (s) => escapeLayer(s).sequences.filter((q) => q.kind !== 'csi').map((q) => q.final);
+  assert.deepStrictEqual(finals('\x1b]0;t\x1b\\a\x1b]0;t\x1b[1mb\x1bPq\x1b\\c'), ['\x1b\\', '', '\x1b\\']);
+  // the ST is still read as the two-character sequence it is: nothing of it is text
+  assert.strictEqual(escapeLayer('\x1b]0;t\x1b\\a').text, 'a');
 });

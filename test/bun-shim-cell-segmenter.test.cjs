@@ -14,11 +14,11 @@
 // baseline). This file pins the CONTRACT so a later edit cannot drift from what
 // that measurement certified.
 //
-// The last test PINS ONE THING AS CURRENTLY WRONG (phase 4, OSC-8 interning). It
-// is asserted as it is today so that the day it is fixed this goes red and the pin
-// gets re-taken on purpose. Phase 3's two pins (clustering, widths) were re-taken
-// that way: the test before it now asserts native's answers. Clusters and widths
-// themselves are judged against native by test/fidelity/text-differential.test.cjs.
+// Nothing is pinned as wrong any more. Phase 3's two pins (clustering, widths) and
+// phase 4's (OSC-8 links, not interned) were each asserted as they were until the fix
+// turned them red, and were re-taken on purpose: the last two tests assert native's
+// answers. Clusters, widths, styles and links themselves are judged against native by
+// test/fidelity/text-differential.test.cjs.
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -136,6 +136,24 @@ const out = {};
   const r = seg(n, 'a\x1b]8;;https://example.com\x07L\x1b]8;;\x1b\\b\x01\x7f');
   out.osc = { text: r.cells.map(([g]) => n.graphemes[g]).join(''), linkOfRuns: r.runs.map(([, l]) => l),
     uris: n.uris.slice() };
+}
+
+// CELL-LINK: each cell's grapheme and its run's uris index, and the pool after, one fresh
+// segmenter per case unless the case is about what one segmenter carries across calls.
+{ const cp = (...c) => String.fromCodePoint(...c);
+  const links = (n, text) => { const r = seg(n, text); return r.cells.map(([g, w]) => [n.graphemes[g], r.runs[w >>> 10][1]]); };
+  const one = (text) => { const n = make([]); return { cells: links(n, text), uris: n.uris.slice() }; };
+  out.link = {
+    mark: one('e\x1b]8;;u\x07' + cp(0x301) + 'x'),
+    ids: one('\x1b]8;id=1;u\x07a\x1b]8;id=2;u\x9cb\x9d8;;v\x1b\\c'),
+    readNoCell: one('a\x1b]8;;u\x07\x1b]8;;\x07b'),
+    trailing: one('a\x1b]8;;u\x07'),
+    nest: one('\x1b]8;;u\x07a\x1b]8;;v\x07b\x1b]8;;\x07c'),
+    notLinks: one('\x1b]8;;u\x07a\x1b]8;v\x07b\x1b[0mc\x1bcd\x1b]8;;w\x1b[1me'),
+    tabWide: one('\x1b]8;;u\x07\t' + cp(0x4e2d) + '\x1b]8;;\x07' + cp(0x200b) + 'z'),
+  };
+  const n = make([]);
+  out.link.perCall = { first: links(n, '\x1b]8;;u\x07a'), second: links(n, 'b'), uris: n.uris.slice() };
 }
 
 // paint(): the caller hands it the screen, an x that may run past the width,
@@ -350,10 +368,34 @@ test('clusters and widths match native (2026-09-24 measurements)', (t) => {
   assert.ok(o.pins.wholeCluster, 'its cell holds the whole sequence, both surrogate pairs intact');
 });
 
-test('PINNED AS WRONG: no OSC-8 interning', (t) => {
+// Phase 4's pin, re-taken: it asserted `uris` stayed [''] and every run's link 0 until
+// CELL-LINK landed. Every literal below is native 2.1.278's CellSegmenter (2026-09-25).
+test('CELL-LINK: a link is interned into uris and named by the runs of the cells it covers', (t) => {
   const o = results(t); if (!o) return;
-  const retake = ' — if this changed, phase 4 landed: re-take the pin and update the SCOPE note '
-    + 'beside _CellSegmenter in libexec/bun-shim.cjs';
-  assert.deepStrictEqual(o.osc.uris, [''], `OSC-8 targets should be interned; today they are not${retake}`);
-  assert.ok(o.osc.linkOfRuns.every((l) => l === 0), `so every run's link is 0${retake}`);
+  // native: `a` [link 0] `L` [link 1] `b` [link 0], uris ['', 'https://example.com']
+  assert.deepStrictEqual(o.osc.uris, ['', 'https://example.com']);
+  assert.deepStrictEqual(o.osc.linkOfRuns, [0, 1, 0], 'no link, the link, closed by ESC]8;; ESC \\');
+  // no nesting: `u`, then `v`, then a close is no link, not `u`
+  assert.deepStrictEqual(o.link.nest, { cells: [['a', 1], ['b', 2], ['c', 0]], uris: ['', 'u', 'v'] });
+  // one `;`, SGR 0, RIS and an OSC 8 ended by an ESC that is not ST neither open nor close one
+  assert.deepStrictEqual(o.link.notLinks, { cells: [['a', 1], ['b', 1], ['c', 1], ['d', 1], ['e', 1]], uris: ['', 'u'] });
+  // a tab takes the link; a zero-width cluster has no cell to take one
+  assert.deepStrictEqual(o.link.tabWide, { cells: [['\t', 1], [String.fromCodePoint(0x4e2d), 1], ['z', 0]], uris: ['', 'u'] });
+});
+
+test('CELL-LINK: a cell takes the link in force where its cluster starts, and each segment() starts with none', (t) => {
+  const o = results(t); if (!o) return;
+  // native `e`, an open of `u`, `U+0301 x`: the cluster `e U+0301` started before the open
+  assert.deepStrictEqual(o.link.mark, { cells: [['e' + String.fromCodePoint(0x301), 0], ['x', 1]], uris: ['', 'u'] });
+  // native: a link left open at the end of one segment() is not carried into the next
+  assert.deepStrictEqual(o.link.perCall, { first: [['a', 1]], second: [['b', 0]], uris: ['', 'u'] });
+});
+
+test('CELL-LINK: uris holds the URI alone, interned as it is read', (t) => {
+  const o = results(t); if (!o) return;
+  // native: `id=1` and `id=2` on `u` are one entry; the C1 OSC's `v` is the next
+  assert.deepStrictEqual(o.link.ids, { cells: [['a', 1], ['b', 1], ['c', 2]], uris: ['', 'u', 'v'] });
+  // native interns `u` though no cell ever has it: closed before one, or after the last
+  assert.deepStrictEqual(o.link.readNoCell, { cells: [['a', 0], ['b', 0]], uris: ['', 'u'] });
+  assert.deepStrictEqual(o.link.trailing, { cells: [['a', 0]], uris: ['', 'u'] });
 });

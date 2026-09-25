@@ -1035,7 +1035,7 @@ if (!_yaml) YAML.__bunShimStub = true;
 //   every screen cell written: BOTH slots, char index and packed word.
 //
 // SCOPE, STATED SO IT IS MEASURABLE RATHER THAN SILENT. Phases 1 and 2 built the
-// contract above; phase 3 made the TEXT native's:
+// contract above; phase 3 made the TEXT native's, and phase 4 its LINKS:
 //   - CLUSTERS AND WIDTHS are native CellSegmenter's own, from the ONE
 //     implementation in unicode-text.cjs (its `bun-cell` profile, NOT the UAX #29
 //     that Intl.Segmenter follows: native's two clusterers disagree), together
@@ -1049,13 +1049,13 @@ if (!_yaml) YAML.__bunShimStub = true;
 //     style is spelled and in what order the run's key lists them are unicode-text.cjs's
 //     SGR- and CELL-SGR rules, judged by the same gate on the style the caller PAINTS
 //     (each cell's key through its own ansiCodes()/SC filter, close codes included).
-//   - HYPERLINKS ARE PARSED BUT NOT INTERNED (phase 4). OSC sequences are consumed
-//     (they must be, or their bytes would paint as glyphs) and `uris` therefore
-//     never grows past its reserved index 0, so runs[2j+1] is always 0 and the
-//     caller skips interning. Frames containing OSC-8 links differ from native in
-//     the link class and nowhere else.
-// test/bun-shim-cell-segmenter.test.cjs PINS the last as currently wrong, so the
-// day it is fixed the pin goes red and has to be re-taken.
+//   - HYPERLINKS are native's too: which OSC is a link is unicode-text.cjs's OSC-8
+//     rule (the one Bun.sliceAnsi's SLICE-LINKS reads as well), and which cell takes
+//     it, what `uris` holds and when a URI is interned is CELL-LINK. Judged by the
+//     same gate on the link the caller PAINTS (each cell's run's uris entry, as
+//     runWords() reads it).
+// What is still NOT native's is named in BACKLOG.md's CellSegmenter section (phase 5:
+// the stateful surfaces; phase 6: `reordered`, and performance).
 
 // Pool interning. The pools are ARRAYS because the caller indexes and .length
 // them directly; the Map beside each is ours and never escapes.
@@ -1182,27 +1182,35 @@ class _CellSegmenter {
     };
 
     // THE TEXT IS unicode-text.cjs's, stated there once: its escape layer takes ESC
-    // and the C1 introducers' sequences out (OSC is consumed, not interned: phase 4),
-    // and its cells are native's bun-cell clusters with the TAB, zero-width,
-    // 255-saturation and substitute rules. What is left here is the caller's
-    // encoding. A cell's style is the one in force where its cluster STARTS — a
-    // cluster can span an escape (measured: `e ESC[1m U+0301 x` is `e U+0301`
-    // unstyled, then `x` bold) — so a sequence applies before the first cell whose
-    // cluster starts at or after it.
+    // and the C1 introducers' sequences out, and its cells are native's bun-cell
+    // clusters with the TAB, zero-width, 255-saturation and substitute rules. What is
+    // left here is the caller's encoding. A cell's style and link are the ones in force
+    // where its cluster STARTS — a cluster can span an escape (measured: `e ESC[1m
+    // U+0301 x` is `e U+0301` unstyled, then `x` bold; the same for a link) — so a
+    // sequence applies before the first cell whose cluster starts at or after it.
     const { text: visible, sequences } = _ut.escapeLayer(str);
+    const apply = (q) => {
+      // An SGR: a CSI that ENDED at `m` and met nothing it could not hold (an ignored CSI
+      // is consumed and never applied: ESCAPE-LAYER). What it does is CELL-SGR's.
+      if (q.kind === 'csi' && q.final === 'm' && !q.ignored) { _ut.cellSgr(styles, q.params); sgrIdx = this._sgrIndexOf(styles); }
+      // A hyperlink: which OSC is one is OSC-8's, what it does CELL-LINK's. Its URI is
+      // interned as it is read; '' (a close) is index 0, no link.
+      else if (q.kind === 'osc') {
+        const uri = _ut.oscLink(q.params, q.final);
+        if (uri !== null) uriIdx = _csIntern(this.uris, this._uriIndex, uri);
+      }
+    };
     let next = 0;
     _ut.forEachCell(visible, this.ambiguousIsNarrow, this.substitute, (g, advance, tab, at) => {
-      for (; next < sequences.length && sequences[next].at <= at; next++) {
-        const q = sequences[next];
-        // An SGR: a CSI that ENDED at `m` and met nothing it could not hold (an ignored CSI
-        // is consumed and never applied: ESCAPE-LAYER). What it does is CELL-SGR's.
-        if (q.kind === 'csi' && q.final === 'm' && !q.ignored) { _ut.cellSgr(styles, q.params); sgrIdx = this._sgrIndexOf(styles); }
-      }
+      for (; next < sequences.length && sequences[next].at <= at; next++) apply(sequences[next]);
       // TAB: bit 8 says "advance is tabWidth - col%tabWidth", which only the
       // consumer (width(), or our paint()) can resolve because it depends on the
       // column. The low advance bits are unread for a tab; keep them 0.
       emit(_csIntern(this.graphemes, this._gIndex, g), tab ? 256 : advance);
     });
+    // After the last cell: native still interns the URI of a link it reads there
+    // (CELL-LINK), but no style key (it keys only a style a cell has).
+    for (; next < sequences.length; next++) if (sequences[next].kind === 'osc') apply(sequences[next]);
 
     if (overflow) return -count;
     return count;

@@ -396,13 +396,18 @@ function readCsi(str, j, at, out) {
 }
 
 // An OSC (kind 'osc') or a DCS/SOS/PM/APC string (kind 'string') from j, just past its
-// introducer. Recorded with the terminator it ended at ('' when an ESC ended it).
+// introducer. Recorded with the terminator it ended at: BEL or U+009C, `ESC \` when the ESC
+// that ended it is the ST (the ESC is still read again, as the two-character sequence it
+// is), '' when any other ESC ended it.
 function readString(str, j, kind, at, out) {
   const start = j;
   for (; j < str.length; j++) {
     const c = str.charCodeAt(j);
     if (c === ST || (c === BEL && kind === 'osc')) { out.push({ at, kind, params: str.slice(start, j), final: str[j] }); return j + 1; }
-    if (c === ESC) { out.push({ at, kind, params: str.slice(start, j), final: '' }); return j; }
+    if (c === ESC) {
+      out.push({ at, kind, params: str.slice(start, j), final: str.charCodeAt(j + 1) === 0x5c ? '\x1b\\' : '' });
+      return j;
+    }
     if (isCancel(c)) return j + 1;                                    // CAN, SUB: abandoned
   }
   return j;
@@ -669,6 +674,47 @@ function cellSgr(styles, params) {
   });
 }
 
+// ---- OSC 8 hyperlinks ---------------------------------------------------------------------
+// Native Bun reads hyperlinks in the same two places it reads SGR: Bun.sliceAnsi replays and
+// closes the link open at a cut (SLICE-LINKS), and Bun.ant.CellSegmenter interns each link's
+// URI into `uris` and names it in each run of cells (CELL-LINK). WHICH sequence is a link is
+// one rule both share (OSC-8); each reader finds where an OSC ends by its own escape grammar
+// (ESCAPE-LAYER, SLICE-ESCAPES). Measured against native 2.1.278 (Bun 1.4.3) on 2026-09-25:
+// every UTF-16 code unit (and four astral code points) in the parameter and in the URI
+// position of a CellSegmenter link, and the links corpus (scripts/lib/text-corpus.cjs) through
+// all four consumers; each rule is pinned by a same-named test in test/unicode-text.test.cjs
+// or test/bun-shim-cell-segmenter.test.cjs.
+// OSC-8 (rule): an OSC (ESC ] or U+009D) whose body is `8;`, then parameters up to the next
+//   `;`, then the URI: everything after that `;`, up to a BEL, U+009C or ESC \ terminator. So
+//   `8;a;b;u` has the URI `b;u` and `8;;;` the URI `;`, and the URI is kept verbatim --
+//   controls, C1, DEL, NUL and lone surrogates included, at any length (300,000 was measured).
+//   An empty URI closes the link in force; any other replaces it. There is no nesting: `u`,
+//   then `v`, then a close leaves no link, not `u`. What is not one opens and closes nothing:
+//   a body `8;u` (one `;`) or `8`, `08;;u`, `88;;u`, `8 ;;u`, any other OSC, and an OSC 8
+//   ended any other way -- by an ESC that is not ST, by CAN or SUB, or by the end of the text.
+//   SGR 0 and RIS (ESC c) close no link either.
+
+// OSC-8: the URI of the OSC whose body (what follows ESC ] or U+009D) and terminator (BEL,
+// U+009C, `ESC \`, or '' for anything else) are given -- '' when it closes the link in force --
+// or null when it is no hyperlink. The body holds none of the terminators: both readers end an
+// OSC at the first.
+function oscLink(body, terminator) {
+  if (terminator !== '\x07' && terminator !== '\x9c' && terminator !== '\x1b\\') return null;
+  if (body.charCodeAt(0) !== 0x38 || body.charCodeAt(1) !== 0x3b) return null;
+  const k = body.indexOf(';', 2);
+  return k < 0 ? null : body.slice(k + 1);
+}
+
+// CELL-LINK (rule): the hyperlink of each CellSegmenter cell, which the shim names in each run
+//   of cells as an index into `uris` (bun-shim.cjs), is OSC-8's with three rules of its own:
+//   - a cell takes the link in force where its cluster STARTS, as it takes its style
+//     (`e`, an open of `u`, `U+0301 x` is `e U+0301` with no link, then `x` linked to `u`),
+//     and every segment() starts with none (a link left open is not carried to the next);
+//   - `uris` holds the URI alone: the parameters, `id=` among them, are dropped, and one URI
+//     under two ids is one entry, at one index;
+//   - a URI is interned as it is READ, even when no cell follows it (`a`, an open of `u`, a
+//     close, `b` interns `u`), where a style is interned only for a cell that has it.
+
 // ---- Bun.sliceAnsi ------------------------------------------------------------------------
 // Bun.sliceAnsi(input, start, end, options): `input` cut to the display COLUMNS [start, end),
 // its escape sequences kept and its styles closed at the cut. New in upstream 2.1.278, whose
@@ -707,9 +753,9 @@ function cellSgr(styles, params) {
 //   copied as they are. At the cut the styles still open are closed, last opened first, each
 //   close once (`ESC[1m ESC[2m` closes with one `ESC[22m`), always in the ESC form, by their
 //   SGR-CLOSES close (`ESC[0m` for a code with none).
-// SLICE-LINKS (rule): an OSC 8 hyperlink open before the slice is replayed as it was written,
-//   and one still open at the cut is closed with `ESC]8;;` (or C1 OSC `8;;`) and the
-//   terminator it was opened with.
+// SLICE-LINKS (rule): an OSC 8 hyperlink (OSC-8) open before the slice is replayed as it was
+//   written, parameters and all, and one still open at the cut is closed with `ESC]8;;` (or C1
+//   OSC `8;;`) and the terminator it was opened with.
 // SLICE-AFTER-END (rule): the sequences between the last cluster in the slice and the first
 //   one out of it are kept only when they close something open: an SGR with no opening
 //   parameter (and no colon form) that closes an open style, a hyperlink close while one is
@@ -718,9 +764,7 @@ function cellSgr(styles, params) {
 //   (0, 3) keeps and closes the bold); a negative start or end that resolves to the total
 //   width counts as no end (`ab ESC[1m` (-2) keeps it too).
 // SLICE-ESCAPES (rule): the grammar sliceAnsi recognises, which differs from ESCAPE-LAYER's:
-//   - An OSC 8 hyperlink (ESC ] 8 ; or C1 OSC 8 ;) is its own kind: parameters up to a `;`,
-//     then a URI up to BEL, ESC \ or U+009C; empty URI closes. Anything else ends it early
-//     and it is an ordinary OSC.
+//   - An OSC 8 hyperlink (OSC-8) is its own kind; an OSC that is not one is an ordinary OSC.
 //   - An OSC, DCS, SOS, PM or APC string (ESC or C1 introduced) with NO terminator is not a
 //     sequence at all: its introducer is a visible 0-wide character and its body visible text
 //     (`a ESC ] 0 ; title` (0, 3) is `a ESC ] 0`), where ESCAPE-LAYER takes it to the end.
@@ -757,32 +801,23 @@ function toIntegerOrInfinity(v) {
   return Math.trunc(x) || 0;
 }
 
-// An OSC 8 hyperlink at i, or null (SLICE-ESCAPES).
+// An OSC 8 hyperlink at i, or null: the OSC SLICE-ESCAPES reads there (sliceString, below),
+// judged by OSC-8.
 function sliceLink(str, i, n) {
   const c = str.charCodeAt(i);
-  let j, viaC1;
-  if (c === ESC && n - i >= 4 && str.charCodeAt(i + 1) === 0x5d && str.charCodeAt(i + 2) === 0x38 && str.charCodeAt(i + 3) === 0x3b) { j = i + 4; viaC1 = false; }
-  else if (c === C1_OSC && n - i >= 3 && str.charCodeAt(i + 1) === 0x38 && str.charCodeAt(i + 2) === 0x3b) { j = i + 3; viaC1 = true; }
+  let from;
+  if (c === C1_OSC) from = i + 1;
+  else if (c === ESC && i + 1 < n && str.charCodeAt(i + 1) === 0x5d) from = i + 2;
   else return null;
-  for (; j < n; j++) {
-    const d = str.charCodeAt(j);
-    if (d === 0x3b) break;
-    if (d === BEL || d === ST || d === ESC || d === 0x18 || d === 0x1a) return null;
-  }
-  if (j >= n) return null;
-  const uri = j + 1;
-  for (let k = uri; k < n; k++) {
-    const d = str.charCodeAt(k);
-    let end = -1;
-    if (d === BEL || d === ST) end = k + 1;
-    else if (d === ESC && k + 1 < n && str.charCodeAt(k + 1) === 0x5c) end = k + 2;
-    else if (d === ESC || d === 0x18 || d === 0x1a) return null;
-    if (end >= 0) {
-      return { kind: SLICE_LINK, at: i, end, text: str.slice(i, end), open: k > uri,
-        close: (viaC1 ? String.fromCharCode(C1_OSC) + '8;;' : '\x1b]8;;') + str.slice(k, end) };
-    }
-  }
-  return null;
+  const end = sliceString(str, i, n);
+  if (end < 0) return null;
+  let to = end, terminator = '';
+  const last = str.charCodeAt(end - 1);
+  if (end - 1 >= from && (last === BEL || last === ST)) { to = end - 1; terminator = str[to]; }
+  else if (end - 2 >= from && last === 0x5c && str.charCodeAt(end - 2) === ESC) { to = end - 2; terminator = '\x1b\\'; }
+  const uri = oscLink(str.slice(from, to), terminator);
+  if (uri === null) return null;
+  return { kind: SLICE_LINK, at: i, end, text: str.slice(i, end), open: uri !== '', close: str.slice(i, from) + '8;;' + terminator };
 }
 
 // Where an OSC/DCS/SOS/PM/APC string or a lone U+009C at i ends, or -1 (SLICE-ESCAPES).
@@ -1047,4 +1082,4 @@ function sliceAnsi(input, start, end, options, narrowOption) {
 }
 
 module.exports = { graphemeBoundaries, clusterWidth: cellClusterWidth, codePointWidth, escapeLayer, textWidth, stringWidth, forEachCell, cellSgr,
-  sliceAnsi, UNICODE_DATA };
+  oscLink, sliceAnsi, UNICODE_DATA };
