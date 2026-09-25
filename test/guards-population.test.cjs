@@ -566,6 +566,18 @@ test('the controlled set is EXACTLY the modules a guard was deliberately written
   // of 28 and went red at authoring time; test/build-gates/text-probe-gates.test.cjs controls
   // the restatement against the carved bundle's own ansiCodes()/SC, which returned the count
   // to 28. The baseline did not move.
+  //
+  // scripts/lib/paint-probe.cjs ADDED 2026-09-25 (CellSegmenter phase 5, task 1), the mechanism
+  // a seventh time, and gate-shaped on the day it was written: it pattern-matches (the SC regex
+  // it shares with text-probe.cjs, `.test(`) and refuses (an empty corpus throws). It restates
+  // two numbers read off the carve rather than derived at run time — the word's style/link
+  // shift (17/2, `jn(style,link,width)=style<<17|link<<2|width`) and the paint()/setCell()
+  // packed-return's damage constants (1048576/65536/68719476736) — because unlike a segmented
+  // STRING, a shift or a divisor cannot be read back from a live instance the way a pool string
+  // can. It pushed uncontrolled to 29 against the baseline of 28 and went red at authoring
+  // time; test/build-gates/paint-probe-gates.test.cjs controls both restatements against the
+  // carved bundle's own packWord function and damage-decode sites, which returned the count to
+  // 28. The baseline did not move.
   assert.deepStrictEqual([...controlledProductionModules().keys()].sort(), [
     'libexec/clode-build.cjs',
     'libexec/host-provision.cjs',
@@ -575,6 +587,7 @@ test('the controlled set is EXACTLY the modules a guard was deliberately written
     'scripts/build-graph.cjs',
     'scripts/build-runner.cjs',
     'scripts/carve-probe.mjs',
+    'scripts/lib/paint-probe.cjs',
     'scripts/lib/text-probe.cjs',
     'scripts/oracle-native-version.cjs',
     'scripts/render-build-graph.cjs',
