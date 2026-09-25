@@ -123,7 +123,7 @@ test('Intl.RelativeTimeFormat / Segmenter / Collator / DisplayNames / Locale exi
 // read as ABSENCE rather than as an error — `segments.containing` was plain
 // `undefined`, so a caller got a NAMELESS quickjs "TypeError: not a function"
 // from a line that never mentions Intl. That is how it surfaced: npm slice-ansi
-// (which backs Bun.sliceAnsi, new in upstream 2.1.278) tokenises with
+// (which then backed Bun.sliceAnsi, new in upstream 2.1.278) tokenises with
 // `graphemeSegments.containing(index)`, so every Ink layout pass that truncated
 // a string threw, upstream caught it and logged "frame dropped", and the
 // interactive TUI emitted 518 bytes of pure control sequences without one

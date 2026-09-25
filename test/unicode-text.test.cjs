@@ -11,7 +11,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
-const { graphemeBoundaries, clusterWidth, codePointWidth, escapeLayer, forEachCell, textWidth, stringWidth, UNICODE_DATA } =
+const { graphemeBoundaries, clusterWidth, codePointWidth, escapeLayer, forEachCell, textWidth, stringWidth, sliceAnsi, UNICODE_DATA } =
   require('../libexec/unicode-text.cjs');
 const { clodeCacheDir } = require('../libexec/clode-paths.cjs');
 const ucd = require('../scripts/lib/ucd.cjs');
@@ -461,4 +461,207 @@ test('ESCAPE-LAYER CANCEL: U+009C, CAN and SUB end any sequence they interrupt, 
   assert.deepStrictEqual(cellsOf(H(0x61, ESC, 0x9c, 0x903)), [[[0x61, 0x903], 2]]);
   // Outside a sequence CAN is an ordinary control and breaks: native `a CAN U+0301` -> [a]
   assert.deepStrictEqual(cellsOf(H(0x61, 0x18, 0x301)), [[[0x61], 1]]);
+});
+
+// ---- Bun.sliceAnsi (the SLICE-* rules and the bun-slice profile's two deltas) ------------
+// Every expected value below is native 2.1.278's own answer (Bun 1.4.3, measured 2026-09-25:
+// each call was made in native and in ours, and the two agreed), written with ASCII escapes
+// and code points so no editing tool can normalise it. The differential over whole corpora
+// is test/fidelity/text-differential.test.cjs's text-diff-sliceansi.
+
+test('bun-slice: bun-cell clusters, except that a Cc other than CR LF and a lone surrogate are Other', () => {
+  // Measured through sliceAnsi below (SLICE-CONTROLS-JOIN, SLICE-SURROGATES-VISIBLE).
+  assert.deepStrictEqual(B(H(0x890, 0x7, 0x78), 'bun-slice'), [2, 3]);
+  assert.deepStrictEqual(B(H(0x890, 0x7, 0x78), 'bun-cell'), [1, 2, 3]);
+  assert.deepStrictEqual(B(H(0x890, 0xd, 0x78), 'bun-slice'), [1, 2, 3]);
+  assert.deepStrictEqual(B(H(0x2764, 0xdc00, 0xfe0f), 'bun-slice'), [1, 3]);
+  assert.deepStrictEqual(B(H(0x2764, 0xdc00, 0xfe0f), 'bun-cell'), [3]);
+  assert.deepStrictEqual(B(H(0x1f476, 0x1f3fb, 0x1f3fb), 'bun-slice'), B(H(0x1f476, 0x1f3fb, 0x1f3fb), 'bun-cell'));
+});
+
+test('SLICE-ARGUMENTS: an ellipsis with a width is refused, not answered differently from native', () => {
+  // Native truncates with it ('uni.', 'un..'); the bundle never passes one, so it is not
+  // implemented here.
+  assert.throws(() => sliceAnsi('unicorn', 0, 4, '.'), /ellipsis option is not implemented/);
+  assert.throws(() => sliceAnsi('unicorn', 0, 4, { ellipsis: '..' }), /ellipsis option is not implemented/);
+  // Zero-width ellipses are no ellipsis at all, in native too: 'unicorn' (0, 4, '') is 'unic'.
+  assert.strictEqual(sliceAnsi('unicorn', 0, 4, ''), 'unic');
+});
+
+test('SLICE-ARGUMENTS: columns count back from the total width when negative; indices are integers', () => {
+  assert.strictEqual(sliceAnsi('hello', -2), 'lo');
+  assert.strictEqual(sliceAnsi('hello', 1, -1), 'ell');
+  assert.strictEqual(sliceAnsi('hello', -2, -1), 'l');
+  assert.strictEqual(sliceAnsi(H(0x4e2d, 0x6587) + 'x', -3), H(0x6587) + 'x');
+  assert.strictEqual(sliceAnsi(H(0x4e2d, 0x6587) + 'x', 0, -3), H(0x4e2d));
+  assert.strictEqual(sliceAnsi('hello', 1.9), 'ello');
+  assert.strictEqual(sliceAnsi('hello', -1.9), 'o');
+  assert.strictEqual(sliceAnsi('hello', 'x'), 'hello');
+  assert.strictEqual(sliceAnsi('hello', null, 2), 'he');
+  assert.strictEqual(sliceAnsi('hello', 1, null), '');
+  assert.strictEqual(sliceAnsi('hello', '1', '3'), 'el');
+  assert.strictEqual(sliceAnsi('hello', -Infinity), 'hello');
+  assert.strictEqual(sliceAnsi('hello', 0, -Infinity), '');
+  assert.strictEqual(sliceAnsi('hello', Infinity), '');
+});
+
+test('SLICE-ARGUMENTS: the input is converted as a template literal converts it, and read before the indices', () => {
+  assert.strictEqual(sliceAnsi(), 'undefined');
+  assert.strictEqual(sliceAnsi(undefined), 'undefined');
+  assert.strictEqual(sliceAnsi(null), 'null');
+  assert.strictEqual(sliceAnsi(123, 1), '23');
+  assert.strictEqual(sliceAnsi(true, 1, 3), 'ru');
+  assert.strictEqual(sliceAnsi(['a', 'b'], 1), ',b');
+  assert.throws(() => sliceAnsi(Symbol.iterator), TypeError);
+  assert.throws(() => sliceAnsi('hello', Symbol.iterator), TypeError);
+  assert.throws(() => sliceAnsi('hello', 1n), TypeError);
+  assert.strictEqual(sliceAnsi('', Symbol.iterator), '');
+});
+
+test('SLICE-ARGUMENTS: ambiguousIsNarrow is true unless a boolean or an options object says otherwise', () => {
+  assert.strictEqual(sliceAnsi(H(0xa1, 0xa1) + 'x', 0, 2), H(0xa1, 0xa1));
+  assert.strictEqual(sliceAnsi(H(0xa1, 0xa1) + 'x', 0, 2, false), H(0xa1));
+  assert.strictEqual(sliceAnsi(H(0xa1, 0xa1) + 'x', 0, 2, true), H(0xa1, 0xa1));
+  assert.strictEqual(sliceAnsi(H(0xa1, 0xa1) + 'x', 0, 2, undefined, false), H(0xa1));
+  assert.strictEqual(sliceAnsi(H(0xa1, 0xa1) + 'x', 0, 2, '', false), H(0xa1));
+  assert.strictEqual(sliceAnsi(H(0xa1, 0xa1) + 'x', 0, 2, {ambiguousIsNarrow: false}), H(0xa1));
+  assert.strictEqual(sliceAnsi(H(0xa1, 0xa1) + 'x', 0, 2, {ambiguousIsNarrow: 0}), H(0xa1));
+  assert.strictEqual(sliceAnsi(H(0xa1, 0xa1) + 'x', 0, 2, {}), H(0xa1, 0xa1));
+  assert.strictEqual(sliceAnsi(H(0xa1, 0xa1) + 'x', 0, 2, null, false), H(0xa1, 0xa1));
+});
+
+test('SLICE-IDENTITY: start 0 to the end returns the input as given; any other end normalises it', () => {
+  assert.strictEqual(sliceAnsi('\x1b[1;31mab'), '\x1b[1;31mab');
+  assert.strictEqual(sliceAnsi('\x1b[1;31mab', 0), '\x1b[1;31mab');
+  assert.strictEqual(sliceAnsi('\x1b[1;31mab', 0, Infinity), '\x1b[1;31mab');
+  assert.strictEqual(sliceAnsi('\x1b[1;31mab', 0, 100), '\x1b[1m\x1b[31mab\x1b[39m\x1b[22m');
+  assert.strictEqual(sliceAnsi('\x1b[1;31mab', -2), '\x1b[1m\x1b[31mab\x1b[39m\x1b[22m');
+  assert.strictEqual(sliceAnsi('a\x1b[2Kb', 0), 'a\x1b[2Kb');
+  assert.strictEqual(sliceAnsi('a\x1b[2Kb', 0, 9), 'a\x1b[2Kb');
+});
+
+test('SLICE-COLUMNS: a cluster is in when the column it starts at is in [start, end)', () => {
+  assert.strictEqual(sliceAnsi(H(0x4e2d, 0x6587) + 'x', 0, 1), H(0x4e2d));
+  assert.strictEqual(sliceAnsi(H(0x4e2d, 0x6587) + 'x', 0, 3), H(0x4e2d, 0x6587));
+  assert.strictEqual(sliceAnsi(H(0x4e2d, 0x6587) + 'x', 1, 3), H(0x6587));
+  assert.strictEqual(sliceAnsi(H(0x4e2d, 0x6587) + 'x', 1), H(0x6587) + 'x');
+  assert.strictEqual(sliceAnsi('a' + H(0x200b), 0, 1), 'a');
+  assert.strictEqual(sliceAnsi('a' + H(0x200b), 1), H(0x200b));
+  assert.strictEqual(sliceAnsi(H(0x200b) + 'a', 1), '');
+  assert.strictEqual(sliceAnsi(H(0x1f468, 0x200d, 0x1f469, 0x200d, 0x1f467) + 'ab', 0, 1), H(0x1f468, 0x200d, 0x1f469, 0x200d, 0x1f467));
+  assert.strictEqual(sliceAnsi(H(0x1f468, 0x200d, 0x1f469, 0x200d, 0x1f467) + 'ab', 1), 'ab');
+  assert.strictEqual(sliceAnsi(H(0x1100, 0x1100) + 'x', 3), 'x');
+  assert.strictEqual(sliceAnsi(H(0x915, 0x94d, 0x937, 0x94d, 0x92e) + 'x', 3), 'x');
+  assert.strictEqual(sliceAnsi('a' + H(0x1f3ff, 0x1f476), 1), H(0x1f3ff, 0x1f476));
+  assert.strictEqual(sliceAnsi(H(0x1019, 0x1039, 0x1018) + 'x', 1), H(0x1018) + 'x');
+  assert.strictEqual(sliceAnsi('e\x1b[1m' + H(0x301) + 'x', 0, 1), 'e\x1b[1m' + H(0x301) + '\x1b[22m');
+  assert.strictEqual(sliceAnsi('e\x1b[1m' + H(0x301) + 'x', 1), '\x1b[1mx\x1b[22m');
+  assert.strictEqual(sliceAnsi(H(0x1f600, 0x903, 0xfe0f) + 'x', 3), 'x');
+});
+
+test('bun-slice SLICE-CONTROLS-JOIN: only CR and LF break around themselves; a Prepend takes any other Cc', () => {
+  assert.strictEqual(sliceAnsi(H(0x890) + '\x07x', 1), 'x');
+  assert.strictEqual(sliceAnsi(H(0x890) + '\x09x', 1), 'x');
+  assert.strictEqual(sliceAnsi(H(0x890) + '\x00x', 1), 'x');
+  assert.strictEqual(sliceAnsi(H(0x890) + '\x85x', 1), 'x');
+  assert.strictEqual(sliceAnsi(H(0x890) + '\x7fx', 1), 'x');
+  assert.strictEqual(sliceAnsi(H(0x890) + '\x0dx', 1), '\x0dx');
+  assert.strictEqual(sliceAnsi(H(0x890) + '\x0ax', 1), '\x0ax');
+  assert.strictEqual(sliceAnsi('a\x07' + H(0x301) + 'b', 1), '\x07' + H(0x301) + 'b');
+  assert.strictEqual(sliceAnsi('a\x07' + H(0x301) + 'b', 0, 2), 'a\x07' + H(0x301) + 'b');
+});
+
+test('bun-slice SLICE-SURROGATES-VISIBLE: a lone surrogate is a 0-wide code point of its own', () => {
+  assert.strictEqual(sliceAnsi(H(0x2764, 0xdc00, 0xfe0f) + 'x', 1), H(0xdc00, 0xfe0f) + 'x');
+  assert.strictEqual(sliceAnsi(H(0x890, 0xd800) + 'x', 1), 'x');
+  assert.strictEqual(sliceAnsi('a' + H(0xd83d), 1), H(0xd83d));
+  assert.strictEqual(sliceAnsi(H(0xd83d) + 'a', 0, 1), H(0xd83d) + 'a');
+  assert.strictEqual(sliceAnsi(H(0xd83d) + 'a', 1), '');
+  assert.strictEqual(sliceAnsi('a' + H(0xdc00, 0x308) + 'b', 1), H(0xdc00, 0x308) + 'b');
+  assert.strictEqual(sliceAnsi(H(0xd83d) + '\x1b[1m' + H(0xde00) + 'b', 1), '');
+});
+
+test('SLICE-STYLES: SGRs before the slice are replayed one parameter and one attribute at a time', () => {
+  assert.strictEqual(sliceAnsi('\x1b[1;31mab', 1), '\x1b[1m\x1b[31mb\x1b[39m\x1b[22m');
+  assert.strictEqual(sliceAnsi('\x1b[31m\x1b[1m\x1b[32mab', 1), '\x1b[1m\x1b[32mb\x1b[39m\x1b[22m');
+  assert.strictEqual(sliceAnsi('\x1b[1m\x1b[2mab', 1), '\x1b[1m\x1b[2mb\x1b[22m');
+  assert.strictEqual(sliceAnsi('\x1b[2m\x1b[1mab', 1), '\x1b[2m\x1b[1mb\x1b[22m');
+  assert.strictEqual(sliceAnsi('\x1b[1;2mab', 1), '\x1b[1m\x1b[2mb\x1b[22m');
+  assert.strictEqual(sliceAnsi('\x1b[99mab', 1), '\x1b[99mb\x1b[0m');
+  assert.strictEqual(sliceAnsi('\x1b[10m\x1b[11mab', 1), '\x1b[11mb\x1b[0m');
+  assert.strictEqual(sliceAnsi('\x1b[38;5mab', 1), '\x1b[38m\x1b[5mb\x1b[25m\x1b[39m');
+  assert.strictEqual(sliceAnsi('\x1b[38;5;208mab', 1), '\x1b[38;5;208mb\x1b[39m');
+  assert.strictEqual(sliceAnsi('\x1b[38;2;1;2;3mab', 1), '\x1b[38;2;1;2;3mb\x1b[39m');
+  assert.strictEqual(sliceAnsi('\x1b[4:3mab', 1), '\x1b[4:3mb\x1b[24m');
+  assert.strictEqual(sliceAnsi('\x1b[38:5:208mab', 1), '\x1b[38:5:208mb\x1b[39m');
+  assert.strictEqual(sliceAnsi('\x1b[1m\x1b[0;4mab', 1), '\x1b[4mb\x1b[24m');
+  assert.strictEqual(sliceAnsi('\x1b[1m\x1b[mab', 1), 'b');
+  assert.strictEqual(sliceAnsi('\x1b[1234567mab', 1), '\x1b[123456mb\x1b[0m');
+  assert.strictEqual(sliceAnsi('a\x9b31;1mbc', 1, 2), '\x9b31m\x9b1mb\x1b[22m\x1b[39m');
+  assert.strictEqual(sliceAnsi('\x1b[4m\x1b[21mab', 1), '\x1b[4m\x1b[21mb\x1b[24m');
+});
+
+test('SLICE-LINKS: an OSC 8 link open before the slice is replayed, and closed at the cut as it was opened', () => {
+  assert.strictEqual(sliceAnsi('\x1b]8;;http://x\x07ab\x1b]8;;\x07cd', 1), '\x1b]8;;http://x\x07b\x1b]8;;\x07cd');
+  assert.strictEqual(sliceAnsi('\x1b]8;;http://x\x07ab\x1b]8;;\x07cd', 0, 1), '\x1b]8;;http://x\x07a\x1b]8;;\x07');
+  assert.strictEqual(sliceAnsi('\x1b]8;;http://x\x07ab\x1b]8;;\x07cd', 0, 2), '\x1b]8;;http://x\x07ab\x1b]8;;\x07');
+  assert.strictEqual(sliceAnsi('\x1b]8;id=1;u\x1b\\ab', 1), '\x1b]8;id=1;u\x1b\\b\x1b]8;;\x1b\\');
+  assert.strictEqual(sliceAnsi('\x9d8;;u\x9cab\x9d8;;\x9ccd', 1, 2), '\x9d8;;u\x9cb\x9d8;;\x9c');
+  assert.strictEqual(sliceAnsi('x\x1b]8;;u\x07ab', 0, 2), 'x\x1b]8;;u\x07a\x1b]8;;\x07');
+  assert.strictEqual(sliceAnsi('\x1b]8;;u\x1bab', 1), '');
+});
+
+test('SLICE-AFTER-END: at the cut only what closes something open is kept; at the end of the text, all of it', () => {
+  assert.strictEqual(sliceAnsi('ab\x1b[1m', 0, 2), 'ab');
+  assert.strictEqual(sliceAnsi('ab\x1b[1m', 0, 3), 'ab\x1b[1m\x1b[22m');
+  assert.strictEqual(sliceAnsi('ab\x1b[1m', -2), 'ab\x1b[1m\x1b[22m');
+  assert.strictEqual(sliceAnsi('ab\x1b[22m', -2), 'ab\x1b[22m');
+  assert.strictEqual(sliceAnsi('\x1b[1mab\x1b[22mcd', 0, 2), '\x1b[1mab\x1b[22m');
+  assert.strictEqual(sliceAnsi('\x1b[1mab\x1b[22;4mcd', 0, 2), '\x1b[1mab\x1b[22m');
+  assert.strictEqual(sliceAnsi('\x1b[1mab\x1b[0mcd', 0, 2), '\x1b[1mab\x1b[0m');
+  assert.strictEqual(sliceAnsi('\x1b[1mab\x1b[39mcd', 0, 2), '\x1b[1mab\x1b[22m');
+  assert.strictEqual(sliceAnsi('ab\x1b[0mcd', 0, 2), 'ab');
+  assert.strictEqual(sliceAnsi('\x1b[4mab\x1b[4:0mcd', 0, 2), '\x1b[4mab\x1b[24m');
+  assert.strictEqual(sliceAnsi('a\x1b[2Kb', 0, 1), 'a');
+  assert.strictEqual(sliceAnsi('a\x1b[2Kb', 0, 2), 'a\x1b[2Kb');
+});
+
+test('SLICE-ESCAPES: an unterminated string is visible text; U+009C alone is a sequence', () => {
+  assert.strictEqual(sliceAnsi('a\x1b]0;title', 0, 3), 'a\x1b]0');
+  assert.strictEqual(sliceAnsi('a\x1b]0;title', 3), ';title');
+  assert.strictEqual(sliceAnsi('a\x9d0;title', 0, 3), 'a\x9d0;');
+  assert.strictEqual(sliceAnsi('a\x1bP1\x07b', 1), '\x1bP1\x07b');
+  assert.strictEqual(sliceAnsi('a\x1b]0;t\x07b', 1), 'b');
+  assert.strictEqual(sliceAnsi('a\x1b]0;t\x1b[1mb', 1), '\x1b[1mb\x1b[22m');
+  assert.strictEqual(sliceAnsi('a\x1b]0;t\x1b', 1), '');
+  assert.strictEqual(sliceAnsi('a\x9c' + H(0x903) + 'b', 0, 1), 'a\x9c' + H(0x903));
+  assert.strictEqual(sliceAnsi('a\x9cb', 1), 'b');
+  assert.strictEqual(sliceAnsi('a\x18' + H(0x903) + 'b', 1), '\x18' + H(0x903) + 'b');
+});
+
+test('SLICE-ESCAPES: ESC forms, and an ESC that starts none is a visible 0-wide character', () => {
+  assert.strictEqual(sliceAnsi('a\x1b\x18b', 1), '\x1b\x18b');
+  assert.strictEqual(sliceAnsi('a\x1b' + H(0x301) + 'b', 1), '\x1b' + H(0x301) + 'b');
+  assert.strictEqual(sliceAnsi('a\x1b' + H(0x301) + 'b', 0, 1), 'a');
+  assert.strictEqual(sliceAnsi('a\x1b ' + H(0x1f600) + 'b', 1), H(0xde00) + 'b');
+  assert.strictEqual(sliceAnsi('a\x1b\x1b[1mb', 1), '\x1b[1mb\x1b[22m');
+  assert.strictEqual(sliceAnsi('a\x1b\x1bb', 1), '');
+  assert.strictEqual(sliceAnsi('a\x1b', 1), '');
+  assert.strictEqual(sliceAnsi('\x1ba', 0, 1), '');
+  assert.strictEqual(sliceAnsi('a\x1b7b', 1), 'b');
+  assert.strictEqual(sliceAnsi('a\x1b[?25lb', 0, 2), 'a\x1b[?25lb');
+  assert.strictEqual(sliceAnsi('\x1b[?1mab', 1), 'b');
+  assert.strictEqual(sliceAnsi('\x1b[1 mab', 1), 'b');
+});
+
+test('SLICE-ASCII-RUNS: two or more printable ASCII leading a run end the cluster before them', () => {
+  assert.strictEqual(sliceAnsi(H(0x890) + '\x1b[1mab', 1), '\x1b[1mab\x1b[22m');
+  assert.strictEqual(sliceAnsi(H(0x890) + '\x1b[1ma', 1), '');
+  assert.strictEqual(sliceAnsi(H(0x890) + '\x1b[1ma' + H(0x301) + 'b', 1), '\x1b[1mb\x1b[22m');
+  assert.strictEqual(sliceAnsi(H(0x890) + 'ab', 1), 'b');
+  assert.strictEqual(sliceAnsi(H(0x600) + '\x1b[1mab', 0, 1), H(0x600) + '\x1b[1ma\x1b[22m');
+  assert.strictEqual(sliceAnsi(H(0x301, 0x301, 0x301, 0x301, 0x890) + 'ab', 0, 1), H(0x301, 0x301, 0x301, 0x301, 0x890) + 'a');
+  assert.strictEqual(sliceAnsi(H(0x301, 0x301, 0x301, 0x301, 0x301, 0x890) + 'ab', 0, 1), H(0x301, 0x301, 0x301, 0x301, 0x301, 0x890));
+  assert.strictEqual(sliceAnsi(H(0x301, 0x301, 0x301, 0x301, 0x301, 0x301, 0x890) + 'ab', 0, 1), H(0x301, 0x301, 0x301, 0x301, 0x301, 0x301, 0x890) + 'a');
+  assert.strictEqual(sliceAnsi('x' + H(0x301, 0x301, 0x301, 0x301, 0x301, 0x890) + 'abc', 1, 2), H(0x890));
 });

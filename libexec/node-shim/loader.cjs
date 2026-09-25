@@ -918,7 +918,7 @@ globalThis.clearImmediate ??= (h) => clearTimeout(h);
 globalThis.global ??= globalThis;
 
 // Intl polyfill: this tjs build ships NO `Intl` global at all, but the bundle's
-// text deps (string-width, slice-ansi) do `new Intl.Segmenter()` to split text into
+// text deps (wrap-ansi's string-width) do `new Intl.Segmenter()` to split text into
 // grapheme clusters. modules/intl.cjs's Segmenter is real UAX #29 clustering, from
 // the ONE implementation in libexec/unicode-text.cjs (which is why that file must
 // ride two levels above modules/ in every packaging), judged against native Bun by

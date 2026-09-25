@@ -82,7 +82,8 @@ const KNOWN_BUN = new Set([
   // that the UNRECOGNIZED bucket was hiding (see gateProblems below for why
   // that bucket is no longer silent):
   //   sliceAnsi            NEW in 2.1.278; Ink's text truncation. IMPLEMENTED
-  //                        (bun-shim, npm slice-ansi). Its absence is what made
+  //                        (bun-shim, from unicode-text.cjs; npm slice-ansi
+  //                        until 2026-09-25). Its absence is what made
   //                        the 2.1.278 TUI paint zero printable cells.
   //   unsafe               NEW in 2.1.278; Bun.unsafe.setJITPolicy?.(). Provided
   //                        as an EMPTY namespace on purpose (see bun-shim).

@@ -211,18 +211,39 @@ for (const m of ['exec', 'execSync']) {
 const TODO = (name) => { const f = () => { throw new Error(`Bun.${name} not yet implemented in the Node host shim`); }; f.__bunShimStub = true; return f; };
 
 // --- text: the ONE clustering/width implementation --------------------------
-// Bun.stringWidth and Bun.ant.CellSegmenter (below) both come from
+// Bun.stringWidth, Bun.sliceAnsi and Bun.ant.CellSegmenter (below) all come from
 // unicode-text.cjs, which travels beside this file in every packaging
-// (test/shim-companions.test.cjs), so the two can never disagree about a width.
+// (test/shim-companions.test.cjs), so they can never disagree about a width.
 // Bun.stringWidth used to be npm string-width, whose width rules are its own, not
-// Bun's (4206 code points differed from native 2.1.278). Both are judged against
-// native by test/fidelity/text-differential.test.cjs.
+// Bun's (4206 code points differed from native 2.1.278).
+//
+// Bun.sliceAnsi -- NEW IN 2.1.278, and it is the ONLY Bun member the bundle
+// gained between the pin (2.1.251) and .278 (measured: `Bun\.[A-Za-z_$]\w*`
+// over both carves; the two sets differ by this one name). Upstream uses it in
+// Ink's text-truncation helper:
+//
+//     function vo(n,s,u){ let f=Bun.sliceAnsi(n,s,u);
+//                         while(u>s && se(f)>u-s) u--, f=Bun.sliceAnsi(n,s,u);
+//                         return f }
+//
+// (and in its line-clipping and the collapsed-output wrap), so EVERY layout pass
+// that truncates a string calls it. Undefined here meant a nameless quickjs
+// TypeError inside runLayoutPass, which upstream catches, logs as "ink layout pass
+// threw ... frame dropped", and swallows -- the TUI then paints NOTHING while the
+// process stays alive, answers keystrokes and runs a full turn. `-p` never touches
+// this code, which is why every headless floor row stayed green. It used to be npm
+// slice-ansi, whose columns, escapes and argument handling are its own (250,673 of
+// the text gates' 1,176,930 strings differed from native 2.1.278: negative indices,
+// a wide cluster at the cut, styles replayed and closed differently).
+//
+// All three are judged against native by test/fidelity/text-differential.test.cjs.
 const _ut = require(__dirname + '/unicode-text.cjs');
 const stringWidth = _ut.stringWidth;
+const sliceAnsi = _ut.sliceAnsi;
 
 // --- external deps backed by real npm packages -----------------------------
-// stripANSI / wrapAnsi / sliceAnsi (and semver, below) are backed by the npm
-// strip-ansi / wrap-ansi / slice-ansi / semver packages -- no in-house clones.
+// stripANSI / wrapAnsi (and semver, below) are backed by the npm
+// strip-ansi / wrap-ansi / semver packages -- no in-house clones.
 // They render every frame / gate versions, so a missing one is FATAL: write the
 // install hint and exit (nothing to recover, unlike the optional ws/yaml features).
 // require() resolves these even though strip-ansi/wrap-ansi are ESM-
@@ -240,35 +261,12 @@ function _extResolve(pkg){ try { const m = require(pkg); return (m && m.default)
 
 const _stripAnsiFn   = _extResolve('strip-ansi');
 const _wrapAnsiFn    = _extResolve('wrap-ansi');
-// Bun.sliceAnsi -- NEW IN 2.1.278, and it is the ONLY Bun member the bundle
-// gained between the pin (2.1.251) and .278 (measured: `Bun\.[A-Za-z_$]\w*`
-// over both carves; the two sets differ by this one name). Upstream uses it in
-// Ink's text-truncation helper:
-//
-//     function vo(n,s,u){ let f=Bun.sliceAnsi(n,s,u);
-//                         while(u>s && se(f)>u-s) u--, f=Bun.sliceAnsi(n,s,u);
-//                         return f }
-//
-// so EVERY layout pass that truncates a string called it. Undefined here meant a
-// nameless quickjs TypeError inside runLayoutPass, which upstream catches, logs
-// as "ink layout pass threw ... frame dropped", and swallows -- the TUI then
-// paints NOTHING while the process stays alive, answers keystrokes and runs a
-// full turn. `-p` never touches this code, which is why every headless floor row
-// stayed green.
-//
-// Backed by npm slice-ansi, like strip-ansi and wrap-ansi above: the indices are DISPLAY
-// COLUMNS (slice-ansi advances its cursor by each token's visibleWidth, so a
-// fullwidth CJK cell counts 2), which is what upstream's width-derived arguments
-// and its own `se(f) > u-s` correction loop expect.
-const _sliceAnsiFn   = _extResolve('slice-ansi');
 function stripANSI(...a){ return _stripAnsiFn ? _stripAnsiFn(...a) : _extFatal(_extMissing('strip-ansi', 'text rendering (ANSI stripping)')); }
 function wrapAnsi(...a){ return _wrapAnsiFn ? _wrapAnsiFn(...a) : _extFatal(_extMissing('wrap-ansi', 'text rendering (line wrapping)')); }
-function sliceAnsi(...a){ return _sliceAnsiFn ? _sliceAnsiFn(...a) : _extFatal(_extMissing('slice-ansi', 'text rendering (ANSI-aware slicing)')); }
 // Without the real module these are fail-loud stubs, not implementations -- tag so
 // inspect-claude-bundle coverage reports them honestly (see Bun.YAML).
 if (!_stripAnsiFn) stripANSI.__bunShimStub = true;
 if (!_wrapAnsiFn) wrapAnsi.__bunShimStub = true;
-if (!_sliceAnsiFn) sliceAnsi.__bunShimStub = true;
 
 // --- rewriteSnapshot: rewrite Claude Code's grep/find/rg shell-snapshot shadows
 // to exec the REAL host applet instead of the upstream native multiplexer (which

@@ -1,9 +1,9 @@
 // test/text-utils.test.cjs — Bun.stripANSI / wrapAnsi backed by the npm strip-ansi /
 // wrap-ansi deps (the ext-dep pattern). These are CORE (every render), so a missing one
 // is fatal: write the install hint and exit, like ws — clode can't render without them,
-// so there's nothing to recover. Bun.stringWidth is NOT npm-backed any more (phase 3,
-// 2026-09-24): it is libexec/unicode-text.cjs's, judged against native by
-// test/fidelity/text-differential.test.cjs, so it needs no module and ignores one.
+// so there's nothing to recover. Bun.stringWidth and Bun.sliceAnsi are NOT npm-backed any
+// more (phase 3, 2026-09-24 and -25): they are libexec/unicode-text.cjs's, judged against
+// native by test/fidelity/text-differential.test.cjs, so they need no module and ignore one.
 const { test } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
@@ -11,7 +11,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const { runShimChild } = require('./isolated-shim.cjs');
 
-// Fake string-width/strip-ansi/wrap-ansi on a NODE_PATH dir. string-width and
+// Fake string-width/strip-ansi/wrap-ansi/slice-ansi on a NODE_PATH dir. string-width and
 // strip-ansi are ESM-only upstream (default export), so model that shape — a
 // `{default: fn}` namespace — to prove the shim unwraps `.default`. wrap-ansi echoes
 // all three args so we can prove forwarding.
@@ -28,6 +28,7 @@ function withFakes() {
   mk('strip-ansi', 'exports.default=(s)=>"STRIP:"+s;');
   // CJS-function shape: module.exports = fn (proves `.default || m` falls back to m)
   mk('wrap-ansi', 'module.exports=(...a)=>"WRAP:"+JSON.stringify(a);');
+  mk('slice-ansi', 'exports.default=(...a)=>"SLICE:"+JSON.stringify(a);');
   return dir;
 }
 
@@ -50,6 +51,19 @@ test('Bun.stringWidth needs no npm module, and ignores one that is there', () =>
   assert.strictEqual(bare.stdout.trim(), '3 2');
   const faked = runShimChild(probe, { NODE_PATH: withFakes() });
   assert.strictEqual(faked.stdout.trim(), '3 2', 'a string-width module on NODE_PATH must not be used');
+});
+
+test('Bun.sliceAnsi needs no npm module, and ignores one that is there', () => {
+  // native 2.1.278: a wide cluster that STARTS in [0, 1) is kept whole (npm slice-ansi gave
+  // ''), and a bold run cut from column 1 is reopened and closed.
+  const probe = 'console.log(JSON.stringify([Bun.sliceAnsi(String.fromCodePoint(0x4e2d, 0x61), 0, 1), '
+    + 'Bun.sliceAnsi(String.fromCharCode(0x1b) + "[1mhi", 1)]));';
+  const want = JSON.stringify([String.fromCodePoint(0x4e2d), '\x1b[1mi\x1b[22m']);
+  const bare = runShimChild(probe);
+  assert.strictEqual(bare.status, 0, bare.stderr);
+  assert.strictEqual(bare.stdout.trim(), want);
+  const faked = runShimChild(probe, { NODE_PATH: withFakes() });
+  assert.strictEqual(faked.stdout.trim(), want, 'a slice-ansi module on NODE_PATH must not be used');
 });
 
 test('forwards all args to the real modules and unwraps ESM .default', () => {

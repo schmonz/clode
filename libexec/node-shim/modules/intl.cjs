@@ -37,7 +37,7 @@ class Segmenter {
     // reads as absence rather than as an error — `segments.containing` is plain
     // `undefined`, so a caller gets a NAMELESS quickjs "TypeError: not a
     // function" from a line that never mentions Intl. That is exactly how it was
-    // found: slice-ansi (which backs Bun.sliceAnsi, below) tokenises text with
+    // found: npm slice-ansi (which then backed Bun.sliceAnsi) tokenises text with
     // `graphemeSegments.containing(index)`, every Ink layout pass that truncates
     // a string threw, upstream caught it, logged "frame dropped" and rendered
     // NOTHING. The TUI emitted 518 bytes of pure control sequences.
