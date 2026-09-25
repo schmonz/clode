@@ -486,6 +486,15 @@ test('SLICE-ARGUMENTS: an ellipsis with a width is refused, not answered differe
   assert.throws(() => sliceAnsi('unicorn', 0, 4, { ellipsis: '..' }), /ellipsis option is not implemented/);
   // Zero-width ellipses are no ellipsis at all, in native too: 'unicorn' (0, 4, '') is 'unic'.
   assert.strictEqual(sliceAnsi('unicorn', 0, 4, ''), 'unic');
+  // ...and so is a NON-EMPTY zero-width one (task 8, R32: measured before deciding whether
+  // `ellipsis !== ''` should refuse it). Native 2.1.278, 2026-09-25: 448 cases (U+200B,
+  // U+0301, U+200D, U+FE0F, ESC[1m, ESC[0m and an OSC 8 open, as a string and as
+  // { ellipsis }, over four inputs and eight cuts, truncating and not) each equal the same
+  // slice with no ellipsis at all. So the refusal is for a WIDTH, as native's behaviour is.
+  assert.strictEqual(sliceAnsi('unicorn', 0, 4, H(0x200b)), 'unic');
+  assert.strictEqual(sliceAnsi('unicorn', 2, 4, { ellipsis: '\x1b[1m' }), 'ic');
+  assert.strictEqual(sliceAnsi('\x1b[31municorn\x1b[39m', 1, 3, H(0x301)), '\x1b[31mni\x1b[39m');
+  assert.strictEqual(sliceAnsi(H(0x61, 0x4e2d, 0x62, 0x63), 0, 2, { ellipsis: H(0x200b) }), H(0x61, 0x4e2d));
 });
 
 test('SLICE-ARGUMENTS: columns count back from the total width when negative; indices are integers', () => {

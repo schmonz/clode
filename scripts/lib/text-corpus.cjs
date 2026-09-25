@@ -181,6 +181,15 @@ function corpusEscapes() {
 //           the Prepend takes it, so (1) is just `x` — except CR and LF.
 //   HORIZON zero-width marks, a 1-wide Prepend and two letters: the scan horizon lands
 //           between the Prepend and the letters for exactly one count of marks.
+//   EVERY SGR every code 0-107 (task 8, R32), in two linear templates, because AROUND only
+//           SAMPLES the close/attribute table (sgrCloseCode, sgrSlot, isSgrEndCode in
+//           libexec/unicode-text.cjs): `ESC[c m a ESC[c m bc` asks what c closes with and
+//           whether it closes, `ESC[31;42m ESC[c m ab` asks which attribute c replaces
+//           beside an open foreground and background. Measured 2026-09-25 against native
+//           2.1.278: 0 differences, and with only the corpora above the gate stayed green
+//           with 97, 107 or 30 dropped from their colour ranges (each one is 1 string here)
+//           or with the background codes given one attribute each (16 strings here).
+const SGR_CODES = Array.from({ length: 108 }, (_, c) => c);
 const SGRS = [
   '1', '2', '1;2', '3', '20', '4', '21', '5', '6', '7', '8', '9', '31', '91', '38;5;208', '38;2;1;2;3', '38;5', '38;2;1',
   '48;5;1', '48;2;9;8;7', '58;5;1', '51', '52', '53', '73', '74', '10', '11', '99', '', '0', ';1', '1;', '22', '23', '24', '25',
@@ -195,6 +204,7 @@ function corpusSliceProbes() {
   const out = [];
   const around = SGRS.concat(LINKS);
   for (const x of around) for (const y of around) out.push(x + 'a' + y + 'bc');
+  for (const c of SGR_CODES) out.push('\x1b[' + c + 'ma\x1b[' + c + 'mbc', '\x1b[31;42m\x1b[' + c + 'mab');
   const controls = [];
   for (let c = 0; c <= 0x1f; c++) controls.push(c);
   for (let c = 0x7f; c <= 0x9f; c++) controls.push(c);

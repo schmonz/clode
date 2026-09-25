@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { compareTextResults, runNative, runOurs, asciiJson } = require('../scripts/lib/text-probe.cjs');
+const { compareTextResults, runNative, runOurs, asciiJson, PROBE_SOURCE } = require('../scripts/lib/text-probe.cjs');
 const { corpusCodePoints, corpusComposed, corpusEmojiTest, corpusGraphemeBreakTest } =
   require('../scripts/lib/text-corpus.cjs');
 
@@ -28,6 +28,21 @@ test('a sliceAnsi difference is counted and named like the other consumers', () 
   assert.deepStrictEqual(d.counts, { segmenter: null, stringWidth: null, intl: null, sliceAnsi: 1 });
   assert.match(d.findings[0], /^sliceAnsi U\+0061: native/);
   assert.deepStrictEqual(compareTextResults(['a'], n, JSON.parse(JSON.stringify(n))).counts.sliceAnsi, 0);
+});
+
+// The probe program itself, run against a Bun that lacks a member: that consumer answers
+// null (so compareTextResults does not compare it), and the others still answer. Before
+// task 8 only the segmenter was availability-checked, so a native without Bun.sliceAnsi
+// threw out of the whole program and took the other three consumers with it.
+test('PROBE_SOURCE answers null for a consumer the runtime lacks, and the rest still answer', () => {
+  const run = new Function('input', 'Bun', PROBE_SOURCE);
+  const bunWithout = { version: '0.0.0-test', stringWidth: (s) => s.length };
+  const r = run({ strings: ['ab'], wants: { segmenter: true, stringWidth: true, sliceAnsi: true }, side: 'native' }, bunWithout);
+  assert.strictEqual(r.sliceAnsi, null, 'no Bun.sliceAnsi -> not compared');
+  assert.strictEqual(r.segmenter, null, 'no Bun.ant.CellSegmenter -> not compared');
+  assert.deepStrictEqual(r.stringWidth, [[2, 2]], 'a consumer the runtime has still answers');
+  const bunWith = { ...bunWithout, sliceAnsi: (s, a, b) => s.slice(a, b) };
+  assert.strictEqual(run({ strings: ['ab'], wants: { sliceAnsi: true }, side: 'native' }, bunWith).sliceAnsi.length, 1);
 });
 
 test('a consumer native lacks (segmenter null) is NOT compared and says so', () => {

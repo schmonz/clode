@@ -572,7 +572,10 @@ function forEachCell(text, ambiguousIsNarrow, substitute, fn) {
 //   argument: a string is an ellipsis (a 5th boolean then is ambiguousIsNarrow), a boolean is
 //   ambiguousIsNarrow, an object is { ellipsis, ambiguousIsNarrow }; ambiguousIsNarrow
 //   defaults to true. An ellipsis of nonzero width is NOT implemented here (the bundle never
-//   passes one): it throws rather than answer differently from native.
+//   passes one): it throws rather than answer differently from native. A zero-width one, empty
+//   or not (U+200B, a mark, an SGR), is no ellipsis at all, exactly as in native (measured
+//   2026-09-25, 448 cases). test/bun-slice-ansi-arity.test.cjs goes red the day a carved
+//   bundle calls Bun.sliceAnsi with a 4th argument, before a TUI can meet this throw.
 // SLICE-IDENTITY (rule): start 0 with end +Infinity returns the input as given — no style
 //   closed, no sequence normalised (`ESC[1;31m ab` stays so, where (0, 100) is
 //   `ESC[1m ESC[31m ab ESC[39m ESC[22m`).

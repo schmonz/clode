@@ -44,7 +44,10 @@ const PROBE_SOURCE = String.raw`
   // negative forms (they count back from the total width), the whole string (0 to the end:
   // native returns it untouched), and the string inside a bold run, inside an OSC-8 link, and
   // before an escape and a plain run, each cut so the slice starts or ends inside the run.
-  if (wants.sliceAnsi) {
+  // Availability-checked like the segmenter (task 8, R32): a native without Bun.sliceAnsi
+  // reports null (not compared) rather than failing the whole meter. Measured 2026-09-25:
+  // 2.1.251 (Bun 1.4.1) and 2.1.278 (Bun 1.4.3) both have it; only the bundle is new to it.
+  if (wants.sliceAnsi && typeof Bun.sliceAnsi === 'function') {
     const E = '\x1b';
     out.sliceAnsi = strings.map((s) => {
       const bold = E + '[1m' + s + 'x' + E + '[22m';
