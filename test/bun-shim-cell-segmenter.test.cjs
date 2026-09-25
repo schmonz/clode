@@ -116,10 +116,10 @@ const out = {};
 }
 
 { const n = make(BIDI);
-  const r = seg(n, 'x‮y؜z');
+  const r = seg(n, 'x\u202ey\u061cz');
   out.substitute = r.cells.map(([g]) => n.graphemes[g]);
   const p = make([]);
-  const q = seg(p, '‮');
+  const q = seg(p, '\u202e');
   out.noSubstitute = q.cells.map(([g]) => p.graphemes[g]);
 }
 
@@ -164,7 +164,7 @@ const out = {};
 
 // The three pins (see the header). Stated as they ARE, not as they should be.
 { const n = make(BIDI);
-  const combining = seg(n, 'é');
+  const combining = seg(n, 'e\u0301');
   const cjk = seg(n, '中');
   const skin = seg(n, '\u{1f44d}\u{1f3fd}');
   out.pins = { combiningCells: combining.count, cjkWidth: width(cjk, 0),
@@ -267,7 +267,7 @@ test('a TAB is one scratch cell with bit 8, resolved against the column', (t) =>
 test('substitute ranges become U+FFFD, and an empty list substitutes nothing', (t) => {
   const o = results(t); if (!o) return;
   assert.deepStrictEqual(o.substitute, ['x', '�', 'y', '�', 'z']);
-  assert.deepStrictEqual(o.noSubstitute, ['‮']);
+  assert.deepStrictEqual(o.noSubstitute, ['\u202e']);
 });
 
 test('OSC sequences and C0 controls paint nothing', (t) => {

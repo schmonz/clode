@@ -13,7 +13,7 @@
 
 // ---- Intl.Segmenter (grapheme) — moved here from loader.cjs verbatim ----
 const MARK = /\p{Mark}/u; // combining marks (accents, etc.)
-const ZWJ = '‍';
+const ZWJ = '\u200d';
 class Segmenter {
   constructor(_locales, options) { this._granularity = (options && options.granularity) || 'grapheme'; }
   segment(input) {

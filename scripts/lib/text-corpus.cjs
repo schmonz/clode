@@ -15,18 +15,18 @@ function corpusCodePoints() {
 function corpusComposed() {
   return [
     'é',                       // base + combining mark
-    'a‮b́',                // a bidi control (substitute range) inside a would-be cluster
-    '‮́',                  // a bidi control followed by a mark it could absorb
+    'a\u202eb\u0301',                // a bidi control (substitute range) inside a would-be cluster
+    '\u202e\u0301',                  // a bidi control followed by a mark it could absorb
     'e\x1b[1ḿ',                // an SGR escape between a base and its mark
-    'e\x1b]8;;http://x\x07́',   // an OSC-8 between a base and its mark
-    '\u{1f468}‍\u{1f469}‍\u{1f467}', // ZWJ family
+    'e\x1b]8;;http://x\x07\u0301',   // an OSC-8 between a base and its mark
+    '\u{1f468}\u200d\u{1f469}\u200d\u{1f467}', // ZWJ family
     '\u{1f44d}\u{1f3fd}',            // emoji modifier
     '\u{1f1fa}\u{1f1f8}\u{1f1ec}',   // three regional indicators (pair + orphan)
     '❤️', '❤︎',  // VS16 and VS15 on a text-default emoji
     'क्ष',            // Devanagari conjunct (GB9c, Unicode 15.1)
     '각',            // Hangul L V T
     '\r\n', 'a\r\nb',                // CR LF
-    'a\tb\t', '\t́',            // tabs, and a mark after a tab
+    'a\tb\t', '\t\u0301',            // tabs, and a mark after a tab
     '؀a',                       // Prepend
     '\ud83d', 'a\udc00b',            // lone surrogates in context
   ];

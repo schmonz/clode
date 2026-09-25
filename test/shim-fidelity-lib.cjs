@@ -54,7 +54,7 @@ const WIDTH_INPUTS = [
   '日本語',                 // 3 fullwidth CJK
   'Ａ',                     // fullwidth Latin
   '👍',                     // emoji presentation
-  '👨‍👩‍👧‍👦',              // ZWJ family sequence
+  '👨\u200d👩\u200d👧\u200d👦',              // ZWJ family sequence
   '👋🏽',                    // skin-tone modifier
   'a\u0300',                // 'a' + combining grave
   '\u200bhi',               // zero-width space + text

@@ -55,5 +55,5 @@ test('sliceAnsi: columns in, styles preserved (Bun agrees for these)', () => {
   // A slice that starts inside a colour run reopens it and closes it.
   assert.strictEqual(sliceAnsi('\x1b[31mred text\x1b[39m', 4, 8), '\x1b[31mtext\x1b[39m');
   // A combining sequence is one cluster of width 1: [0,2) takes it plus 'b'.
-  assert.strictEqual(sliceAnsi('àbc', 0, 2), 'àb');
+  assert.strictEqual(sliceAnsi('a\u0300bc', 0, 2), 'a\u0300b');
 });

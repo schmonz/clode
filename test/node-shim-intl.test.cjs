@@ -157,6 +157,6 @@ test('Intl.Segmenter segments.containing() matches host node (the dead-TUI gap)'
   // whole cluster from either of its two code-unit positions.
   assert.strictEqual(rows[0][0], null, 'containing(-1) must be undefined');
   assert.strictEqual(rows[0][rows[0].length - 1], null, 'containing(length) must be undefined');
-  assert.deepStrictEqual(rows[1][1], { segment: 'à', index: 0 });
-  assert.deepStrictEqual(rows[1][2], { segment: 'à', index: 0 });
+  assert.deepStrictEqual(rows[1][1], { segment: 'a\u0300', index: 0 });
+  assert.deepStrictEqual(rows[1][2], { segment: 'a\u0300', index: 0 });
 });

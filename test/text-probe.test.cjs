@@ -37,7 +37,7 @@ test('the code point corpus is exactly 0x110000 strings, lone surrogates include
 test('the composed corpus holds the cases a single code point cannot', () => {
   const c = corpusComposed();
   assert.ok(c.includes('é'));
-  assert.ok(c.includes('a‮b́'), 'a bidi control inside a would-be cluster');
+  assert.ok(c.includes('a\u202eb\u0301'), 'a bidi control inside a would-be cluster');
   assert.ok(c.includes('e\x1b[1ḿ'), 'an escape inside a would-be cluster');
 });
 
@@ -52,7 +52,7 @@ test('runNative and runOurs refuse an empty corpus before spawning anything', ()
 
 test('GraphemeBreakTest and emoji-test parsers read the published formats', () => {
   const gbt = '÷ 0020 × 0308 ÷\t#  comment\n# header\n÷ 1F1E6 × 1F1E7 ÷ 1F1E8 ÷\t# RI\n';
-  assert.deepStrictEqual(corpusGraphemeBreakTest(gbt), [' ̈', '\u{1f1e6}\u{1f1e7}\u{1f1e8}']);
+  assert.deepStrictEqual(corpusGraphemeBreakTest(gbt), [' \u0308', '\u{1f1e6}\u{1f1e7}\u{1f1e8}']);
   const et = '# group: Smileys\n1F600                  ; fully-qualified     # 😀 E1.0 grinning face\n'
     + '2764 FE0F              ; fully-qualified     # ❤️ E0.6 red heart\n';
   assert.deepStrictEqual(corpusEmojiTest(et), ['\u{1f600}', '❤️']);

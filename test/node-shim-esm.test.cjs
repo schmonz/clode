@@ -13,7 +13,7 @@ const path = require('node:path');
 const { runLoader, skipUnlessTjs } = require('./node-shim-helper.cjs');
 
 const ESC = String.fromCharCode(27);
-const INPUTS = ['PONG', 'hello world', ESC + '[31mred' + ESC + '[0m', '古池や', 'a' + '́'];
+const INPUTS = ['PONG', 'hello world', ESC + '[31mred' + ESC + '[0m', '古池や', 'a' + '\u0301'];
 
 // Oracle: the real ESM packages under host node.
 async function hostWidths() {
