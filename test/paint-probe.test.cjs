@@ -39,6 +39,20 @@ test('both sides throwing the SAME message compares clean', () => {
   assert.deepStrictEqual(d.findings, []);
 });
 
+// The paint gate's floor is in ops (ruling R2), so a scenario that diverges at its first op must
+// still count every op as examined: otherwise a real difference reads as a BLIND guard (BROKEN,
+// its findings unprinted) instead of a VIOLATION. Later ops are still judged; only the first
+// difference in a scenario is reported, since what follows it proves nothing new.
+test('a scenario that diverges at its first op still examines every op, and is one finding', () => {
+  const sc = [{ part: 'overwrite', w: 5, h: 1, ops: [{ seg: 'ab', x: 0, y: 0 }, { seg: 'x', x: 1, y: 0 }] }];
+  const n = { runtime: 'n', results: [[{ ret: [2, 0, 2], grew: false, screen: [] }, { ret: [2, 1, 2], grew: false, screen: [] }]] };
+  const o = { runtime: 'o', results: [[{ ret: [2, 0, 1], grew: false, screen: [] }, { ret: [2, 0, 2], grew: false, screen: [] }]] };
+  const d = comparePaintResults(sc, n, o);
+  assert.strictEqual(d.examined, 2);
+  assert.strictEqual(d.count, 1);
+  assert.deepStrictEqual(d.findings, ['overwrite #0 op 0: ret native [2,0,2] ours [2,0,1]']);
+});
+
 test('the corpus has every named part, and every part is non-empty', () => {
   const c = paintCorpus();
   for (const p of PAINT_PARTS) assert.ok(c.some((s) => s.part === p), `part ${p} missing`);

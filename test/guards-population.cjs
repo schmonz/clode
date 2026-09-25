@@ -174,6 +174,13 @@ const TEST_VERDICT_EXTRA = [
   // FLOOR test said the classifier could not see. Narrow on purpose: `runNative(` names
   // the native run, not runInNative's own unit tests.
   /\brunNative\s*\(/,
+  // A PAINT DIFFERENTIAL: the same paint probe run inside native Bun and under our shim,
+  // compared op by op, screen cells and packed damage (scripts/lib/paint-probe.cjs's
+  // runPaintNative, judged by comparePaintResults). Added 2026-09-25 for
+  // fidelity/paint-differential, a registered defineGuard guard the FLOOR test said the
+  // classifier could not see, exactly as it said of text-differential. Narrow on purpose:
+  // `runPaintNative(` names the native run, not the probe's own unit tests.
+  /\brunPaintNative\s*\(/,
 ];
 
 function classifyTestFile(src) {

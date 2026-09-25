@@ -116,6 +116,10 @@ function comparePaintResults(scenarios, native, ours) {
   scenarios.forEach((sc, i) => {
     const k = idx.get(sc.part) || 0; idx.set(sc.part, k + 1);
     const a = native.results[i], b = ours.results[i];
+    // Every op is compared and counted (the gate's floor is in ops, ruling R2), but a scenario
+    // reports only its FIRST difference: once one op diverged, the screens differ and what
+    // follows proves nothing new.
+    let reported = false;
     for (let op = 0; op < sc.ops.length; op++) {
       examined++;
       const na = a[op], ob = b && b[op];
@@ -131,10 +135,10 @@ function comparePaintResults(scenarios, native, ours) {
           if (na.screen[y][x] !== ob.screen[y][x]) why = `cell ${x},${y} native ${JSON.stringify(na.screen[y][x])} ours ${JSON.stringify(ob.screen[y][x])}`;
         }
       }
-      if (!why) continue;
+      if (!why || reported) continue;
       count++;
       if (findings.length < 200) findings.push(`${sc.part} #${k} op ${op}: ${why}`); else more++;
-      break;                                   // later ops of a diverged scenario prove nothing new
+      reported = true;
     }
   });
   if (more) findings.push(`... ${more} more`);
