@@ -23,7 +23,8 @@ function loadHarness() {
     return { pty: require('node-pty'), Terminal: require('@xterm/headless').Terminal };
   }
 }
-const { pty, Terminal } = loadHarness();
+// Loaded inside main(), not at require time, so a test can require this file for
+// hexPayload() alone on a box with no PTY harness.
 
 // Probes xterm doesn't answer (xterm extensions / OSC colors): supply plausible
 // replies so the TUI's startup negotiation completes. Ported from tui_screen.py.
@@ -35,9 +36,17 @@ const EXTRA_PROBES = [
   ['\x1b[>0c',  'da2',   '\x1b[>0;10;1c'],
 ];
 
-// Note: --send-hex/--then-hex decode hex to a latin1 string then child.write()s
-// it (re-encoded UTF-8). All current fixtures are ASCII (/doctor, CR), so this is
-// exact; a byte >= 0x80 would need a Buffer write to stay faithful to the bytes.
+// --send-hex/--then-hex carry BYTES, and the child must receive exactly those bytes.
+// They used to be decoded as latin1 and child.write() re-encoded the string as UTF-8, so any
+// byte >= 0x80 arrived doubled (U+00E4 for 0xE4 -> C3 A4): exact for the ASCII fixtures
+// (/doctor, CR), mojibake for the first non-ASCII one (the wide-glyph frame scene, 2026-09-25).
+// A payload that is valid UTF-8 is written as the string it decodes to (node-pty encodes it
+// back to the same bytes); anything else is written as the Buffer itself.
+function hexPayload(hex) {
+  const bytes = Buffer.from(hex, 'hex');
+  const text = bytes.toString('utf8');
+  return Buffer.from(text, 'utf8').equals(bytes) ? text : bytes;
+}
 function parseArgs(argv) {
   const sends = []; const resizes = []; let rows = 40, cols = 100;
   // --cells switches stdout from the ANSI-stripped text screen to a cell-level
@@ -52,10 +61,10 @@ function parseArgs(argv) {
   const FLAGS = ['--send-hex', '--then-hex', '--rows', '--cols', '--resize'];
   while (argv.length >= 2 && FLAGS.includes(argv[1])) {
     const v = argv[2];
-    if (argv[1] === '--send-hex') sends.push([1.5, Buffer.from(v, 'hex').toString('latin1')]);
+    if (argv[1] === '--send-hex') sends.push([1.5, hexPayload(v)]);
     else if (argv[1] === '--then-hex') {
       const [hex, delay] = v.split('@');
-      sends.push([parseFloat(delay), Buffer.from(hex, 'hex').toString('latin1')]);
+      sends.push([parseFloat(delay), hexPayload(hex)]);
     } else if (argv[1] === '--rows') rows = parseInt(v, 10);
     else if (argv[1] === '--cols') cols = parseInt(v, 10);
     else if (argv[1] === '--resize') {
@@ -133,6 +142,7 @@ function dumpCells(term) {
 
 async function main() {
   const { secs, cmd, sends, resizes, rows, cols, cells } = parseArgs(process.argv.slice(2));
+  const { pty, Terminal } = loadHarness();
   const term = new Terminal({ rows, cols, allowProposedApi: true });
   const child = pty.spawn(cmd[0], cmd.slice(1), { name: 'xterm-256color', cols, rows, env: process.env });
 
@@ -187,9 +197,13 @@ function finish(text) {
   timer.unref();
   process.stdout.write(text, () => bye(0));
 }
+module.exports = { hexPayload };
+
 // Honor the "Exit 0 always" contract even if pty.spawn/setup throws: fail loud
 // with a nonzero exit rather than crashing on an unhandled rejection.
-main().catch((e) => {
-  process.stderr.write('tui-screen: ' + ((e && e.stack) || e) + '\n');
-  process.exit(2);
-});
+if (require.main === module) {
+  main().catch((e) => {
+    process.stderr.write('tui-screen: ' + ((e && e.stack) || e) + '\n');
+    process.exit(2);
+  });
+}

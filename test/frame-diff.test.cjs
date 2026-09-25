@@ -327,3 +327,19 @@ test('the equivalence does not absorb a COLOURED space, a spacer, or another gly
   const other = corrupt(FRAMES.skipped, 'glyph', { y: 0, x: 2 });
   assert.strictEqual(diff(FRAMES.skipped, other).counts.glyph, 1, 'an unwritten cell is not an X');
 });
+
+// TYPED INPUT IS BYTES. tui-screen's --send-hex/--then-hex carry the bytes a scene types, and
+// the child must receive exactly those: the wide-glyph scene in
+// test/fidelity/interactive-frame-diff.test.cjs types UTF-8. Until 2026-09-25 they were
+// decoded as latin1 and the pty write re-encoded that string as UTF-8, so every byte >= 0x80
+// arrived as two (E4 -> C3 A4) — invisible to every ASCII fixture, mojibake for the first
+// non-ASCII one. Pure: what node-pty puts on the wire for a string is its UTF-8 encoding.
+test('typed hex reaches the pty as exactly its bytes, UTF-8 or not', () => {
+  const { hexPayload } = require('./tui-screen.cjs');
+  const onWire = (p) => (Buffer.isBuffer(p) ? p : Buffer.from(p, 'utf8'));
+  const wide = Buffer.from(String.fromCodePoint(0x4e2d, 0x6587, 0x20, 0x1f44d, 0x1f3fd, 0x20, 0xe9), 'utf8').toString('hex');
+  for (const hex of ['0d', '2f646f63746f72', wide, 'e4', '9b316d', 'ff00']) {
+    assert.strictEqual(onWire(hexPayload(hex)).toString('hex'), hex, `payload ${hex}`);
+  }
+  assert.strictEqual(typeof hexPayload('0d'), 'string', 'an ASCII fixture is written as the string it always was');
+});

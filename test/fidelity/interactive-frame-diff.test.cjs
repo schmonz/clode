@@ -24,10 +24,19 @@
 // which is exactly how quaude-from-2.1.278 painted nothing for a day while the
 // build smoke said PONG.
 //
-// WHAT IT DOES NOT COVER, deliberately named: only the INITIAL frame, no typed
-// input, no resize, no scroll (phase 5 of the CellSegmenter work), and nothing
-// wide — the welcome screen contains no CJK and no emoji, so this gate says
-// nothing yet about phase 3's widths.
+// TWO SCENES, two guards. `tui-initial-frame-cells` is the welcome screen as it
+// boots. `tui-prompt-wide-glyphs` (CellSegmenter phase 3, 2026-09-25) types
+// `U+4E2D U+6587 SP U+1F44D U+1F3FD SP U+1F1FA U+1F1F8 SP e U+0301 SP U+2764 U+FE0F`
+// into the prompt, NO Enter, well after boot (typed at t=0 it races the TUI's
+// startup), so both sides paint the prompt row with wide CJK, an emoji with a skin
+// tone, a flag, a base + combining mark and an emoji with VS16 — the clusters and
+// widths phase 3 exists for, which the welcome screen contains none of. Measured:
+// native-vs-native identical; the pre-phase-3 quaude (per-code-point clusters, all
+// width 1) differs from native on that row. The scene's reference must SHOW the
+// typed glyphs, or the guard says so instead of comparing two frames without them.
+//
+// WHAT IT DOES NOT COVER, deliberately named: no resize, no scroll, no damage
+// under partial repaint (phase 5 of the CellSegmenter work), no hyperlinks (phase 4).
 //
 // THE REFERENCE IS A RUNNABLE NATIVE CLAUDE, NOT THE BUILD PROVIDER.
 // CLODE_NATIVE_CLAUDE, else `claude` on PATH (what CI's `npm i -g` installs), and
@@ -49,7 +58,7 @@ const { skipReason: providerSkipReason } = require('../provider-resolve.cjs');
 const { builtQuaude } = require('../built-binary.cjs');
 const { apeCmd } = require('../e2e-pty.cjs');
 const { captureFrames } = require('../frame-oracle.cjs');
-const { diff, describe, corrupt, cloneFrame } = require('../frame-diff.cjs');
+const { diff, describe, corrupt, cloneFrame, rowText } = require('../frame-diff.cjs');
 const { defineGuard, guardTests } = require('../guard.cjs');
 const { resolveNativeClaude, nativeVersion } = require('../../scripts/lib/native-oracle.cjs');
 
@@ -59,6 +68,12 @@ const ROWS = 40, COLS = 100;
 // read as 16 phantom glyph+sgr differences.
 const SECONDS = 20;
 const FLOOR = 200;
+// The typed scene, built from CODE POINTS (an editor normalises a typed `e U+0301` into
+// the precomposed U+00E9, which is not a combining mark — that happened to the plan's own
+// literal). Typed at 6 s: native and quaude both paint their prompt within ~2 s here.
+const TYPED_CPS = [0x4e2d, 0x6587, 0x20, 0x1f44d, 0x1f3fd, 0x20, 0x1f1fa, 0x1f1f8, 0x20, 0x65, 0x301, 0x20, 0x2764, 0xfe0f];
+const TYPED = String.fromCodePoint(...TYPED_CPS);
+const TYPE_AT = 6;
 
 function harnessMissing() {
   const path = require('node:path');
@@ -89,7 +104,7 @@ function nonBlank(frame) {
   return n;
 }
 
-let SKIP = null, FRAMES = null, WHAT = '';
+let SKIP = null, FRAMES = null, TYPED_FRAMES = null, WHAT = '', TYPED_WHAT = '';
 before(async () => {
   SKIP = liveRenderSkipReason() || harnessMissing() || providerSkipReason(process.env) || null;
   if (SKIP) return;
@@ -110,7 +125,33 @@ before(async () => {
   if (!FRAMES.ref || !FRAMES.sub) {
     throw new Error(`frame capture failed (${WHAT}): ref=${!!FRAMES.ref} sub=${!!FRAMES.sub}; see stderr`);
   }
+  TYPED_WHAT = `${WHAT}, prompt typed at ${TYPE_AT}s`;
+  TYPED_FRAMES = await captureFrames({ ref, sub: built.path, seconds: SECONDS, rows: ROWS, cols: COLS,
+    thenHex: [`${Buffer.from(TYPED, 'utf8').toString('hex')}@${TYPE_AT}`] });
+  if (!TYPED_FRAMES.ref || !TYPED_FRAMES.sub) {
+    throw new Error(`frame capture failed (${TYPED_WHAT}): ref=${!!TYPED_FRAMES.ref} sub=${!!TYPED_FRAMES.sub}; see stderr`);
+  }
 });
+
+// Both guards judge the same way: exact equality, cell for cell, and no claim about
+// hyperlinks from a capture that could not see them. `mustShow` (the typed scene) is text
+// the REFERENCE must paint on some row, or that scene compared two frames that never had
+// the glyphs it exists for — reported as a finding, never as a pass.
+function scanFrames({ ref, sub, what, mustShow }) {
+  const d = diff(ref, sub, { maxDetail: 30 });
+  const findings = [];
+  if (mustShow) {
+    const rows = [];
+    for (let y = 0; y < ref.rows; y++) rows.push(rowText(ref, y));
+    if (!rows.some((t) => t.includes(mustShow))) {
+      findings.push(`the reference never painted the typed text ${JSON.stringify(mustShow)}, so this scene judged nothing wide`);
+    }
+  }
+  // Refuse to claim link equality from a capture that could not see links.
+  if (!d.linksJudged) findings.push('hyperlinks were NOT observable in one of the frames, so equality cannot be claimed');
+  if (!d.equal) findings.push(describe(ref, sub, d));
+  return { examined: nonBlank(ref), findings, note: what };
+}
 
 // A synthetic control that is a real-shaped frame: FLOOR+50 painted cells, so
 // the control clears the floor and its finding is the diff, not the floor.
@@ -136,19 +177,37 @@ guardTests(defineGuard({
     if (SKIP) return { skip: SKIP };
     return { ref: FRAMES.ref, sub: FRAMES.sub, what: WHAT };
   },
-  scan({ ref, sub, what }) {
-    const d = diff(ref, sub, { maxDetail: 30 });
-    const findings = [];
-    // Refuse to claim link equality from a capture that could not see links.
-    if (!d.linksJudged) findings.push('hyperlinks were NOT observable in one of the frames, so equality cannot be claimed');
-    if (!d.equal) findings.push(describe(ref, sub, d));
-    return { examined: nonBlank(ref), findings, note: what };
-  },
+  scan: scanFrames,
   // The real regression, spelled as a frame: one glyph in the middle of painted
   // content differs. Using corrupt() — the same helper frame-diff.test.cjs
   // proves produces exactly one glyph difference against real pty captures.
   control() {
     const ref = controlFrame();
     return { ref, sub: corrupt(cloneFrame(ref), 'glyph', { y: 1, x: 10 }), what: 'synthetic control' };
+  },
+}));
+
+// The typed scene: the prompt row carries wide CJK, emoji sequences, a flag and a
+// combining mark (see the header). Same shape as the gate above; the reference must also
+// show the typed text. The control is the phase-3 regression itself, spelled as a frame:
+// the first CJK glyph painted narrow, its spacer column taken by the next glyph.
+guardTests(defineGuard({
+  name: 'tui-prompt-wide-glyphs',
+  floor: FLOOR,
+  read() {
+    if (SKIP) return { skip: SKIP };
+    return { ref: TYPED_FRAMES.ref, sub: TYPED_FRAMES.sub, what: TYPED_WHAT, mustShow: String.fromCodePoint(0x4e2d, 0x6587) };
+  },
+  scan: scanFrames,
+  control() {
+    const ref = controlFrame();
+    ref.cells[2][0] = { c: String.fromCodePoint(0x4e2d), w: 2, f: '0:-1', b: '0:-1', a: 0, l: null };
+    ref.cells[2][1] = { c: '', w: 0, f: '0:-1', b: '0:-1', a: 0, l: null };
+    ref.cells[2][2] = { c: String.fromCodePoint(0x6587), w: 2, f: '0:-1', b: '0:-1', a: 0, l: null };
+    ref.cells[2][3] = { c: '', w: 0, f: '0:-1', b: '0:-1', a: 0, l: null };
+    const sub = cloneFrame(ref);
+    sub.cells[2][0] = { ...sub.cells[2][0], w: 1 };
+    sub.cells[2][1] = { ...sub.cells[2][2], w: 1 };
+    return { ref, sub, what: 'synthetic control', mustShow: String.fromCodePoint(0x4e2d) };
   },
 }));
