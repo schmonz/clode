@@ -21,10 +21,18 @@
 // requires ../../target-env.cjs: from this modules/ dir that is libexec/ in a checkout
 // and the archive root in a quaude or a native builder, where unicode-text.cjs rides
 // beside bun-shim.cjs (libexec/quaude-blobulate.js).
-const { graphemeBoundaries } = require('../../unicode-text.cjs');
+//
+// Required at the FIRST segment(), not when this module loads: the loader installs this
+// polyfill in EVERY tjs process, and evaluating unicode-text.cjs's generated tables is most
+// of a bare boot. Measured 2026-09-25 under tjs on darwin-arm64, interleaved medians: the
+// loader running an empty program 44.1 -> 20.0 ms (40 runs each), `clode --version` 90.5 ->
+// 66.4 ms (20 each) — paid by the builder and its workers, which never segment. A quaude
+// pays it either way (bun-shim.cjs requires the module when it loads).
+let graphemeBoundaries = null;
 class Segmenter {
   constructor(_locales, options) { this._granularity = (options && options.granularity) || 'grapheme'; }
   segment(input) {
+    if (graphemeBoundaries === null) ({ graphemeBoundaries } = require('../../unicode-text.cjs'));
     const str = String(input);
     const clusters = [];
     let index = 0;
