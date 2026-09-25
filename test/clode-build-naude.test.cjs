@@ -41,9 +41,13 @@ function seedProvider(dir) {
   fs.mkdirSync(stageDir, { recursive: true });
   const cliPath = path.join(stageDir, 'cli.cjs');
   fs.writeFileSync(cliPath, '// extracted cli.cjs stub\n');
-  // extractIfNeeded's cache-hit trio: cli.cjs + bun-shim.cjs + a matching sig.
-  // The sig is sigOf() (size+mtime), NOT a sha256 — mirror extractIfNeeded.
+  // extractIfNeeded's cache-hit quartet: cli.cjs + bun-shim.cjs + its unicode-text.cjs
+  // companion + a matching sig (Task 5 — clode-extract.cjs now requires
+  // unicode-text.cjs to be present too, or it re-extracts; see
+  // test/shim-companions.test.cjs). The sig is sigOf() (size+mtime), NOT a sha256 —
+  // mirror extractIfNeeded.
   fs.copyFileSync(path.join(LIBEXEC, 'bun-shim.cjs'), path.join(stageDir, 'bun-shim.cjs'));
+  fs.copyFileSync(path.join(LIBEXEC, 'unicode-text.cjs'), path.join(stageDir, 'unicode-text.cjs'));
   fs.writeFileSync(path.join(stageDir, '.extractor-sig'),
     // The stored sig is the extractor's signature COMPOSED WITH the provider's platform:
     // a version alone never determined the carve (see test/extract-cache-key.test.cjs).
