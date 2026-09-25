@@ -8,6 +8,28 @@ Concrete clode-under-Node divergences from native Claude Code, to triage and fix
 That page is GENERATED from `scripts/build-graph.cjs` — the one declaration of the build — so it
 cannot drift from it; it is also where the honest answer to "does this need node?" lives.
 
+## Four more tests let a global install choose their provider (2026-09-25)
+
+**Context, done:** upstream 2.1.281 moved the Remote Control gate's anchor (its reason helper
+gained a code: `(e,o)=>({reason:o,code:e,orgPolicyDenied:!1})`; 2.1.280 is still the old
+shape). Re-pinned as a fourth shape in `REMOTE_CONTROL_SHAPES` (libexec/extract-claude-js.cjs),
+which inspect-claude-bundle now reads instead of mirroring; proven on 2.1.251/278/280/281/282.
+It surfaced through `test/bun-graph-plan.test.cjs`, which tested whatever
+`scripts/find-provider.mjs` found in the global npm root (2.1.282); that file is now pin-scoped
+through `test/provider-resolve.cjs` and names its provider.
+
+**Open:** the same ambient discovery (env, then find-provider's global root; three also add
+the golden-shas store) is still in four tests. Under `test/run.mjs` the pin is always among their
+subjects, but so is any global install. None is the same one-line fix:
+- `test/bun-graph.test.cjs` `providers()`: its CJS-decode test has subjects only in the
+  golden-shas store (2.1.210/215/218); pin-scoped alone it would check nothing, silently
+  (`if (!checked) return`). Decide the CJS fixture first.
+- `test/extract-bundle-format.test.cjs` `realProvider()`: named "the installed provider", and
+  its skip says `npm i -g`. Either its subject is the pin (use `providerBin()`) or it is upstream
+  (then it is upstream-drift's job).
+- `test/graph-unserved-refs.test.cjs`, `test/make-min-provider.test.cjs` `providers()`: also add
+  `resolveClaudeBin()` (PATH / `current`) and want both CJS and split shapes on purpose.
+
 ## build-clode-main cannot recover from a reaped toolchain in the same run (2026-09-25)
 
 **Pre-existing, found by CellSegmenter phase 3's task-8 suite run; not fixed.** macOS's
