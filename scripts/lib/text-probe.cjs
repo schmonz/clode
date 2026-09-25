@@ -36,6 +36,11 @@ const PROBE_SOURCE = String.raw`
       for (let m = 0; m < s.length; m++) if (SC.test(s[m])) f.push([s[m], u[m]]);
       return f;
     };
+    // Each cell's HYPERLINK as the caller reads it, through the bundle's own runWords(): the
+    // run's uris index, 0 being no link (it interns nothing), otherwise the uris entry it
+    // interns into its hyperlinkPool. '' is no link. The index itself is not compared: the
+    // caller never keeps one, only the target behind it.
+    const linkOf = (p) => (p === 0 ? '' : n.uris[p]);
     let cells = new Int32Array(4096), runs = new Int32Array(4096);
     out.segmenter = strings.map((s) => {
       let c = n.segment(s, cells, runs, false);
@@ -43,7 +48,7 @@ const PROBE_SOURCE = String.raw`
       const row = [];
       for (let i = 0; i < c; i++) {
         const w = cells[2 * i + 1];
-        row.push([n.graphemes[cells[2 * i]], w & 255, (w & 256) ? 1 : 0, ansiCodes(runs[2 * (w >> 10)])]);
+        row.push([n.graphemes[cells[2 * i]], w & 255, (w & 256) ? 1 : 0, ansiCodes(runs[2 * (w >> 10)]), linkOf(runs[2 * (w >> 10) + 1])]);
       }
       return row;
     });

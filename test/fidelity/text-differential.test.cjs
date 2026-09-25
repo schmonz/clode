@@ -2,8 +2,10 @@
 // Ours vs NATIVE Bun, per consumer, exact equality. The four text consumers the bundle
 // calls, each against the native it stands in for:
 //   text-diff-segmenter    Bun.ant.CellSegmenter's cells (grapheme text, advance, tab bit,
-//                          and the style the caller PAINTS: the run's SGR keys through the
-//                          bundle's own ansiCodes()/SC filter, close codes included)
+//                          the style the caller PAINTS: the run's SGR keys through the
+//                          bundle's own ansiCodes()/SC filter, close codes included, and
+//                          the hyperlink it paints: the run's uris entry, as runWords()
+//                          reads it)
 //   text-diff-stringwidth  Bun.stringWidth, both ambiguousIsNarrow settings
 //   text-diff-intl         Intl.Segmenter's grapheme segments
 //   text-diff-sliceansi    Bun.sliceAnsi, eleven cuts of each string in columns: the edges
@@ -26,6 +28,10 @@
 //   corpusSliceProbes Bun.sliceAnsi's own rules: SGR and OSC 8 variety around a cut, a
 //                     1-wide Prepend before each control, its scan horizon. Without it that
 //                     gate stayed green with several of those rules switched off.
+//   corpusLinks       OSC 8 hyperlinks (phase 4): every introducer x parameters x URI x
+//                     terminator, the closes, what is NOT a link, and links opened or closed
+//                     inside a cluster, across wide glyphs and SGR changes, re-opened, left
+//                     open. The corpora above open links only in passing and never vary the URI.
 //   emoji-test        every sequence in the pinned emoji-test.txt
 //   bundle literals   the carved bundle's own non-ASCII snippets, when CLODE_PROVIDER_BIN
 //                     names a provider (CI's provider-min carves; it need not run)
@@ -70,6 +76,7 @@ const PART_FLOORS = {
   'cell probes': 560,        // 586
   escapes: 48000,            // 50,081
   'slice probes': 4600,      // 4,855
+  links: 380,                // 395
   'emoji-test': 5000,        // 5,225
   'bundle literals': 1,      // 2,233 in the 2.1.278 carve; 0 required without a provider
 };
@@ -115,7 +122,8 @@ before(async () => {
   }
   const parts = [
     ['code points', C.corpusCodePoints()], ['composed', C.corpusComposed()], ['cell probes', C.corpusCellProbes()],
-    ['escapes', C.corpusEscapes()], ['slice probes', C.corpusSliceProbes()], ['emoji-test', C.corpusEmojiTest(emoji)],
+    ['escapes', C.corpusEscapes()], ['slice probes', C.corpusSliceProbes()], ['links', C.corpusLinks()],
+    ['emoji-test', C.corpusEmojiTest(emoji)],
   ];
   const lit = bundleLiterals();
   parts.push(['bundle literals', lit.strings]);
@@ -156,7 +164,7 @@ const judge = (key) => ({
   control() {
     const strings = new Array(CORPUS_FLOOR).fill('a');
     const SHAPES = {
-      segmenter: [[['a', 1, 0, []]], [['a', 1, 0, [['\x1b[1m', '\x1b[22m']]]]], stringWidth: [[1, 1], [2, 2]], intl: [['a'], ['', 'a']],
+      segmenter: [[['a', 1, 0, [], '']], [['a', 1, 0, [], 'http://x']]], stringWidth: [[1, 1], [2, 2]], intl: [['a'], ['', 'a']],
       sliceAnsi: [['a', '', '\x1b[1ma\x1b[22m'], ['a', 'a', '\x1b[1ma\x1b[22m']],
     };
     const [one, bad] = SHAPES[key];
@@ -174,7 +182,7 @@ guardTests(defineGuard({ name: 'text-diff-sliceansi', ...judge('sliceAnsi') }));
 // The per-part floor without the four-minute run: a provider whose carve yielded no literals is
 // as BROKEN as an emptied escapes part, and the note names which part.
 test('a corpus part under its own floor makes the gate BROKEN, naming the part', () => {
-  const row = [[['a', 1, 0, []]]];
+  const row = [[['a', 1, 0, [], '']]];
   const r = judge('segmenter').scan({ strings: ['a'], native: { segmenter: row }, ours: { segmenter: row }, what: 'x',
     parts: [{ name: 'code points', count: 0x110000, floor: 0x110000 }, { name: 'bundle literals', count: 0, floor: 1 }] });
   assert.strictEqual(r.examined, 0);

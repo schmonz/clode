@@ -79,12 +79,13 @@ jobs:
       # against the text oracle (the native libexec/unicode-text.cjs was generated from), so
       # neither ever saw a NEWER upstream, which is the one bundle each exists to warn about:
       # a Bun.sliceAnsi call gaining a 4th argument (an ellipsis, which the shim refuses with
-      # a throw, i.e. a blank TUI) or a spread; and ansiCodes()/SC changing under the text
-      # gate's painted-style column (test/build-gates/text-probe-gates.test.cjs). A finding
+      # a throw, i.e. a blank TUI) or a spread; and ansiCodes()/SC or runWords()' uris read
+      # changing under the text gate's painted-style and link columns
+      # (test/build-gates/text-probe-gates.test.cjs). A finding
       # fails this job. Either one SKIPS, saying so, if the bundle no longer calls
       # Bun.sliceAnsi or has no CellSegmenter caller. It runs even when the anchor check
       # above went red (a different question), but not without a provider to read.
-      - name: The text tripwires still hold on the newest bundle (sliceAnsi arity, painted style)
+      - name: The text tripwires still hold on the newest bundle (sliceAnsi arity, painted style, link)
         if: ${{ !cancelled() && steps.anchors.outputs.provider != '' }}
         env:
           PROV: ${{ steps.anchors.outputs.provider }}

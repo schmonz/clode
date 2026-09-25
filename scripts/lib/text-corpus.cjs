@@ -220,6 +220,58 @@ function corpusSliceProbes() {
   return [...new Set(out)];
 }
 
+// OSC 8 hyperlinks (CellSegmenter phase 4): which link each cell takes, which the corpora above
+// reach only in passing (the escape and slice probes open links but rarely close them, and
+// none varies the URI). Measured 2026-09-25 against native 2.1.278 (Bun 1.4.3), whose
+// CellSegmenter interns each link's URI into `uris`:
+//   FORMS   every introducer (ESC ] and U+009D) x parameters (none, `id=`, `id=` with more,
+//           and one holding a `;`, which moves the rest into the URI) x URI (`;` and a lone
+//           `;`, a space, non-ASCII, TAB, C1, DEL, NUL, a lone surrogate, 3,000 characters)
+//           x terminator (BEL, U+009C, ESC \), opened after `a` and closed after `b`.
+//   CLOSES  every introducer x terminator x parameters, closing a link that is open.
+//   NOT     what is not a hyperlink (one `;`, `08`, `88`, `8 `, another OSC, ended by an ESC
+//           that is not ST, by CAN or SUB, a terminator inside the parameters, unterminated)
+//           and two sequences that do not close one (SGR 0, RIS): each alone, after an open
+//           link, and after an open link at the end of the string.
+//   SHAPES  a link spanning wide glyphs, emoji and SGR changes; opened or closed between the
+//           code points of one cluster (a mark, a ZWJ sequence, a conjunct, a flag, Hangul, a
+//           Prepend, a split surrogate pair); over a tab, a zero-width cluster and a
+//           substituted bidi control; re-opened (there is no nesting); left open at the end of
+//           a string, followed by a string with none (the probe segments every string with one
+//           segmenter, so a link carried from one segment() to the next would show).
+function corpusLinks() {
+  const E = H(0x1b), BEL = H(0x07), ST = H(0x9c), OSC = [E + ']', H(0x9d)];
+  const TERMS = [BEL, ST, E + '\\'];
+  const PARAMS = ['', 'id=1', 'id=1:foo=bar', 'a;b'];
+  const URIS = ['http://x', 'u;v', ';', ' ', 'http://' + H(0xfc, 0x4e2d, 0x1f600), 'u' + H(0x09) + 'v', 'u' + H(0x85) + 'v',
+    'u' + H(0x7f) + 'v', 'u' + H(0x00) + 'v', 'u' + H(0x9d) + 'v', 'u' + H(0xd800) + 'v', 'h'.repeat(3000)];
+  const link = (intro, params, uri, term) => intro + '8;' + params + ';' + uri + term;
+  const out = [];
+  for (const intro of OSC) for (const params of PARAMS) for (const uri of URIS) for (const term of TERMS) {
+    out.push('a' + link(intro, params, uri, term) + 'b' + link(intro, '', '', term) + 'c');
+  }
+  const O = link(E + ']', '', 'http://x', BEL), O2 = link(E + ']', 'id=2', 'http://y', ST), X = link(E + ']', '', '', BEL);
+  for (const intro of OSC) for (const term of TERMS) for (const params of ['', 'id=1']) out.push(O + 'a' + link(intro, params, '', term) + 'b');
+  const NOT = [
+    E + ']8;u' + BEL, E + ']8' + BEL, E + ']08;;v' + BEL, E + ']88;;v' + BEL, E + ']8 ;;v' + BEL, E + '];8;;v' + BEL, E + ']0;t' + BEL,
+    E + ']8;;v' + E + '[1m', E + ']8;;v' + E + '7', E + ']8;;v' + E + E + '\\', E + ']8;;v' + H(0x18), E + ']8;;v' + H(0x1a),
+    E + ']8;' + BEL + ';v' + BEL, E + ']8;' + ST + ';v' + BEL, E + ']8;' + H(0x18) + ';v' + BEL, E + ']8;' + E + ';v' + BEL,
+    H(0x9d) + '8;v' + ST, H(0x9d) + '8;;v' + E + '[1m', H(0x9d) + '8;;v' + H(0x1a), E + '[0m', E + 'c', E + ']8;;v', H(0x9d) + '8;;v',
+  ];
+  for (const m of NOT) out.push('a' + m + 'bc', O + 'a' + m + 'bc', O + 'a' + m);
+  out.push(
+    'a' + O + H(0x4e2d) + E + '[1m' + H(0x6587, 0x1f44d, 0x1f3fd) + 'b' + E + '[0m' + 'c' + X + 'd',
+    'e' + O + H(0x301) + 'x', O + 'e' + X + H(0x301) + 'x', O + 'e' + O2 + H(0x301) + 'x',
+    H(0x1f600, 0x200d) + O + H(0x1f600) + 'x', H(0x915, 0x94d) + O + H(0x937) + 'x', H(0x1f1e6) + O + H(0x1f1e7) + 'x',
+    H(0x1100) + O + H(0x1161) + 'x', H(0x600) + O + 'a', 'a' + H(0xd83d) + O + H(0xde00) + 'b',
+    O + 'a' + H(0x09) + 'b' + X + H(0x09), O + H(0x200b) + X + 'a', O + H(0x301) + X + 'a', 'a' + O + H(0x202e) + X + 'b',
+    O + 'a' + O2 + 'b' + X + 'c', O + 'a' + O2 + 'b' + O + 'c' + X + 'd', O + 'a' + O + 'b',
+    E + '[1m' + O + 'a' + E + '[0m' + 'b' + X + 'c', 'a' + O + X + 'b', 'a' + O + O2 + X + 'b',
+    O + 'a', 'b', O2, 'c', E + ']8;;v', 'd',
+  );
+  return out;
+}
+
 // The bun-cell per-code-point sweep (task 4b): every template, with every code point X in
 // the `X` slot, is one string. Templates close with a code point of nonzero width where a
 // zero-width X would otherwise leave nothing to compare. `narrow: false` runs it with
@@ -293,4 +345,4 @@ function graphemeBreakTestCases(text) {
 }
 
 module.exports = { corpusCodePoints, corpusComposed, corpusGraphemeBreakTest, corpusEmojiTest, corpusBundleLiterals,
-  corpusCellProbes, corpusEscapes, corpusSliceProbes, CELL_SWEEP_TEMPLATES, graphemeBreakTestCases };
+  corpusCellProbes, corpusEscapes, corpusSliceProbes, corpusLinks, CELL_SWEEP_TEMPLATES, graphemeBreakTestCases };

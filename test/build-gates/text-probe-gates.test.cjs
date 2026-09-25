@@ -13,7 +13,8 @@
 // paints, green while judging the wrong thing. This is the control: the restatement must still
 // be what the carved bundle says.
 //
-// WHAT IS PROVEN. read(): the carve of CLODE_PROVIDER_BIN, decoded the way
+// WHAT IS PROVEN (text-probe-caller-style; text-probe-caller-link, at the end, does the same for
+// the link column). read(): the carve of CLODE_PROVIDER_BIN, decoded the way
 // inspect-claude-bundle reads it. scan(): every ansiCodes() method in it (floor 1) short-circuits
 // index 0, splits both pools at the same index, tests the open code with a regex whose literal is
 // EXACTLY the one the probe spells, and pairs it with its close code. control(): a bundle whose SC
@@ -116,6 +117,26 @@ function scanCallerStyle({ bundle, probe, what }) {
   return { findings, examined, note: `${what}: ${examined} ansiCodes() method(s)` };
 }
 
+// The carve of CLODE_PROVIDER_BIN, decoded the way inspect-claude-bundle reads it; carved once
+// for both guards below.
+let CARVE = null;
+function readCarve() {
+  if (CARVE) return CARVE;
+  const bin = process.env.CLODE_PROVIDER_BIN;
+  if (!bin || !fs.existsSync(bin)) return { skip: 'no CLODE_PROVIDER_BIN (point it at a real claude binary to run this gate)' };
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'probe-caller-'));
+  try {
+    const cli = path.join(dir, 'cli.cjs');
+    const ex = spawnSync(process.execPath, [EXTRACT, bin, cli], { encoding: 'utf8' });
+    if (ex.status !== 0) throw new Error(`extract-claude-js could not carve ${bin}: ${(ex.stderr || '').slice(0, 400)}`);
+    const decoded = decodeGraphRunner(cli);
+    const bundle = decoded !== null ? decoded : fs.readFileSync(cli, 'latin1');
+    if (!bundle.includes('sgrCloseKeys')) CARVE = { skip: `the carve of ${bin} has no CellSegmenter caller (the bundle adopted it in 2.1.278)` };
+    else CARVE = { bundle, probe: PROBE_SOURCE, what: `the carve of ${bin}` };
+    return CARVE;
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+}
+
 // The 2.1.278 carve's own caller, verbatim (the darwin-arm64 carve, 2026-09-25), for the control.
 const CALLER = 'ansiCodes(n){if(n===0)return[];let s=this.sgrKeys[n].split("\\x00"),u=this.sgrCloseKeys[n].split("\\x00"),f=[];'
   + 'for(let m=0;m<s.length;m++){let p=s[m];if(SC.test(p))f.push({type:"ansi",code:p,endCode:u[m]})}return f}}'
@@ -124,20 +145,7 @@ const CALLER = 'ansiCodes(n){if(n===0)return[];let s=this.sgrKeys[n].split("\\x0
 guardTests(defineGuard({
   name: 'text-probe-caller-style',
   floor: 1,
-  read() {
-    const bin = process.env.CLODE_PROVIDER_BIN;
-    if (!bin || !fs.existsSync(bin)) return { skip: 'no CLODE_PROVIDER_BIN (point it at a real claude binary to run this gate)' };
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'probe-caller-'));
-    try {
-      const cli = path.join(dir, 'cli.cjs');
-      const ex = spawnSync(process.execPath, [EXTRACT, bin, cli], { encoding: 'utf8' });
-      if (ex.status !== 0) throw new Error(`extract-claude-js could not carve ${bin}: ${(ex.stderr || '').slice(0, 400)}`);
-      const decoded = decodeGraphRunner(cli);
-      const bundle = decoded !== null ? decoded : fs.readFileSync(cli, 'latin1');
-      if (!bundle.includes('sgrCloseKeys')) return { skip: `the carve of ${bin} has no CellSegmenter caller (the bundle adopted it in 2.1.278)` };
-      return { bundle, probe: PROBE_SOURCE, what: `the carve of ${bin}` };
-    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
-  },
+  read: readCarve,
   scan: scanCallerStyle,
   // Two drifts: SC grown to accept a colon form (the probe would drop, as invisible, a style the
   // TUI now paints) and an ansiCodes() that stopped reading the close pool.
@@ -157,5 +165,65 @@ test('the caller-style scan passes the 2.1.278 caller verbatim and names each dr
   assert.strictEqual(run(CALLER.replace('var SC=', 'var XX=')).findings.length, 1, 'an SC this scan cannot find');
   assert.deepStrictEqual(run('var SC=/other/;' + ' '.repeat(5000) + CALLER).findings, [], 'another module\'s SC is not the caller\'s');
   assert.strictEqual(scanCallerStyle({ bundle: CALLER, probe: 'no regex here', what: 'x' }).findings.length, 1);
+  assert.strictEqual(run('').examined, 0, 'no caller at all examines nothing, which the floor reads as BROKEN');
+});
+
+// THE LINK COLUMN (CellSegmenter phase 4). The probe's rows also carry each cell's hyperlink,
+// restating the caller's runWords(): the run's second slot is an index into `uris`, 0 is no link
+// (it interns nothing), and any other is the uris entry, interned into the screen's
+// hyperlinkPool. If upstream changes that read, text-diff-segmenter would go on comparing a link
+// the TUI no longer paints. scan(): every runWords() method (floor 1) reads the link index from
+// runs[2j+1], skips 0 and interns this.uris at that index, and the probe spells the same read.
+const PROBE_LINK = ["const linkOf = (p) => (p === 0 ? '' : n.uris[p]);", 'linkOf(runs[2 * (w >> 10) + 1])'];
+
+function scanCallerLink({ bundle, probe, what }) {
+  const findings = [];
+  for (const needle of PROBE_LINK) {
+    if (!probe.includes(needle)) findings.push(`scripts/lib/text-probe.cjs no longer spells "${needle}": its link column no longer restates runWords()`);
+  }
+  const re = /\brunWords\((\w+)\)\{/g;
+  let m, examined = 0;
+  while ((m = re.exec(bundle)) !== null) {
+    examined++;
+    const body = blockBody(bundle, m.index + m[0].length - 1);
+    const at = bundle.slice(m.index, m.index + 160);
+    if (body === null) { findings.push(`a runWords() whose body never ends: ${at}...`); continue; }
+    const r = /let (\w+)=this\.runs\[2\*(\w+)\+1\]/.exec(body);
+    if (r === null) { findings.push(`runWords() no longer reads a run's link index from runs[2j+1]; re-derive the probe's link column from it: ${at}...`); continue; }
+    const want = [
+      [`if(${r[1]}!==0)`, 'link index 0 is no link'],
+      [`.intern(this.uris[${r[1]}])`, 'any other is the uris entry at that index, interned'],
+    ];
+    for (const [needle, why] of want) {
+      if (!body.includes(needle)) findings.push(`runWords() no longer does "${needle}" (${why}); re-derive the probe's link column from it: ${at}...`);
+    }
+  }
+  return { findings, examined, note: `${what}: ${examined} runWords() method(s)` };
+}
+
+// The 2.1.278 carve's runWords(), verbatim but for the reordered branch (the darwin-arm64 carve,
+// 2026-09-25), for the control.
+const CALLER_LINK = 'runWords(n){let s=this.count;if(s===0)return this.words;if(this.hyperlinkPool!==n)this.hyperlinkPool=n,'
+  + 'this.linkIds.fill(0);let u=this.cells[2*s-1]>>>Og;let f=u+1;this.words=Bs(this.words,f,0);for(let m=0;m<f;m++)'
+  + '{let p=this.runs[2*m+1],S=0;if(p!==0){if(this.linkIds=Bs(this.linkIds,p+1,this.linkIds.length),S=this.linkIds[p],'
+  + 'S===0)S=n.intern(this.uris[p])+1,this.linkIds[p]=S;S-=1}this.words[m]=jn(this.styleId(this.runs[2*m]),S,0)}return this.words}';
+
+guardTests(defineGuard({
+  name: 'text-probe-caller-link',
+  floor: 1,
+  read: readCarve,
+  scan: scanCallerLink,
+  // A runWords() that reads the uris one entry along (a drift the text gate would not see: it
+  // would compare the link the probe reads, not the one painted).
+  control: () => ({ bundle: CALLER_LINK.replace('n.intern(this.uris[p])', 'n.intern(this.uris[p-1])'), probe: PROBE_SOURCE, what: 'synthetic control' }),
+}));
+
+test('the caller-link scan passes the 2.1.278 caller verbatim and names each drift', () => {
+  const run = (bundle) => scanCallerLink({ bundle, probe: PROBE_SOURCE, what: 'x' });
+  assert.deepStrictEqual(run(CALLER_LINK).findings, [], 'the probe restates the 2.1.278 caller');
+  assert.strictEqual(run(CALLER_LINK).examined, 1);
+  assert.strictEqual(run(CALLER_LINK.replace('if(p!==0)', 'if(p>=0)')).findings.length, 1, 'index 0 no longer skipped');
+  assert.strictEqual(run(CALLER_LINK.replace('this.runs[2*m+1]', 'this.runs[2*m]')).findings.length, 1, 'the link index read elsewhere');
+  assert.strictEqual(scanCallerLink({ bundle: CALLER_LINK, probe: 'no link column', what: 'x' }).findings.length, 2);
   assert.strictEqual(run('').examined, 0, 'no caller at all examines nothing, which the floor reads as BROKEN');
 });
