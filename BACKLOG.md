@@ -53,9 +53,133 @@ the one whose provider happens to contain it.
 
 ## `Bun.ant.CellSegmenter` — the 2.1.278 TUI's real blocker, and it is NOT small (2026-09-22)
 
-**Status: OPEN, phases 1-2 of 6 DONE (2026-09-24), and it is still what stands between this
-repo and moving the pin.** Everything else in the 2.1.278 interactive chain is fixed and driven;
-this is the remainder.
+**Status: OPEN, phases 1-3 of 6 DONE (phase 3 closed 2026-09-25), and it is still what stands
+between this repo and moving the pin: phase 4 (OSC-8 links do not work yet) is the next
+functional gap.** Everything else in the 2.1.278 interactive chain is fixed and driven; this is
+the remainder. Phase 3's record is the next block; phases 1-2's follows it.
+
+**Phase 3 landed (2026-09-24/25): quaude clusters, sizes and slices text exactly as native Bun
+does.** One module, `libexec/unicode-text.cjs`, serves all four text consumers through three
+MEASURED profiles of one clusterer (controller rulings R15-amended, R20, R31): `uax29` for
+`Intl.Segmenter` (native's ICU is UAX #29 17.0.0; GraphemeBreakTest 17.0.0 766/766), `bun-cell`
+for `Bun.ant.CellSegmenter` and `Bun.stringWidth` (Bun's own clusterer: Unicode 16.0.0 cluster
+data plus eleven named, measured rule deltas, uncapped cluster widths, the escape layer, 255
+cell-advance saturation), and `bun-slice` for `Bun.sliceAnsi` (bun-cell plus two deltas, and
+native's separate escape grammar and style replay). Its tables are GENERATED, never typed, by
+`scripts/gen-unicode-data.cjs` from sha256-pinned UCD files plus native's own per-code-point
+widths, and `test/unicode-data-fresh.test.cjs` regenerates and compares them.
+
+Against native 2.1.278 (Bun 1.4.3), exact equality, strings that differ:
+
+| consumer | before phase 3 | now |
+| --- | --- | --- |
+| `Bun.ant.CellSegmenter` (cells: text, advance, tab bit) | 234,044 | 0 |
+| `Bun.stringWidth` (both ambiguous settings) | 49,910 | 0 |
+| `Intl.Segmenter` | 5,694 | 0 |
+| `Bun.sliceAnsi` (eleven cuts per string) | 250,673 | 0 |
+
+The gates are `test/fidelity/text-differential.test.cjs` (four defineGuards) over 1,177,111
+strings: every code point (1,114,112, lone surrogates included), 19 composed cases, 586 cell
+probes, 50,081 escape-layer strings, 4,855 slice probes (every SGR code 0-107 among them), the
+5,225 sequences of emoji-test 17.0 and the 2,233 non-ASCII literals of the 2.1.278 carve. (The
+"before" counts are over the corpora of the tasks that took them to 0: 1,172,256 strings for the
+first three, 1,176,930 for sliceAnsi.) `scripts/cell-profile-diff.cjs` re-proves both clusterer
+profiles against native's own two clusterers, 0 differences: GraphemeBreakTest 17.0 (766) and
+16.0 (1,093), emoji-test, the probes, and a 25,624,576-string per-code-point sweep.
+
+**Unicode version.** Widths track 17.0.0, chosen by counting width disagreements with native
+over every code point: 15.1.0 382 (215 assigned), 16.0.0 184 (27), 17.0.0 27 (27) — and those
+27 are the same in every version (the 26 Regional Indicators are 1 wide alone, U+20E3 is 2
+wide alone), so they say nothing about the version and none needed an override. CellSegmenter's
+CLUSTERER data is 16.0.0 (`CELL_UNICODE`: thirteen join templates over every code point match
+16.0.0 and no other pinned version). That constant is measured, not read from anything the
+freshness gate regenerates, so a Bun clusterer bump would not move the table: CI's
+`cell-profile-diff` step is its detector (R24).
+
+**On the screen.** `test/fidelity/interactive-frame-diff.test.cjs` gained a second guard,
+`tui-prompt-wide-glyphs`: U+4E2D U+6587, U+1F44D U+1F3FD, the U+1F1FA U+1F1F8 flag, e U+0301 and
+U+2764 U+FE0F typed into the prompt (no Enter, 6 s after boot), then the frame compared cell for
+cell with native's. 0 differences against native 2.1.278 and 2.1.251 on darwin-arm64, and
+against 2.1.251 in a linux-x64 container mirroring CI; the pre-phase-3 builds differ on the
+prompt row (2.1.278: 14 cell-classes, 2 of them width; 2.1.251: 8). D1 passes on both fresh
+builds (test/fidelity/RESULTS.md, 2026-09-25). Typing needed an instrument fix first:
+`test/tui-screen.cjs` sent hex payloads as latin1, so every byte >= 0x80 reached the child as two.
+
+**In CI (task 8, not yet pushed).** `linux-x64-pty` installs the TEXT ORACLE native at the
+version the generated header names (`scripts/oracle-native-version.cjs`, independent of
+UPSTREAM_PIN: it judges, it is never built from), warms every pinned UCD file online (a failed
+fetch fails that step by name), runs the text gates, the freshness gate, the UAX #29 test and
+the sliceAnsi arity tripwire OFFLINE from that cache asserting `skipped 0`, and runs
+`cell-profile-diff`, which now REFUSES (exit 2) a native of another version instead of warning.
+Verified before any push in a node:24.21.0-bookworm container on ultimate-hat mirroring every
+step of the job (task-8 report), twice (before and after the lazy-Intl commit): all twelve
+steps green, every text gate RAN (67 tests, `skipped 0`), and the linux-x64 2.1.278 native agrees with the darwin-generated table (the
+freshness gate is green there), so one table serves both. **CI cost, and it is real:** that
+container (6 x86_64 CPUs) spent 11m37s and 11m47s in the text-gates step, almost all of it the
+text-differential gate, plus 41 s in cell-profile-diff; on darwin-arm64 the same gate takes
+3m43s under tjs (it was ~68 s before sliceAnsi's eleven cuts per string). If the runner's time
+is ever worth more than the gate's breadth, the lever is the corpus (by count, the 1,114,112
+single code points are 95% of it; not measured per corpus), not a skip.
+
+**Three gate blind spots closed in task 8 (R32).** (1) The sliceAnsi close/attribute table was
+only SAMPLED (of the colours, 31, 91 and the 38/48/58 extended forms; chalk's everyday 30,
+32-37, 40-47, 90, 92-97 and 100-107 never): the slice corpus now carries every SGR code 0-107
+in two templates, and dropping 97 from the bright-foreground range turns
+`text-diff-sliceansi` red (2 findings) where it had stayed green. (2) The ellipsis refusal had no
+carve-time alarm: `test/bun-slice-ansi-arity.test.cjs` fails if any `Bun.sliceAnsi(` call in a
+carved bundle passes a 4th argument or is reached through an alias (2.1.278: 5 calls, all three
+arguments; it skips on 2.1.251, which does not use Bun.sliceAnsi). The refusal stays on a WIDTH,
+not on `ellipsis !== ''`: measured first, native treats a zero-width non-empty ellipsis (U+200B,
+a mark, an SGR, an OSC-8 open; 448 cases) exactly as no ellipsis. (3) The probe now
+availability-checks `Bun.sliceAnsi` like the segmenter (2.1.251's Bun 1.4.1 has it anyway).
+
+**Recorded, not fixed — each a written divergence or a finding, with its ruling:**
+
+- **R22, darwin libicucore's PUA quirk.** darwin's native `Intl.Segmenter` treats 39 private-use
+  code points (U+F870-F87F, F884-F899, F89F; Apple's corporate-use variant tags, apparently) as
+  extending. The polyfill does NOT copy it: `uax29` stays pure UAX #29, one implementation
+  everywhere, and linux native presumably lacks it. The intl gate's corpora hold none of them.
+- **R27, 17 stringWidth probes under the pinned 2.1.251.** The rules follow Bun 1.4.3 (the
+  bundle this phase exists to absorb). Under 2.1.251's Bun 1.4.1 every broad corpus is 0 where
+  it was 4,206 code points + 42,134 escape strings + 445 probes before; 17 exotic probes still
+  differ (1.4.1 takes the FIRST code point as the cluster's width base and caps at 2: a
+  zero-width Prepend base, spacing marks before VS16). A per-Bun-version profile is YAGNI while
+  the pin is moving to 2.1.278.
+- **R28, two pre-existing product bugs found by the instruments.** tjs's `TextDecoder` drops
+  EVERY U+FEFF it decodes, not just a leading BOM (`a U+FEFF b` reads back as `ab` through
+  node-shim's `fs.readFileSync(f, 'utf8')`, `TextDecoder` and `string_decoder`;
+  `Buffer.toString` keeps them) — a product bug whose root fix is in the engine; the text probe
+  works around it with all-ASCII JSON. And the naude smoke (clode-native acceptance 4) runs with
+  the AMBIENT HOME: a cached GrowthBook `.claude.json` there makes the 2.1.278 bundle under Node
+  exit 0 after `HEAD /api/hello` without ever POSTing — likely the root of the
+  "load-sensitive naude smoke flake" task 5 saw; a hermetic HOME in `smokeTarget` is the fix.
+- **R29, unknown and colon SGR keys.** Native keeps `ESC[99m`, `ESC[4:3m`, `ESC[38:5:208m`
+  verbatim as `sgrKeys`; the shim drops them. The caller filters keys through its own SGR
+  regex, so only the run COUNT could differ, and nothing paints that.
+- **The graphemes pool's pre-seed.** Native starts `graphemes` with 98 entries; ours starts
+  empty. The caller only ever reads the indices a `segment()` hands it, so it is unobservable.
+- **`string-width` stays in `deps/claude`, now for two reasons that are not the product's
+  `Bun.stringWidth`.** Measured: no product code requires it since task 6, but `wrap-ansi`
+  (which backs bun-shim's `Bun.wrapAnsi`) depends on `string-width ^8.2.0`, so it is in the
+  embedded closure whether or not it is listed; and `test/node-shim-esm` and
+  `test/node-shim-vflag-regex` exercise the npm package itself under tjs, which the shipped
+  stringWidth cannot stand in for. Its direct listing is therefore kept.
+
+**Slow box (step 6, measure only).** Tiger PPC: BLOCKED on 2026-09-25 — no qemu guest was
+running on this Mac (nothing listening on port 1215) and no current darwin-ppc engine was at
+hand (the last CI run published none; a stale engine template breaks `clode build`), so the
+cross-built first-frame timing is still owed. On darwin-arm64, first frame to the prompt
+glyph, 10 interleaved runs each, canned mock: pre-phase-3 quaude 1522 ms median, phase-3 1575 ms
+(+3.5%), native 2.1.278 369 ms. The one lever measured (the task 6 review's note): the Intl
+polyfill evaluated unicode-text.cjs's tables at EVERY tjs loader boot, including the builder
+and workers that never segment; requiring it at the first `segment()` instead takes a bare
+loader boot from 44.1 to 20.0 ms and `clode --version` under tjs from 90.5 to 66.4 ms, and was
+applied. It does not move a quaude's first frame (1572 ms), because bun-shim loads the module
+anyway.
+
+**What remains:** phase 4 (OSC-8 interning — links are consumed, never interned), phase 5 (the
+stateful surfaces below, and the unmeasured SGR re-apply choice), phase 6 (`reordered`, and
+performance on the slow boxes — starting with the Tiger first-frame number above).
 
 **Phases 1-2 landed: the 2.1.278 TUI paints, and its initial frame matches native.**
 `libexec/bun-shim.cjs` now provides `Bun.ant` with exactly one member, `CellSegmenter`
@@ -67,9 +191,10 @@ pins the contract by playing the caller's own arithmetic, and `test/bun-shim-ant
 pins the membership (a second member is red). What is NOT done, and is pinned as wrong in that
 test so fixing it forces a re-take:
 
-- **phase 3, clustering and width.** Clustering is per CODE POINT and every non-control code
+- ~~**phase 3, clustering and width.** Clustering is per CODE POINT and every non-control code
   point is one column wide. A CJK glyph or an emoji anywhere on a line shifts the rest of it.
-  The initial frame is 0-diff only because it contains nothing wide.
+  The initial frame is 0-diff only because it contains nothing wide.~~ DONE 2026-09-25 (the
+  block above); the pins were re-taken as native's measurements in task 6.
 - **phase 4, OSC-8.** Hyperlinks are consumed but never interned, so links do not work.
 - **phase 5, the stateful surfaces** (damage under partial repaint, scroll, resize; the
   grow-and-retry and pool-reset paths under a real session), and **phase 6** (`reordered`,
@@ -125,7 +250,8 @@ on macOS/Linux — which means frame-differential testing, not unit tests. It is
 class of work as `Bun.Transpiler`, and considerably more load-bearing: without it there is
 no TUI at all on any target quaude exists to serve.
 
-**What is already done, so nobody redoes it:** `Bun.sliceAnsi` (npm slice-ansi),
+**What is already done, so nobody redoes it:** `Bun.sliceAnsi` (npm slice-ansi on 2026-09-22;
+since 2026-09-25 it is libexec/unicode-text.cjs's own, judged against native — see phase 3 above),
 `Intl.Segmenter`'s missing `segments.containing()`, `Bun.sleepSync`, and the engine's
 unhandled-rejection-drain use-after-free are all fixed and driven on darwin-arm64 and on
 the live NetBSD/arm64 guest; the pinned 2.1.251 build still passes D1 on both. The gate
@@ -164,6 +290,7 @@ Full derivation, the per-member call sites, the named experiments for the handfu
 only native can answer, and the implementation plan: see the CellSegmenter contract note in
 `.superpowers/sdd/2026-09-22-cellsegmenter/` (untracked, per the no-plans-in-git rule).
 
+(Resolved by phase 3, 2026-09-25; kept as the record of why.)
 **The thing that makes this bigger than it looks, measured on the real engine 2026-09-22:
 WE HAVE NO GRAPHEME SEGMENTER.** `typeof Intl === "undefined"` in bare tjs; what exists is
 our own polyfill (`libexec/node-shim/modules/intl.cjs`), and it splits on CODE POINTS and
