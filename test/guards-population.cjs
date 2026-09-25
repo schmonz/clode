@@ -181,6 +181,14 @@ const TEST_VERDICT_EXTRA = [
   // classifier could not see, exactly as it said of text-differential. Narrow on purpose:
   // `runPaintNative(` names the native run, not the probe's own unit tests.
   /\brunPaintNative\s*\(/,
+  // A SESSION DIFFERENTIAL: the frame SEQUENCES two real runs painted, a frame per scripted
+  // step (test/frame-oracle.cjs's captureSessions, judged step by step by frame-diff.cjs's
+  // diffSessions). Added 2026-09-25 for fidelity/session-determinism (native against itself)
+  // and the phase-5 session gates after it: the same shape as captureFrames above, one frame
+  // per step instead of one per run. Narrow on purpose: `captureSessions(` names the
+  // two-sided capture, not captureSession (singular), which the harness's own unit tests
+  // drive against a fake TUI they wrote.
+  /\bcaptureSessions\s*\(/,
 ];
 
 function classifyTestFile(src) {
