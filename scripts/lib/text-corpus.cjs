@@ -14,17 +14,17 @@ function corpusCodePoints() {
 // Cases a single code point cannot express. Each line names why it is here.
 function corpusComposed() {
   return [
-    'é',                       // base + combining mark
+    H(0x65, 0x301),                  // base + combining mark (decomposed: e U+0301)
     'a\u202eb\u0301',                // a bidi control (substitute range) inside a would-be cluster
     '\u202e\u0301',                  // a bidi control followed by a mark it could absorb
-    'e\x1b[1ḿ',                // an SGR escape between a base and its mark
+    'e\x1b[1m' + H(0x301),          // an SGR escape between a base and its mark
     'e\x1b]8;;http://x\x07\u0301',   // an OSC-8 between a base and its mark
     '\u{1f468}\u200d\u{1f469}\u200d\u{1f467}', // ZWJ family
     '\u{1f44d}\u{1f3fd}',            // emoji modifier
     '\u{1f1fa}\u{1f1f8}\u{1f1ec}',   // three regional indicators (pair + orphan)
     '❤️', '❤︎',  // VS16 and VS15 on a text-default emoji
     'क्ष',            // Devanagari conjunct (GB9c, Unicode 15.1)
-    '각',            // Hangul L V T
+    H(0x1100, 0x1161, 0x11a8),       // Hangul L V T (conjoining jamo)
     '\r\n', 'a\r\nb',                // CR LF
     'a\tb\t', '\t\u0301',            // tabs, and a mark after a tab
     '؀a',                       // Prepend
@@ -123,6 +123,52 @@ function corpusCellProbes() {
   return out;
 }
 
+// The escape layer (task 6): what ESC and the C1 introducers do to the text around them.
+// CellSegmenter and Bun.stringWidth both put it in front of the clusterer, and a single
+// code point or the UCD corpora never reach it. Two cross products, so the transition
+// table is WALKED rather than sampled:
+//   PARSER  `a` + a STATE (a prefix that leaves the parser in one of its states) + two
+//           TOKENS + `b c`: every state followed by every two-step continuation. The `b c`
+//           tail shows whether the sequence ended, and where (`b` is itself a final byte).
+//   ACROSS  a cluster's first half, one escape sequence, its second half: native clusters
+//           ACROSS an escape (measured 2026-09-24 against 2.1.278: `e ESC[1m U+0301` is the
+//           one cell `e U+0301`, and `1F600 200D ESC[1m 1F600` one 2-wide cell).
+const ESC = 0x1b;
+const ESCAPE_STATES = [
+  [], [ESC], [ESC, 0x20],                                                  // ground, ESC, ESC + intermediate
+  [ESC, 0x5b], [ESC, 0x5b, 0x31], [ESC, 0x5b, 0x3f], [ESC, 0x5b, 0x20],    // CSI: entry, param, private, intermediate
+  [ESC, 0x5b, 0x31, 0x301],                                                // CSI after a byte it cannot hold
+  [ESC, 0x5d], [ESC, 0x5d, 0x38, 0x3b, 0x3b, 0x78],                        // OSC: entry, an OSC-8 body
+  [ESC, 0x50], [ESC, 0x58], [ESC, 0x5e], [ESC, 0x5f],                      // 7-bit DCS, SOS, PM, APC
+  [0x9b], [0x9b, 0x31], [0x9d], [0x90], [0x98], [0x9e], [0x9f],            // the C1 introducers
+];
+const ESCAPE_TOKENS = [
+  ESC, 0x5b, 0x5d, 0x5c, 0x50, 0x5f, 0x31, 0x30, 0x3b, 0x3a, 0x3f, 0x20, 0x2f,   // ESC [ ] \ P _ 1 0 ; : ? SP /
+  0x6d, 0x48, 0x40, 0x7e,                                                       // finals m H @ ~
+  0x4e, 0x4f, 0x58, 0x5e,                                                       // N O (single shifts) X ^
+  0x07, 0x09, 0x0a, 0x0d, 0x00, 0x7f, 0x18, 0x1a,                               // BEL TAB LF CR NUL DEL CAN SUB
+  0x80, 0x85, 0x8e, 0x8f, 0x90, 0x98, 0x9b, 0x9c, 0x9d, 0x9e, 0x9f,             // C1: SS2 SS3, the introducers, ST
+  0x301, 0x903, 0x4e2d, 0x1f600, 0x1f1e6, 0x202e, 0xd83d, 0xde00,               // mark, spacing mark, wide, emoji, RI, bidi, lone halves
+];
+const ACROSS_FIRST = [[0x65], [0x1f1e6], [0x915, 0x94d], [0x1100], [0x1f600, 0x200d], [0x600], [0x1f476], [0x2764],
+  [0x202e], [0xd83d], [0x61, 0x09]];
+const ACROSS_ESCAPE = [
+  [ESC, 0x5b, 0x31, 0x6d], [ESC, 0x5b, 0x6d], [ESC, 0x5d, 0x38, 0x3b, 0x3b, 0x75, 0x07],
+  [ESC, 0x5d, 0x38, 0x3b, 0x3b, 0x75, ESC, 0x5c], [0x9b, 0x31, 0x6d], [0x9d, 0x38, 0x3b, 0x3b, 0x75, 0x9c],
+  [ESC, 0x37], [ESC, 0x28, 0x42], [ESC], [ESC, 0x5b, 0x31, 0x301, 0x6d], [ESC, 0x50, 0x71, ESC, 0x5c], [],
+];
+const ACROSS_SECOND = [[0x301], [0x903], [0x1f1e7], [0x937], [0x1161], [0x1f600], [0x1f3fb], [0xfe0f], [0x200d, 0x1f600],
+  [0xde00], [0x202e], [0x78], [0x09]];
+
+function corpusEscapes() {
+  const out = [];
+  for (const st of ESCAPE_STATES) {
+    for (const t1 of ESCAPE_TOKENS) for (const t2 of ESCAPE_TOKENS) out.push(H(0x61, ...st, t1, t2, 0x62, 0x63));
+  }
+  for (const x of ACROSS_FIRST) for (const e of ACROSS_ESCAPE) for (const y of ACROSS_SECOND) out.push(H(...x, ...e, ...y));
+  return [...new Set(out)];   // the two halves overlap in a few strings
+}
+
 // The bun-cell per-code-point sweep (task 4b): every template, with every code point X in
 // the `X` slot, is one string. Templates close with a code point of nonzero width where a
 // zero-width X would otherwise leave nothing to compare. `narrow: false` runs it with
@@ -196,4 +242,4 @@ function graphemeBreakTestCases(text) {
 }
 
 module.exports = { corpusCodePoints, corpusComposed, corpusGraphemeBreakTest, corpusEmojiTest, corpusBundleLiterals,
-  corpusCellProbes, CELL_SWEEP_TEMPLATES, graphemeBreakTestCases };
+  corpusCellProbes, corpusEscapes, CELL_SWEEP_TEMPLATES, graphemeBreakTestCases };

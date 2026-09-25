@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { compareTextResults, runNative, runOurs } = require('../scripts/lib/text-probe.cjs');
+const { compareTextResults, runNative, runOurs, asciiJson } = require('../scripts/lib/text-probe.cjs');
 const { corpusCodePoints, corpusComposed, corpusEmojiTest, corpusGraphemeBreakTest } =
   require('../scripts/lib/text-corpus.cjs');
 
@@ -36,9 +36,12 @@ test('the code point corpus is exactly 0x110000 strings, lone surrogates include
 
 test('the composed corpus holds the cases a single code point cannot', () => {
   const c = corpusComposed();
-  assert.ok(c.includes('é'));
+  // Built from code points: the precomposed U+00E9 / U+1E3F these once were (an editing
+  // tool normalised the typed escapes) are single code points, not the sequences meant.
+  assert.ok(c.includes(String.fromCodePoint(0x65, 0x301)), 'a base and its combining mark');
   assert.ok(c.includes('a\u202eb\u0301'), 'a bidi control inside a would-be cluster');
-  assert.ok(c.includes('e\x1b[1ḿ'), 'an escape inside a would-be cluster');
+  assert.ok(c.includes('e\x1b[1m' + String.fromCodePoint(0x301)), 'an escape inside a would-be cluster');
+  assert.ok(c.includes(String.fromCodePoint(0x1100, 0x1161, 0x11a8)), 'Hangul L V T as conjoining jamo');
 });
 
 // The refusal happens before any spawn (native or tjs), so this needs neither a real
@@ -56,4 +59,14 @@ test('GraphemeBreakTest and emoji-test parsers read the published formats', () =
   const et = '# group: Smileys\n1F600                  ; fully-qualified     # 😀 E1.0 grinning face\n'
     + '2764 FE0F              ; fully-qualified     # ❤️ E0.6 red heart\n';
   assert.deepStrictEqual(corpusEmojiTest(et), ['\u{1f600}', '❤️']);
+});
+
+// The tjs side's input must survive node-shim's fs.readFileSync(f, 'utf8'), whose engine
+// TextDecoder drops every U+FEFF (measured 2026-09-24); an all-ASCII file cannot lose one.
+test('asciiJson writes pure ASCII that parses back to exactly the same strings', () => {
+  const H = (...cps) => cps.map((c) => ((c >= 0xd800 && c <= 0xdfff) ? String.fromCharCode(c) : String.fromCodePoint(c))).join('');
+  const v = { strings: [H(0x61, 0xfeff, 0x62), H(0xfeff), H(0xd83d), H(0x1f600), H(0x301), H(0x7f, 0x80), ''] };
+  const j = asciiJson(v);
+  assert.ok(!/[^\x00-\x7f]/.test(j), `not ASCII: ${j}`);
+  assert.deepStrictEqual(JSON.parse(j), v);
 });

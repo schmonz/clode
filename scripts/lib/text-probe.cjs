@@ -61,6 +61,16 @@ function runNative(bin, strings, wants) {
   return merge(batches(strings).map((s) => runInNative(bin, PROBE_SOURCE, { input: { strings: s, wants, side: 'native' } })));
 }
 
+// JSON with every non-ASCII UTF-16 unit written as an escape, so the file is pure ASCII.
+// The tjs side must get back EXACTLY the strings Node wrote, and it would not: the engine's
+// TextDecoder, under node-shim's fs.readFileSync(f, 'utf8'), drops EVERY U+FEFF it decodes
+// (measured 2026-09-24: `a U+FEFF b` read back as `ab`), where Node's fs keeps them all. That
+// is what the baseline's one Intl.Segmenter "difference" at U+FEFF was: the instrument, not
+// the segmenter.
+function asciiJson(v) {
+  return JSON.stringify(v).replace(/[^\x00-\x7f]/g, (c) => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'));
+}
+
 function runOurs(strings, wants) {
   if (strings.length === 0) throw new Error('empty corpus: nothing to compare');
   const { runLoader } = require(path.join(REPO, 'test', 'node-shim-helper.cjs'));
@@ -69,7 +79,7 @@ function runOurs(strings, wants) {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'text-probe-'));
     try {
       const inf = path.join(dir, 'in.json'); const outf = path.join(dir, 'out.json'); const prog = path.join(dir, 'p.cjs');
-      fs.writeFileSync(inf, JSON.stringify({ strings: s, wants, side: 'ours' }));
+      fs.writeFileSync(inf, asciiJson({ strings: s, wants, side: 'ours' }));
       fs.writeFileSync(prog, `require(${JSON.stringify(shim)});\nconst fs = require('fs');\n`
         + `const input = JSON.parse(fs.readFileSync(${JSON.stringify(inf)}, 'utf8'));\n`
         + `const r = (function (input) {${PROBE_SOURCE}\n})(input);\n`
@@ -105,4 +115,4 @@ function compareTextResults(strings, native, ours) {
   return { examined: strings.length, findings, counts };
 }
 
-module.exports = { PROBE_SOURCE, runNative, runOurs, compareTextResults, BATCH };
+module.exports = { PROBE_SOURCE, runNative, runOurs, compareTextResults, asciiJson, BATCH };

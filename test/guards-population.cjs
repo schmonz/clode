@@ -147,6 +147,15 @@ const PATTERN_MATCHES = [
   /\.exec\s*\(/,
   /\.includes\s*\(\s*['"]/,
   /assert\.(?:match|doesNotMatch)\s*\(/,
+];
+
+// TEST-ONLY verdict shapes: how a TEST derives a finding from bytes two real binaries
+// produced, without spelling it as a regex. Consulted by classifyTestFile() ALONE —
+// never by the production classifier, which spreads PATTERN_MATCHES into GATE_VERDICT
+// below, so an entry here cannot quietly widen what counts as a production gate (phase 3,
+// controller ruling R10 revised, 2026-09-24; proven by comparing classifyProductionFile
+// over every production file before and after the move: no verdict changed).
+const TEST_VERDICT_EXTRA = [
   // A CELL-BY-CELL COMPARISON of the frames two real binaries painted
   // (test/frame-oracle.cjs's captureFrames, judged by test/frame-diff.cjs). Added
   // 2026-09-24 the same way CLODE_DEPSCAN_ENGINE was: fidelity/interactive-frame-diff
@@ -155,13 +164,21 @@ const PATTERN_MATCHES = [
   // FLOOR test said, correctly, that the classifier was the broken party. A structural
   // diff is a finding derived from bytes; it just is not spelled as a regex. Narrow on
   // purpose: `captureFrames(` names the two-binary capture, not frame-diff's own unit
-  // tests (which build synthetic payloads and call captureFrame, singular).
+  // tests (which build synthetic payloads and call captureFrame, singular). Moved here
+  // from PATTERN_MATCHES on 2026-09-24 (R10 revised): it is a test's shape, not a gate's.
   /\bcaptureFrames\s*\(/,
+  // A TEXT DIFFERENTIAL: the same probe program run inside native Bun and under our shim,
+  // compared string by string (scripts/lib/text-probe.cjs's runNative, judged by
+  // compareTextResults). Added 2026-09-24 for fidelity/text-differential, a registered
+  // defineGuard guard whose finding is derived from what native answered, which the
+  // FLOOR test said the classifier could not see. Narrow on purpose: `runNative(` names
+  // the native run, not runInNative's own unit tests.
+  /\brunNative\s*\(/,
 ];
 
 function classifyTestFile(src) {
   const artifact = readsArtifact(src);
-  const derivesFinding = PATTERN_MATCHES.some((re) => re.test(src));
+  const derivesFinding = PATTERN_MATCHES.some((re) => re.test(src)) || TEST_VERDICT_EXTRA.some((re) => re.test(src));
   const scannerShaped = artifact && derivesFinding;
   const why = scannerShaped
     ? 'reads an artifact it did not create AND derives a finding from the bytes'
@@ -1113,6 +1130,7 @@ module.exports = {
   REPO_ROOTED,
   STANDALONE_ARTIFACT_SIGNALS,
   PATTERN_MATCHES,
+  TEST_VERDICT_EXTRA,
   // ---- production build-gate population (phase 5b, task 5)
   discoverProductionFiles,
   classifyProductionFile,
