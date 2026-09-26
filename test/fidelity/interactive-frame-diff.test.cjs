@@ -24,7 +24,7 @@
 // which is exactly how quaude-from-2.1.278 painted nothing for a day while the
 // build smoke said PONG.
 //
-// THREE SCENES, three guards. `tui-initial-frame-cells` is the welcome screen as it
+// FOUR SCENES, four guards. `tui-initial-frame-cells` is the welcome screen as it
 // boots. `tui-prompt-wide-glyphs` (CellSegmenter phase 3, 2026-09-25) types
 // `U+4E2D U+6587 SP U+1F44D U+1F3FD SP U+1F1FA U+1F1F8 SP e U+0301 SP U+2764 U+FE0F`
 // into the prompt, NO Enter, well after boot (typed at t=0 it races the TUI's
@@ -46,6 +46,20 @@
 // reference must PAINT both links, or the guard says so instead of comparing two frames
 // with none. Measured: native-vs-native identical; the pre-phase-4 quaude differs on the
 // reply row (link 32, sgr 32: native underlines what it links).
+// `tui-reply-wraps` (Bun.wrapAnsi = native, 2026-09-26) is a turn answered with a markdown
+// table whose two cells the TUI wraps through Bun.wrapAnsi: one holding literal tabs, one
+// holding an italic run with bold inside it that crosses the wrap point. The TABLE is where
+// the wrap helper sees what native and npm wrap-ansi disagree on, measured with a
+// Bun.wrapAnsi-logging preload in native: a paragraph or list item reaches Bun.wrapAnsi as
+// plain text and is styled after wrapping, so bold holding inline code across a wrap paints
+// identically there; a table cell reaches it with its SGR inside. Native keeps a tab as
+// near zero-width where npm expands it to tab stops, so the cells break at different words;
+// and at the wrap native closes only the inner bold, so the outer italic runs on over the
+// cell's padding and border. Bold holding inline code (a colour) inside a cell also crosses
+// the wrap differently in the helper's output yet paints identically, so the scene holds
+// italic around bold. The reference must paint the reply's last words. Measured: native vs
+// native identical; the quaude of npm wrap-ansi differs on the table rows (glyph 85: the
+// tab row; sgr 13: the italic run on the border and padding).
 //
 // WHAT IT DOES NOT COVER, deliberately named: no resize, no scroll, no damage
 // under partial repaint (phase 5 of the CellSegmenter work).
@@ -89,8 +103,23 @@ const LINK_REPLY = `See [the docs](${LINKS[0]}) and ${LINKS[1]} now.`;
 const LINK_SHOWN = `See the docs and ${LINKS[1]} now.`;
 const LINK_SCENE = { mockText: LINK_REPLY, env: { FORCE_HYPERLINK: '1' }, settings: { showTurnDuration: false },
   thenHex: [`${Buffer.from('hi', 'utf8').toString('hex')}@${TYPE_AT}`, `0d@${TYPE_AT + 1.2}`] };
+// WRAP SCENE: a reply the wrap helper breaks across lines, holding what native's
+// Bun.wrapAnsi and npm wrap-ansi disagree on (recon 2026-09-26): literal tabs inside
+// wrapped text, and an italic run holding bold that crosses a wrap point. Both in a table,
+// the one place the helper sees the styles (see the header); each cell long enough to wrap
+// at 100 columns, the tabbed row first so the reply ends on the italic row's intact words.
+const WRAP_REPLY = [
+  '| Name | Description |',
+  '| --- | --- |',
+  '| beta | a tab\tthen another tab\tand more words so that this cell wraps past its column edge here |',
+  '| alpha | plain words that push the bold run toward the wrap: *italic holding **bold words that cross the wrap point of this cell** and more italic* done |',
+].join('\n');
+const WRAP_SHOWN = 'and more italic done';
+const WRAP_SCENE = { mockText: WRAP_REPLY, settings: { showTurnDuration: false },
+  thenHex: [`${Buffer.from('hi', 'utf8').toString('hex')}@${TYPE_AT}`, `0d@${TYPE_AT + 1.2}`] };
 
-let SKIP = null, FRAMES = null, TYPED_FRAMES = null, LINK_FRAMES = null, WHAT = '', TYPED_WHAT = '', LINK_WHAT = '';
+let SKIP = null, FRAMES = null, TYPED_FRAMES = null, LINK_FRAMES = null, WRAP_FRAMES = null;
+let WHAT = '', TYPED_WHAT = '', LINK_WHAT = '', WRAP_WHAT = '';
 before(async () => {
   const gate = liveFrameGate();
   if (gate.skip) { SKIP = gate.skip; return; }
@@ -116,6 +145,11 @@ before(async () => {
   LINK_FRAMES = await captureFrames({ ref, sub, seconds: SECONDS, rows: ROWS, cols: COLS, ...LINK_SCENE });
   if (!LINK_FRAMES.ref || !LINK_FRAMES.sub) {
     throw new Error(`frame capture failed (${LINK_WHAT}): ref=${!!LINK_FRAMES.ref} sub=${!!LINK_FRAMES.sub}; see stderr`);
+  }
+  WRAP_WHAT = `${WHAT}, a turn typed at ${TYPE_AT}s answered with a table the wrap helper breaks`;
+  WRAP_FRAMES = await captureFrames({ ref, sub, seconds: SECONDS, rows: ROWS, cols: COLS, ...WRAP_SCENE });
+  if (!WRAP_FRAMES.ref || !WRAP_FRAMES.sub) {
+    throw new Error(`frame capture failed (${WRAP_WHAT}): ref=${!!WRAP_FRAMES.ref} sub=${!!WRAP_FRAMES.sub}; see stderr`);
   }
 });
 
@@ -217,6 +251,24 @@ guardTests(defineGuard({
     const sub = cloneFrame(ref);
     for (let x = 0; x < 8; x++) sub.cells[3][x] = { ...sub.cells[3][x], l: null };
     return { ref, sub, what: 'synthetic control', mustLink: [LINKS[0]] };
+  },
+}));
+
+// The wrap scene: a turn answered with a table whose cells the wrap helper breaks (see the
+// header). The reference must show the reply's last words. The control is the wrap
+// regression in miniature: one cell of the wrapped run painted in the wrong place.
+guardTests(defineGuard({
+  name: 'tui-reply-wraps',
+  floor: FLOOR,
+  read() {
+    if (SKIP) return { skip: SKIP };
+    return { ref: WRAP_FRAMES.ref, sub: WRAP_FRAMES.sub, what: WRAP_WHAT, mustShow: WRAP_SHOWN };
+  },
+  scan: scanFrames,
+  control() {
+    const ref = controlFrame(), sub = cloneFrame(ref);
+    sub.cells[3][10] = { ...sub.cells[3][10], c: 'Z' };
+    return { ref, sub, what: 'synthetic control', mustShow: null };
   },
 }));
 
