@@ -23,10 +23,14 @@ new pin had 26 failures, from three upstream changes a carve cannot see, and the
   their `clode build` was failing. Now both spellings match, and a module with the reader's
   structure (the zstd magic beside both fs imports) the anchor misses is a dead hook, not
   benign (1ad8e8b).
-- **Two woff2 font rows** are the first embedded rows with invalid UTF-8, and tjs's
-  TextDecoder is not WHATWG's for ill-formed input, so the extractor's output differed between
-  node and tjs by 184 bytes. bun-graph now decodes invalid rows itself (UTF8-REPLACEMENT,
-  f851ff2).
+- **Two woff2 font rows** are the first rows the carve decodes whose invalid bytes node and tjs
+  decode differently (tjs's TextDecoder is not WHATWG's for ill-formed input), so the
+  extractor's output differed between node and tjs by 184 bytes. They are not the first
+  invalid rows: 14 loader-13 text rows of 2.1.251 fail a fatal UTF-8 decode, as do 16 of
+  2.1.274, 2.1.278 and 2.1.281 and 15 of 2.1.282 and 2.1.283 (all of them the UTF-16LE rows
+  below), and both engines read those alike (measured 2026-09-26, darwin-arm64: every
+  non-napi invalid row, node vs tjs non-fatal decode). bun-graph now decodes invalid rows
+  itself (UTF8-REPLACEMENT, f851ff2).
 - **Builtin plugins read `import.meta.dir` and `import.meta.dirname`** (already in 2.1.282), which
   neither host gives a runner-hosted module; node's path.join throws on undefined, and a naude
   answered `-p` with nothing, exit 0. The runner now assigns both from the module's name
@@ -38,6 +42,16 @@ new pin had 26 failures, from three upstream changes a carve cannot see, and the
   'replace' of undefined" (interactive-frame-diff red on all three scenes, on darwin and in the
   linux-x64-pty mirror). A graph hook keeps the bundled branch, native's (BUILTIN-PLUGIN-BUNDLED,
   bac26f0).
+  It changes older providers too, so it was driven there (2026-09-26). Staged through
+  planGraph and transformGraph, the hook applies exactly once, every other hook applying too,
+  on 2.1.274 (npm `stable` that day), .275, .278, .281, .282 and .283 on darwin-arm64, .278
+  and .283 on linux, .283 on win32; it is the benign absent case on .251, .252 and .257 (no
+  folder descriptor) and on every older carve tried. A fresh quaude from native 2.1.278 with
+  the hook passed its PONG and attest smokes and matched native 2.1.278 cell for cell on all
+  three frame scenes (353 / 336 / 398 cells, 0 differences; test/fidelity/RESULTS.md).
+  The two canaries that keep this hook and `embedded_asset_reader` from reading as benign
+  no longer share the anchors' patterns: the zstd magic in a module that imports or requires
+  fs in any form, and the folder descriptor in either key order.
 
 **Still open:**
 
@@ -57,6 +71,15 @@ new pin had 26 failures, from three upstream changes a carve cannot see, and the
   expects BYTES for `.toString("base64")` into an `@font-face` data URL. The carve decodes
   every non-zstd row as UTF-8 (lossy for binary) and the patched reader returns that string,
   so the data URL is not the font. Serving binary rows as bytes means typing the asset map.
+- **UTF-16LE text assets are served NUL-interleaved** (standing since before the pin moved).
+  The carve ignores Bun's per-row encoding byte (`enumBytes[0]`, row offset +48). Measured
+  2026-09-26, darwin-arm64: every row marked 2 is a loader-13 text row, none zstd, all valid
+  UTF-16LE — 15 in 2.1.251, 22 in 2.1.274, 20 in 2.1.278 and 2.1.281, 19 in 2.1.282 and
+  2.1.283. `loadAssetsFromBytes` decodes them as UTF-8 and serves a NUL beside nearly every
+  character: 2.1.251's `SKILL-e1sgkfee.md` (the plan-artifact skill) carries 2,303 NULs in
+  4,606 bytes, 2.1.283's `design-6m4nsdef.md` 5,656 in 11,312. Fix direction: decode by the
+  encoding byte, as a named rule whose test takes its literals from what native's Bun hands
+  the bundle for such a row (the preload oracle can read it).
 - **tjs's TextDecoder** (txiki's `src/js/polyfills/text-encoding.js`) still decodes ill-formed
   UTF-8 unlike WHATWG (F0 9F C3 9F: node U+FFFD U+00DF, tjs U+FFFD U+FFFD; 36 of a 4,014-string
   fuzz differ) for every non-fatal decode outside the carve, the shim's Buffer
@@ -67,6 +90,15 @@ new pin had 26 failures, from three upstream changes a carve cannot see, and the
   which upstream catches, so that scrub never runs under quaude; and `[event-loop-stall]
   process.resourceUsage() failed: not a function` (the shim has no process.resourceUsage). The
   turn completes either way. The regex construct QuickJS rejects is not yet named.
+- **A quaude turn at 2.1.283 is slower than native's, and no gate sees it now.** In the
+  linux-x64-pty container mirror the resize session's quaude went at least 800 ms with no
+  output mid-turn (its `send` frame settled at 2.7-2.9 s with the turn in flight, 4 runs in
+  4) and, waited for, answered at 3.6-3.8 s (3 runs in 3), against native's 1.2 s (f0eee15).
+  At 2.1.251 the same session settled after the reply with no `until` (CI's linux-x64-pty
+  sessions step, green through run 36253515217). The resize and scroll send steps now wait
+  `until` their reply is on screen, which is right for a paint gate and blind to the time it
+  took. Not yet measured: where the time goes, and whether it is the `[event-loop-stall]`
+  line above (logged every turn).
 - **Image processing is unavailable under quaude** and now fails through `new Bun.Image(...)`,
   three of whose six call sites have no catch of their own (reviewed in
   test/shim-surface/golden.json's Bun.Image note; callers not verified). Standing since before
