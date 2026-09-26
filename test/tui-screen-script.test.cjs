@@ -54,6 +54,22 @@ test('parseArgs: an unflagged script run takes the measured defaults', () => {
     'a cap below its own quiet window could never report a frame settled');
 });
 
+test('settleVerdict: a step whose until-text is not on screen does not settle on quiet alone', () => {
+  const base = { now: 5000, since: 1000, lastOut: 2000, quietMs: 800, maxMs: 15000, needOutput: true };
+  assert.strictEqual(settleVerdict({ ...base, shown: true }), 'settled');
+  assert.strictEqual(settleVerdict({ ...base, shown: false }), 'wait', 'the reply has not painted: keep waiting');
+  assert.strictEqual(settleVerdict({ ...base, now: 16001, shown: false }), 'timeout', 'and the cap still ends it');
+  assert.strictEqual(settleVerdict(base), 'settled', 'a step without until is unchanged');
+});
+
+test('parseScript: until rides a send step, and nothing else', () => {
+  assert.deepStrictEqual(parseScript([{ label: 'send', send: '0d', until: 'end.' }]),
+    [{ label: 'send', send: '0d', until: 'end.' }]);
+  assert.throws(() => parseScript([{ label: 's', send: '0d', until: '' }]), /until must be non-empty text/);
+  assert.throws(() => parseScript([{ label: 'r', resize: '60x30', until: 'x' }]), /until belongs to a send step/);
+  assert.throws(() => parseScript([{ label: 'w', wait: 100, until: 'x' }]), /until belongs to a send step/);
+});
+
 test('parseArgs: --then-hex needs its @DELAY, and --signal delivers NAME@DELAY', () => {
   // Without a delay the keystrokes went at spawn (setTimeout with NaN), which is how
   // e2e-ctrlz-tui typed its marker before its own Ctrl-Z for as long as it existed.

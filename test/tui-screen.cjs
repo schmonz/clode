@@ -84,16 +84,23 @@ const SCRIPT_DEFAULTS = Object.freeze({ settleMs: 800, maxSettleMs: 15000, bootS
 // frame's quiet: right after a keystroke it has already lasted a whole window, and a frame
 // taken then shows the screen before the TUI painted the key. A `wait` step expects no
 // output (it is how a script lets a self-timed element run out), so earlier quiet counts.
-// `since` is when the step acted (boot: the spawn). Pure, so the rule is unit-tested.
-function settleVerdict({ now, since, lastOut, quietMs, maxMs, needOutput }) {
+// `since` is when the step acted (boot: the spawn). `shown` is false while a step's `until`
+// text is not yet on screen (see parseScript): quiet does not settle a turn whose reply has
+// not painted. Pure, so the rule is unit-tested.
+function settleVerdict({ now, since, lastOut, quietMs, maxMs, needOutput, shown = true }) {
   const heard = !needOutput || lastOut >= since;
-  if (heard && now - lastOut >= quietMs) return 'settled';
+  if (heard && shown && now - lastOut >= quietMs) return 'settled';
   if (now - since >= maxMs) return 'timeout';
   return 'wait';
 }
 
-// A script is a JSON array of steps, each { label, send: HEX } | { label, resize: 'COLSxROWS' }
-// | { label, wait: MS }. Labels name the frames the gates report, so they are unique and
+// A script is a JSON array of steps, each { label, send: HEX[, until: TEXT] }
+// | { label, resize: 'COLSxROWS' } | { label, wait: MS }. `until` holds a send step's frame
+// until TEXT is on screen and output has then settled: a turn is judged once its reply is
+// painted, however long the builder waited in silence first. (Found 2026-09-26: in the
+// linux-x64-pty container a quaude's 2.1.283 reply came after more than the 800 ms quiet
+// window, 4 runs in 4, so the frame after Enter showed the turn still in flight; native's
+// reply had painted.) Labels name the frames the gates report, so they are unique and
 // never 'boot' (frame 0's label). Refused loudly: a typo'd step that silently did nothing
 // would still produce a frame, and two builds agreeing on a step that never happened is a
 // pass that judged nothing.
@@ -108,13 +115,18 @@ function parseScript(steps) {
     if (seen.has(label)) throw new Error(`step ${i}: label "${label}" is used twice`);
     seen.add(label);
     for (const k of Object.keys(st)) {
-      if (!['label', 'send', 'resize', 'wait'].includes(k)) throw new Error(`step "${label}": unknown key "${k}"`);
+      if (!['label', 'send', 'resize', 'wait', 'until'].includes(k)) throw new Error(`step "${label}": unknown key "${k}"`);
     }
     const acts = ['send', 'resize', 'wait'].filter((k) => st[k] !== undefined);
     if (acts.length !== 1) throw new Error(`step "${label}" needs exactly one of send, resize, wait`);
     if (acts[0] === 'send') {
       if (typeof st.send !== 'string' || !/^(?:[0-9a-fA-F]{2})+$/.test(st.send)) throw new Error(`step "${label}": send must be an even-length hex string`);
-      return { label, send: st.send };
+      if (st.until === undefined) return { label, send: st.send };
+      if (typeof st.until !== 'string' || st.until === '') throw new Error(`step "${label}": until must be non-empty text`);
+      return { label, send: st.send, until: st.until };
+    }
+    if (st.until !== undefined) {
+      throw new Error(`step "${label}": until belongs to a send step`);
     }
     if (acts[0] === 'resize') {
       const m = typeof st.resize === 'string' && /^([1-9][0-9]*)x([1-9][0-9]*)$/.exec(st.resize);
@@ -310,12 +322,21 @@ async function main() {
 // frame is marked unsettled and no frame is invented for a step it never saw.
 async function runScript({ steps, child, term, state, spawnedAt, opts }) {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const settle = async (since, quietMs, maxMs, needOutput) => {
+  const onScreen = (text) => {
+    const buf = term.buffer.active;
+    for (let i = 0; i < term.rows; i++) {
+      const line = buf.getLine(i);
+      if (line && line.translateToString(true).includes(text)) return true;
+    }
+    return false;
+  };
+  const settle = async (since, quietMs, maxMs, needOutput, until) => {
     for (;;) {
       await sleep(50);
       const now = Date.now();
       if (state.exited) return { settled: false, ms: now - since };
-      const v = settleVerdict({ now, since, lastOut: state.lastOut, quietMs, maxMs, needOutput });
+      const shown = until === undefined || onScreen(until);
+      const v = settleVerdict({ now, since, lastOut: state.lastOut, quietMs, maxMs, needOutput, shown });
       if (v !== 'wait') return { settled: v === 'settled', ms: now - since };
     }
   };
@@ -340,7 +361,7 @@ async function runScript({ steps, child, term, state, spawnedAt, opts }) {
       await sleep(st.wait);
       since = Date.now();
     }
-    await snap(st.label, await settle(since, opts.settleMs, opts.maxSettleMs, st.wait === undefined));
+    await snap(st.label, await settle(since, opts.settleMs, opts.maxSettleMs, st.wait === undefined, st.until));
   }
   return frames;
 }

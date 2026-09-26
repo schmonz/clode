@@ -72,7 +72,7 @@ const SESSIONS = {
     rows: 40, cols: 100,
     script: [
       { label: 'ask', send: hex('hi') },
-      { label: 'send', send: hex('\r') },
+      { label: 'send', send: hex('\r'), until: 'end.' },
       { label: 'shrink 60x30', resize: '60x30' },
       { label: 'grow 120x40', resize: '120x40' },
       { label: 'back 100x40', resize: '100x40' },
@@ -113,7 +113,7 @@ const SESSIONS = {
     rows: 40, cols: 320,
     script: [
       { label: 'ask', send: hex('hi') },
-      { label: 'send', send: hex('\r') },
+      { label: 'send', send: hex('\r'), until: 'line 121 end.' },
       { label: 'page up', send: hex(ESC + '[5~') },
       { label: 'page up 2', send: hex(ESC + '[5~') },
       { label: 'wheel up', send: hex(ESC + '[<64;50;20M') },
