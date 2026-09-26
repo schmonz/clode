@@ -163,6 +163,25 @@ test('a module whose name is not an absolute path gets require but no invented u
   const out = moduleWithMeta('fs', 'export default 1;\n');
   assert.match(out, /^import\.meta\.require = globalThis\.__quaudeRequire;\n/);
   assert.ok(!out.includes('import.meta.url'), 'invented a url for a bare specifier');
+  assert.ok(!out.includes('import.meta.dir'), 'invented a directory for a bare specifier');
+});
+
+// RUNNER-META-DIR (extract-claude-js.cjs moduleWithMeta): a runner-hosted module reports its
+// directory as import.meta.dirname and Bun's import.meta.dir, derived from its name, on both
+// hosts. Before 2026-09-26 both hosts reported undefined for both, and a naude of 2.1.282/283
+// answered `-p` with nothing (upstream's builtin plugins resolve their home from them).
+test('RUNNER-META-DIR: a module reports its directory as import.meta.dirname and dir, on both hosts', (t) => {
+  const helper = 'export const M = JSON.stringify([import.meta.dirname, import.meta.dir]);';
+  const entry = 'import { M } from "/$bunfs/root/helper.js";\nconsole.log(M);\n'
+    + 'console.log(JSON.stringify([import.meta.dirname, import.meta.dir]));\n';
+  const { dir, f } = writeRunner(docOf(entry, helper));
+  const want = `${JSON.stringify(['/$bunfs/root', '/$bunfs/root'])}\n`.repeat(2);
+  try {
+    assert.strictEqual(runNode(f, dir), want, 'node');
+    if (tjsAvailable(t)) assert.strictEqual(runTjs(f, dir), want, 'tjs');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  assert.match(moduleWithMeta('B:/~BUN/root/chunk-x.js', ''), / import\.meta\.dirname = import\.meta\.dir = "B:\/~BUN\/root";/,
+    'a win32 carve names its modules B:/~BUN/root/..., and the directory is read from the name the same way');
 });
 
 // --- 4. the staged bundle carries BOTH shapes ---------------------------------------

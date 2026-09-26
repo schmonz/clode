@@ -1479,8 +1479,21 @@ function moduleWithMeta(name, src) {
   // fileURLToPath(import.meta.url) on it. One derived value, same on every host, is the
   // only version of this that cannot drift. It is also EXACTLY what the engine derives
   // from the same module name (src/modules.c), so tjs sees no change.
+  //
+  // RUNNER-META-DIR: and the module's DIRECTORY, as import.meta.dirname and Bun's alias
+  // import.meta.dir, derived from the same name (`/$bunfs/root/chunk-x.js` -> `/$bunfs/root`).
+  // Neither host supplies them to a runner-hosted module (measured 2026-09-26: node and tjs
+  // both report undefined for both). Upstream reads them at startup (2.1.282 and 2.1.283 do;
+  // 2.1.278 does not reach them): builtin plugins register `$K(import.meta.dir, ...)` and
+  // resolve their home from `import.meta.dirname`, and node's path.join/resolve throw on
+  // undefined, so the runner under node answered `-p` with nothing and exit 0 -- its command
+  // loading never settled, after HEAD /api/hello and no POST -- and so did every naude built
+  // from them. (tjs's shim path.join accepts undefined, which is why quaude did not notice.)
+  const cut = abs ? name.search(/[/\\][^/\\]*$/) : -1;          // the last separator, either kind
+  const dir = cut > 0 ? name.slice(0, cut) : (cut === 0 ? name[0] : null);
   return 'import.meta.require = globalThis.__quaudeRequire;'
     + (url ? ' import.meta.url = ' + JSON.stringify(url) + ';' : '')
+    + (dir ? ' import.meta.dirname = import.meta.dir = ' + JSON.stringify(dir) + ';' : '')
     + '\n' + src;
 }
 
