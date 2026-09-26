@@ -167,8 +167,8 @@ test('the inspector\'s snapshot-generator anchor is byte-identical to the extrac
 // The five-day red light this re-pin closes: upstream-drift.yml reported
 // `snapshot_generator_present = false` against `next` from 2026-09-17. Both ends are
 // asserted, because an anchor that matches only the NEW shape trades one red for another:
-// every build in CI stages the PIN.
-for (const [version, gen] of [['2.1.251', 'CDn'], ['2.1.278', 'OCr']]) {
+// every build in CI stages the PIN (2.1.251 until 2026-09-26, 2.1.283 since).
+for (const [version, gen] of [['2.1.251', 'CDn'], ['2.1.278', 'OCr'], ['2.1.283', 'JAn']]) {
   test(`snapshotGeneratorPresent on the REAL ${version} bundle shape`, () => {
     const src = fs.readFileSync(
       path.join(__dirname, 'fixtures', 'doctor', `snapshot-gen-${version}.js`), 'latin1');

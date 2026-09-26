@@ -173,16 +173,18 @@ test('patchSnapshotBridge exposes the real 2.1.205 generator as the bridge', () 
 // 2.1.278 is the third shape: the storageV5 argument now feeds a plugin-bin-paths read
 // (`let n=await I(),r=await D(e)`) and it is THAT result the snapshot builder is handed
 // (`{pluginBinPaths:r}`), with the same value echoed on the returned object. The old
-// anchor missed it, which is what had upstream-drift.yml red for five days. 2.1.251 — the
-// version UPSTREAM_PIN names and the one every CI leg actually stages — is in the list for
-// the other half of that: an anchor that matches only the newest bundle trades one red for
-// another, silently, on every build.
+// anchor missed it, which is what had upstream-drift.yml red for five days. The version
+// UPSTREAM_PIN names — the one every CI leg actually stages — is in the list for the other half
+// of that: an anchor that matches only the newest bundle trades one red for another, silently,
+// on every build. That was 2.1.251 until 2026-09-26 and is 2.1.283 since; 2.1.283 keeps
+// 2.1.278's shape (`JAn`, memo `e.shellConfig??=JAn(n)`, read from the real darwin-arm64 binary).
 for (const [version, gen, wrapper] of [
   ['2.1.241', 'X5v', 'XUf'],   // no-arg generator, memo `Afe.shellConfig??=X5v()`
   ['2.1.243', 'iqo', 'ozn'],   // storageV5 arrives; memo `jC.shellConfig??=iqo(e)`
   ['2.1.245', 'iqo', 'ozn'],   // byte-identical shape to 2.1.243 in this window
-  ['2.1.251', 'CDn', 'oyt'],   // THE PIN — memo `m0.shellConfig??=CDn(e)`
+  ['2.1.251', 'CDn', 'oyt'],   // the pin until 2026-09-26 — memo `m0.shellConfig??=CDn(e)`
   ['2.1.278', 'OCr', 'JLt'],   // pluginBinPaths shape; memo `e.shellConfig??=OCr(n)`
+  ['2.1.283', 'JAn', 'Ast'],   // THE PIN since 2026-09-26 — 2.1.278's shape; memo `e.shellConfig??=JAn(n)`
 ]) {
   test(`patchSnapshotBridge applies to the REAL ${version} bundle shape`, () => {
     const src = read(`snapshot-gen-${version}.js`);
@@ -200,7 +202,7 @@ for (const [version, gen, wrapper] of [
 }
 
 test('patchSnapshotBridge is fail-loud on absent/ambiguous generator', () => {
-  for (const v of ['2.1.205', '2.1.241', '2.1.245', '2.1.251', '2.1.278']) {
+  for (const v of ['2.1.205', '2.1.241', '2.1.245', '2.1.251', '2.1.278', '2.1.283']) {
     const gen = read(`snapshot-gen-${v}.js`);
     assert.strictEqual(ex.patchSnapshotBridge(gen + gen)[1], false, `${v}: doubled must not apply`);
   }
@@ -386,11 +388,12 @@ test('the 2.1.281+ anchor pins the helper, so a field upstream adds is a red and
 // the stubs make upstream's gate report AVAILABLE (checked, unpatched, first — so the test
 // measures the hook, not a stub), then the patched gate is read the way THAT version's real
 // consumers read it (all read from the real bundles):
-//   gate    (seen 2.1.219..2.1.251; the pin): the value itself — `if(i)exitWithError(\`Error: ${i}\`…)`
+//   gate    (seen 2.1.219..2.1.251; the pin until 2026-09-26): the value itself — `if(i)exitWithError(\`Error: ${i}\`…)`
 //   wrapped (seen 2.1.270..2.1.280): `(await gate())?.reason ?? null`, `.orgPolicyDenied`
-//   coded   (2.1.281+):       the same two, plus `.code` — sent as telemetry `error_code`, which
-//                             upstream keeps only if it matches /^[A-Za-z][A-Za-z0-9_-]{0,63}$/
-//                             (anything else is recorded as "nonconforming").
+//   coded   (2.1.281+; the pin, 2.1.283, since 2026-09-26): the same two, plus `.code` —
+//                             sent as telemetry `error_code`, which upstream keeps only if it
+//                             matches /^[A-Za-z][A-Za-z0-9_-]{0,63}$/ (anything else is
+//                             recorded as "nonconforming").
 // The object shapes must also carry EXACTLY the fields upstream's own helper builds, so the
 // helper in each fixture is run and its keys compared.
 const RC_SHAPE_CASES = [

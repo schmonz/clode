@@ -76,24 +76,36 @@ function _providers(env) {
   // it here: a box whose store predates the change still holds providers/<pin>/claude, and a
   // harness that quietly reached for the old path would keep the suite running against an
   // entry whose platform the path cannot state -- which is the whole defect.
+  //
+  // TWO STORES, the operator's and the product's, in that order. storeDir() is the HOME
+  // store a box keeps its providers in. The product's own store (clode-paths providersDir:
+  // CLODE_PROVIDERS, else CLODE_STATE_ROOT, else XDG/HOME) is where `clode fetch claude`
+  // WRITES -- and test/run.mjs sets CLODE_STATE_ROOT to a fresh tmpdir before it fetches a
+  // missing pin, so the fetch landed there and selection, reading only HOME, never saw it.
+  // Found 2026-09-26 moving the pin to 2.1.283: a box without that version in its HOME store
+  // would download it on every suite run and still skip every provider-gated test. When the
+  // two are the same directory it is enumerated once (add() dedupes).
   const pin = pinnedVersion();
   if (pin) {
+    const cpaths = require('../libexec/clode-paths.cjs');
     try { require('../libexec/clode-current.cjs').rekeyLegacyEntry(env, pin); } catch { /* best effort */ }
-    let keys = [];
-    try {
-      keys = fs.readdirSync(path.join(storeDir(env), pin), { withFileTypes: true })
-        .filter((e) => e.isDirectory()).map((e) => e.name).sort();
-    } catch { /* no entries for the pin */ }
-    // This host's own carve first, so providerBin() (the "any provider" answer) is the one a
-    // build here would actually use; the rest follow for providerBinFor's sake.
-    const mine = require('../libexec/clode-paths.cjs').pickProviderEntry(keys);
-    for (const k of (mine ? [mine, ...keys.filter((x) => x !== mine)] : keys)) {
-      add(path.join(storeDir(env), pin, k, 'claude'));
+    for (const store of [storeDir(env), cpaths.providersDir(env)]) {
+      let keys = [];
+      try {
+        keys = fs.readdirSync(path.join(store, pin), { withFileTypes: true })
+          .filter((e) => e.isDirectory()).map((e) => e.name).sort();
+      } catch { /* no entries for the pin */ }
+      // This host's own carve first, so providerBin() (the "any provider" answer) is the one a
+      // build here would actually use; the rest follow for providerBinFor's sake.
+      const mine = cpaths.pickProviderEntry(keys);
+      for (const k of (mine ? [mine, ...keys.filter((x) => x !== mine)] : keys)) {
+        add(path.join(store, pin, k, 'claude'));
+      }
+      // A store the migration could not re-key (unidentifiable container, or an unwritable
+      // store) still has to be USABLE -- just never mistakable for a known platform. Last in
+      // its store, so it can never displace a keyed entry there.
+      add(path.join(store, pin, 'claude'));
     }
-    // A store the migration could not re-key (unidentifiable container, or an unwritable
-    // store) still has to be USABLE -- just never mistakable for a known platform. Last,
-    // so it can never displace a keyed entry.
-    add(path.join(storeDir(env), pin, 'claude'));
   }
 
   return found.filter(isBunContainer);
@@ -114,8 +126,10 @@ function skipReason(env = process.env) {
   // scripts/find-provider.mjs and the golden-shas store, none of which selection has read
   // since it became pin-exact -- a skip that claims to have looked somewhere it did not.
   const pin = pinnedVersion();
+  const stores = [...new Set([storeDir(env), require('../libexec/clode-paths.cjs').providersDir(env)])]
+    .map((s) => `${path.join(s, pin || '<pin>')}/`).join(' and ');
   return 'no Claude provider found. Looked at: CLODE_PROVIDER_BIN, CLODE_CLAUDE_BIN, and '
-    + `UPSTREAM_PIN's pinned version (${pin || 'unset'}) under ${path.join(storeDir(env), pin || '<pin>')}/. `
+    + `UPSTREAM_PIN's pinned version (${pin || 'unset'}) under ${stores}. `
     + 'Set CLODE_PROVIDER_BIN=<path to a claude binary> to run this, or run the suite through '
     + 'test/run.mjs, which fetches the pinned version once.';
 }
