@@ -445,7 +445,7 @@ test('patchRemoteControlUnavailable still supports the old inline shape (<=2.1.2
 // "embedded text asset is missing or corrupt". The patch wraps the IMPORT BINDINGS rather than
 // the readers, because the reader bodies are minified and rename every release while the import
 // statements name what they bind.
-const { patchEmbeddedAssetReader } = require('../libexec/extract-claude-js.cjs');
+const { patchEmbeddedAssetReader, transformGraph } = require('../libexec/extract-claude-js.cjs');
 
 // The real 2.1.251 helper, verbatim (chunk-t0k3nmf2.js).
 const ASSET_CHUNK = 'import{readFileSync as o}from"fs";import{readFile as i}from"fs/promises";'
@@ -482,6 +482,46 @@ test('embedded_asset_reader: a real path still falls through to fs', () => {
     { __quaudeRequire: (n) => { throw new Error('Cannot find module ' + n); } },
     { readFileSync: (p) => { assert.strictEqual(p, '/real/file.txt'); return 'from disk'; } });
   assert.strictEqual(mod.nt('/real/file.txt', '/base'), 'from disk');
+});
+
+// 2.1.283's helper, verbatim (chunk-n4sab4fy.js of the darwin-arm64 carve, 2026-09-26). Its words
+// changed ("embedded asset", no "text") and its sync reader now hands back the bytes, which `ze`
+// turns into text. Anchored on the old words, the hook matched no module, reported the benign
+// "no filesystem-backed embedded assets", and every 2.1.283 quaude died in the build's own PONG
+// smoke: `ENOENT ... /$bunfs/root/claude-code.d.ts-8ef3f324.txt.zst`, read at module init.
+const ASSET_CHUNK_283 = 'import{readFileSync as o}from"fs";import{readFile as i}from"fs/promises";'
+  + 'import{isAbsolute as d,join as c}from"path";var u=[40,181,47,253];'
+  + 'function s(r){return r.length>=4&&u.every((t,e)=>r[e]===t)}function nWn(r,t){return d(r)?r:c(t,r)}'
+  + 'async function Xge(r,t){let e=await i(nWn(r,t));return(s(e)?await Bun.zstdDecompress(e):e).toString("utf8")}'
+  + 'function ze(r,t){return u0r(r,t).toString("utf8")}'
+  + 'function u0r(r,t){let e=nWn(r,t);try{let n=o(e);return s(n)?Bun.zstdDecompressSync(n):n}'
+  + 'catch(n){throw Object.assign(Error("embedded asset is missing or corrupt",{cause:n}),{path:e})}}\n'
+  + 'export{nWn,Xge,ze,u0r};\n';
+
+test('embedded_asset_reader: 2.1.283 reader, whose words changed, resolves through the embedded map', () => {
+  const [patched, applied] = patchEmbeddedAssetReader(ASSET_CHUNK_283);
+  assert.strictEqual(applied, true, 'the 2.1.283 helper must be recognised');
+  const mod = evalPatched(patched, {
+    __quaudeRequire: (n) => {
+      if (n === '/$bunfs/root/claude-code.d.ts-8ef3f324.txt.zst') return '// declarations\n';
+      throw new Error('Cannot find module ' + n);
+    },
+  }, { readFileSync: () => { throw new Error('fs must not be reached for an embedded asset'); } });
+  assert.strictEqual(mod.ze('/$bunfs/root/claude-code.d.ts-8ef3f324.txt.zst', '/base'), '// declarations\n');
+});
+
+test('embedded_asset_reader: a reader it cannot anchor on is a dead hook, not a benign skip', () => {
+  // The reader's STRUCTURE (the zstd frame magic it sniffs, beside both fs imports) is present,
+  // but its words are not ones the anchor knows: what 2.1.283 did to the hook, one step further.
+  const renamed = ASSET_CHUNK_283.replace('embedded asset is missing or corrupt', 'asset unreadable');
+  const { report } = transformGraph({ '/$bunfs/root/chunk-x.js': renamed });
+  const r = report.find((e) => e.key === 'embedded_asset_reader');
+  assert.strictEqual(r.applied, false);
+  assert.ok(!r.benign, `a present reader the anchor missed must not read as benign: ${r.why}`);
+  assert.deepStrictEqual(r.modules, ['/$bunfs/root/chunk-x.js']);
+  // And a graph with no such reader at all is still the benign skip it always was.
+  const none = transformGraph({ '/a.js': 'var x=1;export{x};\n' }).report.find((e) => e.key === 'embedded_asset_reader');
+  assert.strictEqual(none.benign, true);
 });
 
 test('embedded_asset_reader: a provider without the fs reader is left alone', () => {

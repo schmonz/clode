@@ -978,15 +978,32 @@ function transform(body) {
 // Nothing here decompresses: bun-graph.cjs already decoded the zstd frames at carve time, which
 // is deliberate (`s()` above only decompresses when the magic is PRESENT, so plain text flows
 // through untouched and neither target needs a zstd implementation it does not have).
-const ASSET_READER_ERR = 'embedded text asset is missing or corrupt';
+//
+// THE WORDS MOVE. 2.1.251..2.1.278 throw "embedded text asset is missing or corrupt"; 2.1.283 throws
+// "embedded asset is missing or corrupt", and its sync reader hands back the bytes, which a text
+// reader beside it turns into a string (both measured on the darwin-arm64 binaries, 2026-09-26).
+// The import bindings the patch wraps did not move. Anchored on the old words, the hook found no
+// module, reported the benign "no filesystem-backed embedded assets", and every 2.1.283 target
+// died in the build's own PONG smoke, reading /$bunfs/root/claude-code.d.ts-*.txt.zst at module
+// init. So the anchor takes both spellings, and assetReaderShape() below keeps the next change
+// of words from being benign.
+const ASSET_READER_ERR = /embedded (?:text )?asset is missing or corrupt/;
+// The reader's STRUCTURE, independent of its words: the zstd frame magic it sniffs, in a module
+// that imports both fs readers. One module in every carve measured (2.1.251, 2.1.278, 2.1.283;
+// darwin, linux, win32). A module with this shape the anchor did not match is a dead hook.
+const ASSET_READER_MAGIC = /\[40,181,47,253\]/;
 const ASSET_FS_SYNC = /import\{readFileSync as ([A-Za-z0-9_$]+)\}from"fs";/;
 const ASSET_FS_ASYNC = /import\{readFile as ([A-Za-z0-9_$]+)\}from"fs\/promises";/;
 const ASSET_LOOKUP = 'const __clodeAsset=(p)=>{try{'
   + 'const v=typeof globalThis.__quaudeRequire==="function"?globalThis.__quaudeRequire(p):undefined;'
   + 'return typeof v==="string"?v:undefined;}catch(e){return undefined;}};';
 
+function assetReaderShape(body) {
+  return ASSET_READER_MAGIC.test(body) && ASSET_FS_SYNC.test(body) && ASSET_FS_ASYNC.test(body);
+}
+
 function patchEmbeddedAssetReader(body) {
-  if (body.indexOf(ASSET_READER_ERR) === -1) return [body, false];
+  if (!ASSET_READER_ERR.test(body)) return [body, false];
   const sync = ASSET_FS_SYNC.exec(body);
   const asyncRead = ASSET_FS_ASYNC.exec(body);
   if (!sync || !asyncRead) return [body, false];
@@ -1036,6 +1053,16 @@ function transformGraph(sources) {
       continue;
     }
     if (arity === 'if-present' && hits.length === 0) {
+      // Benign only when the reader is truly absent. A module with its structure that the anchor
+      // did not match is the dead hook 2.1.283 produced (see ASSET_READER_ERR): loud, not benign.
+      const shaped = key === 'embedded_asset_reader'
+        ? Object.keys(out).filter((name) => assetReaderShape(out[name])) : [];
+      if (shaped.length) {
+        report.push({ key, applied: false, modules: shaped,
+          why: 'a module reads embedded assets through fs (zstd magic beside both fs imports), '
+            + 'but the anchor did not match it: upstream changed the reader' });
+        continue;
+      }
       report.push({ key, applied: false, benign: true, modules: [],
         why: 'this provider has no filesystem-backed embedded assets (pre-2.1.251)' });
       continue;
