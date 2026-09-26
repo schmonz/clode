@@ -23,16 +23,46 @@ function isSea(sea = seaMod()) {
 // for binary assets; Buffer.from wraps it without copying the backing store.
 function assetBuffer(sea, name) { return Buffer.from(sea.getRawAsset(name)); }
 
+// WHEN AN UNPACKED TREE IS WHOLE: its marker lists the package.json of every package it was
+// unpacked with, and each one is still there -- not merely "node_modules/ exists". cacheDir
+// defaults to os.tmpdir(), and macOS's periodic temp cleaner deletes files left there for days
+// while leaving their directories: measured 2026-09-26, $TMPDIR/sea-deps/<sig>/node_modules still
+// held its 21 package directories and not one file, and every naude using it died "ws ... isn't
+// installed" at the bundle's first require('ws'), because the old check never unpacked again.
+// Checking each package (one read and a stat per package, per launch) rather than the marker
+// alone does not depend on which timestamp a cleaner ages files by, nor on it leaving the
+// directories behind. A tree unpacked before the marker existed is not whole either: it is
+// unpacked once more.
+const UNPACKED = '.clode-unpacked.json';
+function unpackedWhole(dir) {
+  let listed;
+  try { listed = JSON.parse(fs.readFileSync(path.join(dir, UNPACKED), 'utf8')); } catch { return false; }
+  return Array.isArray(listed) && listed.every((p) => fs.existsSync(path.join(dir, p)));
+}
+// The package.json of every package directly under root/node_modules (scoped ones included).
+function packageManifests(root) {
+  const nm = path.join(root, 'node_modules');
+  const out = [];
+  for (const e of fs.readdirSync(nm, { withFileTypes: true })) {
+    if (e.name.startsWith('.')) continue;
+    const names = e.name.startsWith('@')
+      ? fs.readdirSync(path.join(nm, e.name)).map((n) => `${e.name}/${n}`)
+      : [e.name];
+    for (const n of names) out.push(`node_modules/${n}/package.json`);
+  }
+  return out.filter((p) => fs.existsSync(path.join(root, p)));
+}
+
 // Unpack the embedded deps tarball to a persistent, sig-keyed cache dir and return
 // that dir — shaped like a clode DEPS_ROOT (it contains node_modules/), so the caller
 // hands it to the normal launch path as depsRoot with no SEA-specific handling.
-// Idempotent (skips if already unpacked) and atomic (temp dir + rename).
+// Idempotent (skips a tree that is whole, see UNPACKED) and atomic (temp dir + rename).
 function materializeDeps({ sea = seaMod(), cacheDir, assetBuffer: getAsset = assetBuffer, spawn, env = process.env } = {}) {
   const { provision } = require('./host-provision.cjs');
   const { execFileSync } = require('node:child_process');
   const sig = getAsset(sea, 'deps.sig').toString('utf8').trim();
   const dir = path.join(cacheDir, 'sea-deps', sig);
-  if (fs.existsSync(path.join(dir, 'node_modules'))) return dir;   // already materialized
+  if (unpackedWhole(dir)) return dir;   // already materialized
   const tmp = dir + '.partial-' + process.pid;
   fs.rmSync(tmp, { recursive: true, force: true }); // clear a stale partial from a crashed run
   fs.mkdirSync(tmp, { recursive: true });
@@ -49,13 +79,21 @@ function materializeDeps({ sea = seaMod(), cacheDir, assetBuffer: getAsset = ass
     ? (bin, args) => spawn(bin, args, { cwd: tmp, input: getAsset(sea, 'deps.tar'), maxBuffer: 1 << 30 })
     : (bin, args) => execFileSync(bin, args, { cwd: tmp, input: getAsset(sea, 'deps.tar'), maxBuffer: 1 << 30 });
   runExtract(tarBin, ['-xf', '-']);
+  fs.writeFileSync(path.join(tmp, UNPACKED), JSON.stringify(packageManifests(tmp)));
   fs.mkdirSync(path.dirname(dir), { recursive: true });
+  // A tree that is there but not whole (emptied by the cleaner, or unpacked before the marker)
+  // is moved aside first: the rename below cannot land on a non-empty directory. Re-checked
+  // here, so a tree another launch published whole meanwhile is left alone.
+  if (fs.existsSync(dir) && !unpackedWhole(dir)) {
+    const stale = dir + '.stale-' + process.pid;
+    try { fs.renameSync(dir, stale); fs.rmSync(stale, { recursive: true, force: true }); } catch { /* another launch moved it first */ }
+  }
   try {
     fs.renameSync(tmp, dir);                          // atomic publish
   } catch (e) {
     // Lost a cold-start race: another clode published this sig first. Its dir is
     // authoritative (rename onto a non-empty dir fails ENOTEMPTY/EEXIST) — drop ours.
-    if (fs.existsSync(path.join(dir, 'node_modules'))) fs.rmSync(tmp, { recursive: true, force: true });
+    if (unpackedWhole(dir)) fs.rmSync(tmp, { recursive: true, force: true });
     else throw e;
   }
   return dir;
