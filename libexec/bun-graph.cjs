@@ -495,10 +495,50 @@ function loadGraphFromBytes(u8) {
   return mods;
 }
 
-// Minimal UTF-8 decode (quickjs has TextDecoder, but this keeps it dependency-free).
+// UTF8-REPLACEMENT: a row decodes to the same string on every engine, invalid bytes included.
+// Valid UTF-8 goes through the engine's TextDecoder, FATAL, so no engine gets to choose how an
+// invalid byte reads; invalid input decodes below by the WHATWG rule (each maximal subpart of an
+// ill-formed sequence is one U+FFFD, and the byte that ended it starts over). Found 2026-09-26:
+// 2.1.283 embeds two woff2 fonts as loader-5 rows, the first rows with invalid UTF-8, and the
+// extractor's output differed between node and tjs by 184 bytes. The engine's decoder is not
+// WHATWG's: F0 9F C3 9F reads U+FFFD U+00DF under node and U+FFFD U+FFFD under tjs.
 function utf8(u8, p, len) {
-  if (typeof TextDecoder !== 'undefined') return new TextDecoder('utf-8').decode(u8.subarray(p, p + len));
-  return latin1(u8, p, len);
+  var bytes = u8.subarray(p, p + len);
+  if (typeof TextDecoder !== 'undefined') {
+    try { return new TextDecoder('utf-8', { fatal: true }).decode(bytes); } catch (e) { /* invalid */ }
+  }
+  return utf8Replacing(bytes);
+}
+
+// The WHATWG Encoding standard's UTF-8 decoder, replacement mode, BOM stripped as TextDecoder
+// strips it. Only invalid rows (a few fonts) take it, so it favours plainness over speed.
+function utf8Replacing(b) {
+  var n = b.length, i = 0, need = 0, seen = 0, cp = 0, lower = 0x80, upper = 0xBF;
+  var cps = [], out = '';
+  var emit = function (c) { cps.push(c); if (cps.length === 4096) { out += String.fromCodePoint.apply(null, cps); cps = []; } };
+  if (n >= 3 && b[0] === 0xEF && b[1] === 0xBB && b[2] === 0xBF) i = 3;
+  for (; i < n; i++) {
+    var x = b[i];
+    if (need === 0) {
+      if (x <= 0x7F) emit(x);
+      else if (x >= 0xC2 && x <= 0xDF) { need = 1; cp = x & 0x1F; }
+      else if (x >= 0xE0 && x <= 0xEF) { if (x === 0xE0) lower = 0xA0; if (x === 0xED) upper = 0x9F; need = 2; cp = x & 0x0F; }
+      else if (x >= 0xF0 && x <= 0xF4) { if (x === 0xF0) lower = 0x90; if (x === 0xF4) upper = 0x8F; need = 3; cp = x & 0x07; }
+      else emit(0xFFFD);
+      continue;
+    }
+    if (x < lower || x > upper) {
+      need = seen = cp = 0; lower = 0x80; upper = 0xBF;
+      emit(0xFFFD);
+      i--;                                            // the byte that ended it starts over
+      continue;
+    }
+    lower = 0x80; upper = 0xBF;
+    cp = (cp << 6) | (x & 0x3F);
+    if (++seen === need) { emit(cp); need = seen = cp = 0; }
+  }
+  if (need) emit(0xFFFD);
+  return out + (cps.length ? String.fromCodePoint.apply(null, cps) : '');
 }
 
 // ---- Node-only conveniences (oracle / CLI) ---------------------------------
@@ -510,7 +550,7 @@ if (typeof require === 'function' && typeof module === 'object') {
   loadAssets = function (binPath) { return loadAssetsFromBytes(new Uint8Array(fs.readFileSync(binPath))); };
   module.exports = { decodeBunGraph, loadGraphFromBytes, loadGraph, loadGraphFull,
                      loadAssets, loadAssetsFromBytes, TRAILER,
-                     __zstdToTextForTest: zstdToText,
+                     __zstdToTextForTest: zstdToText, __utf8ForTest: utf8,
                      MODULE_FORMAT: { ESM: 1, CJS: 2 },
                      LOADER: { 0: 'jsx', 1: 'js', 2: 'ts', 3: 'tsx', 4: 'css', 5: 'file', 6: 'json', 10: 'napi',
                                // 13 = text. NEW IN CLAUDE CODE 2.1.246: 164 rows, 118 of them .md —

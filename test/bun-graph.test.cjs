@@ -835,3 +835,51 @@ test('the deadlock guard skips for no room ONLY when statfs proves the shortfall
   assert.strictEqual(noRoomSkipReason({ status: 0, stdout: 'LEN 1', stderr: '' }, need, 0, 'D:\\x'), null,
     'a success is never skipped');
 });
+
+// UTF8-REPLACEMENT (libexec/bun-graph.cjs utf8): a row decodes to the same string on every engine,
+// invalid bytes included, by the WHATWG rule. The reference is this process's TextDecoder (Node's
+// is WHATWG's). The corpus: the sequence that split node from tjs on 2.1.283's woff2 font rows,
+// every ill-formed shape by class, and a seeded fuzz of short byte strings over the bytes that
+// matter. The same check then runs under tjs, where the engine's own decoder disagrees.
+function utf8Corpus() {
+  const out = [[0xF0, 0x9F, 0xC3, 0x9F], [0x15, 0xC3, 0x9F, 0x71], [0xE0, 0xC3, 0x9F], [0xC3], [0xF0, 0x9F, 0x98],
+    [0xED, 0xA0, 0x80], [0xE0, 0x80, 0x80], [0xF4, 0x90, 0x80, 0x80], [0xC0, 0xAF], [0xFF], [0x80, 0x80],
+    [0xEF, 0xBB, 0xBF, 0x61], [0xEF, 0xBB, 0xBF, 0xFF], [0xF0, 0x90, 0x80]];
+  const pool = [0x00, 0x41, 0x7F, 0x80, 0x8F, 0x90, 0x9F, 0xA0, 0xBF, 0xC0, 0xC2, 0xDF, 0xE0, 0xED, 0xEF, 0xF0, 0xF4, 0xF5, 0xFF];
+  let seed = 0x2BD;
+  const rnd = (k) => { seed = (seed * 1103515245 + 12345) >>> 0; return (seed >>> 16) % k; };
+  for (let i = 0; i < 4000; i++) { const len = 1 + rnd(7); const b = []; for (let j = 0; j < len; j++) b.push(pool[rnd(pool.length)]); out.push(b); }
+  return out;
+}
+const cps = (s) => Array.from(s, (ch) => ch.codePointAt(0));
+
+test('UTF8-REPLACEMENT: invalid bytes decode by the WHATWG rule, as Node\'s TextDecoder does', () => {
+  const corpus = utf8Corpus();
+  for (const b of corpus) {
+    const u = new Uint8Array(b);
+    assert.deepStrictEqual(cps(bunGraph.__utf8ForTest(u, 0, u.length)), cps(new TextDecoder().decode(u)), JSON.stringify(b));
+  }
+  // The one that split the engines, stated: F0 9F is one maximal subpart, C3 9F is U+00DF.
+  const u = new Uint8Array([0xF0, 0x9F, 0xC3, 0x9F]);
+  assert.deepStrictEqual(cps(bunGraph.__utf8ForTest(u, 0, 4)), [0xFFFD, 0xDF]);
+});
+
+test('UTF8-REPLACEMENT: the same strings under tjs', (t) => {
+  const { skipUnlessTjs, runLoader } = require('./node-shim-helper.cjs');
+  if (skipUnlessTjs(t)) return;
+  const corpus = utf8Corpus();
+  const want = corpus.map((b) => cps(new TextDecoder().decode(new Uint8Array(b))));
+  const dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'utf8-repl-'));
+  try {
+    const script = path.join(dir, 'probe.cjs');
+    fs.writeFileSync(script, `const g = require(${JSON.stringify(path.join(REPO, 'libexec', 'bun-graph.cjs'))});\n`
+      + `const corpus = ${JSON.stringify(corpus)};\n`
+      + 'process.stdout.write(JSON.stringify(corpus.map((b) => { const u = new Uint8Array(b); '
+      + 'return Array.from(g.__utf8ForTest(u, 0, u.length), (ch) => ch.codePointAt(0)); })));\n');
+    const r = runLoader(script, [], { timeout: 120000 });
+    assert.strictEqual(r.status, 0, r.stderr);
+    const got = JSON.parse(r.stdout);
+    const bad = corpus.filter((b, i) => JSON.stringify(got[i]) !== JSON.stringify(want[i]));
+    assert.deepStrictEqual(bad, [], `${bad.length} of ${corpus.length} decode differently under tjs`);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
