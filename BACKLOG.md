@@ -8,6 +8,71 @@ Concrete clode-under-Node divergences from native Claude Code, to triage and fix
 That page is GENERATED from `scripts/build-graph.cjs` — the one declaration of the build — so it
 cannot drift from it; it is also where the honest answer to "does this need node?" lives.
 
+## 2.1.283 broke every `clode build`, and nothing daily could see it (2026-09-26)
+
+**Found moving UPSTREAM_PIN to 2.1.283, fixed in the same change.** The first full suite at the
+new pin had 26 failures, from three upstream changes a carve cannot see, and the live frame gate
+(not in the full suite) found a fourth:
+
+- **The filesystem asset reader was reworded** ("embedded text asset is missing or corrupt" ->
+  "embedded asset is missing or corrupt"; 2.1.274/275/281/282 still say "text") and 2.1.283
+  reads one asset at module init. The `embedded_asset_reader` hook was anchored on the old words
+  and is `if-present`, so zero matches read as the benign "no filesystem-backed embedded assets",
+  and every build died in its own PONG smoke with ENOENT on
+  `/$bunfs/root/claude-code.d.ts-8ef3f324.txt.zst`. Users follow `latest`, which was 2.1.283:
+  their `clode build` was failing. Now both spellings match, and a module with the reader's
+  structure (the zstd magic beside both fs imports) the anchor misses is a dead hook, not
+  benign (1ad8e8b).
+- **Two woff2 font rows** are the first embedded rows with invalid UTF-8, and tjs's
+  TextDecoder is not WHATWG's for ill-formed input, so the extractor's output differed between
+  node and tjs by 184 bytes. bun-graph now decodes invalid rows itself (UTF8-REPLACEMENT,
+  f851ff2).
+- **Builtin plugins read `import.meta.dir` and `import.meta.dirname`** (already in 2.1.282), which
+  neither host gives a runner-hosted module; node's path.join throws on undefined, and a naude
+  answered `-p` with nothing, exit 0. The runner now assigns both from the module's name
+  (RUNNER-META-DIR, 70d2bd7).
+- **A built-in plugin's hooks module took upstream's dev-tree branch.** Upstream loads it from the
+  bundle when `Bun.isStandaloneExecutable` is true and from a source folder on disk otherwise;
+  our targets report false on purpose, so they took the folder branch with no folder, and every
+  2.1.283 quaude TUI painted "agents-md: hooks module did not load: cannot read property
+  'replace' of undefined" (interactive-frame-diff red on all three scenes, on darwin and in the
+  linux-x64-pty mirror). A graph hook keeps the bundled branch, native's (BUILTIN-PLUGIN-BUNDLED,
+  bac26f0).
+
+**Still open:**
+
+- **upstream-drift could not see the first one.** Its anchors job has no row for this hook
+  (inspect does not report it, and adding a key rewrites the golden `--json` shas), its `carve`
+  job prints the staging's hook report without judging it, and `boots` builds the pin. The
+  2026-09-26 drift run was green against 2.1.283. Either judge the hook report in the carve job
+  (a non-benign, non-applied hook is a red) or give inspect the row.
+- **quaude's modules have no `import.meta.dir` either.** The runner fix covers naude and the
+  oracle's quaude model, not a blobulated quaude, whose meta the engine attaches at deserialize
+  (url, main, dirname, basename, path). It went unnoticed because the shim's
+  `path.join(undefined, 'x')` returns `/x` where node throws ERR_INVALID_ARG_TYPE (and
+  `path.resolve(undefined, '..')` returns a cwd-relative path). BUILTIN-PLUGIN-BUNDLED removed
+  the one reader that showed; making the shim's path strict before the bytecode modules carry
+  `dir` would turn any other into naude's silent hang.
+- **Binary assets are served as mangled text.** The two woff2 rows reach a reader (`u0r`) that
+  expects BYTES for `.toString("base64")` into an `@font-face` data URL. The carve decodes
+  every non-zstd row as UTF-8 (lossy for binary) and the patched reader returns that string,
+  so the data URL is not the font. Serving binary rows as bytes means typing the asset map.
+- **tjs's TextDecoder** (txiki's `src/js/polyfills/text-encoding.js`) still decodes ill-formed
+  UTF-8 unlike WHATWG (F0 9F C3 9F: node U+FFFD U+00DF, tjs U+FFFD U+FFFD; 36 of a 4,014-string
+  fuzz differ) for every non-fatal decode outside the carve, the shim's Buffer
+  `toString('utf8')` included.
+- **Two errors every 2.1.283 quaude turn logs** (`--debug`, darwin and linux; not compared with
+  2.1.278): QuickJS throws `SyntaxError` constructing the bundle's artifact
+  `bracketedLeadScrubPattern` RegExp (flags `giu`; `get lead` in the artifact tool-result code),
+  which upstream catches, so that scrub never runs under quaude; and `[event-loop-stall]
+  process.resourceUsage() failed: not a function` (the shim has no process.resourceUsage). The
+  turn completes either way. The regex construct QuickJS rejects is not yet named.
+- **Image processing is unavailable under quaude** and now fails through `new Bun.Image(...)`,
+  three of whose six call sites have no catch of their own (reviewed in
+  test/shim-surface/golden.json's Bun.Image note; callers not verified). Standing since before
+  the pin moved (2.1.251 loaded a native processor, then sharp, neither of which loads under
+  tjs); now the constructor is what is missing.
+
 ## Four more tests let a global install choose their provider (2026-09-25)
 
 **Context, done:** upstream 2.1.281 moved the Remote Control gate's anchor (its reason helper
@@ -91,11 +156,56 @@ the one whose provider happens to contain it.
 
 ## `Bun.ant.CellSegmenter` — the 2.1.278 TUI's real blocker, and it is NOT small (2026-09-22)
 
-**Status: OPEN, phases 1-5 of 6 DONE (phase 5 closed 2026-09-26).** What remains before the pin
-moves ends the phase-5 block: phase 6 (`reordered`, slow-box performance), measuring
-`Bun.wrapAnsi`, and the move itself, to upstream's latest rather than 2.1.278. Everything else in
-the 2.1.278 interactive chain is fixed and driven. Phase 5's record is the next block, then
-phase 4's and phase 3's; phases 1-2's follows them.
+**Status: OPEN, phases 1-5 of 6 DONE (phase 5 closed 2026-09-26), and the pin no longer waits on
+it: UPSTREAM_PIN moved to 2.1.283 on 2026-09-26 (the next block).** What remains ends the phase-5
+block: phase 6 (`reordered`, slow-box performance), measuring `Bun.wrapAnsi`, and the recorded
+nits. Phase 5's record follows the pin move, then phase 4's and phase 3's; phases 1-2's follows
+them.
+
+**The pin moved to 2.1.283 (2026-09-26), so CI judges the CellSegmenter painter users run.**
+
+- **One oracle, one version.** Native 2.1.283 (Bun 1.4.3, another build than 2.1.278's) against
+  the tree's shim under tjs: every text corpus 0 differences through all four consumers
+  (1,178,263 strings, the 2,990 bundle literals of 2.1.283's own carve included), the paint
+  corpus 0 of 526 scenarios (577 ops), cell-profile-diff 0. No rule changed; the generated table
+  changed only in the version it names, so the text oracle moved to 2.1.283 with the pin.
+- **The painter, on darwin** (fresh quaude of the final tree against native 2.1.283,
+  CLODE_LIVE_RENDER=1): the three frame scenes 0 differences (637 / 634 / 682 cells); native
+  repaints every session identically (29,119 cells); the four sessions identical, every frame
+  settled (type-edit 6 frames, 3,795 cells; resize 6, 4,393; scroll 8, 15,937; slash-menu 7,
+  4,994); reset-invisibility identical over the same 29,119 cells with the resets firing on
+  every call (type-edit 205 of 205, resize 403 of 403, scroll 652 of 653 plus the grow retry,
+  slash-menu 520 of 520; the counts follow renders and vary run to run) and reset-patch-landed
+  over 2,193 modules; D1 pass (1573 ms). Re-run after the sessions' `until` change (below):
+  the same cells, frames and verdicts.
+- **What CI now covers that it did not.** linux-x64-pty's sessions exercise the CellSegmenter
+  painter instead of the classic one, both reset guards RUN, and the session step accepts no
+  skip at all (it accepted the reset guards' named no-consumer skip while the pin had no
+  consumer). The carve checks that skipped on a consumer-less bundle (paint-probe-gates,
+  reset-patch-gates, text-probe-gates, bun-slice-ansi-arity) now also run in the ubuntu and
+  windows suites, whose CLODE_PROVIDER_BIN is the pin.
+- **The move was not free** (the section above this one, "2.1.283 broke every `clode build`"):
+  four upstream changes a carve cannot see, each fixed; three carve scans that misread 2.1.283
+  (paint-probe-word-packing read another module's `Lr`); the pin-keyed ratchets re-measured
+  (wall tripwires, the shim-surface golden, the guard's SUBCOMMANDS, module-count floors); and
+  three PTY harness assumptions the container mirror caught. e2e-ctrlz-tui typed its marker at
+  spawn (a `--then-hex` with no delay ran at NaN) and never sent SIGCONT; it now suspends,
+  continues (tui-screen `--signal`) and types. interactive-render-diff shared one HOME between
+  native and quaude, and 2.1.283's one-time auto-mode notice went to whichever ran first; each
+  side now gets its own. And the session turns settled on quiet alone: in the container a
+  quaude's reply came after more than the 800 ms window (4 runs in 4), so the resize session
+  compared a turn in flight with native's answered one; a send step may now wait `until` its
+  reply is on screen (resize and scroll do).
+- **In the Linux container mirror** (node:24.21.0-bookworm on ultimate-hat, 6 x86_64 CPUs;
+  engine `tjs-linux-x64-musl` from CI run 36253515217; the final tree), every step of
+  linux-x64-pty green in 2,266 s (37.8 minutes; 1,865 s at the old pin): the frame step 23 of
+  23; the session step with no skip (native repainted every session identically over 28,275
+  cells; type-edit 6 frames, 3,549 cells; resize 6, 4,147; scroll 8, 15,872; slash-menu 7,
+  4,707; reset-invisibility over the same 28,275 cells, the resets firing on every call, and
+  reset-patch-landed over 2,177 modules); the text and paint step 96 tests, `skipped 0`,
+  against the linux-x64 2.1.283 oracle (the paint gate 577 ops, 0 differences);
+  cell-profile-diff 0. The session step now takes 837 s (reset-invisibility RUNS, about 320 s
+  of it), so the job costs about 6.7 minutes more than at the old pin, in that container.
 
 **Phase 5 landed (2026-09-25/26): paint(), setCell() and the screen across frames are native's.**
 
@@ -200,7 +310,8 @@ phase 4's and phase 3's; phases 1-2's follows them.
   implemented this wave.
 - **upstream-drift does not run the two phase-5 carve checks** (paint-probe-gates,
   reset-patch-gates) against `next`, the bundle they exist to warn about; one line in its
-  tripwire step.
+  tripwire step. It would have named paint-probe-word-packing's misread of 2.1.283 (another
+  module's `Lr=8` taken for packWord's link shift) the day 2.1.283 was `next`.
 - **Phase-5 test-infrastructure nits** (final-review triage, none blocking):
   - `scripts/lib/paint-probe.cjs:89` `String(e && e.message || e)` stringifies the whole error
     when `message` is empty.
@@ -243,7 +354,7 @@ phase 4's and phase 3's; phases 1-2's follows them.
     `test/naude-sea.test.cjs` tests adding a second directory rename right after extraction
     (Defender/indexer EPERM).
 
-**What remains before the pin moves:**
+**What remains:**
 
 - **Phase 6.** `reordered`: the contract below said it was false everywhere quaude normally
   runs, but the 2.1.278 carve sets it from a host-terminal check (`xf()` ->
@@ -258,8 +369,6 @@ phase 4's and phase 3's; phases 1-2's follows them.
   gate. Profile on the slow boxes first.
 - **`Bun.wrapAnsi`** (the phase-3 follow-up below): measure whether it ever changes a PAINTED
   cell before a phase-3-sized effort.
-- **The pin move**, to upstream's latest (2.1.283 today), not 2.1.278. Every rule here was
-  measured against 2.1.278, and a different Bun is a different oracle (R11): re-measure first.
 
 **Phase 4 landed (2026-09-25): OSC-8 hyperlinks are native's.** CellSegmenter parsed OSC 8 but
 never interned a link (`uris` stayed `['']`, every run's link 0), so a link painted as plain
@@ -9264,6 +9373,11 @@ Filed rather than fixed because it is a change to how the fidelity gate decides,
 not to phase 3b's subject. It belongs with whatever next touches
 `doctor-cli-parity.test.cjs`, and the measurement above is the evidence a future
 implementer needs so they don't have to re-derive it.
+
+**The excuse has expired (2026-09-26):** UPSTREAM_PIN moved to 2.1.283, past 2.1.270, so the
+pinned bundle is no longer the reason quaude could lack the label. Not re-driven in the pin move
+(the file is live-render gated and spawns the real bundle's `doctor`): re-run it at the pin, and
+retire the entry if quaude emits the label.
 
 ## THE BUILT TARGET DOCUMENTS NO ENV VAR IT READS (found 2026-09-13, phase-3b fix wave)
 
