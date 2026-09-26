@@ -12,6 +12,7 @@
 //   liveFrameGate({ session, env })  -> { skip } | { native }: the whole chain, in order
 //   quaudeBesideNative(native)       -> { skip } | { quaude, version }: the built quaude a
 //                                    gate judges, only when it is the native's version
+//   quaudeVersion(bin)               a built quaude's --version line (apeCmd-aware)
 //
 // WHERE THE SESSION GATES RUN, AND WHY THE FULL SUITE IS NOT IT (ruling R5, CellSegmenter
 // phase 5). A session gate launches native Claude Code, and later a built quaude too, a
@@ -94,4 +95,4 @@ function quaudeBesideNative(native) {
   return { quaude: built.path, version: rv };
 }
 
-module.exports = { liveFrameGate, quaudeBesideNative, ptyHarnessSkipReason, fullSuiteSkipReason, FULL_SUITE_ENV };
+module.exports = { liveFrameGate, quaudeBesideNative, quaudeVersion, ptyHarnessSkipReason, fullSuiteSkipReason, FULL_SUITE_ENV };

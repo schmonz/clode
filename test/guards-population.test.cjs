@@ -602,6 +602,17 @@ test('the controlled set is EXACTLY the modules a guard was deliberately written
   // time; test/build-gates/paint-probe-gates.test.cjs controls both restatements against the
   // carved bundle's own packWord function and damage-decode sites, which returned the count to
   // 28. The baseline did not move.
+  //
+  // scripts/lib/reset-patch.cjs ADDED 2026-09-25 (CellSegmenter phase 5, task 6), the mechanism
+  // an eighth time, gate-shaped on the day it was written: the reset-invisibility test build
+  // finds the bundle's two pool-reset conditions by structure (`.test(`, matchAll) and REFUSES
+  // (throws, naming the site) when one is not there exactly once, so an upstream rename is loud
+  // instead of a test build that patched nothing. It is test-only (no product build reaches it,
+  // test/reset-patch.test.cjs guards that), but the sweep does not know test-only from
+  // shipped, and the refusal is real either way. It pushed uncontrolled to 29 against the
+  // baseline of 28 and went red at authoring time; test/build-gates/reset-patch-gates.test.cjs
+  // controls the refusal against the provider's own carve, which returned the count to 28.
+  // The baseline did not move.
   assert.deepStrictEqual([...controlledProductionModules().keys()].sort(), [
     'libexec/clode-build.cjs',
     'libexec/host-provision.cjs',
@@ -612,6 +623,7 @@ test('the controlled set is EXACTLY the modules a guard was deliberately written
     'scripts/build-runner.cjs',
     'scripts/carve-probe.mjs',
     'scripts/lib/paint-probe.cjs',
+    'scripts/lib/reset-patch.cjs',
     'scripts/lib/text-probe.cjs',
     'scripts/oracle-native-version.cjs',
     'scripts/render-build-graph.cjs',

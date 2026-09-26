@@ -56,6 +56,9 @@ const { stateRoot } = require('./state-root-helper.cjs');
 
 let memo = null; // { path } | { skip } — set at most once per process, by build()
 
+// The STABLE extraction cache every build here shares (see CLODE_CACHE in build() below).
+const STABLE_CACHE = path.join(os.tmpdir(), 'clode-built-binary-cache');
+
 // Every build's private scratch dir, so exit-cleanup can remove exactly what THIS
 // process created and nothing another concurrent process is still using.
 const builtDirs = [];
@@ -68,7 +71,11 @@ function registerCleanup() {
   });
 }
 
-function build() {
+// build({ cache }) -> { path } | { skip }. `cache` is the CLODE_CACHE the build stages the
+// provider in: STABLE_CACHE unless a caller hands it a scratch copy it has changed (the
+// reset-invisibility gate builds from a carve whose reset thresholds it lowered, and must never
+// write that carve where an ordinary build would pick it up).
+function build({ cache = STABLE_CACHE } = {}) {
   const provider = providerBin(process.env);
   if (!provider) {
     return { skip: providerSkipReason(process.env) };
@@ -88,6 +95,7 @@ function build() {
       ...process.env,
       CLODE_CLAUDE_BIN: provider,
       CLODE_TJS: engine,
+      // `cache` (STABLE_CACHE unless the caller passed its own, see above). The default is
       // A STABLE, shared-across-processes cache dir, off-tree and off the real
       // operator store (~/.cache/clode is never touched) -- same shape as
       // oracle-models.cjs's CLODE_ORACLE_STAGE_ROOT and node-shim-helper.cjs's
@@ -103,7 +111,7 @@ function build() {
       // against a change to clode's OWN build code: the merge/blobulate steps
       // read the current template and extractor fresh every call regardless;
       // only the upstream-provider extraction is skipped when unchanged.
-      CLODE_CACHE: path.join(os.tmpdir(), 'clode-built-binary-cache'),
+      CLODE_CACHE: cache,
       // Private per-build state root: never the real ~/.local/share/clode, and
       // never a shared one another test's run left behind (stateRoot(dir) falls
       // back to run.mjs's central CLODE_STATE_ROOT when the whole suite already
@@ -140,4 +148,4 @@ function builtQuaude() {
   return memo;
 }
 
-module.exports = { builtQuaude };
+module.exports = { builtQuaude, buildQuaude: build, STABLE_CACHE };
