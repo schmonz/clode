@@ -53,11 +53,11 @@ jobs:
       # One channel is enough (user, 2026-08-25). When the two are the same version this
       # costs nothing; when they differ, `next` is the one worth knowing about.
       #
-      # This job does NOT read UPSTREAM_PIN (the 2.1.251 pin ci.yml/naude-cross.yml/
-      # build-leg install to dodge the 2.1.257 SCC-merge break — see that file). Pinning
-      # here would blind the early-warning system at exactly the moment we are choosing
-      # to lag on purpose: this job's only reason to exist is to notice upstream moving
-      # WHILE everything else holds still. Leave it unpinned.
+      # This job does NOT read UPSTREAM_PIN (the version ci.yml/naude-cross.yml/build-leg
+      # install; it held at 2.1.251 from 2026-09-01 to 2026-09-26 to dodge the 2.1.257
+      # SCC-merge break — see that file). Pinning here would blind the early-warning system
+      # at exactly the moment we choose to lag on purpose: this job's only reason to exist is
+      # to notice upstream moving WHILE everything else holds still. Leave it unpinned.
       - name: Install the `next` Claude Code
         run: npm i -g @anthropic-ai/claude-code@next 2>&1 | tail -3
       - name: Every clode hook anchor still matches the newest bundle
@@ -194,13 +194,14 @@ jobs:
   # booting the PIN, not `next`. Nothing announced that; the comment simply went stale
   # and the green went on reading as a statement about newest upstream.
   #
-  # Pointing it at `next` is NOT the fix, and that is a deliberate call: `clode build`
-  # cannot carve 2.1.257+ at all (the SCC merge; see UPSTREAM_PIN), so this leg would be
-  # red from birth — the exact "red from birth teaches everyone to ignore it" failure the
-  # --strict discussion in upstream-drift-check.mjs's header already rejected. The honest
-  # replacement is an engine-backed probe that asserts the KNOWN-BLOCKED state and goes
-  # red when it CHANGES (Haiku-probe doctrine, below), which is FILED in BACKLOG.md with
-  # its shape, not hand-waved here.
+  # Pointing it at `next` was NOT the fix, and that was a deliberate call: `clode build`
+  # could not carve 2.1.257+ at all then (the SCC merge; see UPSTREAM_PIN), so this leg
+  # would have been red from birth — the exact "red from birth teaches everyone to ignore
+  # it" failure the --strict discussion in upstream-drift-check.mjs's header already
+  # rejected. The honest replacement is the engine-backed probe that asserts the RECORDED
+  # state and goes red when it CHANGES (the `carve` job above). That blocker is gone: the
+  # pin moved to 2.1.283 on 2026-09-26, `next` that day. This job still boots the PIN,
+  # which falls behind `next` again as upstream publishes; the `carve` job looks past it.
   #
   # What this job still genuinely buys, unchanged: the pinned bundle's shim surface is
   # exercised daily on a real runner, which is how 2.1.238's os.constants.errno break

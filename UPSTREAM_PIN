@@ -1,12 +1,19 @@
 # Deliberately pinned @anthropic-ai/claude-code version for CI's provider
 # installs. This is NOT "pin to hold green" — this project's doctrine is to
-# never pin to an older upstream just to keep CI quiet. 2.1.257 broke
+# never pin to an older upstream just to keep CI quiet. The pin is ONLY what CI
+# installs, builds and tests: users' `clode fetch claude` follows upstream's own
+# update channel (default `latest`; libexec/clode-update.cjs resolveChannel), so
+# the pin is how CI proves what users run.
+#
+# From 2026-09-01 to 2026-09-26 the pin held at 2.1.251. 2.1.257 broke
 # `clode build`'s SCC merger (QuickJS's parser rejects a merged file with
 # "invalid property name") on every leg that stages a provider; only
-# engine-only cross-build legs still pass. This pin is the OTHER half of the
-# doctrine — "absorb the change AND make the next absorption cheaper" — paid
-# first: 2.1.257 gets absorbed deliberately, later, as the first test of the
-# rejiggered build system, not silently avoided by holding still forever.
+# engine-only cross-build legs still passed. Holding at 2.1.251 was the OTHER
+# half of the doctrine — "absorb the change AND make the next absorption
+# cheaper" — paid first, not silently avoided by holding still forever. It was
+# absorbed on 2026-09-26: the pin moved to 2.1.283, upstream's `latest` and
+# `next` that day (`npm view @anthropic-ai/claude-code dist-tags`: stable
+# 2.1.274, latest 2.1.283, next 2.1.283).
 #
 # upstream-drift.yml does NOT read this file: its whole job is noticing that
 # upstream moved, so it stays on `next`/unpinned on purpose. See its own
@@ -32,6 +39,21 @@
 #            under tjs. Not luck we control — see the root cause below. Nothing is claimed
 #            here about booting it; only that the step the pin exists for now passes.
 #
+#   2.1.283  THE PIN since 2026-09-26. CARVES, MERGES AND COMPILES (2026-09-26,
+#            darwin-arm64, real engine): scripts/carve-probe.mjs, run while the pin was
+#            still 2.1.251, staged 3 merged groups (3, 51, 4; 18 residual requires
+#            removed) and compiled all 2193 staged modules under tjs. Its Bun is 1.4.3, as
+#            2.1.278's, but another build (revision 7c1d0ed2 where 2.1.278's is 8c28b316).
+#            Its text and paint match native 2.1.283 exactly under our shim (1,178,263
+#            strings through four consumers, 577 paint ops), so the text oracle moved with
+#            it. Carving is not booting, and it did not boot: the first full suite at this
+#            pin had 26 failures, from three upstream changes a carve cannot see, each
+#            fixed with it (BACKLOG.md, "2.1.283 broke every clode build"): the
+#            filesystem asset reader's reworded error (every build's PONG smoke died),
+#            woff2 font rows tjs decodes unlike node (the extractor's output differed by
+#            184 bytes), and builtin plugins reading import.meta.dir (a naude answered -p
+#            with nothing; that one arrived by 2.1.282).
+#
 # WHAT ACTUALLY BREAKS, measured 2026-09-21 on this box with a real engine, because
 # "QuickJS rejects the merged file" was true and told nobody where to look. The merged
 # file is not valid ES in ANY engine — node rejects it too ("Invalid or unexpected token")
@@ -52,8 +74,15 @@
 # sites sit in modules that are NOT in any merged group, so the merger never touches them
 # — the defects are LATENT, not fixed, and upstream's next re-chunk can re-trigger them.
 #
+# CORRECTED 2026-09-26, by measurement: the merger has since learned both spellings
+# (libexec/scc-merge.cjs: a unicode escape is part of its identifier; a member-modifier
+# CHAIN like `static get` protects the member name). scripts/carve-probe.mjs on the real
+# darwin-arm64 2.1.257 now CARVES: 3 merged groups (7, 114, 5), all 1680 staged modules
+# compiled under tjs. On 2.1.283 the two sites sit in two modules, chunk-9yjanq6m.js and
+# chunk-hzevqd7x.js, neither in a merged group.
+#
 # So: the versions between .252 and .269 have never been tried, and "we cannot build
-# from newer" is measured at .257 and .261 — not at .270, and NOT at .278.
+# from newer" is measured at .257 and .261 — not at .270, and NOT at .278 or .283.
 #
 # THE STANDING ANSWER, kept honest by scripts/carve-probe.mjs (upstream-drift.yml's
 # `carve` job). This is the outcome someone MEASURED for newer-than-pin upstream; the
@@ -62,7 +91,10 @@
 # context for a reader; the OUTCOME is what is compared. Grammar:
 #     carve-probe <version> carves
 #     carve-probe <version> blocked <stage> <reason substring>
-carve-probe 2.1.278 carves
+# The record below was measured on 2.1.283 while it was still newer than the pin (above).
+# With the pin at 2.1.283, which was also `next` that day, the probe SKIPS by name ("not
+# newer than the pin") until upstream publishes past it, then compares that carve with this.
+carve-probe 2.1.283 carves
 #
 # Bump or drop the pin by editing the version below — one line, one file.
-claude-code 2.1.251
+claude-code 2.1.283
