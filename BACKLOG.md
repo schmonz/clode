@@ -91,11 +91,116 @@ the one whose provider happens to contain it.
 
 ## `Bun.ant.CellSegmenter` — the 2.1.278 TUI's real blocker, and it is NOT small (2026-09-22)
 
-**Status: OPEN, phases 1-4 of 6 DONE (phase 4 closed 2026-09-25), and it is still what stands
-between this repo and moving the pin: phase 5 (the stateful surfaces: damage under partial
-repaint, scroll, resize) is the next functional gap.** Everything else in the 2.1.278
-interactive chain is fixed and driven; this is the remainder. Phase 4's record is the next
-block, then phase 3's; phases 1-2's follows them.
+**Status: OPEN, phases 1-5 of 6 DONE (phase 5 closed 2026-09-26).** What remains before the pin
+moves ends the phase-5 block: phase 6 (`reordered`, slow-box performance), measuring
+`Bun.wrapAnsi`, and the move itself, to upstream's latest rather than 2.1.278. Everything else in
+the 2.1.278 interactive chain is fixed and driven. Phase 5's record is the next block, then
+phase 4's and phase 3's; phases 1-2's follows them.
+
+**Phase 5 landed (2026-09-25/26): paint(), setCell() and the screen across frames are native's.**
+
+- **Paint and damage, exactly native's** (the user's decision: damage rects EQUAL to native's,
+  not merely covering). `scripts/lib/paint-probe.cjs` runs one probe inside native 2.1.278's Bun
+  and under tjs + bun-shim; `test/fidelity/paint-differential.test.cjs` compares, after every op,
+  every screen cell (decoded: grapheme, style key, link, width bits) and the packed return (end
+  column, damage x1..x2). Scenarios that differ: **214 -> 0** on the original corpus (397
+  scenarios, 409 ops) and **316 -> 0** on the extended one (526 / 577; before, per part: ascii
+  64, clip 32, wide 21, tabs 52, zero-width 32, overwrite 23, runs 20, setcell 71, grow 1). Ten
+  named rules in bun-shim.cjs, each with a same-named test whose literals are native's:
+  PAINT-DAMAGE (every column written, same-value writes and cleared orphans included; nothing
+  written is x1 65535, x2 0), PAINT-END, PACK-END, PAINT-TAB, PAINT-EDGE-WIDE, SCREEN-SPACER,
+  PAINT-SPACERS, SCREEN-BOUNDS, SCREEN-ORPHANS, SETCELL-END. They answer the contract's named
+  experiments (a wide glyph at the last column, x past the width, same-value writes, tab
+  damage). Native is 2.1.251's JS painter, except that its damage covers every cell it writes.
+- **A contract correction: `spacerHead` is not free.** The contract below called it free; native
+  paint() writes one where a wide cluster does not fit at the last column (PAINT-EDGE-WIDE), and
+  the shim now writes it where native does.
+- **Four sessions, frame by frame.** `test/tui-screen.cjs --script` takes a frame per scripted
+  step once output settles (boot waits out a 12 s window: Clawd's random entrance animation and an
+  effort notice that clears itself ~10 s in); `test/fidelity/sessions.cjs` states the four once.
+  `interactive-session-diff`, native vs a fresh quaude: identical, every frame settled.
+
+  | session | what repaints | frames | painted cells, 2.1.278 / 2.1.251 |
+  | --- | --- | --- | --- |
+  | type-edit | wide CJK, an emoji + skin tone, base + combining marks typed, erased, retyped | 6 | 2,035 / 2,035 |
+  | resize | a wrapped reply at 100x40, 60x30, 120x40, 100x40 | 6 | 2,675 / 2,675 |
+  | scroll | 121 lines at 320 columns (a 300-character token: grow-and-retry at first paint), paged and wheeled | 8 | 15,341 / 15,329 |
+  | slash-menu | the menu opened and closed, the prompt cleared | 7 | 2,968 / 2,968 |
+
+  `session-determinism` runs every session twice on native first and requires identical frames
+  (2.1.278 three times, 23,019 cells; 2.1.251 once, 23,007), so a racy script fails as a racy
+  script. Scroll's wheel step runs with `CLODE_TTY_MOUSE=1` on both sides: quaude's mouse and
+  focus tracking are off by design (RECIPE.md X1), not a finding.
+- **No session can see paint damage (measured).** Quaudes whose paint()/setCell() report no
+  damage, or damage one column short, paint all four sessions exactly like native: upstream's
+  renderer clears and damages every region it repaints, so every cell paint() writes already
+  lies inside damage it holds. **The paint gate is the only damage judge.**
+- **Real-frame red proofs.** A quaude whose segment() never asks to grow fails scroll at "boot"
+  (256 cell-classes: the 320-column rules stop at column 256); one whose tty never turns SIGWINCH
+  into 'resize' fails resize at "back 100x40" (94); scroll without the X1 mouse knob fails at
+  "wheel up"; a shim that carries the previous segmenter's grapheme index across a reset fails all
+  four at "boot" in reset-invisibility (179; unpatched, the same shim paints like native).
+- **Pool resets never change a frame.** A test-only quaude with the reset thresholds (16384 /
+  2048; `scripts/lib/reset-patch.cjs`) patched to 0 resets before every segment() call.
+  `reset-invisibility` judges it against the unpatched quaude over the four sessions (identical,
+  23,019 cells on 2.1.278) and requires that the resets fired: every segment() call ran on a
+  freshly reset segmenter -- type-edit 161 of 161, resize 237 of 237, scroll 588 of 589 (the
+  other is the grow retry), slash-menu 187 of 187 (the counts follow renders per step and vary
+  run to run; the frames do not). `reset-patch-landed` proves the test build is the patch alone:
+  of 1,958 compiled modules only the patched one differs. A carve with no CellSegmenter consumer
+  makes both SKIP with one named reason.
+- **In CI (task 7, not yet pushed).** linux-x64-pty's text step runs the paint gate, with the
+  paint probe's packing check and the reset-site check, against the 2.1.278 text oracle,
+  asserting `skipped 0`. A new step runs session-determinism, then interactive-session-diff, then
+  reset-invisibility, one `node --test` each (node sorts the files it is given), and accepts only
+  the reset guards' named no-consumer skip. **Before the pin moves**, CI builds from 2.1.251,
+  which has no CellSegmenter consumer: its sessions exercise only the classic painter, the grow
+  path is judged only locally against 2.1.278 (and at unit level by the paint gate's `grow`
+  part), and the reset guards skip. **Once the pin moves**, CI covers CellSegmenter end to end
+  with no workflow change: with the provider shaped as CI shapes it (minimised, 2.1.278), both
+  reset guards ran here and passed (1,958 modules; 23,019 cells). Found on the way:
+  reset-invisibility asked its provider for `--version`, which a minimised provider cannot
+  answer, so in CI it would have skipped forever with the wrong reason; it now judges the version
+  by what is built from it. Verified before any push in a node:24.21.0-bookworm container on
+  ultimate-hat (6 x86_64 CPUs) mirroring every step of the job, engine `tjs-linux-x64-musl` from
+  CI run 36172348016: all 13 steps green. The session step gave exactly the two named skips;
+  native 2.1.251 linux-x64 repainted every session identically (22,163 cells), and the quaude
+  matched it in all four (type-edit 1,789, resize 2,429, scroll 15,264, slash-menu 2,681: 41 cells
+  a frame fewer than darwin, the banner's shorter cwd). The text step ran 95 tests, `skipped 0`,
+  the paint gate 577 ops, 0 differences, against the linux-x64 2.1.278 oracle. **CI cost,
+  measured there:** +502 s for the session step (determinism 226 s, sessions 273 s, the reset
+  skip 1 s on the carve the session build warmed) and ~18 s in the text step (the paint gate 1 s,
+  its two carve checks 17 s): the mirrored job went from ~22.4 to 31.1 minutes.
+
+**Recorded, not fixed (phase 5):**
+
+- **refreshGenerations' reset branch never fires live.** No session moves the style or chalk
+  generation, so under the patched quaude it fired 0 times; only `test/reset-patch.test.cjs`
+  runs it (it calls the same resetNative() every other reset takes).
+- **`readCarve` has four copies** in test/build-gates, and their consumer tests have drifted
+  (`sgrCloseKeys` in one, `/\bCellSegmenter\b/` in another): one shared carve reader.
+- **The naude deps fix (ccc2a04) is partial.** It detects a purge by each package's
+  `package.json` only, so a lazily required file inside a used package that the $TMPDIR cleaner
+  aged out is still lost, and the comment at naude-sea.cjs:32 claims more. On Windows a failed
+  rmSync is swallowed and the move-aside's EPERM is a new hard failure; the legacy no-marker tree
+  and the lost-race branch are untested. Options: a marker that lists every file, or the cache
+  out of os.tmpdir() (NAUDE_CACHE exists).
+- **upstream-drift does not run the two phase-5 carve checks** (paint-probe-gates,
+  reset-patch-gates) against `next`, the bundle they exist to warn about; one line in its
+  tripwire step.
+
+**What remains before the pin moves:**
+
+- **Phase 6.** `reordered`: the contract below said it was false everywhere quaude normally
+  runs, but the 2.1.278 carve sets it from a host-terminal check (`xf()` ->
+  `yC.of(G().host).isNeeded()`, rp2.pretty.js:16606: `WT_SESSION` set, or `TERM_PROGRAM` is
+  `vscode`), so Windows Terminal and VS Code's terminal reach it. And performance: paint() is
+  ~1.6x slower than before phase 5 (32 -> 52 microseconds per 120-column paint, as the task-2
+  review measured it; structural, not allocation). Profile on the slow boxes first.
+- **`Bun.wrapAnsi`** (the phase-3 follow-up below): measure whether it ever changes a PAINTED
+  cell before a phase-3-sized effort.
+- **The pin move**, to upstream's latest (2.1.283 today), not 2.1.278. Every rule here was
+  measured against 2.1.278, and a different Bun is a different oracle (R11): re-measure first.
 
 **Phase 4 landed (2026-09-25): OSC-8 hyperlinks are native's.** CellSegmenter parsed OSC 8 but
 never interned a link (`uris` stayed `['']`, every run's link 0), so a link painted as plain
@@ -160,9 +265,10 @@ answering mock, native 2.1.278's interactive first turn sends HEAD /api/hello, t
   style as it applies it. The caller reads keys only by a cell's run, so the one observable is
   the pool size the caller resets at (16,384 entries): at worst an earlier reset. Measured
   2026-09-25.
-- **The link scene has not been mirrored on linux-x64.** CI's linux-x64-pty job runs the frame
+- ~~**The link scene has not been mirrored on linux-x64.** CI's linux-x64-pty job runs the frame
   gate against the pinned 2.1.251 and will run the new scene on the next push; the darwin
-  2.1.251 drive above is the evidence so far.
+  2.1.251 drive above is the evidence so far.~~ DONE: CI run 36172348016 (9abb067) ran
+  `tui-reply-hyperlinks` green in linux-x64-pty.
 
 **Phase 3 landed (2026-09-24/25): quaude clusters, sizes and slices text exactly as native Bun
 does.** One module, `libexec/unicode-text.cjs`, serves all four text consumers through three
@@ -351,8 +457,9 @@ applied. It does not move a quaude's first frame (1572 ms), because bun-shim loa
 anyway.
 
 **What remains:** ~~phase 4 (OSC-8 interning — links are consumed, never interned)~~ DONE
-2026-09-25 (the block above), phase 5 (the stateful surfaces below), phase 6 (`reordered`, and
-performance on the slow boxes — starting with the Tiger first-frame number above).
+2026-09-25 (the block above), ~~phase 5 (the stateful surfaces below)~~ DONE 2026-09-26 (the
+phase-5 block), phase 6 (`reordered`, and performance on the slow boxes — starting with the Tiger
+first-frame number above).
 
 **Phases 1-2 landed: the 2.1.278 TUI paints, and its initial frame matches native.**
 `libexec/bun-shim.cjs` now provides `Bun.ant` with exactly one member, `CellSegmenter`
@@ -370,9 +477,9 @@ test so fixing it forces a re-take:
   block above); the pins were re-taken as native's measurements in task 6.
 - ~~**phase 4, OSC-8.** Hyperlinks are consumed but never interned, so links do not work.~~
   DONE 2026-09-25 (the phase-4 block above); the pin was re-taken as native's measurements.
-- **phase 5, the stateful surfaces** (damage under partial repaint, scroll, resize; the
-  grow-and-retry and pool-reset paths under a real session), and **phase 6** (`reordered`,
-  performance on the slow boxes). Not started.
+- ~~**phase 5, the stateful surfaces** (damage under partial repaint, scroll, resize; the
+  grow-and-retry and pool-reset paths under a real session)~~ DONE 2026-09-26 (the phase-5
+  block); **phase 6** (`reordered`, performance on the slow boxes) not started.
 - ~~**Unmeasured choice:** a re-applied SGR slot is replaced IN PLACE (so chalk re-opening an
   outer colour reuses one style id). The initial frame never re-applies, so what native does
   there is an open experiment for a multi-frame oracle script.~~ MEASURED 2026-09-25 (final fix
@@ -454,13 +561,16 @@ tractable:
   grapheme takes one scratch cell or two (`width()` only SUMS the advances); the exact
   negative `segment()` returns, as long as its magnitude is >= the cell count (the caller
   reallocates to `2*max(-u, oldLen)` and retries exactly ONCE); the 7th `paint` argument
-  (always `undefined`); the low 20 bits of `setCell`'s return; **`spacerHead` (3) — nothing
-  in the bundle ever produces or distinguishes it**, every reader treats 2 and 3 alike.
+  (always `undefined`); the low 20 bits of `setCell`'s return; ~~**`spacerHead` (3) — nothing
+  in the bundle ever produces or distinguishes it**~~ WRONG (phase 5): native paint() produces
+  it (PAINT-EDGE-WIDE) and the screen is compared cell by cell, though every reader still treats
+  2 and 3 alike.
 - **Also measured:** `tabWidth` is 8 (`cwt`, chunk-xpg5m2n8.js); `substitute` is a list of
   codepoint RANGES to replace with U+FFFD, passed the bidi controls
   `[[1564,1564],[8234,8238],[8294,8297]]`; `emptyCharIndex`/`spacerCharIndex` index the
   SCREEN charPool (`[" ", ""]`), not `graphemes`; `reordered` is
-  `WT_SESSION || TERM_PROGRAM==="vscode"`, i.e. **false everywhere quaude normally runs**.
+  `WT_SESSION || TERM_PROGRAM==="vscode"`, ~~i.e. **false everywhere quaude normally runs**~~
+  i.e. true in Windows Terminal and VS Code's terminal (phase 6, above).
 
 Full derivation, the per-member call sites, the named experiments for the handful of things
 only native can answer, and the implementation plan: see the CellSegmenter contract note in
