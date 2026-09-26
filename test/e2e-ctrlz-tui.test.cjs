@@ -75,6 +75,8 @@ test('quaude survives Ctrl-Z: the TUI stays alive and responsive after suspend',
   assert.match(SCREEN, /has been suspended/, `Ctrl-Z did not suspend:\n${SCREEN}`);
   // ...and input works after the resume: the marker typed after SIGCONT is in the PROMPT,
   // not merely echoed somewhere by a terminal left in cooked mode.
-  assert.match(SCREEN, new RegExp(`${String.fromCodePoint(0x276F)} ${MARKER}`),
+  // The prompt glyph U+276F is followed by U+00A0, not a space (sessions.cjs's slash-menu
+  // mustShow spells the same pair); \s matches either.
+  assert.match(SCREEN, new RegExp(`${String.fromCodePoint(0x276F)}\\s${MARKER}`),
     `input unresponsive after Ctrl-Z and SIGCONT (marker not in the prompt):\n${SCREEN}`);
 });
