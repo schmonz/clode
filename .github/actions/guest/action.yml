@@ -384,7 +384,7 @@ runs:
     # `command: not found`.
     - name: Run the guest script (vmactions haiku VM)
       if: inputs.platform == 'haiku'
-      uses: vmactions/haiku-vm@v1.1.5
+      uses: vmactions/haiku-vm@v1.1.6
       with:
         release: ${{ inputs.version }}
         usesh: true
