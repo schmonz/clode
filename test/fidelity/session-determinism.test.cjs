@@ -26,8 +26,8 @@
 //
 // WHAT IT IS A GUARD OVER, and its floor. `examined` is the visibly painted cells over
 // every frame of every session's first run (type-edit: 6 frames, ~2035 cells; resize: 6
-// frames, ~2675; scroll: 7 frames, ~13302; slash-menu: 7 frames, ~2968; all four 20980 on
-// 2.1.278, 20971 on 2.1.251). The floor is 1000: a native that painted nothing compares
+// frames, ~2675; scroll: 8 frames, ~15341; slash-menu: 7 frames, ~2968; all four 23019 on
+// 2.1.278, 23007 on 2.1.251). The floor is 1000: a native that painted nothing compares
 // identical to itself, and that must read BROKEN, not OK. A blank frame on either run is
 // its own finding (ruling R8, in judgeSessions): two blank frames compare equal and judge
 // nothing.

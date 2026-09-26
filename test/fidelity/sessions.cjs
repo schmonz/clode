@@ -83,11 +83,13 @@ const SESSIONS = {
     settings: { showTurnDuration: false }, env: {},
     mustShow: 'end.',
   },
-  // A reply longer than the screen, scrolled back and forth: up half a page twice, down
-  // once, then Ctrl+End (the TUI's scroll:bottom). Each step moves the viewport 17 lines, so
-  // every frame repaints the rows under it; while scrolled up the TUI pins the prompt to
-  // row 0 and overlays "Jump to bottom" on the viewport's last row, at "page up 2" across a
-  // line of wide glyphs, and the steps after it repaint what that overlay covered.
+  // A reply longer than the screen, scrolled back and forth: up half a page twice, one
+  // mouse-wheel notch up, down half a page, then Ctrl+End (the TUI's scroll:bottom). Each
+  // page moves the viewport 17 lines and the notch 3, so every frame repaints the rows under
+  // it; while scrolled up the TUI pins the prompt to row 0 and overlays "Jump to bottom" on
+  // the viewport's last row, at "page up 2" across a line of wide glyphs (after the wheel,
+  // the hint's text changes to its click form), and the steps after it repaint what that
+  // overlay covered.
   //
   // MEASURED (2.1.278, task 5), each shaping the session:
   // - Nothing streams. The canned mock answers a turn with ONE text_delta in one response
@@ -103,9 +105,10 @@ const SESSIONS = {
   //   that logged every call). At 320 the prompt's rules are 320-cell lines, which force the
   //   grow-and-retry at the first paint (320 cells against 256, then against 512), and line
   //   100's token is segmented whole, in one 309-cell call.
-  // - No mouse-wheel step: native scrolls 3 lines on a wheel report and quaude writes
-  //   nothing (it enables only mouse mode 1006, native 1000/1002/1003/1006), an input
-  //   divergence this paint gate leaves to its own record.
+  // - CLODE_TTY_MOUSE=1 on both sides, for the wheel step: quaude leaves mouse tracking
+  //   off by default on purpose (test/fidelity/RECIPE.md, intentional divergence X1) and
+  //   drops the wheel report, and this knob is X1's route back to parity. Native does not
+  //   read it. Without it the step differs at "wheel up", quaude never settling.
   'scroll': {
     rows: 40, cols: 320,
     script: [
@@ -113,11 +116,12 @@ const SESSIONS = {
       { label: 'send', send: hex('\r') },
       { label: 'page up', send: hex(ESC + '[5~') },
       { label: 'page up 2', send: hex(ESC + '[5~') },
+      { label: 'wheel up', send: hex(ESC + '[<64;50;20M') },
       { label: 'page down', send: hex(ESC + '[6~') },
       { label: 'end', send: hex(ESC + '[1;5F') },
     ],
     mockText: scrollReply(),
-    settings: { showTurnDuration: false }, env: {},
+    settings: { showTurnDuration: false }, env: { CLODE_TTY_MOUSE: '1' },
     mustShow: 'line 121 end.',
   },
   // The slash-command menu, opened, filtered, closed, and opened and closed again: the menu

@@ -11,8 +11,8 @@
 // filled, a reflow, a resize the TUI mishandles -- needs a frame per step. So each session
 // repaints what an earlier step painted: type-edit erases and retypes wide and combining
 // clusters in the prompt; resize reflows a wrapped reply narrower, wider and back; scroll
-// pages a 320-column reply up and down under an overlay (and segments lines too long for
-// the bundle's 256-cell scratch buffers); slash-menu opens and closes the command menu.
+// pages and wheels a 320-column reply up and down under an overlay (and segments lines too
+// long for the bundle's 256-cell scratch buffers); slash-menu opens and closes the menu.
 //
 // THE PRECONDITION is session-determinism.test.cjs: native repaints each session
 // identically twice. A difference here is a quaude finding only because that holds.
@@ -36,13 +36,14 @@
 //
 // MEASURED 2026-09-25 (darwin-arm64, fresh quaudes of this tree): identical on native
 // 2.1.278 and on native 2.1.251 (CI's pin), every frame settled -- type-edit 6 frames,
-// 2035 painted cells; resize 6 frames, 2675; scroll 7 frames, 13302 (13293 on 2.1.251);
+// 2035 painted cells; resize 6 frames, 2675; scroll 8 frames, 15341 (15329 on 2.1.251);
 // slash-menu 7 frames, 2968. The pre-phase-5 quaude (310471c, before task 2 made
 // paint()/setCell() damage native) is identical too. Two quaudes are not: one whose tty
 // never turns SIGWINCH into 'resize' first differs in resize at step "back 100x40" (94
 // cell-classes, the reply laid out at a stale width); one whose segment() never asks to
 // grow first differs in scroll at step "boot" (256 cell-classes: the prompt's 320-column
-// rules end at column 256).
+// rules end at column 256). And scroll run without CLODE_TTY_MOUSE=1 differs at step
+// "wheel up": quaude drops the wheel report by design (RECIPE.md X1, mouse tracking off).
 //
 // WHAT IT IS A GUARD OVER, and its floor: `examined` is the native's painted cells over
 // every frame of the session. The floor is 1000: two blank sessions compare identical,
