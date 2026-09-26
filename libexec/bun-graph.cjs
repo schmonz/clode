@@ -499,9 +499,11 @@ function loadGraphFromBytes(u8) {
 // Valid UTF-8 goes through the engine's TextDecoder, FATAL, so no engine gets to choose how an
 // invalid byte reads; invalid input decodes below by the WHATWG rule (each maximal subpart of an
 // ill-formed sequence is one U+FFFD, and the byte that ended it starts over). Found 2026-09-26:
-// 2.1.283 embeds two woff2 fonts as loader-5 rows, the first rows with invalid UTF-8, and the
-// extractor's output differed between node and tjs by 184 bytes. The engine's decoder is not
-// WHATWG's: F0 9F C3 9F reads U+FFFD U+00DF under node and U+FFFD U+FFFD under tjs.
+// 2.1.283 embeds two woff2 fonts as loader-5 rows, the first rows this reads whose invalid
+// bytes node and tjs decode differently, and the extractor's output differed between them by
+// 184 bytes. The engine's decoder is not WHATWG's: F0 9F C3 9F reads U+FFFD U+00DF under node
+// and U+FFFD U+FFFD under tjs. Invalid rows are older than that: 14 loader-13 rows of 2.1.251
+// (16 of 2.1.278 and of 2.1.281) fail a fatal decode, and both engines read them alike.
 function utf8(u8, p, len) {
   var bytes = u8.subarray(p, p + len);
   if (typeof TextDecoder !== 'undefined') {
@@ -511,7 +513,8 @@ function utf8(u8, p, len) {
 }
 
 // The WHATWG Encoding standard's UTF-8 decoder, replacement mode, BOM stripped as TextDecoder
-// strips it. Only invalid rows (a few fonts) take it, so it favours plainness over speed.
+// strips it. Only invalid rows take it (14 to 17 per carve measured: UTF-16LE text, and
+// 2.1.283's two fonts), so it favours plainness over speed.
 function utf8Replacing(b) {
   var n = b.length, i = 0, need = 0, seen = 0, cp = 0, lower = 0x80, upper = 0xBF;
   var cps = [], out = '';
