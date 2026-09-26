@@ -43,11 +43,21 @@ const EXTRACT = path.join(REPO, 'libexec', 'extract-claude-js.cjs');
 // two shapes the real carve uses for `jn`'s shift constants (they are shared with several other
 // readers in the same module, per the contract, so the minifier keeps them as named vars
 // instead of inlining them into jn() alone).
-function resolveConst(bundle, tok) {
+//
+// THE NEAREST ASSIGNMENT BEFORE packWord, not the first in the bundle. A minified name is
+// unique only within its module, and the decoded carve is every module end to end. Measured
+// 2026-09-26 on the 2.1.283 carve (darwin-arm64): packWord is
+// `var so=17,Lr=2,...;function Vn(n,u,f){return n<<so|u<<Lr|f}`, and six other modules assign
+// `Lr` too, the first at offset 735,613 (`var Dr=16,Lr=8,...`). Reading the first match took 8
+// for the link shift, a VIOLATION about a module packWord never reads. On 2.1.278 both names
+// happened to be unique, so the first match was also the nearest.
+function resolveConst(bundle, tok, before) {
   if (/^\d+$/.test(tok)) return Number(tok);
   const escaped = tok.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const m = new RegExp(`(?:var\\s+|[,;])${escaped}=(\\d+)`).exec(bundle);
-  return m ? Number(m[1]) : null;
+  const re = new RegExp(`(?:var\\s+|[,;])${escaped}=(\\d+)`, 'g');
+  let m, last = null;
+  while ((m = re.exec(bundle)) !== null && m.index < before) last = Number(m[1]);
+  return last;
 }
 
 // packWord: a 3-parameter function whose entire body ORs three left-shifted/plain reads of its
@@ -62,8 +72,8 @@ function scanWordPacking({ bundle, probe, what }) {
   while ((m = re.exec(bundle)) !== null) {
     examined++;
     const at = bundle.slice(m.index, m.index + 100);
-    const styleShift = resolveConst(bundle, m[4]);
-    const linkShift = resolveConst(bundle, m[5]);
+    const styleShift = resolveConst(bundle, m[4], m.index);
+    const linkShift = resolveConst(bundle, m[5], m.index);
     if (styleShift === null) findings.push(`a packWord function's style-shift token '${m[4]}' could not be resolved to a number: ${at}...`);
     else if (styleShift !== 17) findings.push(`a packWord function shifts style by ${styleShift}, not 17 (scripts/lib/paint-probe.cjs encodes/decodes style at bit 17): ${at}...`);
     if (linkShift === null) findings.push(`a packWord function's link-shift token '${m[5]}' could not be resolved to a number: ${at}...`);
@@ -161,6 +171,23 @@ test('the word-packing scan passes the 2.1.278 carve verbatim and names each dri
   assert.strictEqual(run(WORD_CALLER.replace('Bo=2', 'Bo=3')).findings.length, 1, 'a link shift that moved');
   assert.strictEqual(scanWordPacking({ bundle: WORD_CALLER, probe: 'no shifts here', what: 'x' }).findings.length, 4, 'the probe itself stopped restating both shifts');
   assert.strictEqual(run('').examined, 0, 'no packWord function at all examines nothing, which the floor reads as BROKEN');
+});
+
+// The 2.1.283 carve's own text, verbatim (darwin-arm64, 2026-09-26): an EARLIER module's
+// `Lr` (offset 735,613), then the packWord module's, then packWord. A LATER `Lr` stands for the
+// four other modules after it that assign one.
+const OTHER_MODULE_LR = 'var Dr=16,Lr=8,Su=6,Nr=4,Ur=8,zr=3,Hr=1,bu=100;';
+const WORD_CALLER_283 = 'var so=17,Lr=2,zl=32767,xn=3,XE=(1<<32-so)-1,Ed=XE>>>1,QE=Ed>>>1;function Vn(n,u,f){return n<<so|u<<Lr|f}';
+
+test('the word-packing scan reads each shift from the assignment nearest before packWord (the 2.1.283 carve)', () => {
+  const run = (bundle) => scanWordPacking({ bundle, probe: PAINT_SOURCE, what: 'x' });
+  const carve = OTHER_MODULE_LR + WORD_CALLER_283 + 'var Lr=3;';
+  assert.deepStrictEqual(run(carve).findings, [], 'another module\'s Lr=8, before or after, is not the link shift');
+  assert.strictEqual(run(carve).examined, 1);
+  assert.strictEqual(run(OTHER_MODULE_LR + WORD_CALLER_283.replace('Lr=2', 'Lr=3')).findings.length, 1,
+    'the link shift that moved in packWord\'s own module is still named');
+  assert.strictEqual(run('function Vn(n,u,f){return n<<so|u<<Lr|f}var so=17,Lr=2;').findings.length, 2,
+    'a shift assigned only AFTER packWord is unresolved, not guessed');
 });
 
 guardTests(defineGuard({

@@ -104,7 +104,8 @@ function scanRegexBody(src, start) {
 // the same line by an unrelated string containing `/` can make `closed` true over text
 // that isn't really a regex body. Measured across the real corpus (task-1-report.md,
 // fix-round-1 addendum): zero occurrences, so no ALLOWED-list has been needed yet; if one
-// ever is, follow ambiguityGuard's shape.
+// ever is, follow ambiguityGuard's shape. One was, on 2.1.283 (2026-09-26): PHANTOM_ALLOWED
+// below.
 //
 // FALSE-NEGATIVE check (reviewer, fix round 1): does requiring `closed` — a real
 // subsequent unescaped `/` before the next newline — miss real risk sites? It would: the
@@ -132,21 +133,45 @@ function findPhantomCommentSites(src, mask) {
   return findings;
 }
 
-// PURE. The shape defineGuard's `scan` requires: {findings, examined}.
-function scanSources({ sources }) {
+// REVIEWED SITES, the plan the FALSE-POSITIVE note above names (windows-path-ratchet's
+// AMBIGUITY_ALLOWED shape): exact, both directions, each with the reason it is safe. Keyed by
+// the site's own snippet, not module and offset, because the pinned carve's module names differ
+// by platform: in 2.1.283 this one is chunk-d73nsb9c.js on darwin-arm64, chunk-ep8pa8n7.js on
+// linux-x64, chunk-4417evft.js on linux-x64-musl and chunk-j92898s3.js on win32-x64, at offset
+// 6035 in all four. An entry that no longer fires is a finding, so a pin bump re-reviews it.
+const PHANTOM_ALLOWED = new Map([
+  ['/1000)),f=o==="running"?`This call is still running on ${e.n',
+    'measured 2026-09-26 on the 2.1.283 carves: the "/" is `Math.round(r/1000)`, a division '
+    + 'after the identifier `r`, its only reading. The candidate scan walks on through a `[` it '
+    + 'takes for a character class and finds "/*" inside the STRING "/**" (`tail:"/**"`) 4,939 '
+    + 'bytes later, which lexicalCodeMask reads as a string (0 there, code again right after '
+    + 'it). No comment can open.'],
+]);
+
+// PURE. The shape defineGuard's `scan` requires: {findings, examined}. `allowed` defaults to the
+// reviewed sites; the control passes none.
+function scanSources({ sources, allowed = PHANTOM_ALLOWED }) {
   const findings = [];
+  const seen = new Set();
   let examined = 0;
   for (const { rel, src } of sources) {
     if (typeof src !== 'string' || src.length === 0) continue;
     examined++;
     const mask = lexicalCodeMask(src);
     for (const site of findPhantomCommentSites(src, mask)) {
+      if (allowed.has(site.snippet)) { seen.add(site.snippet); continue; }
       findings.push(`${rel}: offset ${site.offset}: a "/" lexicalCodeMask read as ordinary `
         + `code is followed by a raw "/*" before the next real closing "/", newline, or EOF `
         + `— ${JSON.stringify(site.snippet)}. This is the residual the EOF-backoff fix does `
         + `NOT close: if a real, unrelated "*/" exists later in this source, the phantom `
         + `comment can still pair with it instead of backing off, masking real code as `
         + `non-code and letting a colliding name there be renamed with no error.`);
+    }
+  }
+  for (const snippet of allowed.keys()) {
+    if (!seen.has(snippet)) {
+      findings.push(`PHANTOM_ALLOWED names ${JSON.stringify(snippet)}, which no longer produces `
+        + 'this shape — good news, remove the entry so the ratchet holds the gain.');
     }
   }
   return { findings, examined };
@@ -181,17 +206,33 @@ function readGraphSources() {
 // so `examined` is 1,839 on a clean run. The floor is that exact count, per the brief —
 // a drop means either the carve regenerated with fewer modules (in which case the pin
 // moved and this floor should move with it) or something upstream of read() broke.
+// MOVED WITH THE PIN (2026-09-26): the 2.1.283 carves hold 2,193 module sources on darwin,
+// 2,177 on linux and 2,175 on win32 (graph.json, staged through extractIfNeeded on this box).
+// The floor is the smallest, so a dev box of any of the three reads its own carve without a
+// BROKEN, and a drop under it still means a carve that lost modules or a broken read().
 const guard = defineGuard({
   name: 'lexical-code-mask-phantom-comment',
-  floor: 1839,
+  floor: 2175,
   read: readGraphSources,
   scan: scanSources,
   // The coordinator's exact repro: `)` closing `fn()` fails regexAllowed, so the regex
   // scan is skipped for the next `/`, and its candidate body `[/*]` contains a raw `/*`.
   control: () => ({
     sources: [{ rel: 'synthetic/control.cjs', src: 'fn() /[/*]/.test(x);\nvar realName = 1;\n' }],
+    allowed: new Map(),
   }),
 });
 guardTests(guard);
+
+test('a reviewed site is skipped, a stale one is a finding, and anything else still fires', () => {
+  const src = 'fn() /[/*]/.test(x);\nvar realName = 1;\n';
+  const snippet = findPhantomCommentSites(src, lexicalCodeMask(src))[0].snippet;
+  const one = [{ rel: 'a.cjs', src }];
+  assert.deepStrictEqual(scanSources({ sources: one, allowed: new Map([[snippet, 'why']]) }).findings, []);
+  assert.strictEqual(scanSources({ sources: one, allowed: new Map() }).findings.length, 1);
+  const stale = scanSources({ sources: [{ rel: 'b.cjs', src: 'var x = 1;\n' }], allowed: new Map([[snippet, 'why']]) });
+  assert.strictEqual(stale.findings.length, 1);
+  assert.match(stale.findings[0], /no longer produces this shape/);
+});
 
 module.exports = { scanRegexBody, findPhantomCommentSites, scanSources, readGraphSources, guard };

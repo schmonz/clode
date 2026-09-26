@@ -205,9 +205,13 @@ function readGraphChunks() {
 // sources + 1 prelude = 1,840 chunks (see task-2-report.md for the exact command).
 // The floor is that exact count — a drop means either the carve regenerated with
 // fewer modules (the pin moved, and this floor should move with it) or read() broke.
+// MOVED WITH THE PIN (2026-09-26): the 2.1.283 carves hold 2,193 module sources on darwin,
+// 2,177 on linux and 2,175 on win32 (graph.json, staged through extractIfNeeded on this box).
+// The floor is the smallest, so a dev box of any of the three reads its own carve without a
+// BROKEN, and a drop under it still means a carve that lost modules or a broken read(). Plus the prelude: 2,176.
 const guard1 = defineGuard({
   name: 'dep-closure-unterminated-side-effect-import',
-  floor: 1840,
+  floor: 2176,
   read: readGraphChunks,
   scan: scanUnterminatedSideEffectImports,
   control: () => ({

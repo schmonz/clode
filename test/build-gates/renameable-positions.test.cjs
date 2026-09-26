@@ -223,7 +223,14 @@ const NOT_AFTER = '(?<![A-Za-z0-9_$.])';
 //  (b) THE MODIFIER, PLAIN NAME. No JS grammar puts two identifier tokens side by side, and `#`
 //      can only begin a private member name. So a member-modifier word that the mask calls
 //      renameable and that is immediately followed by an identifier or a `#` is fixed syntax:
-//      renaming it emits `static __m0_get rules(){`, which does not parse.
+//      renaming it emits `static __m0_get rules(){`, which does not parse. ONE GRAMMAR DOES: a
+//      module specifier, `IdentifierName as IdentifierName`. `export{get as x}` exports the
+//      local binding `get`, which must rename with its declaration; `<modifier> as <name>` has
+//      no member reading at all (`get as(){` is a getter named `as`, and stays a finding). The
+//      2.1.283 darwin-arm64 carve exports one (chunk-v8wnw23v.js,
+//      `get as artifactTypeListAndCreatePromptGateOpen`), which read as a finding until
+//      2026-09-26. This is the merger's own reading too: assertNoRenamedFixedNames lets `as`
+//      follow a renamed binding (scc-merge.cjs WORD_AFTER_BINDING).
 //
 //  (c) THE MODIFIER, COMPUTED NAME. `get[…](…){` is not parseable as an expression — `get[k]`
 //      is indexing, `get[k](a)` is a call, and no call expression is followed by a `{` that is
@@ -323,7 +330,8 @@ function findStaticBlocks(src, mask) {
   return out;
 }
 
-const MODIFIER_RE = new RegExp(`${NOT_AFTER}(${MOD_ALT})(?:[ \\t]+(?=[A-Za-z_$])|(?=#))`, 'g');
+const MODIFIER_RE = new RegExp(
+  `${NOT_AFTER}(${MOD_ALT})(?![ \\t]+as[ \\t]+[A-Za-z_$])(?:[ \\t]+(?=[A-Za-z_$])|(?=#))`, 'g');
 function findModifiers(src, mask) {
   const out = [];
   MODIFIER_RE.lastIndex = 0;
@@ -343,6 +351,21 @@ function findRenameablePositions(src, mask) {
     findModifiers(src, mask).map((offset) => ({ kind: 'modifier', offset })),
   );
 }
+
+test('detector (b) reads `<modifier> as <name>` as a module specifier, not a member', () => {
+  // The 2.1.283 darwin-arm64 carve's own export list (chunk-v8wnw23v.js), verbatim but cut.
+  const exp = 'var get=1;export{Nur as artifactTypeCatalogPromptParagraph,'
+    + 'get as artifactTypeListAndCreatePromptGateOpen,h9t as artifactTypesPromptGateOpen};';
+  const mask = codeMask(exp);
+  assert.strictEqual(mask[exp.indexOf('get as')], 1, 'the exported local binding still renames');
+  assert.deepStrictEqual(findModifiers(exp, mask), [], 'and it is not a member modifier');
+  // What (b) must still name, read against an all-code mask so only the detector is judged.
+  const all = (src) => new Uint8Array(src.length).fill(1);
+  for (const [src, want] of [['o={get as(){return 1}}', [3]], ['class T{static get rules(){}}', [8, 15]],
+    ['class T{get#p(){}}', [8]]]) {
+    assert.deepStrictEqual(findModifiers(src, all(src)), want, src);
+  }
+});
 
 // ---- read(): the only I/O, shared by all five guards ---------------------------------------
 //
@@ -411,7 +434,11 @@ function scanWith(find, say) {
 // makes its green mean something. The floor is the module count, as next door: a drop means the
 // carve regenerated with fewer modules (the pin moved — move the floor with it) or something
 // upstream of read() broke.
-const FLOOR = 1839;
+// MOVED WITH THE PIN (2026-09-26): the 2.1.283 carves hold 2,193 module sources on darwin,
+// 2,177 on linux and 2,175 on win32 (graph.json, staged through extractIfNeeded on this box).
+// The floor is the smallest, so a dev box of any of the three reads its own carve without a
+// BROKEN, and a drop under it still means a carve that lost modules or a broken read().
+const FLOOR = 2175;
 
 // THE CONTROLS, and why none of them is the verbatim repro above. Every repro is masked 0 BY
 // CONSTRUCTION — that is the fix — so feeding one here would produce no findings and register a
