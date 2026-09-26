@@ -758,6 +758,12 @@ const ACCEPTED_UNRECOGNIZED_BUN = new Set([
   // here", which is the honest answer for a host with no image codecs. Kept out
   // of KNOWN_BUN only to avoid rewriting the 2.1.210/215/218 golden --json shas.
   'Image',
+  // FetchSession: new in 2.1.283 (0 references in the 2.1.278 binary; measured 2026-09-26).
+  // Read once, feature-detected, in the mTLS module's getTLSFetchSession:
+  // `let e=typeof Bun>"u"?void 0:Bun.FetchSession;if(!e)return;`, and its one caller falls
+  // back to the plain fetch path on nothing: `let r=Xd()?Cjr():void 0;if(!r)return wFt(e,n)`.
+  // So absence is a host without it. Do NOT stub: a stub flips the detection.
+  'FetchSession',
 ]);
 const ACCEPTED_BUN_MODULES = new Set(['bun:jsc']);
 

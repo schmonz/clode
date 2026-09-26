@@ -441,7 +441,20 @@ const WALLS = [
     // ROUND 3 added bare-default matching: still 10 — same reasoning, applied to the 6
     // real bare-default imports of "net"/"fs". Re-measure this on every pin bump:
     // task-3-report.md.
-    baseline: 10,
+    //
+    // RE-MEASURED AT THE PIN BUMP TO 2.1.283 (2026-09-26): 11, on the darwin-arm64,
+    // linux-x64, linux-x64-musl and linux-arm64 carves alike (the carves CI's two
+    // node-shim-oracle jobs stage). Matched by content, all ten 2.1.251 reaches are still
+    // there (the peer-message socket, the sandbox MITM proxy's unix-socket dial, the daemon
+    // pipe, the upstream-TLS proxy, the control socket, the background-session reaper,
+    // bg-spare's ptySock, the adopt-exit reaper, the Chrome-extension bridge, the eval
+    // socket). The ONE new module is the sandbox runtime's parent-proxy dialer
+    // (`[SandboxDebug]`, HTTP_PROXY/HTTPS_PROXY/NO_PROXY, `dial:()=>...:v(port,host)`),
+    // split out of and imported by the sandbox MITM proxy module already counted: the same
+    // feature, one more module that can reach the wall. The win32 carves count 12 (a
+    // win32-only `require('net').connect(` module); no CI leg stages a win32 carve with an
+    // engine, so none judges it.
+    baseline: 11,
     why: '"the actual socket surface (net.connect / createConnection / real '
       + 'Socket I/O / net.Server) is NOT implemented — the -p transport is '
       + 'txiki\'s native fetch, which never routes through node:net ... '
@@ -460,7 +473,17 @@ const WALLS = [
     // reason as net's — real namespace imports of "fs" exist but none is currently
     // called with `.watch(`. RE-MEASURED again after FIX ROUND 3's bare-default
     // widening: still 5, same reasoning.
-    baseline: 5,
+    //
+    // RE-MEASURED AT THE PIN BUMP TO 2.1.283 (2026-09-26): 6, on every carve (darwin,
+    // linux, win32). Matched by content: four of 2.1.251's five are still there (the
+    // vendored chokidar-style watcher, the task-list watcher, the directory-sync watch,
+    // jobStateNameSync); the fifth, the storage-change bus whose `watchFn` defaulted to
+    // fs.watch, is gone. Two are new: the settings-file watcher ("Watching for changes in
+    // setting files"), whose own `[fs.watch probe]` writes a file and reads a watcher that
+    // never fires as "silent", then switches itself to polling (the path the stub's
+    // never-firing watcher sends it down); and the `claude --cloud` directory sync's
+    // git-dir watcher (`n.watch??<fs.watch>`, startWorkerDirSync), which has no such probe.
+    baseline: 6,
     why: '"fs.watch (the inotify/FSEvents-style API): STILL a stub, unlike '
       + 'watchFile above ... this engine\'s uv_fs_event backend is ENOSYS on some '
       + 'legs, so there is no portable native primitive to poll-emulate cheaply." '
