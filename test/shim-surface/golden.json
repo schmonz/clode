@@ -5,8 +5,8 @@
     "Regenerate with UPDATE_GOLDEN=1, and add a note below for anything new.",
     "Measured against the EXTRACTED cli.cjs (~21MB), never the 255MB Bun binary."
   ],
-  "_measured_against_bundle": "2.1.243",
-  "_measured_on": "2026-08-29",
+  "_measured_against_bundle": "2.1.283",
+  "_measured_on": "2026-09-26",
   "layer1_bun_props_missing": [
     "Bun.WebView",
     "Bun.Image",
