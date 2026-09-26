@@ -35,7 +35,7 @@ const { spawnSync } = require('node:child_process');
 const test = require('node:test');
 const assert = require('node:assert');
 const { defineGuard, guardTests } = require('../guard.cjs');
-const { PROBE_SOURCE } = require('../../scripts/lib/text-probe.cjs');
+const { PROBE_SOURCE, WRAP_OPTIONS } = require('../../scripts/lib/text-probe.cjs');
 const { decodeGraphRunner } = require('../../libexec/inspect-claude-bundle.cjs');
 
 const REPO = path.resolve(__dirname, '..', '..');
@@ -118,13 +118,20 @@ function scanCallerStyle({ bundle, probe, what }) {
   return { findings, examined, note: `${what}: ${examined} ansiCodes() method(s)` };
 }
 
-// The carve of CLODE_PROVIDER_BIN, decoded the way inspect-claude-bundle reads it; carved once
-// for both guards below.
-let CARVE = null;
-function readCarve() {
-  if (CARVE) return CARVE;
+// The carve of CLODE_PROVIDER_BIN, decoded the way inspect-claude-bundle reads it; extracted
+// ONCE and shared by every guard in this file (RAW), each applying its OWN presence check —
+// text-probe-caller-style/-link need a CellSegmenter caller (adopted 2.1.278); text-probe-
+// wrap-options (task 2) needs a Bun.wrapAnsi caller. A shared extraction with per-guard skip
+// wording means an older pin skips each guard for the reason that is actually true of IT,
+// not a borrowed reason from a different feature that happens to have landed nearby.
+let RAW = null;
+function fetchCarve() {
+  if (RAW) return RAW;
   const bin = process.env.CLODE_PROVIDER_BIN;
-  if (!bin || !fs.existsSync(bin)) return { skip: 'no CLODE_PROVIDER_BIN (point it at a real claude binary to run this gate)' };
+  if (!bin || !fs.existsSync(bin)) {
+    RAW = { skip: 'no CLODE_PROVIDER_BIN (point it at a real claude binary to run this gate)' };
+    return RAW;
+  }
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'probe-caller-'));
   try {
     const cli = path.join(dir, 'cli.cjs');
@@ -132,10 +139,30 @@ function readCarve() {
     if (ex.status !== 0) throw new Error(`extract-claude-js could not carve ${bin}: ${(ex.stderr || '').slice(0, 400)}`);
     const decoded = decodeGraphRunner(cli);
     const bundle = decoded !== null ? decoded : fs.readFileSync(cli, 'latin1');
-    if (!bundle.includes('sgrCloseKeys')) CARVE = { skip: `the carve of ${bin} has no CellSegmenter caller (the bundle adopted it in 2.1.278)` };
-    else CARVE = { bundle, probe: PROBE_SOURCE, what: `the carve of ${bin}` };
-    return CARVE;
+    RAW = { bundle, what: `the carve of ${bin}` };
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  return RAW;
+}
+
+function readCarve() {
+  const c = fetchCarve();
+  if ('skip' in c) return c;
+  if (!c.bundle.includes('sgrCloseKeys')) {
+    return { skip: `${c.what} has no CellSegmenter caller (the bundle adopted it in 2.1.278)` };
+  }
+  return { bundle: c.bundle, probe: PROBE_SOURCE, what: c.what };
+}
+
+// task 2's own read(): the same carve, its own presence check. `Bun.wrapAnsi(` is the literal
+// this scan's own findWrapCallSites() anchors on (scanWrapOptions, below); if the carve has
+// none at all, an older pin used npm wrap-ansi throughout and this gate has nothing to judge.
+function readWrapCarve() {
+  const c = fetchCarve();
+  if ('skip' in c) return c;
+  if (!c.bundle.includes('Bun.wrapAnsi(')) {
+    return { skip: `${c.what} has no Bun.wrapAnsi( call at all (an older pin used npm wrap-ansi throughout)` };
+  }
+  return { bundle: c.bundle, what: c.what };
 }
 
 // The 2.1.278 carve's own caller, verbatim (the darwin-arm64 carve, 2026-09-25), for the control.
@@ -227,4 +254,255 @@ test('the caller-link scan passes the 2.1.278 caller verbatim and names each dri
   assert.strictEqual(run(CALLER_LINK.replace('this.runs[2*m+1]', 'this.runs[2*m]')).findings.length, 1, 'the link index read elsewhere');
   assert.strictEqual(scanCallerLink({ bundle: CALLER_LINK, probe: 'no link column', what: 'x' }).findings.length, 2);
   assert.strictEqual(run('').examined, 0, 'no caller at all examines nothing, which the floor reads as BROKEN');
+});
+
+// THE WRAP-OPTIONS GATE (task 2, Bun.wrapAnsi = native). scripts/lib/text-probe.cjs's
+// WRAP_OPTIONS is "the exact set of option objects the carve's wrap helper can pass to
+// Bun.wrapAnsi" (measured once, 2026-09-26, against the 2.1.283 carve). If a future carve
+// adds a call site with an option shape not in that set, the unit gate (text-diff-wrapansi)
+// would go on judging cases the bundle never actually asks for, silently blind to the one it
+// does. This is the restatement check, in the same shape as the two guards above it: read()
+// the real carve, scan() every literal options object reaching the wrap helper, control() a
+// carve whose one call site passes an option not in the set.
+//
+// WHY STRUCTURAL, NOT NAMED. The helper and its wrapper are unexported/module-private and
+// minified (`X`/`zu` at 2.1.283, `X`/`Nf` at 2.1.278) — a name changes on every bundler run.
+// findWrapCallSites() finds them by SHAPE instead: the direct caller is
+// `function NAME(a,b,c){if(!SOMEVAR.test(a))return Bun.wrapAnsi(a,b,c);...}` (the ONLY thing
+// this scan assumes stays true — measured at both 2.1.278 and 2.1.283); its wrapper is
+// whatever function in the SAME module forwards the SAME three parameters into it. Every
+// module (split on the bundler's own per-chunk `// Version: ` banner, present in each
+// module's own source) that DEFINES that wrapper or IMPORTS its exact name is then scanned
+// for calls to it; a call with any arity but 3 is not a forwarding call and is skipped rather
+// than flagged, since a same-named 2-letter local in an unrelated scope is exactly the
+// collision this file's other two guards avoid with "nearest definition" — here the risk runs
+// the other way (an unrelated SAME-arity call could false-positive), so this scan additionally
+// requires the calling module to define or import the wrapper's own name, not merely contain
+// the substring.
+function splitModules(bundle) {
+  const re = /\/\/ Version: [^\n]*\n/g;
+  const idxs = [];
+  let m;
+  while ((m = re.exec(bundle)) !== null) idxs.push(m.index);
+  if (idxs.length === 0) return [bundle];
+  idxs.push(bundle.length);
+  const mods = [];
+  for (let i = 0; i < idxs.length - 1; i++) mods.push(bundle.slice(idxs[i], idxs[i + 1]));
+  return mods;
+}
+
+// The balanced-paren argument text starting at `text[openParenIdx] === '('`, or null if the
+// text ends first. Strings are skipped whole so a `)` or `,` inside one is never mistaken for
+// the call's own punctuation.
+function findCallArgs(text, openParenIdx) {
+  let depth = 0; let i = openParenIdx; const start = i + 1;
+  while (i < text.length) {
+    const c = text[i];
+    if (c === '"' || c === "'" || c === '`') {
+      i++;
+      while (i < text.length && text[i] !== c) { if (text[i] === '\\') i++; i++; }
+      i++;
+      continue;
+    }
+    if (c === '(') depth++;
+    else if (c === ')') { depth--; if (depth === 0) return text.slice(start, i); }
+    i++;
+  }
+  return null;
+}
+
+// One call's argument list, split on its OWN top-level commas (nested (), [], {} and strings
+// are not split on).
+function splitTopArgs(argstr) {
+  const parts = []; let depth = 0; let cur = ''; let i = 0;
+  while (i < argstr.length) {
+    const c = argstr[i];
+    if (c === '"' || c === "'" || c === '`') {
+      cur += c; i++;
+      while (i < argstr.length && argstr[i] !== c) { if (argstr[i] === '\\') { cur += argstr[i]; i++; } cur += argstr[i]; i++; }
+      if (i < argstr.length) { cur += argstr[i]; i++; }
+      continue;
+    }
+    if ('([{'.includes(c)) depth++;
+    else if (')]}'.includes(c)) depth--;
+    if (c === ',' && depth === 0) { parts.push(cur); cur = ''; i++; continue; }
+    cur += c; i++;
+  }
+  if (cur.trim() !== '') parts.push(cur);
+  return parts;
+}
+
+const DIRECT_WRAP_CALLER = /function (\w+)\((\w+),(\w+),(\w+)\)\{if\(!(\w+)\.test\(\2\)\)return Bun\.wrapAnsi\(\2,\3,\4\);/;
+
+// { xname, wrapperName, callSites: [ [arg0Text, arg1Text, arg2Text], ... ] }. xname/wrapperName
+// null means the shape this scan expects was not found at all (the caller reads that as
+// nothing to judge, never as zero violations).
+function findWrapCallSites(bundle) {
+  const mods = splitModules(bundle);
+  let xname = null; let defModule = null;
+  for (const mod of mods) {
+    const dm = DIRECT_WRAP_CALLER.exec(mod);
+    if (dm) { xname = dm[1]; defModule = mod; break; }
+  }
+  if (xname === null) return { xname: null, wrapperName: null, callSites: [] };
+  const wrapperRe = new RegExp(`function (\\w+)\\((\\w+),(\\w+),(\\w+)\\)\\{[^}]*?\\b${xname}\\(\\2,\\3,\\4\\)`);
+  const wm = wrapperRe.exec(defModule);
+  if (!wm) return { xname, wrapperName: null, callSites: [] };
+  const wrapperName = wm[1];
+  const impNameRe = new RegExp(`import\\{[^}]*\\b${wrapperName}\\b[^}]*\\}from"[^"]*"`);
+  const callRe = new RegExp(`(?<![\\w$])${wrapperName}\\(`, 'g');
+  const callSites = [];
+  for (const mod of mods) {
+    const isDef = mod === defModule;
+    if (!isDef && !impNameRe.test(mod.slice(0, 4000))) continue;   // neither defines nor imports it: not ours
+    callRe.lastIndex = 0;
+    let cm;
+    while ((cm = callRe.exec(mod)) !== null) {
+      if (mod.slice(Math.max(0, cm.index - 9), cm.index) === 'function ') continue;   // the definition itself
+      const args = findCallArgs(mod, cm.index + wrapperName.length);
+      if (args === null) continue;
+      const parts = splitTopArgs(args);
+      if (parts.length !== 3) continue;   // a same-named local of a different arity: not this wrapper
+      callSites.push(parts);
+    }
+  }
+  return { xname, wrapperName, callSites };
+}
+
+// A literal boolean the way this carve spells it: `!0`/`!1` (minified) or `true`/`false`.
+function parseBool(tok) {
+  const t = tok.trim();
+  if (t === '!0' || t === 'true') return true;
+  if (t === '!1' || t === 'false') return false;
+  return null;
+}
+
+// `EXPR?.key??FALLBACK` / `EXPR.key??FALLBACK`: a caller-supplied boolean with a literal
+// fallback (the `{hard:p?.hard??!1,...}` table-cell shape). Both its values are kept — the
+// literal alone cannot say which the caller passes at runtime.
+function parseDynamicBool(expr) {
+  const m = /^[\w$.]+\?\.\w+\?\?(.+)$/.exec(expr.trim()) || /^[\w$.]+\.\w+\?\?(.+)$/.exec(expr.trim());
+  if (!m) return null;
+  const fallback = parseBool(m[1]);
+  return fallback === null ? null : { dynamic: true, fallback };
+}
+
+// A `{...}` literal's own hard/trim/wordWrap keys, each a boolean or a dynamic-boolean
+// (above). null: not this shape at all (an unknown key, a non-literal, anything this scan
+// does not recognise) -- reported as its own finding by the caller, never silently skipped.
+function parseOptionsLiteral(text) {
+  const t = text.trim();
+  if (!t.startsWith('{') || !t.endsWith('}')) return null;
+  const body = t.slice(1, -1).trim();
+  const out = {};
+  if (body === '') return out;
+  for (const part of splitTopArgs(body)) {
+    const ci = part.indexOf(':');
+    if (ci < 0) return null;
+    const key = part.slice(0, ci).trim().replace(/^["']|["']$/g, '');
+    if (!['hard', 'trim', 'wordWrap'].includes(key)) return null;
+    const valText = part.slice(ci + 1).trim();
+    const b = parseBool(valText);
+    if (b !== null) { out[key] = b; continue; }
+    const dyn = parseDynamicBool(valText);
+    if (dyn === null) return null;
+    out[key] = dyn;
+  }
+  return out;
+}
+
+// Every concrete {hard,trim,wordWrap} object a parsed literal can produce at runtime: a
+// dynamic key expands to both its values, everything else is a straight cross product.
+function expandOptions(parsed) {
+  let variants = [{}];
+  for (const key of Object.keys(parsed)) {
+    const v = parsed[key];
+    const vals = (v && v.dynamic) ? [true, false] : [v];
+    const next = [];
+    for (const base of variants) for (const val of vals) next.push({ ...base, [key]: val });
+    variants = next;
+  }
+  return variants;
+}
+
+const optionsKey = (obj) => JSON.stringify(Object.keys(obj).sort().map((k) => [k, obj[k]]));
+const inWrapOptions = (obj, wrapOptions) => wrapOptions.some((w) => optionsKey(w) === optionsKey(obj));
+
+function scanWrapOptions({ bundle, wrapOptions, what }) {
+  const found = findWrapCallSites(bundle);
+  if (found.xname === null) {
+    return { findings: ['no `function N(a,b,c){if(!V.test(a))return Bun.wrapAnsi(a,b,c);...}` caller found — '
+      + 're-derive this scan\'s shape from the current carve'], examined: 0, note: `${what}: 0 call sites` };
+  }
+  if (found.wrapperName === null) {
+    return { findings: [`found the direct caller '${found.xname}' but no wrapper forwarding its three arguments to it`],
+      examined: 0, note: `${what}: 0 call sites` };
+  }
+  const findings = [];
+  let examined = 0;
+  for (const parts of found.callSites) {
+    examined++;
+    const optText = parts[2].trim();
+    const parsed = parseOptionsLiteral(optText);
+    if (parsed === null) {
+      findings.push(`could not parse the options passed to ${found.wrapperName}(): ${optText} — `
+        + 'a literal this scan does not recognise; re-derive WRAP_OPTIONS by hand and teach the parser its shape');
+      continue;
+    }
+    for (const v of expandOptions(parsed)) {
+      if (!inWrapOptions(v, wrapOptions)) {
+        findings.push(`${found.wrapperName}() called with options not in WRAP_OPTIONS: ${JSON.stringify(v)} (from ${optText})`);
+      }
+    }
+  }
+  return { findings, examined, note: `${what}: ${examined} call site(s) to ${found.wrapperName}()` };
+}
+
+// A minimal synthetic carve with the two functions this scan's shape needs, and one caller —
+// WRAP_OK's caller passes only options in WRAP_OPTIONS (no finding); WRAP_BAD's passes
+// `{wordWrap:false}`, which is not (one finding naming it). Both share the same helper/wrapper
+// text as the real carve's shape, minified names included, so the structural regexes above are
+// exercised the same way they are on the real thing.
+const SYNTH_HELPER = 'function X(e,t,r){if(!z.test(e))return Bun.wrapAnsi(e,t,r);return e}var z=/x/;'
+  + 'function zu(e,t,r){if(!(t>0))return e;let n=X(e,t,r);return n}';
+const WRAP_OK = `${SYNTH_HELPER}function caller(a){return zu(a,10,{hard:true,trim:false})}`;
+const WRAP_BAD = `${SYNTH_HELPER}function caller(a){return zu(a,10,{wordWrap:false})}`;
+
+guardTests(defineGuard({
+  name: 'text-probe-wrap-options',
+  floor: 1,
+  read: readWrapCarve,
+  scan: (i) => scanWrapOptions({ ...i, wrapOptions: WRAP_OPTIONS }),
+  control: () => ({ bundle: WRAP_BAD, what: 'synthetic control' }),
+}));
+
+test('scanWrapOptions finds nothing when every call site\'s options are in WRAP_OPTIONS, and names the one that is not', () => {
+  const ok = scanWrapOptions({ bundle: WRAP_OK, wrapOptions: WRAP_OPTIONS, what: 'x' });
+  assert.deepStrictEqual(ok.findings, []);
+  assert.strictEqual(ok.examined, 1);
+  const bad = scanWrapOptions({ bundle: WRAP_BAD, wrapOptions: WRAP_OPTIONS, what: 'x' });
+  assert.strictEqual(bad.findings.length, 1);
+  assert.match(bad.findings[0], /\{"wordWrap":false\}/);
+  assert.strictEqual(bad.examined, 1);
+});
+
+test('scanWrapOptions examines every real call site in the 2.1.283 shape and finds nothing', () => {
+  const bundle = `${SYNTH_HELPER}function truncate(a,b,c){return zu(a,b,{trim:!0,hard:!0})}`
+    + `function tableCell(a,b,p){return zu(a,b,{hard:p?.hard??!1,trim:!1,wordWrap:!0})}`
+    + 'function preview(a,b){return zu(a,b,{hard:!0})}';
+  const r = scanWrapOptions({ bundle, wrapOptions: WRAP_OPTIONS, what: 'x' });
+  assert.deepStrictEqual(r.findings, []);
+  assert.strictEqual(r.examined, 3, 'the dynamic-hard call is one call site, both its values checked');
+});
+
+// readWrapCarve()'s own env-based skip (fetchCarve()'s cache is process-wide and shared with
+// the two guards above, so this checks the pure function it wraps rather than mutating that
+// shared cache mid-suite): a carve with no direct Bun.wrapAnsi caller at all names the reason
+// rather than reading as zero violations, and its own scan examines nothing.
+test('a carve with no Bun.wrapAnsi caller at all names the reason and examines nothing', () => {
+  const found = findWrapCallSites('var a = 1; function unrelated(){}');
+  assert.strictEqual(found.xname, null);
+  const r = scanWrapOptions({ bundle: 'var a = 1;', wrapOptions: WRAP_OPTIONS, what: 'x' });
+  assert.strictEqual(r.examined, 0);
+  assert.match(r.findings[0], /no `function/);
 });

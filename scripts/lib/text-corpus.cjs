@@ -272,6 +272,99 @@ function corpusLinks() {
   return out;
 }
 
+// The wrap corpus (Bun.wrapAnsi unit gate, task 2): every shape the plan named, walked as a
+// cross product of BODIES (what the words/whitespace/newlines look like) x DECORATIONS (what
+// wraps around them), rather than one hand-placed fixture per case — the width sweep in
+// FULL_WRAPS (text-probe.cjs) then lands wrap points at, before and after most break
+// opportunities without this corpus having to compute any of them itself.
+//   BODIES    words (SHORT_WORDS / LONG_WORDS) joined by 1-3 spaces or by tabs; a single tab
+//             at every offset 0-8 (a full tab-stop period) before a run of words; tabs as the
+//             ONLY separator; a word longer than every FULL_WRAPS width (81, 90, 120, 200
+//             columns), alone and at the start/middle/end of a sentence; leading, trailing and
+//             both-sided spaces and tabs (1-3 of each); `\n` and `\r\n`, each splitting a
+//             sentence, opening it, closing it, and with a blank line in the middle; the empty
+//             string, one character, one word.
+//   DECORATIONS  the identity; bold closed with 22 and, separately, with 0; a basic colour (8
+//             codes: 31-37, 91), a 256-colour and a truecolor foreground, and a background,
+//             each closed with its specific close code; nested bold+colour (colour opens
+//             partway through the bold run and both close at the end — SGR held while another
+//             opens and closes); bold holding a colour change (colour opens and closes INSIDE
+//             an open bold run, which stays open after); italic holding bold (the shape the
+//             screen scene (`tui-reply-wraps`, task 1) found painted differently); an OSC-8
+//             link in each terminator form (BEL, ST); a wide CJK word before and after; an
+//             emoji ZWJ family sequence before; a combining mark after the first character; a
+//             run of U+E000, U+E07F and U+E0FF (the helper's own placeholder range) spliced
+//             into the middle.
+// Built from code points / ASCII escapes only (TOOL HAZARD): no literal non-ASCII character is
+// typed in this file.
+const SHORT_WORDS = ['ab', 'cd', 'ef', 'gh', 'ij', 'kl', 'mn', 'op'];
+const LONG_WORDS = ['alpha', 'bravo', 'charlie', 'delta', 'echo', 'foxtrot', 'golf', 'hotel'];
+
+function wrapBodies() {
+  const out = [];
+  for (const words of [SHORT_WORDS, LONG_WORDS]) {
+    for (const nsp of [1, 2, 3]) {
+      for (const wc of [2, 4, 6, 8]) out.push(words.slice(0, wc).join(' '.repeat(nsp)));
+    }
+    for (const wc of [2, 4, 6, 8]) out.push(words.slice(0, wc).join('\t'));
+  }
+  for (let off = 0; off <= 8; off++) out.push('a'.repeat(off) + '\t' + SHORT_WORDS.slice(0, 5).join(' '));
+  for (const len of [81, 90, 120, 200]) {
+    const w = 'x'.repeat(len);
+    out.push(w, w + ' ' + SHORT_WORDS.slice(0, 3).join(' '), SHORT_WORDS[0] + ' ' + w + ' ' + SHORT_WORDS[1],
+      SHORT_WORDS.slice(0, 3).join(' ') + ' ' + w);
+  }
+  for (const ch of [' ', '\t']) {
+    for (const n of [1, 2, 3]) {
+      const pad = ch.repeat(n); const s = SHORT_WORDS.slice(0, 5).join(' ');
+      out.push(pad + s, s + pad, pad + s + pad);
+    }
+  }
+  for (const nl of ['\n', '\r\n']) {
+    const s = SHORT_WORDS.slice(0, 6).join(' ');
+    out.push(s.slice(0, 10) + nl + s.slice(10), nl + s, s + nl, s.slice(0, 10) + nl + nl + s.slice(10));
+  }
+  out.push('', 'a', SHORT_WORDS[0]);
+  return out;
+}
+
+const WRAP_CJK = H(0x4e2d, 0x6587);
+const WRAP_ZWJ_FAMILY = H(0x1f468, 0x200d, 0x1f469, 0x200d, 0x1f467);
+const WRAP_COMBINING = H(0x65, 0x301);
+const WRAP_PUA = H(0xe000) + H(0xe07f) + H(0xe0ff);
+
+function wrapDecorations() {
+  const half = (s) => Math.ceil(s.length / 2);
+  const list = [
+    (s) => s,
+    (s) => '\x1b[1m' + s + '\x1b[22m',
+    (s) => '\x1b[1m' + s + '\x1b[0m',
+    (s) => '\x1b[38;5;208m' + s + '\x1b[39m',
+    (s) => '\x1b[38;2;10;20;30m' + s + '\x1b[39m',
+    (s) => '\x1b[41m' + s + '\x1b[49m',
+    (s) => { const h = half(s); return '\x1b[1m' + s.slice(0, h) + '\x1b[38;5;153m' + s.slice(h) + '\x1b[39m' + '\x1b[22m'; },
+    (s) => {
+      const a = Math.floor(s.length / 3), b = Math.floor(2 * s.length / 3);
+      return '\x1b[1m' + s.slice(0, a) + '\x1b[38;5;100m' + s.slice(a, b) + '\x1b[39m' + s.slice(b) + '\x1b[22m';
+    },
+    (s) => { const h = half(s); return '\x1b[3m' + s.slice(0, h) + '\x1b[1m' + s.slice(h) + '\x1b[22m' + '\x1b[23m'; },
+    (s) => 'a\x1b]8;;http://x\x07' + s + '\x1b]8;;\x07b',
+    (s) => 'a\x1b]8;;http://x\x1b\\' + s + '\x1b]8;;\x1b\\b',
+    (s) => WRAP_CJK + ' ' + s + ' ' + WRAP_CJK,
+    (s) => WRAP_ZWJ_FAMILY + ' ' + s,
+    (s) => (s.length ? s[0] + WRAP_COMBINING + s.slice(1) : WRAP_COMBINING),
+    (s) => { const h = half(s); return s.slice(0, h) + WRAP_PUA + s.slice(h); },
+  ];
+  for (const code of [31, 32, 33, 34, 35, 36, 37, 91]) list.push((s) => `\x1b[${code}m` + s + '\x1b[39m');
+  return list;
+}
+
+function corpusWraps() {
+  const out = [];
+  for (const b of wrapBodies()) for (const d of wrapDecorations()) out.push(d(b));
+  return [...new Set(out)];
+}
+
 // The bun-cell per-code-point sweep (task 4b): every template, with every code point X in
 // the `X` slot, is one string. Templates close with a code point of nonzero width where a
 // zero-width X would otherwise leave nothing to compare. `narrow: false` runs it with
@@ -345,4 +438,4 @@ function graphemeBreakTestCases(text) {
 }
 
 module.exports = { corpusCodePoints, corpusComposed, corpusGraphemeBreakTest, corpusEmojiTest, corpusBundleLiterals,
-  corpusCellProbes, corpusEscapes, corpusSliceProbes, corpusLinks, CELL_SWEEP_TEMPLATES, graphemeBreakTestCases };
+  corpusCellProbes, corpusEscapes, corpusSliceProbes, corpusLinks, corpusWraps, CELL_SWEEP_TEMPLATES, graphemeBreakTestCases };

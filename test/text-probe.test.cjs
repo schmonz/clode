@@ -1,8 +1,9 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { compareTextResults, runNative, runOurs, asciiJson, PROBE_SOURCE } = require('../scripts/lib/text-probe.cjs');
-const { corpusCodePoints, corpusComposed, corpusEmojiTest, corpusGraphemeBreakTest } =
+const { compareTextResults, runNative, runOurs, asciiJson, PROBE_SOURCE, WRAP_OPTIONS, BASIC_WRAPS, FULL_WRAPS } =
+  require('../scripts/lib/text-probe.cjs');
+const { corpusCodePoints, corpusComposed, corpusEmojiTest, corpusGraphemeBreakTest, corpusWraps } =
   require('../scripts/lib/text-corpus.cjs');
 
 test('identical results compare clean, and examined counts every string', () => {
@@ -18,16 +19,73 @@ test('a width difference, a split cluster and an Intl difference are each named'
   const o = { segmenter: [[['中', 1, 0]]], stringWidth: [[1, 1]], intl: [['中', '']] };
   const d = compareTextResults(s, n, o);
   // sliceAnsi is null: absent from native's answer, so not compared.
-  assert.deepStrictEqual(d.counts, { segmenter: 1, stringWidth: 1, intl: 1, sliceAnsi: null });
+  assert.deepStrictEqual(d.counts, { segmenter: 1, stringWidth: 1, intl: 1, sliceAnsi: null, wrapAnsi: null });
   assert.match(d.findings[0], /^segmenter U\+4E2D: native/);
 });
 
 test('a sliceAnsi difference is counted and named like the other consumers', () => {
   const n = { sliceAnsi: [['a', '', '\x1b[1ma\x1b[22m']] };
   const d = compareTextResults(['a'], n, { sliceAnsi: [['a', 'a', '\x1b[1ma\x1b[22m']] });
-  assert.deepStrictEqual(d.counts, { segmenter: null, stringWidth: null, intl: null, sliceAnsi: 1 });
+  assert.deepStrictEqual(d.counts, { segmenter: null, stringWidth: null, intl: null, sliceAnsi: 1, wrapAnsi: null });
   assert.match(d.findings[0], /^sliceAnsi U\+0061: native/);
   assert.deepStrictEqual(compareTextResults(['a'], n, JSON.parse(JSON.stringify(n))).counts.sliceAnsi, 0);
+});
+
+// A wrapAnsi row is one wrapped string per [columns, options] case the caller asked for
+// (wants.wrapAnsi) -- the SAME cases run on both sides, so a row is [string, string, ...],
+// never a single scalar. compareTextResults counts a difference in it under counts.wrapAnsi,
+// exactly like the other consumers.
+test('a wrapAnsi row is one wrapped string per case, and a difference is counted under counts.wrapAnsi', () => {
+  const n = { wrapAnsi: [['a', 'a\n']] };
+  const same = compareTextResults(['a'], n, JSON.parse(JSON.stringify(n)));
+  assert.deepStrictEqual(same.counts, { segmenter: null, stringWidth: null, intl: null, sliceAnsi: null, wrapAnsi: 0 });
+  const d = compareTextResults(['a'], n, { wrapAnsi: [['a', 'a']] });
+  assert.deepStrictEqual(d.counts, { segmenter: null, stringWidth: null, intl: null, sliceAnsi: null, wrapAnsi: 1 });
+  assert.match(d.findings[0], /^wrapAnsi U\+0061: native/);
+});
+
+// PROBE_SOURCE's wrapAnsi column: one case per [columns, options] pair in wants.wrapAnsi, in
+// order, opts===null mapped to undefined (JSON has no undefined), and a throw recorded as
+// {threw: message} rather than dropping the case (native Bun.wrapAnsi can throw on an odd
+// width or option).
+test('PROBE_SOURCE runs every wrapAnsi case in order, maps null options to undefined, and keeps a throw', () => {
+  const run = new Function('input', 'Bun', PROBE_SOURCE);
+  const bun = {
+    version: 't',
+    wrapAnsi(s, cols, opts) {
+      if (cols === 0) throw new Error('bad width');
+      return `${s}:${cols}:${opts === undefined ? 'none' : JSON.stringify(opts)}`;
+    },
+  };
+  const r = run({ strings: ['ab', 'cd'], wants: { wrapAnsi: [[3, { hard: true }], [0, {}], [2, null]] }, side: 'native' }, bun);
+  assert.deepStrictEqual(r.wrapAnsi, [
+    ['ab:3:{"hard":true}', { threw: 'bad width' }, 'ab:2:none'],
+    ['cd:3:{"hard":true}', { threw: 'bad width' }, 'cd:2:none'],
+  ]);
+});
+
+// WRAP_OPTIONS is the measured set (scripts/lib/text-probe.cjs's own comment names each call
+// site); BASIC_WRAPS and FULL_WRAPS are its cross product with their own width lists.
+test('BASIC_WRAPS and FULL_WRAPS are widths x WRAP_OPTIONS, and FULL_WRAPS is the wider sweep', () => {
+  assert.ok(WRAP_OPTIONS.length > 0);
+  assert.deepStrictEqual(BASIC_WRAPS.length, 3 * WRAP_OPTIONS.length);
+  assert.deepStrictEqual(FULL_WRAPS.length, 14 * WRAP_OPTIONS.length);
+  assert.deepStrictEqual(BASIC_WRAPS[0], [1, WRAP_OPTIONS[0]]);
+  assert.ok(FULL_WRAPS.some(([cols]) => cols === 80));
+  assert.ok(!BASIC_WRAPS.some(([cols]) => cols === 80), 'BASIC_WRAPS stays narrow');
+});
+
+// corpusWraps(): non-empty, and holds every shape the plan named.
+test('corpusWraps holds a tab, a nested SGR run over a space, an OSC-8 link, a wide cluster, a placeholder and CRLF', () => {
+  const w = corpusWraps();
+  assert.ok(w.length > 0);
+  assert.ok(w.some((s) => s.includes('\t')), 'a tab');
+  assert.ok(w.some((s) => /\x1b\[[0-9;]*m[^\x1b]* [^\x1b]*\x1b\[/.test(s)), 'an SGR run crossing a space');
+  assert.ok(w.some((s) => s.includes('\x1b]8;;')), 'an OSC-8 link');
+  assert.ok(w.some((s) => s.includes(String.fromCodePoint(0x4e2d))), 'a wide CJK cluster');
+  assert.ok(w.some((s) => s.includes(String.fromCodePoint(0xe000))), 'a U+E000-range placeholder');
+  assert.ok(w.some((s) => s.includes('\r\n')), 'CRLF');
+  assert.strictEqual(w.length, new Set(w).size, 'deduplicated');
 });
 
 // The probe program itself, run against a Bun that lacks a member: that consumer answers

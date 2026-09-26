@@ -18,7 +18,7 @@ const BATCH = 20000;
 const PROBE_SOURCE = String.raw`
   const { strings, wants, side } = input;
   const out = { runtime: side === 'native' ? 'bun ' + Bun.version : 'shim',
-    segmenter: null, stringWidth: null, intl: null, sliceAnsi: null };
+    segmenter: null, stringWidth: null, intl: null, sliceAnsi: null, wrapAnsi: null };
   if (wants.segmenter && typeof (Bun.ant && Bun.ant.CellSegmenter) === 'function') {
     const n = new Bun.ant.CellSegmenter({ ambiguousIsNarrow: true,
       substitute: [[1564, 1564], [8234, 8238], [8294, 8297]],
@@ -77,11 +77,56 @@ const PROBE_SOURCE = String.raw`
         Bun.sliceAnsi(bold, 0, 2), Bun.sliceAnsi(bold, 1), Bun.sliceAnsi(link, 1, 3), Bun.sliceAnsi(link, 2), Bun.sliceAnsi(tail, 1, 3)];
     });
   }
+  // Each string wrapped at every [columns, options] case the caller asked for (wants.wrapAnsi):
+  // the same cases on both sides, so a difference is the wrapper's. null = native lacks it.
+  // opts === null stands for "no options" (JSON has no undefined); a case list built from
+  // WRAP_OPTIONS never uses it today, but the mapping is here because the wire format must
+  // survive JSON round-trips symmetrically on both sides. Bun.wrapAnsi can throw (e.g. width
+  // 0, an odd option); the throw is recorded and compared like any other answer, never dropped.
+  if (wants.wrapAnsi && typeof Bun.wrapAnsi === 'function') {
+    out.wrapAnsi = strings.map((s) => wants.wrapAnsi.map(([cols, opts]) => {
+      try { return Bun.wrapAnsi(s, cols, opts === null ? undefined : opts); }
+      catch (e) { return { threw: String((e && e.message) || e) }; }
+    }));
+  }
   return out;
 `;
 
 // The consumers the probe can answer for, in the order every comparison reports them.
-const KEYS = ['segmenter', 'stringWidth', 'intl', 'sliceAnsi'];
+const KEYS = ['segmenter', 'stringWidth', 'intl', 'sliceAnsi', 'wrapAnsi'];
+
+// The carve's own wrap helper (`X(e,t,r)` at 2.1.278's chunk-g7c84pzp.js, `X(e,t,r)` again at
+// 2.1.283's chunk-eskkemcf.js, reached only through its exported wrapper `Nf`/`zu`) calls
+// Bun.wrapAnsi with exactly these option shapes -- measured 2026-09-26 against the 2.1.283
+// carve (extract-claude-js.cjs + decodeGraphRunner; 17 call sites through the wrapper, one
+// self-call inside the same module): a generic paragraph wrap (`ht`, {hard:false,trim:false});
+// tool-output wrap ("wrap"/"wrap-stream" in `Qm`, list clipping `v`, a status line, a vim-mode
+// helper `n6t`: {hard:true,trim:false}); tool-output "wrap-trim" (`Qm`), the truncate-to-N-lines
+// helper's own call (`ghn`), a styled-text renderer: {hard:true,trim:true}; a file preview
+// (`renderPreview`): {hard:true} alone, trim/wordWrap left at their default; a markdown TABLE
+// cell (`le`, task 1's s3/s4/k2 style-nesting cases): {hard:<p?.hard??false>,trim:false,
+// wordWrap:true} -- hard is a caller-supplied boolean, so BOTH its values are kept. No call
+// site passes zero options (r is always a literal object), so there is no `undefined` member
+// (the rule "plus undefined if any caller passes none" does not add one here).
+const WRAP_OPTIONS = [
+  { hard: false, trim: false },
+  { hard: true, trim: false },
+  { hard: true, trim: true },
+  { hard: true },
+  { hard: true, trim: false, wordWrap: true },
+  { hard: false, trim: false, wordWrap: true },
+];
+
+// The BACKLOG's own measurement shape (widths 1, 4, 10) x WRAP_OPTIONS, run over EVERY text
+// corpus part in the main run (ruling W1). FULL_WRAPS is the wider width sweep -- every width
+// from 1 to 80, the range Ink's own textWrap nodes are laid out at -- run only over
+// corpusWraps() in the second, cases-only run: the sweep is what lands wrap points at, before
+// and after most break opportunities without the corpus having to compute any of them itself.
+const BASIC_WIDTHS = [1, 4, 10];
+const FULL_WIDTHS = [1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 16, 20, 40, 80];
+const cases = (widths) => { const c = []; for (const cols of widths) for (const opts of WRAP_OPTIONS) c.push([cols, opts]); return c; };
+const BASIC_WRAPS = cases(BASIC_WIDTHS);
+const FULL_WRAPS = cases(FULL_WIDTHS);
 
 function merge(parts) {
   const out = { runtime: parts[0].runtime };
@@ -169,4 +214,5 @@ function compareTextResults(strings, native, ours) {
   return { examined: strings.length, findings, counts };
 }
 
-module.exports = { PROBE_SOURCE, runNative, runOurs, compareTextResults, asciiJson, batches, runProbeOurs, BATCH };
+module.exports = { PROBE_SOURCE, runNative, runOurs, compareTextResults, asciiJson, batches, runProbeOurs, BATCH,
+  KEYS, WRAP_OPTIONS, BASIC_WRAPS, FULL_WRAPS };

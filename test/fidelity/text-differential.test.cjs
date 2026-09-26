@@ -1,5 +1,5 @@
 'use strict';
-// Ours vs NATIVE Bun, per consumer, exact equality. The four text consumers the bundle
+// Ours vs NATIVE Bun, per consumer, exact equality. The five text consumers the bundle
 // calls, each against the native it stands in for:
 //   text-diff-segmenter    Bun.ant.CellSegmenter's cells (grapheme text, advance, tab bit,
 //                          the style the caller PAINTS: the run's SGR keys through the
@@ -12,6 +12,14 @@
 //                          of its first cluster, both negative forms, the whole string, and
 //                          the string inside a bold run, an OSC-8 link and before an escape
 //                          (scripts/lib/text-probe.cjs says which)
+//   text-diff-wrapansi     Bun.wrapAnsi (task 2, Bun.wrapAnsi = native) over EVERY part below
+//                          at BASIC_WRAPS (widths 1, 4, 10 x WRAP_OPTIONS, the carve's own
+//                          option shapes); text-diff-wrapansi-cases runs the SAME consumer
+//                          over corpusWraps() ALONE at FULL_WRAPS (every width 1-80), which
+//                          lands wrap points at, before and after most of that corpus's break
+//                          opportunities without either corpus having to compute any of them.
+//                          The two guards share one judge() (ruling W1), parameterized by
+//                          which run they read.
 // Ours is bun-shim + the node-shim Intl polyfill under tjs, so the shipped code is what is
 // judged; native runs the SAME probe program (scripts/lib/text-probe.cjs) inside native
 // Claude's own Bun through scripts/lib/native-oracle.cjs (BUN_OPTIONS --preload).
@@ -35,6 +43,13 @@
 //   emoji-test        every sequence in the pinned emoji-test.txt
 //   bundle literals   the carved bundle's own non-ASCII snippets, when CLODE_PROVIDER_BIN
 //                     names a provider (CI's provider-min carves; it need not run)
+//   wraps             corpusWraps() (task 2): tabs at every tab-stop phase, words longer than
+//                     every width, leading/trailing whitespace, `\n`/`\r\n`/empty lines, SGR
+//                     runs (bold, colour, 256/truecolor, nested, bold-holding-a-colour-change,
+//                     italic-holding-bold) crossing a space, OSC-8 links, wide/emoji/combining
+//                     clusters and the helper's own U+E000-U+E0FF placeholder range. The
+//                     corpora above never vary a WIDTH at all, so wrapAnsi is the one consumer
+//                     that needed a corpus of its own to be judged.
 // EACH PART HAS A FLOOR OF ITS OWN (PART_FLOORS), and a part under it makes every gate here
 // BROKEN, naming the part. The one floor there was covered the whole corpus, which is 95% code
 // points: the escape, slice-probe, emoji-test or bundle-literal part could have been truncated
@@ -54,7 +69,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { defineGuard, guardTests } = require('../guard.cjs');
 const { resolveNativeOracle, nativeVersion } = require('../../scripts/lib/native-oracle.cjs');
-const { runNative, runOurs, compareTextResults } = require('../../scripts/lib/text-probe.cjs');
+const { runNative, runOurs, compareTextResults, BASIC_WRAPS, FULL_WRAPS } = require('../../scripts/lib/text-probe.cjs');
 const C = require('../../scripts/lib/text-corpus.cjs');
 const ucd = require('../../scripts/lib/ucd.cjs');
 const { clodeCacheDir } = require('../../libexec/clode-paths.cjs');
@@ -79,9 +94,15 @@ const PART_FLOORS = {
   links: 380,                // 395
   'emoji-test': 5000,        // 5,225
   'bundle literals': 1,      // 2,233 in the 2.1.278 carve, 2,990 in 2.1.283's; 0 without a provider
+  wraps: 1900,               // 1,955 (scripts/lib/text-corpus.cjs corpusWraps(), measured 2026-09-26)
 };
 
 let SKIP = null, STRINGS = null, NATIVE = null, OURS = null, WHAT = '', PARTS = null;
+// The SECOND run (ruling W1): corpusWraps() alone, at FULL_WRAPS (every width 1-80), judged by
+// text-diff-wrapansi-cases. Shares SKIP with the main run (both need the same tjs + matching
+// native precondition; the cases run does not itself need emoji-test, but before() only gets
+// that far once the main run's own preconditions are already met, so there is no separate one).
+let WRAP_STRINGS = null, WRAP_NATIVE = null, WRAP_OURS = null, WRAP_WHAT = '', WRAP_PARTS = null;
 
 // The carved bundle's non-ASCII literals, or [] when no provider is named (said in WHAT).
 // `required`: CLODE_PROVIDER_BIN is set, so the part must not be empty — a path that is not
@@ -120,10 +141,11 @@ before(async () => {
     SKIP = `emoji-test ${ver} not cached and this run is offline — ${e.message}`;
     return;
   }
+  const wraps = C.corpusWraps();
   const parts = [
     ['code points', C.corpusCodePoints()], ['composed', C.corpusComposed()], ['cell probes', C.corpusCellProbes()],
     ['escapes', C.corpusEscapes()], ['slice probes', C.corpusSliceProbes()], ['links', C.corpusLinks()],
-    ['emoji-test', C.corpusEmojiTest(emoji)],
+    ['emoji-test', C.corpusEmojiTest(emoji)], ['wraps', wraps],
   ];
   const lit = bundleLiterals();
   parts.push(['bundle literals', lit.strings]);
@@ -133,20 +155,34 @@ before(async () => {
     return { name, count: s.length, floor: name === 'bundle literals' && !lit.required ? 0 : PART_FLOORS[name] };
   });
   WHAT = `${v} vs ours under tjs; ${parts.map(([n, s]) => `${s.length} ${n}`).join(', ')} (${lit.why})`;
-  const wants = { segmenter: true, stringWidth: true, intl: true, sliceAnsi: true };
+  const wants = { segmenter: true, stringWidth: true, intl: true, sliceAnsi: true, wrapAnsi: BASIC_WRAPS };
   NATIVE = runNative(bin, STRINGS, wants);
   OURS = runOurs(STRINGS, wants);
+
+  // The cases-only run: corpusWraps() ALONE, at FULL_WRAPS (every width 1-80).
+  WRAP_STRINGS = wraps;
+  WRAP_PARTS = [{ name: 'wraps', count: wraps.length, floor: PART_FLOORS.wraps }];
+  WRAP_WHAT = `${v} vs ours under tjs; ${wraps.length} wraps (FULL_WRAPS, corpusWraps() only)`;
+  WRAP_NATIVE = runNative(bin, WRAP_STRINGS, { wrapAnsi: FULL_WRAPS });
+  WRAP_OURS = runOurs(WRAP_STRINGS, { wrapAnsi: FULL_WRAPS });
 });
 
-// One guard per consumer: the four share their read/scan/control shapes, differing only in
-// which of the probe's answers they judge. Four literal calls to defineGuard, one per
-// guard, because test/guards-population.cjs counts guards by their call sites.
-const judge = (key) => ({
-  floor: CORPUS_FLOOR,
+// One guard per consumer: they share their read/scan/control shapes, differing only in which
+// of the probe's answers they judge (and, for the two wrapAnsi guards, which RUN they read —
+// ruling W1: one judge(), parameterized by source, rather than a second copy of it). Six
+// literal calls to defineGuard, one per guard, because test/guards-population.cjs counts
+// guards by their call sites.
+const judge = (key, source = 'main') => ({
+  floor: source === 'cases' ? PART_FLOORS.wraps : CORPUS_FLOOR,
   read() {
     if (SKIP) return { skip: SKIP };
-    if (!NATIVE[key]) return { skip: `native (${NATIVE.runtime}) has no ${key} to compare against` };
-    return { strings: STRINGS, native: { [key]: NATIVE[key] }, ours: { [key]: OURS[key] }, what: WHAT, parts: PARTS };
+    const native = source === 'cases' ? WRAP_NATIVE : NATIVE;
+    const ours = source === 'cases' ? WRAP_OURS : OURS;
+    if (!native[key]) return { skip: `native (${native.runtime}) has no ${key} to compare against` };
+    const strings = source === 'cases' ? WRAP_STRINGS : STRINGS;
+    const what = source === 'cases' ? WRAP_WHAT : WHAT;
+    const parts = source === 'cases' ? WRAP_PARTS : PARTS;
+    return { strings, native: { [key]: native[key] }, ours: { [key]: ours[key] }, what, parts };
   },
   // A part under its floor: nothing counts as examined (so the verdict is BROKEN, with the
   // note naming the part), because a verdict over a corpus missing a part says nothing about
@@ -160,12 +196,16 @@ const judge = (key) => ({
     const d = compareTextResults(strings, native, ours);
     return { examined: d.examined, findings: d.findings, note: `${what}; ${d.counts[key]} differ` };
   },
-  // One string of the floor-sized corpus differs, in the shape this consumer reports.
+  // One string of the floor-sized corpus differs, in the shape this consumer reports. Shared
+  // by both wrapAnsi guards (the brief's own control shape) — control() never reads `source`,
+  // because checkControl (test/guard.cjs) never checks a guard's floor against it, so the
+  // ORIGINAL CORPUS_FLOOR-sized synthetic array proves the same thing for either run.
   control() {
     const strings = new Array(CORPUS_FLOOR).fill('a');
     const SHAPES = {
       segmenter: [[['a', 1, 0, [], '']], [['a', 1, 0, [], 'http://x']]], stringWidth: [[1, 1], [2, 2]], intl: [['a'], ['', 'a']],
       sliceAnsi: [['a', '', '\x1b[1ma\x1b[22m'], ['a', 'a', '\x1b[1ma\x1b[22m']],
+      wrapAnsi: [['a', 'a'], ['a', 'a\n']],
     };
     const [one, bad] = SHAPES[key];
     const nat = new Array(CORPUS_FLOOR).fill(one); const ours = nat.slice(); ours[97] = bad;
@@ -178,6 +218,8 @@ guardTests(defineGuard({ name: 'text-diff-segmenter', ...judge('segmenter') }));
 guardTests(defineGuard({ name: 'text-diff-stringwidth', ...judge('stringWidth') }));
 guardTests(defineGuard({ name: 'text-diff-intl', ...judge('intl') }));
 guardTests(defineGuard({ name: 'text-diff-sliceansi', ...judge('sliceAnsi') }));
+guardTests(defineGuard({ name: 'text-diff-wrapansi', ...judge('wrapAnsi') }));
+guardTests(defineGuard({ name: 'text-diff-wrapansi-cases', ...judge('wrapAnsi', 'cases') }));
 
 // The per-part floor without the four-minute run: a provider whose carve yielded no literals is
 // as BROKEN as an emptied escapes part, and the note names which part.
