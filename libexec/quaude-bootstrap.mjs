@@ -185,8 +185,10 @@ export { guardVerdict };
 // against the bundle by test/guard-subcommands-gate.test.cjs.
 const SUBCOMMANDS = new Set([
   'add', 'add-from-claude-desktop', 'add-json', 'agents', 'auth', 'auto-mode',
-  'autoremove', 'clear', 'config', 'critique', 'defaults', 'details', 'disable',
-  'doctor', 'enable', 'eval', 'gateway', 'get', 'i', 'import',
+  'autoremove', 'clear', 'config', 'critique', 'defaults', 'design-login', 'details',
+  'disable', 'doctor', 'edit-chrome-settings', 'edit-hook', 'edit-memory-settings',
+  'edit-permission-rules', 'edit-sandbox-settings', 'edit-skill-overrides', 'enable',
+  'eval', 'gateway', 'get', 'i', 'import',
   'import-conversations', 'init', 'install', 'kill', 'list', 'login', 'logout',
   'marketplace', 'mcp', 'new', 'plugin', 'plugins', 'project', 'prune', 'purge',
   'rc', 'remote-control', 'remove', 'reset', 'reset-project-choices', 'rm',
