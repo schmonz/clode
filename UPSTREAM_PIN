@@ -22,17 +22,22 @@
 # MEASURED EVIDENCE for the pin, so the gap is a dated fact and not a memory
 # (every line here is something someone observed, not inferred):
 #
-#   2.1.251  the pin. Carves, merges, builds, ships. Exercised on every push.
-#   2.1.257  `clode build` DIES in the SCC merge — QuickJS rejects the merged file
-#            with "invalid property name". Every leg that stages a provider went red;
-#            only engine-only cross-build legs passed. This is why the pin exists.
+#   2.1.251  the pin from 2026-09-01 (585244d) to 2026-09-26. Carved, merged, built and
+#            shipped, exercised on every push while it was the pin.
+#   2.1.252  `clode build` DIED in the SCC merge on 2026-09-03 (`compiling __clode-scc-2.js
+#            failed: invalid property name`; test/provider-resolve.cjs records it). The
+#            earliest version measured broken.
+#   2.1.257  `clode build` DIED in the SCC merge on 2026-09-01 — QuickJS rejected the
+#            merged file with "invalid property name". Every leg that stages a provider
+#            went red; only engine-only cross-build legs passed. This is why the pin was
+#            set.
 #   2.1.261  independently observed uncarvable by our extractor, after native Claude
-#            Code auto-updated past the pin mid-session (2026-09-04).
+#            Code auto-updated past the pin mid-session (2026-09-04). Not tried since.
 #   2.1.270  anchors and CLI extraction verified OK against the real darwin-arm64
 #            bundle on 2026-09-12 (the Remote Control gate anchor was re-pinned that
-#            day for its new object-returning shape). The MERGE is UNTESTED here: it
-#            needs an engine, and nothing in CI currently attempts it against newer
-#            than the pin. Filed in BACKLOG.md as an engine-backed carve probe.
+#            day for its new object-returning shape). The MERGE was not tried: it needs
+#            an engine, and nothing then attempted it against newer than the pin (the
+#            engine-backed carve probe filed that day landed 2026-09-21, 6032f77).
 #
 #   2.1.278  CARVES, MERGES AND COMPILES (2026-09-21, darwin-arm64, real engine): staging
 #            produced 4 merged groups (8, 4, 61, 4) and all 1958 staged modules compiled
@@ -83,8 +88,14 @@
 # compiled under tjs. On 2.1.283 the two sites sit in two modules, chunk-9yjanq6m.js and
 # chunk-hzevqd7x.js, neither in a merged group.
 #
-# So: the versions between .252 and .269 have never been tried, and "we cannot build
-# from newer" is measured at .257 and .261 — not at .270, and NOT at .278 or .283.
+# So, as measured: "we cannot build from newer" held at .252 (2026-09-03), .257
+# (2026-09-01) and .261 (2026-09-04), all before the merger learned those spellings. Since
+# then each version tried has carved, merged and compiled (scripts/carve-probe.mjs,
+# darwin-arm64, real engine): .251, .252, .257 and .278 on 2026-09-22 (a41df80, 73eb692),
+# and on 2026-09-26 .251 and .252 (1839 modules, groups 7/99/5 each), .257 (1680, 7/114/5),
+# .274 (1894, 8/4/59/5), .275 (1929, 8/4/60/5), .281 (2084, 3/6/63/4), .282 (2112, 3/51/4)
+# and .283 (above). This record holds no carve of the other versions from .253 to .282
+# (.270 was only extracted).
 #
 # THE STANDING ANSWER, kept honest by scripts/carve-probe.mjs (upstream-drift.yml's
 # `carve` job). This is the outcome someone MEASURED for newer-than-pin upstream; the
