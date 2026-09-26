@@ -52,7 +52,9 @@
 #            filesystem asset reader's reworded error (every build's PONG smoke died),
 #            woff2 font rows tjs decodes unlike node (the extractor's output differed by
 #            184 bytes), and builtin plugins reading import.meta.dir (a naude answered -p
-#            with nothing; that one arrived by 2.1.282).
+#            with nothing; that one arrived by 2.1.282). A fourth only the live frame gate
+#            saw: a built-in plugin's hooks module taking upstream's dev-tree branch, which
+#            painted "agents-md: hooks module did not load" into every quaude TUI.
 #
 # WHAT ACTUALLY BREAKS, measured 2026-09-21 on this box with a real engine, because
 # "QuickJS rejects the merged file" was true and told nobody where to look. The merged
