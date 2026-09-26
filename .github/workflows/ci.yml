@@ -1065,6 +1065,7 @@ jobs:
         id: deps
         run: npm ci --prefix deps/claude
       - name: Install the PTY harness (node-pty + @xterm/headless)
+        id: harness
         run: npm install --prefix test
       - name: Preflight — node-pty can open a PTY on this kernel
         run: node test/harness-preflight.cjs
@@ -1104,6 +1105,53 @@ jobs:
         env:
           CLODE_QUAUDE: ${{ runner.temp }}/quaude-notify/quaude
         run: node --test --test-concurrency=1 test/fidelity/update-notify.pty.test.cjs
+      # THE SESSION GATES (CellSegmenter phase 5): four scripted multi-frame sessions
+      # (test/fidelity/sessions.cjs: type-edit, resize, scroll, slash-menu), a frame per step
+      # taken once output settles, compared cell for cell. Three `node --test` runs, one file
+      # each, in THIS order -- node --test sorts the files it is given, so one run would take
+      # session-determinism last:
+      #   1. session-determinism       native repaints every session identically twice. The
+      #                                precondition, so it runs first and alone: a racy script
+      #                                fails HERE, as a racy script, and set -e stops the step
+      #                                before any quaude is judged against a native that cannot
+      #                                repeat itself.
+      #   2. interactive-session-diff  native vs the quaude this tree builds (builtQuaude, as
+      #                                interactive-frame-diff gets one), a guard per session. Its
+      #                                build warms built-binary.cjs's STABLE_CACHE with this
+      #                                step's provider carve, which 3 copies instead of extracting.
+      #   3. reset-invisibility        a quaude whose CellSegmenter pool resets fire before every
+      #                                segment() call vs the unpatched one, and the check that the
+      #                                patch landed.
+      # AGAINST THE PIN (2.1.251, no CellSegmenter consumer) 1 and 2 judge the classic painter and
+      # both reset guards SKIP with the one reason scripts/lib/reset-patch.cjs's NO_CONSUMER
+      # states. Those two named skips are the only skips this step accepts: a session gate that
+      # skipped for any other reason (a missing harness, native, engine or quaude; the full-suite
+      # marker CLODE_TEST_FULL_SUITE, which only test/run.mjs sets) judged nothing. Once the pin
+      # moves to a bundle that uses CellSegmenter, the reset guards run and the step accepts no
+      # skip, with no change here. The paint()/setCell() damage these screens cannot see (upstream
+      # damages every region it repaints) is the paint gate's, in the text step below.
+      # Own step, `!cancelled()`: a red frame or notify step above must not mask these, or the
+      # reverse.
+      - name: Session gates — native repaints each session identically, then native vs quaude, then pool-reset invisibility
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' && steps.harness.outcome == 'success' }}
+        env:
+          CLODE_TJS: ${{ runner.temp }}/tjs/tjs
+        run: |
+          set -euo pipefail
+          PROV="$(node scripts/stage-provider.mjs)" || exit 1
+          echo "provider: $PROV"
+          export CLODE_PROVIDER_BIN="$PROV" CLODE_CLAUDE_BIN="$PROV"
+          : > session-gates.out
+          for f in test/fidelity/session-determinism.test.cjs \
+                   test/fidelity/interactive-session-diff.test.cjs \
+                   test/fidelity/reset-invisibility.test.cjs; do
+            node --test --test-concurrency=1 "$f" 2>&1 | tee -a session-gates.out
+          done
+          SKIPPED=$(sed -nE 's/^[^ ]+ skipped ([0-9]+)$/\1/p' session-gates.out | awk '{ n += $1 } END { print n + 0 }')
+          NAMED=$({ grep -oE '(reset-invisibility|reset-patch-landed): skipped [^ ]+ the pinned bundle has no CellSegmenter consumer to reset' session-gates.out || true; } | sort -u | wc -l)
+          echo "skipped: $SKIPPED, of which the reset guards' named no-consumer skip: $NAMED"
+          [ "$SKIPPED" -eq "$NAMED" ] \
+            || { echo "ERROR: a session gate SKIPPED for a reason other than the reset guards' named no-consumer skip (see above) — it judged nothing, so this is not a pass" >&2; grep -E 'skipped' session-gates.out >&2; exit 1; }
       # THE TEXT GATES against the oracle installed above: Bun.ant.CellSegmenter,
       # Bun.stringWidth, Intl.Segmenter and Bun.sliceAnsi, ours under the tjs engine quaude
       # ships vs native Bun, exact equality over ~1.18M strings; the freshness gate (the
@@ -1112,12 +1160,20 @@ jobs:
       # still restates the bundle's own ansiCodes()/SC; and the carve-time tripwire that no
       # Bun.sliceAnsi call in the oracle's bundle passes an ellipsis (CLODE_PROVIDER_BIN is the
       # oracle here, so the bundle literals, the style check and the tripwire read the bundle
-      # the tables were generated from).
+      # the tables were generated from). And CellSegmenter's paint()/setCell() (phase 5): the
+      # screen cells and the packed return (end column, damage x1..x2) of every op in
+      # scripts/lib/paint-corpus.cjs, ours under tjs vs the oracle's own, exactly -- the one
+      # gate that judges damage, which no screen session can see. It drives the shim directly,
+      # so it judges CellSegmenter here although UPSTREAM_PIN's bundle does not use it. With it,
+      # the two phase-5 carve checks that SKIP on a bundle with no CellSegmenter caller, so on
+      # the pin in every other leg: the paint probe's word and damage packing restated against
+      # the carve (paint-probe-gates), and the pool-reset sites the session step's
+      # reset-invisibility patches, found exactly once (reset-patch-gates).
       # They run whenever their own preconditions succeeded, not only when every PTY step
       # above did: a broken PTY gate must not mask working text gates, or the reverse.
       # `skipped 0` is asserted because every one of these SKIPS without its oracle or its
       # cache, and a green run whose gates skipped is the lie this job keeps catching.
-      - name: Text gates — ours vs the TEXT ORACLE native, per consumer (offline, from the warm cache)
+      - name: Text and paint gates — ours vs the TEXT ORACLE native, per consumer (offline, from the warm cache)
         if: ${{ !cancelled() && steps.oracle.outcome == 'success' && steps.ucd.outcome == 'success' && steps.deps.outcome == 'success' }}
         env:
           CLODE_TJS: ${{ runner.temp }}/tjs/tjs
@@ -1130,7 +1186,10 @@ jobs:
               test/unicode-data-fresh.test.cjs \
               test/unicode-text.test.cjs \
               test/fidelity/text-differential.test.cjs \
+              test/fidelity/paint-differential.test.cjs \
               test/build-gates/text-probe-gates.test.cjs \
+              test/build-gates/paint-probe-gates.test.cjs \
+              test/build-gates/reset-patch-gates.test.cjs \
               test/bun-slice-ansi-arity.test.cjs 2>&1 | tee text-gates.out
           grep -qE '^(ℹ|#) skipped 0$' text-gates.out \
             || { echo "ERROR: a text gate SKIPPED (see its reason above) — it judged nothing, so this is not a pass" >&2; grep -E 'skipped' text-gates.out >&2; exit 1; }
