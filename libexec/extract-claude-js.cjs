@@ -341,9 +341,9 @@ function patchDoctorWarnings(body) {
 // fed the generator's OWN parameter and the tail must name the binding that second
 // await produced — so the anchor still cannot drift onto some other async function
 // that merely returns a `provider`. VERIFIED to match exactly once against the real
-// darwin-arm64 bundles for 2.1.251 (the pin), 2.1.257 and 2.1.278; the fixtures in
-// test/fixtures/doctor/ are byte slices of the first and last of those, so this
-// claim is a standing test rather than a note.
+// darwin-arm64 bundles for 2.1.251 (the pin until 2026-09-26), 2.1.257 and 2.1.278;
+// the fixtures in test/fixtures/doctor/ are byte slices of the first and last of
+// those, so this claim is a standing test rather than a note.
 //
 // THE THROWAWAY ARGUMENT SURVIVES THE NEW SHAPE, which is the half worth checking.
 // The bridge still calls with no arguments, so on 2.1.278 `v` is undefined and the
@@ -988,10 +988,16 @@ function transform(body) {
 // init. So the anchor takes both spellings, and assetReaderShape() below keeps the next change
 // of words from being benign.
 const ASSET_READER_ERR = /embedded (?:text )?asset is missing or corrupt/;
-// The reader's STRUCTURE, independent of its words: the zstd frame magic it sniffs, in a module
-// that imports both fs readers. One module in every carve measured (2.1.251, 2.1.278, 2.1.283;
-// darwin, linux, win32). A module with this shape the anchor did not match is a dead hook.
+// The reader's STRUCTURE, independent of its words AND of the anchor's import patterns (a change
+// of import form silences the anchor, so a canary built from the same patterns would go silent
+// with it): the zstd frame magic it sniffs, in a module that imports or requires fs in any form.
+// Measured 2026-09-26 before the hooks run, the magic alone and beside `from"fs"` alike: exactly
+// one module in each carve measured from 2.1.251 to 2.1.283 (darwin-arm64 .251/.252/.257/.274/
+// .275/.278/.281/.282/.283; linux .278, .283 x64, x64-musl, arm64; win32 .283 x64, arm64), none
+// in .207, .215, .218, .243, .246 or .250. A module with this shape the anchor did not match is a
+// dead hook.
 const ASSET_READER_MAGIC = /\[40,181,47,253\]/;
+const ASSET_READER_FS = /from"(?:node:)?fs(?:\/promises)?"|require\("(?:node:)?fs(?:\/promises)?"\)/;
 const ASSET_FS_SYNC = /import\{readFileSync as ([A-Za-z0-9_$]+)\}from"fs";/;
 const ASSET_FS_ASYNC = /import\{readFile as ([A-Za-z0-9_$]+)\}from"fs\/promises";/;
 const ASSET_LOOKUP = 'const __clodeAsset=(p)=>{try{'
@@ -999,7 +1005,7 @@ const ASSET_LOOKUP = 'const __clodeAsset=(p)=>{try{'
   + 'return typeof v==="string"?v:undefined;}catch(e){return undefined;}};';
 
 function assetReaderShape(body) {
-  return ASSET_READER_MAGIC.test(body) && ASSET_FS_SYNC.test(body) && ASSET_FS_ASYNC.test(body);
+  return ASSET_READER_MAGIC.test(body) && ASSET_READER_FS.test(body);
 }
 
 function patchEmbeddedAssetReader(body) {
@@ -1031,10 +1037,12 @@ function patchEmbeddedAssetReader(body) {
 // where native paints nothing (interactive-frame-diff, 153 cell-classes, 2026-09-26). The patch
 // keeps the bundled branch alone, which is the branch native takes.
 const BUILTIN_PLUGIN_DECISION = /var ([\w$]+)=\(([\w$]+),([\w$]+),([\w$]+)\)=>([\w$]+)\(\)\?([\w$]+)\(\3,\4\(\),\2\):\{module:\3,folder:\2\};/;
-// The decision's STRUCTURE, without its call: a module that builds the folder descriptor and
-// that the anchor did not match is a dead hook (the same rule as ASSET_READER_MAGIC's).
+// The decision's STRUCTURE, without its call: a module that builds the folder descriptor, in
+// either key order, and that the anchor did not match is a dead hook (the same rule as
+// ASSET_READER_MAGIC's). Measured 2026-09-26 before the hooks run, over the carves listed there:
+// one module in each from 2.1.274 on, none in .257 or older, none in the other key order.
 function builtinPluginShape(body) {
-  return /\{module:[\w$]+,folder:[\w$]+\}/.test(body);
+  return /\{module:[\w$]+,folder:[\w$]+\}|\{folder:[\w$]+,module:[\w$]+\}/.test(body);
 }
 
 function patchBuiltinPluginBundled(body) {

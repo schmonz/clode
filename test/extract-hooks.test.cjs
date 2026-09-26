@@ -527,6 +527,26 @@ test('embedded_asset_reader: a reader it cannot anchor on is a dead hook, not a 
   assert.strictEqual(none.benign, true);
 });
 
+test('embedded_asset_reader: a reader whose imports changed form is a dead hook, not benign', () => {
+  // The canary must not lean on the anchor's own import patterns: if the import form moves, the
+  // anchor goes silent, and a canary built from the same patterns goes silent with it. Each of
+  // these keeps the words and the magic and changes only how fs is imported.
+  const reshaped = [
+    ASSET_CHUNK_283.replace('import{readFileSync as o}from"fs";', 'import{readFileSync as o,statSync as q}from"fs";'),
+    ASSET_CHUNK_283.replace('import{readFileSync as o}from"fs";', 'import{readFileSync as o}from"node:fs";'),
+    ASSET_CHUNK_283.replace('import{readFile as i}from"fs/promises";', 'import*as P from"fs/promises";var i=P.readFile;'),
+  ];
+  for (const src of reshaped) {
+    assert.strictEqual(patchEmbeddedAssetReader(src)[1], false, 'the anchor cannot read this form');
+    const r = transformGraph({ '/$bunfs/root/chunk-x.js': src }).report.find((e) => e.key === 'embedded_asset_reader');
+    assert.strictEqual(r.applied, false);
+    assert.ok(!r.benign, `a reader the anchor missed must not read as benign: ${r.why}\n${src.slice(0, 120)}`);
+  }
+  // The magic in a module that does not read the filesystem is not the reader.
+  const inMemory = transformGraph({ '/m.js': 'var u=[40,181,47,253];export{u};\n' }).report.find((e) => e.key === 'embedded_asset_reader');
+  assert.strictEqual(inMemory.benign, true);
+});
+
 test('embedded_asset_reader: a provider without the fs reader is left alone', () => {
   const [body, applied] = patchEmbeddedAssetReader('var x=1;export{x};\n');
   assert.strictEqual(applied, false);
@@ -584,4 +604,12 @@ test('BUILTIN-PLUGIN-BUNDLED: a folder descriptor the anchor cannot read is a de
   assert.ok(!r.benign, r.why);
   const none = transformGraph({ '/a.js': 'var x=1;' }).report.find((e) => e.key === 'builtin_plugin_bundled');
   assert.strictEqual(none.benign, true);
+});
+
+test('BUILTIN-PLUGIN-BUNDLED: a folder descriptor in the other key order is a dead hook, not benign', () => {
+  const swapped = BUILTIN_DECISION_283.replace('{module:o,folder:e}', '{folder:e,module:o}');
+  assert.strictEqual(patchBuiltinPluginBundled(swapped)[1], false, 'the anchor cannot read this order');
+  const r = transformGraph({ '/$bunfs/root/chunk-x.js': swapped }).report.find((e) => e.key === 'builtin_plugin_bundled');
+  assert.strictEqual(r.applied, false);
+  assert.ok(!r.benign, r.why);
 });
