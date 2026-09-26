@@ -49,6 +49,10 @@ new pin had 26 failures, from three upstream changes a carve cannot see, and the
   folder descriptor) and on every older carve tried. A fresh quaude from native 2.1.278 with
   the hook passed its PONG and attest smokes and matched native 2.1.278 cell for cell on all
   three frame scenes (353 / 336 / 398 cells, 0 differences; test/fidelity/RESULTS.md).
+  NOT driven at 2.1.278 since bac26f0: the sessions (session-determinism,
+  interactive-session-diff) and tui-probe D1; only PONG/attest and the three frame scenes
+  were. 2.1.280 was not checked at all: it is not on this box. (RESULTS.md holds driven runs
+  only, so these have no row there.)
   The two canaries that keep this hook and `embedded_asset_reader` from reading as benign
   no longer share the anchors' patterns: the zstd magic in a module that imports or requires
   fs in any form, and the folder descriptor in either key order.
@@ -104,6 +108,9 @@ new pin had 26 failures, from three upstream changes a carve cannot see, and the
   test/shim-surface/golden.json's Bun.Image note; callers not verified). Standing since before
   the pin moved (2.1.251 loaded a native processor, then sharp, neither of which loads under
   tjs); now the constructor is what is missing.
+- **scripts/probe-run.mjs's default provider path is stale**: it looks for
+  `providers/<BUNDLE>/claude` (BUNDLE from golden.json), but the store is now
+  `providers/<ver>/<os>-<arch>/claude`, so without CLODE_PROVIDER_BIN it finds nothing.
 
 ## Four more tests let a global install choose their provider (2026-09-25)
 
