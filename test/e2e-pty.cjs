@@ -64,7 +64,8 @@ function seedClaudeProfile(home, opts = {}) {
 
 // Drive opts.cmd under a PTY via tui-screen.cjs; return the rendered screen (stdout).
 // tui-screen self-terminates after opts.seconds, so no external timeout is needed.
-// opts: { seconds, cmd:[...], sendHex?, thenHex?:[...], resize?:['COLSxROWS@DELAY'], rows?, cols?, env? }. cmd[0] is
+// opts: { seconds, cmd:[...], sendHex?, thenHex?:['HEX@DELAY'], signal?:['NAME@DELAY'], resize?:['COLSxROWS@DELAY'],
+// rows?, cols?, env? }. cmd[0] is
 // the absolute program to run under the PTY (e.g. a built quaude, or a native binary).
 // A scripted session (captureSession) passes scriptFile and the settle limits instead.
 function driveArgs(sbx, opts) {
@@ -77,6 +78,7 @@ function driveArgs(sbx, opts) {
   }
   if (opts.sendHex) args.push('--send-hex', opts.sendHex);
   for (const th of opts.thenHex || []) args.push('--then-hex', th);
+  for (const sg of opts.signal || []) args.push('--signal', sg);
   for (const rz of opts.resize || []) args.push('--resize', rz);
   if (opts.rows) args.push('--rows', String(opts.rows));
   if (opts.cols) args.push('--cols', String(opts.cols));

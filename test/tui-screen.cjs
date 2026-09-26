@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 'use strict';
-// tui-screen.cjs SECONDS [--send-hex HEX] [--then-hex HEX@DELAY] [--rows R --cols C] -- cmd [args...]
+// tui-screen.cjs SECONDS [--send-hex HEX] [--then-hex HEX@DELAY] [--signal NAME@DELAY] [--rows R --cols C] -- cmd [args...]
 // tui-screen.cjs 0 --script FILE [--settle-ms N] [--max-settle-ms M] [--boot-settle-ms Q]
 //                [--boot-max-ms B] [--rows R --cols C] -- cmd [args...]
 //
@@ -127,7 +127,7 @@ function parseScript(steps) {
 }
 
 function parseArgs(argv) {
-  const sends = []; const resizes = []; let rows = 40, cols = 100;
+  const sends = []; const resizes = []; const signals = []; let rows = 40, cols = 100;
   let script = null; const limits = { ...SCRIPT_DEFAULTS };
   // --cells switches stdout from the ANSI-stripped text screen to a cell-level
   // frame (JSON; see dumpCells). It takes no value, so it is lifted out before
@@ -139,7 +139,7 @@ function parseArgs(argv) {
     if (at !== -1 && (cut === -1 || at < cut)) { cells = true; argv = argv.slice(0, at).concat(argv.slice(at + 1)); }
   }
   const LIMITS = { '--settle-ms': 'settleMs', '--max-settle-ms': 'maxSettleMs', '--boot-settle-ms': 'bootSettleMs', '--boot-max-ms': 'bootMaxMs' };
-  const FLAGS = ['--send-hex', '--then-hex', '--rows', '--cols', '--resize', '--script', ...Object.keys(LIMITS)];
+  const FLAGS = ['--send-hex', '--then-hex', '--signal', '--rows', '--cols', '--resize', '--script', ...Object.keys(LIMITS)];
   while (argv.length >= 2 && FLAGS.includes(argv[1])) {
     const v = argv[2];
     if (argv[1] === '--script') script = v;
@@ -151,8 +151,18 @@ function parseArgs(argv) {
     }
     else if (argv[1] === '--send-hex') sends.push([1.5, hexPayload(v)]);
     else if (argv[1] === '--then-hex') {
+      // The DELAY is required: without one setTimeout got NaN and fired at once, so
+      // e2e-ctrlz-tui's marker was typed at spawn, before its Ctrl-Z, for as long as it existed.
       const [hex, delay] = v.split('@');
+      if (!(parseFloat(delay) >= 0)) throw new Error(`--then-hex ${v}: needs @DELAY (seconds after spawn)`);
       sends.push([parseFloat(delay), hexPayload(hex)]);
+    } else if (argv[1] === '--signal') {
+      // NAME@DELAY: send the child a signal, e.g. SIGCONT, as a shell's `fg` does after a
+      // Ctrl-Z. The PTY child is its own session leader with no job-control shell, so nothing
+      // else ever continues it (and the kernel may have discarded the stop).
+      const [name, delay] = v.split('@');
+      if (!/^SIG[A-Z0-9]+$/.test(name || '') || !(parseFloat(delay) >= 0)) throw new Error(`--signal ${v}: want NAME@DELAY`);
+      signals.push([parseFloat(delay), name]);
     } else if (argv[1] === '--rows') rows = parseInt(v, 10);
     else if (argv[1] === '--cols') cols = parseInt(v, 10);
     else if (argv[1] === '--resize') {
@@ -166,14 +176,14 @@ function parseArgs(argv) {
   }
   sends.sort((a, b) => a[0] - b[0]);
   if (argv.length < 3 || argv[1] !== '--') {
-    process.stderr.write('usage: tui-screen.cjs SECONDS [--cells] [--send-hex HEX] [--then-hex HEX@DELAY] [--resize COLSxROWS@DELAY] [--rows R --cols C] -- cmd ...\n'
+    process.stderr.write('usage: tui-screen.cjs SECONDS [--cells] [--send-hex HEX] [--then-hex HEX@DELAY] [--signal NAME@DELAY] [--resize COLSxROWS@DELAY] [--rows R --cols C] -- cmd ...\n'
       + '       tui-screen.cjs 0 --script FILE [--settle-ms N] [--max-settle-ms M] [--boot-settle-ms Q] [--boot-max-ms B] [--rows R --cols C] -- cmd ...\n');
     process.exit(2);
   }
   // A script's output is a sequence of CELL frames: there is no text form of it. SECONDS is
   // not consulted with --script; every wait is bounded by the settle caps instead.
   if (script !== null) cells = true;
-  return { secs: parseFloat(argv[0]), cmd: argv.slice(2), sends, resizes, rows, cols, cells, script, ...limits };
+  return { secs: parseFloat(argv[0]), cmd: argv.slice(2), sends, resizes, signals, rows, cols, cells, script, ...limits };
 }
 
 // Cell-level frame capture. The text screen above answers "what words are on
@@ -234,7 +244,7 @@ function dumpCells(term) {
 
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
-  const { secs, cmd, sends, resizes, rows, cols, cells } = opts;
+  const { secs, cmd, sends, resizes, signals, rows, cols, cells } = opts;
   // Read and check the script BEFORE anything is spawned: a bad script never starts a TUI.
   const steps = opts.script === null ? null : parseScript(JSON.parse(fs.readFileSync(opts.script, 'utf8')));
   const { pty, Terminal } = loadHarness();
@@ -269,6 +279,7 @@ async function main() {
     return;
   }
   for (const [delay, bytes] of sends) setTimeout(() => { try { child.write(bytes); } catch { /* */ } }, delay * 1000);
+  for (const [delay, name] of signals) setTimeout(() => { try { child.kill(name); } catch { /* exited */ } }, delay * 1000);
   for (const [delay, c, r] of resizes) setTimeout(() => {
     try { child.resize(c, r); term.resize(c, r); } catch { /* closing */ }
   }, delay * 1000);

@@ -54,6 +54,18 @@ test('parseArgs: an unflagged script run takes the measured defaults', () => {
     'a cap below its own quiet window could never report a frame settled');
 });
 
+test('parseArgs: --then-hex needs its @DELAY, and --signal delivers NAME@DELAY', () => {
+  // Without a delay the keystrokes went at spawn (setTimeout with NaN), which is how
+  // e2e-ctrlz-tui typed its marker before its own Ctrl-Z for as long as it existed.
+  assert.throws(() => parseArgs(['9', '--then-hex', '6869', '--', 'prog']), /--then-hex 6869: needs @DELAY/);
+  const o = parseArgs(['9', '--then-hex', '1a@6', '--signal', 'SIGCONT@7.5', '--', 'prog']);
+  assert.deepStrictEqual(o.signals, [[7.5, 'SIGCONT']]);
+  assert.strictEqual(o.sends[0][0], 6);
+  for (const bad of ['CONT@1', 'SIGCONT', 'SIGCONT@soon']) {
+    assert.throws(() => parseArgs(['9', '--signal', bad, '--', 'prog']), /--signal .*: want NAME@DELAY/);
+  }
+});
+
 test('parseArgs: a limit that is not a positive integer is refused (NaN would never settle nor time out)', () => {
   for (const [flag, v] of [['--settle-ms', 'soon'], ['--max-settle-ms', '0'], ['--boot-settle-ms', '-5'], ['--boot-max-ms', '1.5']]) {
     assert.throws(() => parseArgs(['0', '--script', '/tmp/s.json', flag, v, '--', 'prog']),

@@ -44,13 +44,23 @@ before(() => {
 
   SBX = sandbox();
   seedClaudeProfile(SBX.home, { cwd: REPO });
-  // Send Ctrl-Z (0x1a) after the TUI is up, then type the marker; capture the final
-  // screen. Survival + responsiveness = the marker landed in the input prompt.
+  // Ctrl-Z (0x1a) once the TUI is up, SIGCONT as a shell's `fg` delivers it, then the
+  // marker; capture the final screen. Survival + responsiveness = the marker in the PROMPT.
+  //
+  // WHAT THIS USED TO DO, AND WHY IT STOPPED WORKING (2026-09-26). The marker went as a
+  // --then-hex with no delay, which tui-screen scheduled at NaN, i.e. at spawn, so it was
+  // typeahead read before the Ctrl-Z at 1.5 s, and nothing ever sent SIGCONT. Upstream
+  // re-enters raw mode only on SIGCONT (2.1.251 and 2.1.283 alike); the PTY child is its own
+  // session leader, so the kernel discards its self-SIGTSTP and nothing continues it. On
+  // 2.1.283 the linux-x64-pty mirror caught the typeahead echoed over the banner
+  // ("ctrlz-surviClaude Code...") and never in the prompt. Native 2.1.283 and quaude paint
+  // the same under both the old flow and this one (darwin, measured): suspended, "Run `fg`",
+  // then, on SIGCONT, the repainted TUI with the marker in the prompt.
   SCREEN = capture(SBX, {
     seconds: 14,
     cmd: [quaude],
-    sendHex: '1a',
-    thenHex: [Buffer.from(MARKER).toString('hex')],
+    thenHex: ['1a@6', `${Buffer.from(MARKER).toString('hex')}@9`],
+    signal: ['SIGCONT@7.5'],
   });
 });
 after(() => {
@@ -61,6 +71,10 @@ test('quaude survives Ctrl-Z: the TUI stays alive and responsive after suspend',
   if (SKIP) { t.skip(SKIP); return; }
   // Did NOT crash on Ctrl-Z: the welcome box is still (re)painted...
   assert.match(SCREEN, /Claude Code/, `TUI did not survive Ctrl-Z (no welcome box):\n${SCREEN}`);
-  // ...and input still works: the marker typed AFTER Ctrl-Z landed in the prompt.
-  assert.match(SCREEN, new RegExp(MARKER), `input unresponsive after Ctrl-Z (marker missing):\n${SCREEN}`);
+  // ...it did suspend, the way upstream says it does...
+  assert.match(SCREEN, /has been suspended/, `Ctrl-Z did not suspend:\n${SCREEN}`);
+  // ...and input works after the resume: the marker typed after SIGCONT is in the PROMPT,
+  // not merely echoed somewhere by a terminal left in cooked mode.
+  assert.match(SCREEN, new RegExp(`${String.fromCodePoint(0x276F)} ${MARKER}`),
+    `input unresponsive after Ctrl-Z and SIGCONT (marker not in the prompt):\n${SCREEN}`);
 });

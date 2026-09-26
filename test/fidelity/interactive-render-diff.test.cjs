@@ -42,7 +42,7 @@ function textLines(screen) {
   return seen;
 }
 
-let SKIP = null, NATIVE = '', QUAUDE = '', SBX = null, DIR = null;
+let SKIP = null, NATIVE = '', QUAUDE = '', SBX = null, SBX2 = null, DIR = null;
 before(() => {
   const liveRenderSkip = liveRenderSkipReason();
   if (liveRenderSkip) { SKIP = liveRenderSkip; return; }
@@ -61,12 +61,21 @@ before(() => {
   });
   if (build.status !== 0) { SKIP = `clode build failed:\n${build.stdout}\n${build.stderr}`; return; }
   if (nver !== version([quaude], cleanEnv())) { SKIP = 'version mismatch native vs quaude'; return; }
+  // A FRESH, identically seeded sandbox per side, as test/frame-oracle.cjs gives its captures.
+  // One shared HOME let the first run's config writes decide what the second one painted:
+  // 2.1.283 shows "Auto mode is now Claude Code's default permission mode" once and records
+  // hasSeenAutoDefaultNotice, so native (run first) painted it and quaude never could (the
+  // linux-x64-pty mirror, 2026-09-26: five "missing" lines, all of that notice).
+  SBX2 = sandbox();
+  seedClaudeProfile(SBX2.home, { cwd: REPO });
   const opts = { seconds: 10, rows: 40, cols: 100, env: { DISABLE_AUTOUPDATER: '1' } };
   NATIVE = capture(SBX, { ...opts, cmd: [native] });
-  QUAUDE = capture(SBX, { ...opts, cmd: [quaude] });
+  QUAUDE = capture(SBX2, { ...opts, cmd: [quaude] });
 });
 after(() => {
-  if (SBX) { try { fs.rmSync(SBX.dir, { recursive: true, force: true }); } catch { /* */ } }
+  for (const sbx of [SBX, SBX2]) {
+    if (sbx) { try { fs.rmSync(sbx.dir, { recursive: true, force: true }); } catch { /* */ } }
+  }
   if (DIR) { try { fs.rmSync(DIR, { recursive: true, force: true }); } catch { /* */ } }
 });
 
