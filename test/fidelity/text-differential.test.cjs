@@ -78,7 +78,7 @@ const PART_FLOORS = {
   'slice probes': 4600,      // 4,855
   links: 380,                // 395
   'emoji-test': 5000,        // 5,225
-  'bundle literals': 1,      // 2,233 in the 2.1.278 carve; 0 required without a provider
+  'bundle literals': 1,      // 2,233 in the 2.1.278 carve, 2,990 in 2.1.283's; 0 without a provider
 };
 
 let SKIP = null, STRINGS = null, NATIVE = null, OURS = null, WHAT = '', PARTS = null;
