@@ -549,3 +549,39 @@ function evalPatched(src, globals, fsStub) {
     module, fsStub, { readFile: async () => { throw new Error('unused'); } }, path, g);
   return module.exports;
 }
+
+// BUILTIN-PLUGIN-BUNDLED (libexec/extract-claude-js.cjs patchBuiltinPluginBundled). A built-in
+// plugin names its hooks module one of two ways: from the bundle itself when running as a Bun
+// standalone binary, or from a source FOLDER on disk otherwise (upstream's dev tree:
+// `<folder>/hooks/register.ts`). Our targets are bundled but not Bun standalone
+// (Bun.isStandaloneExecutable is false, deliberately), so they took the folder branch with no
+// folder, and 2.1.283's TUI painted "agents-md: hooks module did not load: cannot read property
+// 'replace' of undefined" where native paints nothing (the frame gate: 153 cell-classes).
+// The decision, verbatim from the 2.1.283 darwin-arm64 carve (2.1.278/281/282 hold the same
+// shape under other names).
+const BUILTIN_DECISION_283 = 'var kt=(e,o,r)=>({module:e,scan:Tt(o,r),files:Nt(o)});var mLr="agents";'
+  + 'var $K=(e,o,r)=>Xd()?kt(o,r(),e):{module:o,folder:e};import{join as Dg}from"path";';
+const { patchBuiltinPluginBundled } = require('../libexec/extract-claude-js.cjs');
+
+test('BUILTIN-PLUGIN-BUNDLED: a built-in plugin takes the bundled branch, whatever Xd() says', () => {
+  const [out, applied] = patchBuiltinPluginBundled(BUILTIN_DECISION_283);
+  assert.strictEqual(applied, true, 'the 2.1.283 decision must be recognised');
+  assert.ok(out.includes('var $K=(e,o,r)=>kt(o,r(),e);'), out);
+  assert.ok(!out.includes('folder:e'), 'the folder branch is gone');
+  // Run it: with Xd() false (our targets), $K now hands back what kt builds, as native's does.
+  const $K = new Function('Xd', 'Tt', 'Nt', `${out.replace(/import\{[^}]*\}from"path";/, '')}; return $K;`)(
+    () => false, (o, r) => ({ o, r }), (o) => [o]);
+  assert.deepStrictEqual($K('/dir', 'mod', () => 'scan'), { module: 'mod', scan: { o: 'scan', r: '/dir' }, files: ['scan'] });
+  // A name the replacement syntax would read as a group reference is carried literally.
+  const dollar = BUILTIN_DECISION_283.replace(/\$K/g, '$1');
+  assert.ok(patchBuiltinPluginBundled(dollar)[0].includes('var $1=(e,o,r)=>kt(o,r(),e);'));
+});
+
+test('BUILTIN-PLUGIN-BUNDLED: a folder descriptor the anchor cannot read is a dead hook, not benign', () => {
+  const changed = BUILTIN_DECISION_283.replace('Xd()?kt(o,r(),e):', 'Xd()&&!0?kt(o,r(),e):');
+  const r = transformGraph({ '/$bunfs/root/chunk-x.js': changed }).report.find((e) => e.key === 'builtin_plugin_bundled');
+  assert.strictEqual(r.applied, false);
+  assert.ok(!r.benign, r.why);
+  const none = transformGraph({ '/a.js': 'var x=1;' }).report.find((e) => e.key === 'builtin_plugin_bundled');
+  assert.strictEqual(none.benign, true);
+});

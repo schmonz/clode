@@ -1016,6 +1016,48 @@ function patchEmbeddedAssetReader(body) {
   return [out, true];
 }
 
+// --- BUILTIN-PLUGIN-BUNDLED: a built-in plugin's hooks module comes from the bundle ---------
+// Upstream decides, per built-in plugin, where its hooks module comes from:
+//
+//     var $K=(e,o,r)=>Xd()?kt(o,r(),e):{module:o,folder:e};     (2.1.283; the same shape, other
+//                                                                names, in 2.1.278/281/282)
+//
+// Xd() is `Bun.isStandaloneExecutable===true`. A Bun standalone binary takes kt(): the module's
+// scan comes from the bundle, and it later loads as builtin:<name>/hooks/register.ts. Anything
+// else is upstream's DEV TREE, a source folder on disk (<folder>/hooks/register.ts). Our
+// targets are bundled but not Bun standalone (bun-shim says false, and other decisions depend on
+// that), so they took the dev-tree branch with no folder. On 2.1.283 that is visible: the TUI
+// paints "agents-md: hooks module did not load: cannot read property 'replace' of undefined"
+// where native paints nothing (interactive-frame-diff, 153 cell-classes, 2026-09-26). The patch
+// keeps the bundled branch alone, which is the branch native takes.
+const BUILTIN_PLUGIN_DECISION = /var ([\w$]+)=\(([\w$]+),([\w$]+),([\w$]+)\)=>([\w$]+)\(\)\?([\w$]+)\(\3,\4\(\),\2\):\{module:\3,folder:\2\};/;
+// The decision's STRUCTURE, without its call: a module that builds the folder descriptor and
+// that the anchor did not match is a dead hook (the same rule as ASSET_READER_MAGIC's).
+function builtinPluginShape(body) {
+  return /\{module:[\w$]+,folder:[\w$]+\}/.test(body);
+}
+
+function patchBuiltinPluginBundled(body) {
+  const m = BUILTIN_PLUGIN_DECISION.exec(body);
+  if (!m) return [body, false];
+  const [, name, folder, mod, scan, , bundled] = m;
+  // A function, not a replacement string: a minified name like `$1` must be carried literally.
+  return [body.replace(m[0], () => `var ${name}=(${folder},${mod},${scan})=>${bundled}(${mod},${scan}(),${folder});`), true];
+}
+
+// if-present hooks: the structure that says the hook's subject IS present, and what an absent
+// subject means. A present subject the anchor missed is reported as a dead hook, never benign.
+const IF_PRESENT_SHAPES = {
+  embedded_asset_reader: [assetReaderShape,
+    'a module reads embedded assets through fs (zstd magic beside both fs imports), but the '
+      + 'anchor did not match it: upstream changed the reader',
+    'this provider has no filesystem-backed embedded assets (pre-2.1.251)'],
+  builtin_plugin_bundled: [builtinPluginShape,
+    'a module builds a built-in plugin folder descriptor, but the anchor did not match its '
+      + 'decision: upstream changed it',
+    'this provider has no built-in plugin hooks modules (2.1.251 had none)'],
+};
+
 const GRAPH_HOOKS = [
   ['doctor', patchDoctorWarnings, 'once'],
   ['snapshot_bridge', patchSnapshotBridge, 'once'],
@@ -1031,6 +1073,7 @@ const GRAPH_HOOKS = [
   // 'if-present': zero hits is CORRECT for any provider that does not read assets through the
   // filesystem (everything up to 2.1.250), so it must not warn; two or more still fails loud.
   ['embedded_asset_reader', patchEmbeddedAssetReader, 'if-present'],
+  ['builtin_plugin_bundled', patchBuiltinPluginBundled, 'if-present'],
 ];
 
 function transformGraph(sources) {
@@ -1053,18 +1096,15 @@ function transformGraph(sources) {
       continue;
     }
     if (arity === 'if-present' && hits.length === 0) {
-      // Benign only when the reader is truly absent. A module with its structure that the anchor
-      // did not match is the dead hook 2.1.283 produced (see ASSET_READER_ERR): loud, not benign.
-      const shaped = key === 'embedded_asset_reader'
-        ? Object.keys(out).filter((name) => assetReaderShape(out[name])) : [];
+      // Benign only when the subject is truly absent. A module with its structure that the
+      // anchor did not match is the dead hook 2.1.283 produced (see ASSET_READER_ERR): loud.
+      const [shape, deadWhy, absentWhy] = IF_PRESENT_SHAPES[key];
+      const shaped = Object.keys(out).filter((name) => shape(out[name]));
       if (shaped.length) {
-        report.push({ key, applied: false, modules: shaped,
-          why: 'a module reads embedded assets through fs (zstd magic beside both fs imports), '
-            + 'but the anchor did not match it: upstream changed the reader' });
+        report.push({ key, applied: false, modules: shaped, why: deadWhy });
         continue;
       }
-      report.push({ key, applied: false, benign: true, modules: [],
-        why: 'this provider has no filesystem-backed embedded assets (pre-2.1.251)' });
+      report.push({ key, applied: false, benign: true, modules: [], why: absentWhy });
       continue;
     }
     if (arity === 'if-present' && hits.length > 1) {
@@ -1774,6 +1814,7 @@ module.exports = {
   verify,
   contentChecks,
   patchEmbeddedAssetReader,
+  patchBuiltinPluginBundled,
   graphReferences,
   unservedReferences,
   assertGraphServesWhatItReferences,
