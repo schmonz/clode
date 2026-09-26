@@ -38,9 +38,11 @@
 // RESET_THRESHOLD: what both thresholds become. 0 resets on every call (see above).
 const RESET_THRESHOLD = '0';
 
-// Why every reset gate SKIPS on a carve with no consumer, in one spelling (CI asserts on it):
-// 2.1.251, the pin until it moves, never constructs a CellSegmenter, so it has nothing to reset.
-const NO_CONSUMER = 'the pinned bundle has no CellSegmenter consumer to reset';
+// Why every reset gate SKIPS on a carve with no consumer, in one spelling: a bundle before
+// 2.1.278 (2.1.251 was the pin until 2026-09-26) never constructs a CellSegmenter, so it has
+// nothing to reset. The pin's bundle has one, so in CI this skip is a red (ci.yml's session step
+// accepts no skip).
+const NO_CONSUMER = 'the carved bundle has no CellSegmenter consumer to reset';
 
 // A carve CONSUMES CellSegmenter when its source names it at all. Wider than "constructs
 // Bun.ant.CellSegmenter" on purpose: a carve that reaches the class some other way still

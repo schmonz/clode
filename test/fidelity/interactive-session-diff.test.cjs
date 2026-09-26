@@ -36,10 +36,10 @@
 // level, by the paint gate; these guards judge the cells.
 //
 // MEASURED 2026-09-25 (darwin-arm64, fresh quaudes of this tree): identical on native
-// 2.1.278 and on native 2.1.251 (CI's pin), every frame settled -- type-edit 6 frames,
-// 2035 painted cells; resize 6 frames, 2675; scroll 8 frames, 15341 (15329 on 2.1.251);
-// slash-menu 7 frames, 2968. The pre-phase-5 quaude (310471c, before task 2 made
-// paint()/setCell() damage native) is identical too. Two quaudes are not: one whose tty
+// 2.1.278 and on native 2.1.251 (CI's pin until 2026-09-26), every frame settled --
+// type-edit 6 frames, 2035 painted cells; resize 6 frames, 2675; scroll 8 frames, 15341
+// (15329 on 2.1.251); slash-menu 7 frames, 2968. The pre-phase-5 quaude (310471c, before
+// task 2 made paint()/setCell() damage native) is identical too. Two quaudes are not: one whose tty
 // never turns SIGWINCH into 'resize' first differs in resize at step "back 100x40" (94
 // cell-classes, the reply laid out at a stale width); one whose segment() never asks to
 // grow first differs in scroll at step "boot" (256 cell-classes: the prompt's 320-column

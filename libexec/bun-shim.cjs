@@ -218,7 +218,7 @@ const TODO = (name) => { const f = () => { throw new Error(`Bun.${name} not yet 
 // Bun's (4206 code points differed from native 2.1.278).
 //
 // Bun.sliceAnsi -- NEW IN 2.1.278, and it is the ONLY Bun member the bundle
-// gained between the pin (2.1.251) and .278 (measured: `Bun\.[A-Za-z_$]\w*`
+// gained between 2.1.251 (the pin until 2026-09-26) and .278 (measured: `Bun\.[A-Za-z_$]\w*`
 // over both carves; the two sets differ by this one name). Upstream uses it in
 // Ink's text-truncation helper:
 //

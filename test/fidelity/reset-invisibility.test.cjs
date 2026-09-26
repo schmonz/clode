@@ -41,7 +41,8 @@
 // the landed guard's compiled-module comparison is the proof either way.)
 //
 // SKIP OR BROKEN. A carve with NO CellSegmenter consumer (no module in its graph names it:
-// 2.1.251, CI's pin) has nothing to reset: both guards SKIP with the one named reason,
+// any bundle before 2.1.278, such as 2.1.251, CI's pin until 2026-09-26) has nothing to reset:
+// both guards SKIP with the one named reason,
 // reset-patch.cjs's NO_CONSUMER. A carve WITH one whose reset sites are not found exactly once
 // was renamed or restructured upstream: both read BROKEN, never a skip, never a pass.
 //
@@ -411,6 +412,6 @@ test('both reset guards read BROKEN, naming why, when the carve has a consumer b
   for (const scan of [scanLanded, scanInvisible]) {
     assert.deepStrictEqual(scan({ broken: 'the carve of p: reset-patch: ... occurs 0 time(s)' }).examined, 0);
   }
-  // The skip reason is the one the CI step and the design name, verbatim.
-  assert.strictEqual(NO_CONSUMER, 'the pinned bundle has no CellSegmenter consumer to reset');
+  // The skip reason, verbatim: it names the carve, not the pin, whose bundle has a consumer.
+  assert.strictEqual(NO_CONSUMER, 'the carved bundle has no CellSegmenter consumer to reset');
 });

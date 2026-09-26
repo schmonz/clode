@@ -20,10 +20,11 @@
 // EXACTLY the one the probe spells, and pairs it with its close code. control(): a bundle whose SC
 // has grown to accept colon forms, and one whose ansiCodes() no longer reads the close pool.
 //
-// WHERE IT RUNS FOR REAL, as test/bun-slice-ansi-arity.test.cjs does: the suite's
-// CLODE_PROVIDER_BIN is the pinned provider, whose bundle has no CellSegmenter caller yet (2.1.278
-// adopted it), so there it SKIPS saying so; CI's linux-x64-pty text step (the text oracle) and
-// upstream-drift's newer-upstream step run it.
+// WHERE IT RUNS FOR REAL, as test/bun-slice-ansi-arity.test.cjs does: wherever
+// CLODE_PROVIDER_BIN names a bundle with a CellSegmenter caller (2.1.278 adopted it) -- the
+// suite's pinned provider since the pin moved to 2.1.283 (2026-09-26), CI's linux-x64-pty text
+// step (the text oracle) and upstream-drift's newer-upstream step. On an older bundle (2.1.251,
+// the pin before) it SKIPS saying so.
 //
 // The literal relative require below is load-bearing for the production-gate population sweep,
 // which derives "which guard controls this production gate" from that string.
