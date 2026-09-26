@@ -17,6 +17,24 @@
 const CP = (...c) => String.fromCodePoint(...c);
 const hex = (s) => Buffer.from(s, 'utf8').toString('hex');
 const BS = '\x7f';
+const ESC = '\x1b';
+
+// The scroll session's reply: 121 numbered lines, three and a half screens at 40 rows.
+// Every third line carries a run of wide CJK (160 or 164 columns, starting at a column that
+// varies with the line's letters), line 100 is one unbroken 300-character token, and the
+// last line is what `mustShow` looks for.
+function scrollReply() {
+  const lines = [];
+  for (let i = 1; i <= 120; i++) {
+    const n = String(i).padStart(3, '0');
+    let line = `line ${n} ` + 'abcdefghij'.slice(0, 1 + (i % 10));
+    if (i % 3 === 0) line += ' ' + CP(0x4e2d, 0x6587).repeat(40 + (i % 2)) + ' wide';
+    if (i === 100) line = `line ${n} ` + 'x'.repeat(300);
+    lines.push(line);
+  }
+  lines.push('line 121 end.');
+  return lines.join('\n');
+}
 
 const SESSIONS = {
   // Type, erase and retype in the prompt: wide CJK, an emoji with a skin tone and base +
@@ -64,6 +82,67 @@ const SESSIONS = {
       + CP(0x4e2d, 0x6587) + ' ' + CP(0x1f44d) + ' end.',
     settings: { showTurnDuration: false }, env: {},
     mustShow: 'end.',
+  },
+  // A reply longer than the screen, scrolled back and forth: up half a page twice, down
+  // once, then Ctrl+End (the TUI's scroll:bottom). Each step moves the viewport 17 lines, so
+  // every frame repaints the rows under it; while scrolled up the TUI pins the prompt to
+  // row 0 and overlays "Jump to bottom" on the viewport's last row, at "page up 2" across a
+  // line of wide glyphs, and the steps after it repaint what that overlay covered.
+  //
+  // MEASURED (2.1.278, task 5), each shaping the session:
+  // - Nothing streams. The canned mock answers a turn with ONE text_delta in one response
+  //   body, and native paints the whole reply within ~155 ms of Enter, then nothing more.
+  //   So there is no mid-stream frame: `wait` steps after `send` settled in 52 ms on frames
+  //   identical to it. The session scrolls instead of waiting.
+  // - Never to the top. A PageUp that reaches the top kept both builds painting past the
+  //   15 s cap (a shorter reply); two half pages up from the bottom of 121 lines stay clear.
+  // - 320 columns. The bundle's segmenter wrapper holds 256 cells and grows and retries
+  //   when a line needs more, but the TUI wraps every line to the screen before segmenting
+  //   it: at 100 columns the widest segment() call was 100 cells, over a 300-character
+  //   token in a paragraph, a code block, inline code, a table cell and a URL (a quaude
+  //   that logged every call). At 320 the prompt's rules are 320-cell lines, which force the
+  //   grow-and-retry at the first paint (320 cells against 256, then against 512), and line
+  //   100's token is segmented whole, in one 309-cell call.
+  // - No mouse-wheel step: native scrolls 3 lines on a wheel report and quaude writes
+  //   nothing (it enables only mouse mode 1006, native 1000/1002/1003/1006), an input
+  //   divergence this paint gate leaves to its own record.
+  'scroll': {
+    rows: 40, cols: 320,
+    script: [
+      { label: 'ask', send: hex('hi') },
+      { label: 'send', send: hex('\r') },
+      { label: 'page up', send: hex(ESC + '[5~') },
+      { label: 'page up 2', send: hex(ESC + '[5~') },
+      { label: 'page down', send: hex(ESC + '[6~') },
+      { label: 'end', send: hex(ESC + '[1;5F') },
+    ],
+    mockText: scrollReply(),
+    settings: { showTurnDuration: false }, env: {},
+    mustShow: 'line 121 end.',
+  },
+  // The slash-command menu, opened, filtered, closed, and opened and closed again: the menu
+  // fills the rows above the prompt (5 rows, then 4 once filtered), each close blanks
+  // them, and the next open repaints them.
+  //
+  // MEASURED (2.1.278, task 5): the menu opens under the harness's mock-API-key profile,
+  // no login needed. ESC closes it and KEEPS the typed text, so a `/` typed next appends
+  // (`/he/`) and opens nothing: the `clear` step erases `/he` first. Every ESC here meets
+  // an open menu: an ESC with none open shows "Esc again to clear", which clears itself
+  // ~1 s later, inside reach of an 800 ms settle window. `mustShow` is the prompt as
+  // native paints it: U+276F, then U+00A0 (a NO-BREAK space: `U+276F /` with a plain space
+  // never matched native's screen), then the slash.
+  'slash-menu': {
+    rows: 40, cols: 100,
+    script: [
+      { label: 'open', send: hex('/') },
+      { label: 'filter', send: hex('he') },
+      { label: 'dismiss', send: hex(ESC) },
+      { label: 'clear', send: hex(BS.repeat(3)) },
+      { label: 'reopen', send: hex('/') },
+      { label: 'dismiss again', send: hex(ESC) },
+    ],
+    mockText: 'PONG', settings: { showTurnDuration: false }, env: {},
+    mustShow: CP(0x276f, 0xa0) + '/',
   },
 };
 

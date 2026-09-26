@@ -1,4 +1,11 @@
 'use strict';
+// SUPERSEDED AT CELL LEVEL by the slash-menu session in
+// test/fidelity/interactive-session-diff.test.cjs: a menu opened and closed, every frame
+// compared cell for cell against native, under a mock-API-key profile, so CI can run it
+// (this file needs a login CI does not have: see ci.yml). Kept for its logged-in-profile
+// path: /doctor opens its full-screen report only when logged in, which no session
+// reaches, and this file still exercises it wherever a login exists.
+//
 // Worked example: capture-a-live-render-bug -> test, for RECIPE row F3
 // (`test/fidelity/RECIPE.md`, category F, OPEN):
 //

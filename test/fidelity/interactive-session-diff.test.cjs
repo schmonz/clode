@@ -10,7 +10,9 @@
 // A defect that shows only after a later step -- a repaint over cells an earlier step
 // filled, a reflow, a resize the TUI mishandles -- needs a frame per step. So each session
 // repaints what an earlier step painted: type-edit erases and retypes wide and combining
-// clusters in the prompt; resize reflows a wrapped reply narrower, wider and back.
+// clusters in the prompt; resize reflows a wrapped reply narrower, wider and back; scroll
+// pages a 320-column reply up and down under an overlay (and segments lines too long for
+// the bundle's 256-cell scratch buffers); slash-menu opens and closes the command menu.
 //
 // THE PRECONDITION is session-determinism.test.cjs: native repaints each session
 // identically twice. A difference here is a quaude finding only because that holds.
@@ -27,15 +29,20 @@
 // the whole screen; so in these sessions every cell paint() writes already lies inside
 // damage the renderer has, whatever paint() reports (2.1.278's renderNodeToOutput). Quaudes
 // whose paint()/setCell() report damage one column short on the right, or none at all,
-// paint both sessions identically to native. Damage exactness is judged at unit level, by
-// the paint gate; these guards judge the cells.
+// paint both sessions identically to native. So do scroll and slash-menu (task 5): a
+// scroll step rewrites the whole viewport, and a closing menu or overlay leaves a cleared
+// region. Damage exactness is judged at unit level, by the paint gate; these guards judge
+// the cells.
 //
 // MEASURED 2026-09-25 (darwin-arm64, fresh quaudes of this tree): identical on native
 // 2.1.278 and on native 2.1.251 (CI's pin), every frame settled -- type-edit 6 frames,
-// 2035 painted cells; resize 6 frames, 2675. The pre-phase-5 quaude (310471c, before task
-// 2 made paint()/setCell() damage native) is identical too. A quaude whose tty never turns
-// SIGWINCH into 'resize' is not: resize first differs at step "back 100x40" (94
-// cell-classes, the reply laid out at a stale width).
+// 2035 painted cells; resize 6 frames, 2675; scroll 7 frames, 13302 (13293 on 2.1.251);
+// slash-menu 7 frames, 2968. The pre-phase-5 quaude (310471c, before task 2 made
+// paint()/setCell() damage native) is identical too. Two quaudes are not: one whose tty
+// never turns SIGWINCH into 'resize' first differs in resize at step "back 100x40" (94
+// cell-classes, the reply laid out at a stale width); one whose segment() never asks to
+// grow first differs in scroll at step "boot" (256 cell-classes: the prompt's 320-column
+// rules end at column 256).
 //
 // WHAT IT IS A GUARD OVER, and its floor: `examined` is the native's painted cells over
 // every frame of the session. The floor is 1000: two blank sessions compare identical,
@@ -111,6 +118,8 @@ function sessionGuard(name) {
 }
 guardTests(defineGuard(sessionGuard('type-edit')));
 guardTests(defineGuard(sessionGuard('resize')));
+guardTests(defineGuard(sessionGuard('scroll')));
+guardTests(defineGuard(sessionGuard('slash-menu')));
 
 // A session added to sessions.cjs is captured above, and without its guard here it would be
 // judged by nothing.
