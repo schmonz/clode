@@ -63,9 +63,16 @@
 // four identically to the good one: no other session gate can see it.
 //
 // Gated by test/live-frame-gate.cjs as a SESSION gate (live render, not inside the concurrent
-// full suite, the PTY harness, a provider, a native claude), then by a tjs engine, the provider
-// being the native's version, the carve, and a built quaude beside the native
-// (quaudeBesideNative). No credentials, no tokens: the canned mock answers.
+// full suite, the PTY harness, a provider, a native claude), then by a tjs engine, the carve,
+// and a built quaude beside the native (quaudeBesideNative). No credentials, no tokens: the
+// canned mock answers.
+//
+// THE PROVIDER IS CARVED, NEVER RUN. CI builds from a minimised provider
+// (scripts/stage-provider.mjs), which is not an executable and answers --version with nothing;
+// asking it (as this gate first did) skipped every CI run as "not the native's version", before
+// and after the pin moves (measured 2026-09-26). So its version is judged by what is built from
+// it: the unpatched quaude beside the native (quaudeBesideNative: a skip naming both versions)
+// and the patched quaude beside the unpatched one (BROKEN).
 const { before, test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -110,13 +117,9 @@ before(async () => {
   const gate = liveFrameGate({ session: true });
   if (gate.skip) { SKIP = gate.skip; return; }
   if (!tjsPath()) { SKIP = 'no tjs engine (set CLODE_TJS) to build the patched quaude with'; return; }
+  // Carved, never run: see THE PROVIDER IS CARVED, NEVER RUN in the header.
   const provider = followWrapper(providerBin(process.env));
-  const pv = nativeVersion(provider), nv = nativeVersion(gate.native);
-  if (!pv || pv !== nv) {
-    SKIP = `the provider (${provider}, ${JSON.stringify(pv)}) is not the native's version `
-      + `(${gate.native}, ${JSON.stringify(nv)}): its carve is not the bundle the frames judge`;
-    return;
-  }
+  const nv = nativeVersion(gate.native);
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reset-invisibility-'));
   process.on('exit', () => { try { fs.rmSync(root, { recursive: true, force: true }); } catch { /* best effort */ } });
 
@@ -126,14 +129,14 @@ before(async () => {
     const graphPath = path.join(staged.dir, 'graph.json');
     if (!fs.existsSync(graphPath)) {
       const cli = fs.readFileSync(path.join(staged.dir, 'cli.cjs'), 'utf8');
-      if (!R.hasCellSegmenterConsumer(cli)) { SKIP = `${NO_CONSUMER} (${provider}, ${pv})`; return; }
+      if (!R.hasCellSegmenterConsumer(cli)) { SKIP = `${NO_CONSUMER} (the carve of ${provider})`; return; }
       BROKEN = `${provider} carves to one cli.cjs that names CellSegmenter; the reset patch knows only a staged graph`;
       return;
     }
     doc = JSON.parse(fs.readFileSync(graphPath, 'utf8'));
     where = R.resetModule(doc);
   } catch (e) { BROKEN = `the carve of ${provider}: ${e.message}`; return; }
-  if (!where.consumer) { SKIP = `${NO_CONSUMER} (${provider}, ${pv})`; return; }
+  if (!where.consumer) { SKIP = `${NO_CONSUMER} (the carve of ${provider})`; return; }
 
   const q = quaudeBesideNative(gate.native);
   if (q.skip) { SKIP = q.skip; return; }
