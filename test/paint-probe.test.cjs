@@ -56,5 +56,7 @@ test('a scenario that diverges at its first op still examines every op, and is o
 test('the corpus has every named part, and every part is non-empty', () => {
   const c = paintCorpus();
   for (const p of PAINT_PARTS) assert.ok(c.some((s) => s.part === p), `part ${p} missing`);
-  assert.ok(c.length >= 390, `only ${c.length} scenarios`);   // 397 as written; the gate's PART_FLOORS pin each part
+  assert.ok(c.length >= 390, `only ${c.length} scenarios`);   // a loose floor, well under the
+  // corpus's current size, so this number never needs to track it; the gate's PART_FLOORS
+  // pin each part and the total exactly.
 });

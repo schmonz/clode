@@ -3,12 +3,15 @@
 // CellSegmenter wrapper reset its pools on every segment() call (CellSegmenter phase 5, reset
 // invisibility; the live gate is test/fidelity/reset-invisibility.test.cjs).
 //
-// THE FIXTURE IS THE CARVE'S OWN TEXT. MF_2_1_278 is upstream 2.1.278's minified wrapper class,
-// verbatim from the carved graph.json (module /$bunfs/root/chunk-rp2p2mxd.js, darwin-arm64,
-// read 2026-09-25) from its threshold declarations through resetNative(), closed after it: the
-// two reset conditions spelled exactly as the build patches them. It is also RUN, with stubs
-// for the names it closes over, so the tests prove the patched wrapper really resets on every
-// call, not only that its text changed.
+// THE FIXTURE IS THE CARVE'S OWN TEXT, IN EXCERPTS. MF_2_1_278 is upstream 2.1.278's minified
+// wrapper class, assembled from VERBATIM EXCERPTS of the carved graph.json (module
+// /$bunfs/root/chunk-rp2p2mxd.js, darwin-arm64, read 2026-09-25): the field declarations, the
+// constructor, segment(), refreshGenerations() and resetNative(), each spelled exactly as the
+// carve has it. It is not one contiguous span -- width(), charIndices(), runWords() and more
+// are omitted between segment() and refreshGenerations() -- but the two reset conditions are
+// spelled exactly as the build patches them. It is also RUN, with stubs for the names it
+// closes over, so the tests prove the patched wrapper really resets on every call, not only
+// that its text changed.
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');

@@ -113,8 +113,9 @@ phase 4's and phase 3's; phases 1-2's follows them.
   experiments (a wide glyph at the last column, x past the width, same-value writes, tab
   damage). Native is 2.1.251's JS painter, except that its damage covers every cell it writes.
 - **A contract correction: `spacerHead` is not free.** The contract below called it free; native
-  paint() writes one where a wide cluster does not fit at the last column (PAINT-EDGE-WIDE), and
-  the shim now writes it where native does.
+  paint() writes one wherever a cluster does not fit before the right edge, not only at the last
+  column (an advance-4 cluster at column 2 of 5 hits it too; PAINT-EDGE-WIDE), and the shim now
+  writes it where native does.
 - **Four sessions, frame by frame.** `test/tui-screen.cjs --script` takes a frame per scripted
   step once output settles (boot waits out a 12 s window: Clawd's random entrance animation and an
   effort notice that clears itself ~10 s in); `test/fidelity/sessions.cjs` states the four once.
@@ -131,10 +132,12 @@ phase 4's and phase 3's; phases 1-2's follows them.
   (2.1.278 three times, 23,019 cells; 2.1.251 once, 23,007), so a racy script fails as a racy
   script. Scroll's wheel step runs with `CLODE_TTY_MOUSE=1` on both sides: quaude's mouse and
   focus tracking are off by design (RECIPE.md X1), not a finding.
-- **No session can see paint damage (measured).** Quaudes whose paint()/setCell() report no
-  damage, or damage one column short, paint all four sessions exactly like native: upstream's
-  renderer clears and damages every region it repaints, so every cell paint() writes already
-  lies inside damage it holds. **The paint gate is the only damage judge.**
+- **No session can see paint damage (measured, the scroll session's wheel-up step included).**
+  Quaudes whose paint()/setCell() report no damage, or damage one column short, paint all four
+  sessions exactly like native -- scroll's wheel notch too (15,341 cells on 2.1.278, both
+  perturbations, re-measured after the wheel step landed): upstream's renderer clears and
+  damages every region it repaints, so every cell paint() writes already lies inside damage it
+  holds. **The paint gate is the only damage judge.**
 - **Real-frame red proofs.** A quaude whose segment() never asks to grow fails scroll at "boot"
   (256 cell-classes: the 320-column rules stop at column 256); one whose tty never turns SIGWINCH
   into 'resize' fails resize at "back 100x40" (94); scroll without the X1 mouse knob fails at
@@ -149,7 +152,7 @@ phase 4's and phase 3's; phases 1-2's follows them.
   run to run; the frames do not). `reset-patch-landed` proves the test build is the patch alone:
   of 1,958 compiled modules only the patched one differs. A carve with no CellSegmenter consumer
   makes both SKIP with one named reason.
-- **In CI (task 7, not yet pushed).** linux-x64-pty's text step runs the paint gate, with the
+- **In CI.** linux-x64-pty's text step runs the paint gate, with the
   paint probe's packing check and the reset-site check, against the 2.1.278 text oracle,
   asserting `skipped 0`. A new step runs session-determinism, then interactive-session-diff, then
   reset-invisibility, one `node --test` each (node sorts the files it is given), and accepts only
@@ -158,7 +161,9 @@ phase 4's and phase 3's; phases 1-2's follows them.
   path is judged only locally against 2.1.278 (and at unit level by the paint gate's `grow`
   part), and the reset guards skip. **Once the pin moves**, CI covers CellSegmenter end to end
   with no workflow change: with the provider shaped as CI shapes it (minimised, 2.1.278), both
-  reset guards ran here and passed (1,958 modules; 23,019 cells). Found on the way:
+  reset guards ran ON DARWIN and passed (1,958 modules; 23,019 cells) -- the Linux container
+  mirror below ran them only at the CURRENT pin (2.1.251), where they skip by name; it does not
+  itself confirm the reset guards passing off darwin. Found on the way:
   reset-invisibility asked its provider for `--version`, which a minimised provider cannot
   answer, so in CI it would have skipped forever with the wrong reason; it now judges the version
   by what is built from it. Verified before any push in a node:24.21.0-bookworm container on
@@ -170,7 +175,9 @@ phase 4's and phase 3's; phases 1-2's follows them.
   the paint gate 577 ops, 0 differences, against the linux-x64 2.1.278 oracle. **CI cost,
   measured there:** +502 s for the session step (determinism 226 s, sessions 273 s, the reset
   skip 1 s on the carve the session build warmed) and ~18 s in the text step (the paint gate 1 s,
-  its two carve checks 17 s): the mirrored job went from ~22.4 to 31.1 minutes.
+  its two carve checks 17 s): the mirrored job went from ~22.4 to 31.1 minutes. **Once the pin
+  moves**, reset-invisibility itself adds about 5 more minutes (two builds -- patched and
+  unpatched -- and 8 session captures; measured locally at 268 s for that pair, task 6).
 
 **Recorded, not fixed (phase 5):**
 
@@ -184,19 +191,71 @@ phase 4's and phase 3's; phases 1-2's follows them.
   aged out is still lost, and the comment at naude-sea.cjs:32 claims more. On Windows a failed
   rmSync is swallowed and the move-aside's EPERM is a new hard failure; the legacy no-marker tree
   and the lost-race branch are untested. Options: a marker that lists every file, or the cache
-  out of os.tmpdir() (NAUDE_CACHE exists).
+  out of os.tmpdir() (NAUDE_CACHE exists). **A second, ordering bug (naude-sea.cjs:89):** the
+  stale tree is rm'd BEFORE the fresh one is published, so `dir` is briefly missing and a
+  concurrently running older naude's lazy require() can fail there; the fix is rename-to-stale,
+  publish, THEN rm. **And (naude-sea.cjs:92-97):** a failed publish while `dir` is not whole
+  currently throws; it could instead return `tmp` (already whole), which would turn the Windows
+  EPERM first-run risk into a working launch rather than a hard failure -- recorded, not
+  implemented this wave.
 - **upstream-drift does not run the two phase-5 carve checks** (paint-probe-gates,
   reset-patch-gates) against `next`, the bundle they exist to warn about; one line in its
   tripwire step.
+- **Phase-5 test-infrastructure nits** (final-review triage, none blocking):
+  - `scripts/lib/paint-probe.cjs:89` `String(e && e.message || e)` stringifies the whole error
+    when `message` is empty.
+  - `scripts/paint-differential.cjs:37` compares outside its try/catch (fix alongside
+    text-differential.cjs; a throw there should exit 2 "harness", not surface uncaught).
+  - `scripts/lib/text-probe.cjs:128` `runProbeOurs`'s shared error text no longer names the
+    probe (thread `tmpPrefix` through).
+  - `libexec/bun-shim.cjs:1326` SCREEN-ORPHANS clause 3 restates clause 1 (:1318) -- phase 6's
+    `_csWrite` restructuring is the place to fold them.
+  - `libexec/bun-shim.cjs:1295` setCell's "the word is written as given" is not a named rule.
+  - `test/tui-screen.cjs:129` `--script` silently ignores `--send-hex`/`--then-hex`/`--resize`/
+    SECONDS; `parseArgs` should refuse the combination.
+  - `test/frame-diff.cjs:265` the capture-failure finding drops the thrown message (stderr
+    only).
+  - `test/fidelity/session-determinism.test.cjs:137` the control test asserts only
+    `findings[0]`.
+  - `test/frame-diff.cjs:214,273` `diffSessions().unsettled` is computed and tested, but
+    `judgeSessions` recomputes the same thing from raw frames instead of using it.
+  - `test/guards-population.cjs:134` no test pins `FRAME_CAPTURE_CALLS`' narrowness (only the
+    82/28 floors it feeds).
+  - Three identical control builders -- `staleCellControl`
+    (`test/fidelity/interactive-session-diff.test.cjs:96`), `plantedControl`
+    (`test/fidelity/reset-invisibility.test.cjs:367`), `plantedRuns`
+    (`test/fidelity/session-determinism.test.cjs:99`) -- one `staleCellSessions()` in
+    `test/frame-diff.cjs`.
+  - `test/guards-population.test.cjs:66` hand-builds a POSIX path
+    (`.split(path.sep).join('/')`) instead of `toPosixRel()`.
+  - `test/fidelity/paint-differential.test.cjs:69` copies `text-differential.test.cjs`'s
+    (`:147`) oracle skip chain; consolidate when the next oracle gate arrives.
+  - Re-run the reset red proof with BOTH builds perturbed (`Q=<t6>/qstale-unpatched`), so
+    `reset-patch-landed` cannot also read BROKEN and mask `reset-invisibility`'s own verdict.
+  - `libexec/clode-build.cjs:596-599` builds the staging path inline and does not export it;
+    `stageCarve` (test/build-gates) re-derives the same path by hand.
+  - `test/bun-shim-cell-segmenter.test.cjs`'s `PAINT_RULES` tests run in no CI leg (they need
+    tjs, and the file's Windows-only skips complicate wiring into the text step); the paint
+    gate already covers the same behaviour in CI (Ruling R12).
+  - First-run risks to watch, unproven either way: ubuntu-latest running
+    `test/tui-screen-script.test.cjs`'s fake-TUI pty group for the first time inside the
+    concurrent suite ("hi" arriving as two chunks); windows-latest's two new
+    `test/naude-sea.test.cjs` tests adding a second directory rename right after extraction
+    (Defender/indexer EPERM).
 
 **What remains before the pin moves:**
 
 - **Phase 6.** `reordered`: the contract below said it was false everywhere quaude normally
   runs, but the 2.1.278 carve sets it from a host-terminal check (`xf()` ->
   `yC.of(G().host).isNeeded()`, rp2.pretty.js:16606: `WT_SESSION` set, or `TERM_PROGRAM` is
-  `vscode`), so Windows Terminal and VS Code's terminal reach it. And performance: paint() is
-  ~1.6x slower than before phase 5 (32 -> 52 microseconds per 120-column paint, as the task-2
-  review measured it; structural, not allocation). Profile on the slow boxes first.
+  `vscode`), so Windows Terminal and VS Code's terminal reach it. And performance, measured
+  under tjs (the task-2 review's figure was Node-only): paint() of a 120-column ASCII line is
+  ~1.9x slower than before phase 5 (22.9 -> 43.7 microseconds); of 60 CJK clusters, ~1.5x
+  (20.5 -> 30.7 microseconds); structural, not allocation. **Phase-6 lead:** a narrow-cell fast
+  path (keep `this.*` in locals; write a narrow cell directly when the target cell is neither
+  wide nor spacerTail) measured 21.3 microseconds on the ASCII sample, with a matching screen
+  and return -- it restates part of SCREEN-BOUNDS/PAINT-DAMAGE, so it belongs behind the paint
+  gate. Profile on the slow boxes first.
 - **`Bun.wrapAnsi`** (the phase-3 follow-up below): measure whether it ever changes a PAINTED
   cell before a phase-3-sized effort.
 - **The pin move**, to upstream's latest (2.1.283 today), not 2.1.278. Every rule here was

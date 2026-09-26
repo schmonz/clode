@@ -23,16 +23,17 @@
 // fails on -- before bun-shim.cjs changes: the unit gate must catch a paint bug before the
 // screen does. Never an allowed diff, never a widened settle window.
 //
-// WHAT THESE SCREENS DO NOT SHOW, measured (task 4, 2026-09-25): paint()/setCell() damage.
-// Upstream's renderer clears the previous region of every dirty node before repainting it
-// and adds each cleared region to the frame's damage, and a node whose layout moved damages
-// the whole screen; so in these sessions every cell paint() writes already lies inside
-// damage the renderer has, whatever paint() reports (2.1.278's renderNodeToOutput). Quaudes
-// whose paint()/setCell() report damage one column short on the right, or none at all,
-// paint both sessions identically to native. So do scroll and slash-menu (task 5): a
-// scroll step rewrites the whole viewport, and a closing menu or overlay leaves a cleared
-// region. Damage exactness is judged at unit level, by the paint gate; these guards judge
-// the cells.
+// WHAT THESE SCREENS DO NOT SHOW, measured (task 4, 2026-09-25; scroll's wheel-up step
+// measured too, in the final fix wave, 2026-09-26): paint()/setCell() damage. Upstream's
+// renderer clears the previous region of every dirty node before repainting it and adds each
+// cleared region to the frame's damage, and a node whose layout moved damages the whole
+// screen; so in these sessions every cell paint() writes already lies inside damage the
+// renderer has, whatever paint() reports (2.1.278's renderNodeToOutput). Quaudes whose
+// paint()/setCell() report damage one column short on the right, or none at all, paint all
+// four sessions identically to native -- scroll's mouse-wheel step included (15,341 cells on
+// 2.1.278, both perturbations): a scroll step, paged or wheeled, rewrites the whole viewport,
+// and a closing menu or overlay leaves a cleared region. Damage exactness is judged at unit
+// level, by the paint gate; these guards judge the cells.
 //
 // MEASURED 2026-09-25 (darwin-arm64, fresh quaudes of this tree): identical on native
 // 2.1.278 and on native 2.1.251 (CI's pin), every frame settled -- type-edit 6 frames,
