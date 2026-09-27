@@ -1091,10 +1091,19 @@ function patchBuiltinPluginBundled(body) {
 // matches do not. test/fidelity/lead-scrub-equivalence.test.cjs judges the real carve's pattern
 // under quaude against the original under native, over a corpus a backtracking separator fails.
 //
-// THE ANCHOR IS THE WHOLE BUILDER AND BOTH HELPERS, minified names aside, because the proof rests
-// on all three: that the helpers are those two atomic forms, that the builder's separators come
-// only from them (so no other group or backreference is left to renumber), and that nothing
-// quantifies a separator. Any change there is a dead hook, loud; leadScrubShape() is the canary.
+// THE ANCHOR IS THE BUILDER'S TEXT AND BOTH HELPERS', minified names aside: the helpers are those
+// two atomic forms, every separator the builder emits comes from them, and nothing quantifies a
+// separator. Any change there is a dead hook, loud; leadScrubShape() is the canary.
+// WHAT IT DOES NOT PIN: the CONTENTS of the free names the builder reads. The class strings (W, J,
+// the invisibles, the dashes, the confusable letters) are bound by name only; the proof does not
+// need them, since each rewritten separator reuses the same class text. The span pattern Lu is
+// inserted raw into every phrase that has a span, and it is bound by name only too. At 2.1.278
+// through 2.1.283 it holds no capturing group, so the rewrite leaves the pattern with none. Were
+// upstream to put one there, that group would be the only one left and would renumber. Nothing
+// in the builder refers to a group by number except the separators the rewrite removes, and Lu,
+// one constant spliced in at several positions, has no number it could refer to; so the matches
+// would stand, but the rewrite's "no capture groups" would not, and
+// test/fidelity/regexp-capture-census.test.cjs counts every pattern's groups on a real turn.
 // The shapes are verbatim 2.1.283 text with each minified binding as @{NAME}: the first
 // occurrence binds an identifier, every later one must repeat it (a regex backreference).
 function compileShape(template) {
@@ -1157,7 +1166,14 @@ function leadScrubShape(body) {
   return /bracketedLeadScrubPattern|Symbol\("LEAD_(?:SPAN|HEX_ID)"\)/.test(body);
 }
 
+// The builder's own error text, which LEAD_SCRUB_SHAPES.builder spells verbatim: a module without it
+// cannot match, so the three anchor scans run on one module per graph instead of every module
+// (about 2.0 s of 40 M characters under tjs, measured 2026-09-27, against under 0.1 s). The canary
+// is separate and still reads every module.
+const LEAD_SCRUB_WORDS = 'bracketedLeadScrubPattern: words are lowercase ASCII';
+
 function patchLeadScrubPossessive(body) {
+  if (!body.includes(LEAD_SCRUB_WORDS)) return [body, false];
   const one = (re) => { const all = [...body.matchAll(re)]; return all.length === 1 ? all[0] : null; };
   const builder = one(LEAD_SCRUB_SHAPES.builder);
   const mu = builder && one(LEAD_SCRUB_SHAPES.mu);
