@@ -275,7 +275,7 @@ function stripANSI(...a){ return _stripAnsiFn ? _stripAnsiFn(...a) : _extFatal(_
 if (!_stripAnsiFn) stripANSI.__bunShimStub = true;
 
 // --- rewriteSnapshot: rewrite Claude Code's grep/find/rg shell-snapshot shadows
-// to exec the REAL host applet instead of the upstream native multiplexer (which
+// to run the REAL host applet instead of the upstream native multiplexer (which
 // under clode resolves to node / a non-dispatching binary). Same-tool routing,
 // fail-loud if the applet is absent. A shadow whose applet we don't know throws
 // (auto-tracking: a new upstream applet must be handled deliberately). ---
@@ -363,6 +363,7 @@ function rgToUgrep(argv) {
 // Shell twin of rgToUgrep — the body of the injected/rewritten `function rg`.
 // Uses bash/zsh arrays (the snapshot is sourced by bash/zsh, never dash). Must
 // stay byte-identical in output to rgToUgrep; test/rg-to-ugrep.test.cjs locks it.
+// Runs ugrep as a CHILD, never `exec` — see SHADOW_KEEPS_THE_SHELL below.
 function rgShadowBody() {
   return [
     'function rg {',
@@ -392,7 +393,7 @@ function rgShadowBody() {
     '    shift',
     '  done',
     '  local -a _pre=(-r); [ $_ignore -eq 1 ] && _pre+=(--ignore-files); _pre+=(-I)',
-    '  exec "$_bin" "${_pre[@]}" "${_tail[@]}" "${_pos[@]}"',
+    '  "$_bin" "${_pre[@]}" "${_tail[@]}" "${_pos[@]}"',
     '}',
   ].join('\n');
 }
@@ -447,10 +448,21 @@ function parseShadow(body){
 // applet's own stderr line, so it can contain anything.
 function shQuote(s){ return "'" + String(s).replace(/'/g, "'\\''") + "'"; }
 
-// Build the replacement shadow. Without a skew finding: exec the host applet
-// (fast path — the function's subshell is replaced). WITH a finding (the
-// generation-time probe saw this applet reject these flags): drop the exec so
-// the exit code is observable, and on a skew-shaped failure print a
+// SHADOW_KEEPS_THE_SHELL — the rule: a shadow runs its applet as a CHILD and
+// returns the applet's status; it never replaces the shell that called it.
+// There is no "function's subshell" to replace: the Bash tool sources the snapshot
+// and evals the model's whole command in ONE shell, and a shadow is a FUNCTION in
+// that shell, so `exec` in its body ended the entire command — `grep -q x f &&
+// echo A; echo B` printed neither echo (found by the NetBSD spike, 2026-09-26; true
+// everywhere, bash and zsh). Upstream's shadow never replaces the caller either
+// (`ARGV0=ugrep …` is a child in zsh; bash gets `(exec -a ugrep …)`, a subshell),
+// so this is the diff-reducing shape. The applet inherits stdin/stdout/stderr and
+// its status is the function's status. test/shadow-keeps-the-shell.test.cjs holds
+// every shadow shape to it, in bash and in zsh.
+//
+// Build the replacement shadow. Without a skew finding: run the host applet and
+// return its status. WITH a finding (the generation-time probe saw this applet
+// reject these flags): capture the exit code, and on a skew-shaped failure print a
 // self-explaining line — the probe's exact why + the applet-specific fix — to
 // stderr right where the cryptic applet error lands, then propagate the
 // applet's own exit code. This is the host-applet (foundation) configuration's
@@ -464,7 +476,7 @@ function buildShadow(name, known, parsed, finding){
     parsed.guard +
     `  local _bin="\${${env}:-$(command -v ${applet} 2>/dev/null)}"\n` +
     `  [ -n "$_bin" ] || { echo "clode: ${name} needs '${applet}' (set ${env} or install it)" >&2; return 127; }\n`;
-  if (!finding) return head + `  exec "$_bin"${flags} "$@"\n}`;
+  if (!finding) return head + `  "$_bin"${flags} "$@"\n}`;
   const msg = shQuote(
     `clode: known applet skew — host ${applet} rejects the flags this ${name} shadow uses ` +
     `(${finding.why}). ${finding.fix}.`);
@@ -499,7 +511,7 @@ function _eachShadow(text, cb){
 
 // findings (optional): skew findings from warnAppletSkew for THIS snapshot's
 // shadows — a shadow with a finding is built with the self-explaining skew
-// trailer instead of the exec fast path. Omitted/empty = the pure rewrite.
+// trailer instead of the plain run. Omitted/empty = the pure rewrite.
 function rewriteSnapshot(text, findings){
   text = String(text);
   const byName = new Map((findings || []).map((f) => [f.name, f]));
@@ -535,7 +547,7 @@ function collectShadows(text){
   return out;
 }
 
-// After rewriting a shadow to exec the host applet, confirm that applet actually
+// After rewriting a shadow to run the host applet, confirm that applet actually
 // ACCEPTS the flags Claude's embedded applet is invoked with. A host applet that
 // skews older can reject a flag the bundle's build supports, so `find`/`grep`
 // would fail at use-time with a cryptic error far from here. Probe once per

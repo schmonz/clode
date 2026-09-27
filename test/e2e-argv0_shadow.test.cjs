@@ -4,9 +4,10 @@
 // upstream shadow bodies invoke the provider under a custom argv0 (`ARGV0=ugrep …`
 // / `exec -a ugrep …`) so the native binary dispatches its bundled multiplexer.
 // Under clode that argv0 trick can't dispatch, so rewriteSnapshot replaces the body
-// with `exec "$ugrep" <upstream-flags> "$@"` routed to the REAL host applet, guarded
-// fail-loud when the applet is absent. We render the rewritten snapshot, source it in
-// a POSIX shell, and confirm `grep` execs the host ugrep (test 1) or fails loud
+// with `"$_bin" <upstream-flags> "$@"` routed to the REAL host applet (run as a child,
+// never exec'd — see SHADOW_KEEPS_THE_SHELL in bun-shim.cjs), guarded fail-loud when
+// the applet is absent. We render the rewritten snapshot, source it in a POSIX shell,
+// and confirm `grep` runs the host ugrep (test 1) or fails loud
 // (test 2). The argv0 mechanism lives inside the generated shell text, not in how we
 // spawn — so this test drives /bin/sh, matching the bats which used `sh -c`.
 const { test } = require('node:test');
@@ -53,8 +54,8 @@ function rewriteSnap(sbx) {
 }
 
 // Render a rewritten snapshot, then source it with a stub `ugrep` on PATH and
-// confirm `grep` (the shadow) execs the stub with the upstream flags.
-test('rewritten grep shadow execs the real ugrep with upstream flags', { skip: BASH_SKIP }, (t) => {
+// confirm `grep` (the shadow) runs the stub with the upstream flags.
+test('rewritten grep shadow runs the real ugrep with upstream flags', { skip: BASH_SKIP }, (t) => {
   const sbx = sandbox(t);
   const snap = rewriteSnap(sbx);
 

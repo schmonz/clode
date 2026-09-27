@@ -252,6 +252,27 @@ async function sandboxWasUsed(sbx) {
 
 const posted = (mock) => mock.requests.some((q) => q.method === 'POST' && /\/messages/.test(q.url));
 
+// The text of the tool_result the target sent back for tool_use `id`. NOT a substring
+// search of the whole request body: every follow-up also carries the assistant's own
+// tool_use block, i.e. the COMMAND, so a marker spelled in the command (`echo MARK`)
+// "came back" whether or not the command ran or its output was returned. B1 and B4
+// both checked the body that way and could not fail on missing output.
+function toolResultText(mock, id) {
+  let out = '';
+  for (const q of mock.requests) {
+    let j;
+    try { j = JSON.parse(q.body || ''); } catch { continue; }
+    for (const m of (j && Array.isArray(j.messages) ? j.messages : [])) {
+      for (const b of (Array.isArray(m && m.content) ? m.content : [])) {
+        if (!b || b.type !== 'tool_result' || b.tool_use_id !== id) continue;
+        out += typeof b.content === 'string' ? b.content
+          : (Array.isArray(b.content) ? b.content.map((c) => (c && c.text) || '').join('') : '');
+      }
+    }
+  }
+  return out;
+}
+
 // ---- the checks. Each maps to ONE RECIPE floor row. ------------------------
 // GUARD 2: exercise the tmpdir-ownership guard every time. The bundle only
 // checks /tmp/claude-<uid> when it EXISTS, so on a fresh box the check silently
@@ -280,20 +301,25 @@ const CHECKS = [
   },
   {
     row: 'B1',
-    what: 'Bash tool runs a command and returns output',
+    what: 'Bash tool runs a compound command (a search shadow, then more) and returns its output',
     async fn(sbx) {
       const ID = 'toolu_floor_bash';
-      const MARK = 'FLOOR-BASH-OK';
+      // The command calls grep FIRST and echoes after it: grep is a snapshot shadow (a
+      // shell function), and a shadow that `exec`s its applet ends the whole command,
+      // so nothing after it runs (the NetBSD spike's F2, 2026-09-26, every platform).
+      // `echo MARK` alone could never see that. The marker is COMPUTED ($((6*7))), so
+      // the output spells it and the command does not.
+      const MARK = 'FLOOR-BASH-42';
       const mock = await startMock([
         { match: ID, text: 'done' },                                   // the follow-up carrying tool_result
-        { tool: { name: 'Bash', input: { command: `echo ${MARK}` }, id: ID } },
+        { tool: { name: 'Bash', input: { command: 'grep -c FLOOR /dev/null; echo FLOOR-BASH-$((6*7))' }, id: ID } },
       ]);
       try {
         const r = await run(BIN, ['-p', 'run it', '--permission-mode', 'bypassPermissions', '--allowedTools', 'Bash'],
           { home: sbx.home, cwd: sbx.cwd, extraEnv: { ANTHROPIC_BASE_URL: mock.url } });
         // The proof is the tool_result echoed back to the model, not the prose:
         // the bundle sends the command's OUTPUT in the follow-up request.
-        const echoed = mock.requests.some((q) => (q.body || '').includes(MARK));
+        const echoed = toolResultText(mock, ID).includes(MARK);
         const ok = r.code === 0 && echoed;
         return { ok, how: ok ? `exit 0, tool_result carried ${MARK}` : `exit=${r.code ?? r.sig} echoed=${echoed} stderr=${JSON.stringify(r.err.slice(-160))}` };
       } finally { await mock.close(); }
@@ -351,12 +377,19 @@ const CHECKS = [
   },
   {
     row: 'B4',
-    what: 'agentic tool round-trips (Bash, Edit, Write, Grep) produce the correct client-observable',
+    what: 'agentic tool round-trips (Bash, Edit, Write, and a grep search) produce the correct client-observable',
     async fn(sbx) {
       // One chained conversation exercising all FOUR tools the row names. Each
       // rule fires on the tool_result id of the PREVIOUS step, so the mock walks
       // the agentic loop the way a real turn does. Read sits between Write and
       // Edit because the bundle requires a read before it will edit.
+      //
+      // The search is `grep` through the Bash tool, not the Grep tool: the bundle
+      // (2.1.283, measured 2026-09-26) answers a Grep tool_use with "No such tool
+      // available: Grep. Grep is not available in this session — search file contents
+      // with `grep` via the Bash tool instead." Search now IS the snapshot's grep
+      // shadow. The old check could not see that: it matched the whole request body,
+      // and the Edit step's own input spells B4-EDITED.
       const sep = sbx.cwdNative.includes('\\') ? '\\' : '/';
       const f = `${sbx.cwdNative}${sep}b4.txt`;
       const shell = `${sbx.cwd}/b4.txt`;                 // OUR view, for checks
@@ -364,7 +397,7 @@ const CHECKS = [
       const mock = await startMock([
         { match: ids.b, text: 'all four done' },
         { match: ids.g, tool: { name: 'Bash', input: { command: 'echo B4-BASH-OK' }, id: ids.b } },
-        { match: ids.e, tool: { name: 'Grep', input: { pattern: 'B4-EDITED', path: sbx.cwdNative }, id: ids.g } },
+        { match: ids.e, tool: { name: 'Bash', input: { command: 'grep -rl B4-EDITED .' }, id: ids.g } },
         { match: ids.r, tool: { name: 'Edit', input: { file_path: f, old_string: 'B4-ORIGINAL', new_string: 'B4-EDITED' }, id: ids.e } },
         { match: ids.w, tool: { name: 'Read', input: { file_path: f }, id: ids.r } },
         { tool: { name: 'Write', input: { file_path: f, content: 'B4-ORIGINAL\n' }, id: ids.w } },
@@ -372,15 +405,14 @@ const CHECKS = [
       try {
         const r = await run(BIN, ['-p', 'do the tool chain', '--permission-mode', 'bypassPermissions'],
           { home: sbx.home, cwd: sbx.cwd, extraEnv: { ANTHROPIC_BASE_URL: mock.url } });
-        const body = mock.requests.map((q) => q.body || '').join('\n');
         const content = (await sbx.exists(shell)) ? await sbx.read(shell) : '';
         const wrote = /B4-/.test(content);                        // Write landed
         const edited = /B4-EDITED/.test(content);                 // Edit applied on disk
-        const grepped = body.includes(ids.g) && /b4\.txt|B4-EDITED/.test(body);
-        const bashed = body.includes('B4-BASH-OK');               // Bash output came back
+        const grepped = /b4\.txt/.test(toolResultText(mock, ids.g));        // grep found the file
+        const bashed = toolResultText(mock, ids.b).includes('B4-BASH-OK'); // Bash output came back
         const ok = r.code === 0 && wrote && edited && grepped && bashed;
         return { ok, how: ok
-          ? 'Write+Read+Edit+Grep+Bash all round-tripped; file reads B4-EDITED on disk'
+          ? 'Write+Read+Edit+grep+Bash all round-tripped; file reads B4-EDITED on disk'
           : `exit=${r.code ?? r.sig} wrote=${wrote} edited=${edited} grepped=${grepped} bashed=${bashed}` };
       } finally { await mock.close(); }
     },

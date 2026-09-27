@@ -37,13 +37,16 @@ test('rewriteSnapshot: leaves a user function named mygrep untouched', () => {
   assert.match(out, /function mygrep \{ command grep --color=auto "\$@"; \}/);
 });
 
-test('rewriteSnapshot: grep shadow execs real ugrep with the upstream flags', () => {
+test('rewriteSnapshot: grep shadow runs real ugrep with the upstream flags', () => {
   const out = rewriteSnapshot(fx('snapshot-execpath.sh'));
   // the rebuilt grep function resolves a real ugrep with override + fail-loud
   assert.match(out, /local _bin="\$\{CLODE_UGREP:-\$\(command -v ugrep 2>\/dev\/null\)\}"/);
   assert.match(out, /clode: grep needs 'ugrep'/);
-  // the upstream flag list is preserved verbatim and exec'd
-  assert.match(out, /exec "\$_bin" -G --ignore-files --hidden -I --exclude-dir=\.git --exclude-dir=\.svn "\$@"/);
+  // the upstream flag list is preserved verbatim, and the applet runs as a CHILD:
+  // never `exec`, which would end the shell running the whole Bash-tool command
+  // (SHADOW_KEEPS_THE_SHELL; test/shadow-keeps-the-shell.test.cjs runs it)
+  assert.match(out, /\n {2}"\$_bin" -G --ignore-files --hidden -I --exclude-dir=\.git --exclude-dir=\.svn "\$@"\n/);
+  assert.doesNotMatch(out, /\bexec\b/);
   // the original native-multiplexer invocation is gone
   assert.doesNotMatch(out, /ARGV0=ugrep/);
   assert.doesNotMatch(out, /_cc_bin/);
@@ -51,18 +54,18 @@ test('rewriteSnapshot: grep shadow execs real ugrep with the upstream flags', ()
   assert.match(out, /case "\$_cc_a" in -\*-filter\*/);
 });
 
-test('rewriteSnapshot: find shadow execs real bfs with upstream flags', () => {
+test('rewriteSnapshot: find shadow runs real bfs with upstream flags', () => {
   const out = rewriteSnapshot(fx('snapshot-execpath.sh'));
   assert.match(out, /local _bin="\$\{CLODE_BFS:-\$\(command -v bfs 2>\/dev\/null\)\}"/);
-  assert.match(out, /exec "\$_bin" -S dfs -regextype findutils-default "\$@"/);
+  assert.match(out, /\n {2}"\$_bin" -S dfs -regextype findutils-default "\$@"\n/);
   assert.match(out, /clode: find needs 'bfs'/);
   assert.doesNotMatch(out, /ARGV0=bfs/);
 });
 
 test('rewriteSnapshot: works on install-path-style snapshots too (resolver-agnostic)', () => {
   const out = rewriteSnapshot(fx('snapshot-installpath.sh'));
-  assert.match(out, /exec "\$_bin" -G --ignore-files --hidden -I --exclude-dir=\.git "\$@"/);
-  assert.match(out, /exec "\$_bin" -S dfs -regextype findutils-default "\$@"/);
+  assert.match(out, /\n {2}"\$_bin" -G --ignore-files --hidden -I --exclude-dir=\.git "\$@"\n/);
+  assert.match(out, /\n {2}"\$_bin" -S dfs -regextype findutils-default "\$@"\n/);
   assert.doesNotMatch(out, /_cc_bin|ARGV0=/);
 });
 
@@ -117,11 +120,11 @@ test('rewriteSnapshot: handles a } inside a quoted string in the shadow body', (
     '}',
   ].join('\n');
   const out = rewriteSnapshot(snap);
-  assert.match(out, /exec "\$_bin" -G --ignore-files "\$@"/);
+  assert.match(out, /\n {2}"\$_bin" -G --ignore-files "\$@"\n/);
   assert.doesNotMatch(out, /ARGV0=ugrep/);
   // the quoted-string line with the stray } must be preserved in the rebuilt body?
   // NOTE: the rebuilt shadow REPLACES the whole body, so the echo line is intentionally
-  // dropped (the rewrite emits a clean exec form). We only require the shadow is rewritten.
+  // dropped (the rewrite emits a clean run form). We only require the shadow is rewritten.
 });
 
 test('rewriteSnapshot: handles a { inside a quoted string in the shadow body', () => {
@@ -134,7 +137,7 @@ test('rewriteSnapshot: handles a { inside a quoted string in the shadow body', (
     'function after { echo untouched; }',
   ].join('\n');
   const out = rewriteSnapshot(snap);
-  assert.match(out, /exec "\$_bin" -S dfs "\$@"/);
+  assert.match(out, /\n {2}"\$_bin" -S dfs "\$@"\n/);
   assert.doesNotMatch(out, /ARGV0=bfs/);
   // the following unrelated function must remain intact (proves matchBrace found the right end)
   assert.match(out, /function after \{ echo untouched; \}/);
@@ -163,7 +166,7 @@ test('collectShadows: returns known shadows with applet/env/flags, skips unknown
 
 // --- self-explaining skew failures: rewriteSnapshot(text, findings) ---------
 // When the generation-time probe found skew, the rewritten shadow must explain
-// the failure AT THE POINT OF USE: no exec (so the exit code can be inspected),
+// the failure AT THE POINT OF USE: the exit code captured (so it can be inspected),
 // a per-applet rc test, a clode-authored stderr line carrying the probe's why +
 // fix, and the applet's own exit code propagated unchanged.
 
@@ -176,7 +179,7 @@ const findFinding = {
 test('rewriteSnapshot with a skew finding: shadow diagnoses on failure, exit code intact', () => {
   const out = rewriteSnapshot(skewSnap, [findFinding]);
   // the skewed find shadow: plain invocation (no exec), rc capture, applet rc test
-  assert.doesNotMatch(out, /exec "\$_bin" -S dfs/);
+  assert.doesNotMatch(out, /\bexec\b/);
   assert.match(out, /\n {2}"\$_bin" -S dfs -regextype findutils-default "\$@"\n/);
   assert.match(out, /local _rc=\$\?/);
   assert.match(out, /\[ "\$_rc" -ne 0 \] && printf/);
@@ -185,8 +188,8 @@ test('rewriteSnapshot with a skew finding: shadow diagnoses on failure, exit cod
   assert.match(out, /return \$_rc/);
   // the why's single quotes are shell-escaped, not raw (would end the quoted msg)
   assert.match(out, /'\\''findutils-default'\\''/);
-  // the un-skewed grep shadow keeps the exec fast path
-  assert.match(out, /function grep \{[\s\S]*?exec "\$_bin" -G --ignore-files "\$@"/);
+  // the un-skewed grep shadow keeps the plain run: no rc capture, no trailer
+  assert.match(out, /function grep \{[\s\S]*?\n {2}"\$_bin" -G --ignore-files "\$@"\n\}/);
 });
 
 test('rewriteSnapshot without findings is byte-identical to the 1-arg form', () => {
@@ -359,8 +362,8 @@ function snapshotCmd(snapPath){
 
 // The generation-time skew probe runs against whatever CLODE_BFS/CLODE_UGREP (or
 // PATH) resolves, and a skewed host applet legitimately changes the emitted
-// shadow (exec fast path vs skew trailer — see the skew tests below). These
-// generator tests assert the EXEC form, so they pin the applets to accepting
+// shadow (plain run vs skew trailer — see the skew tests below). These
+// generator tests assert the PLAIN form, so they pin the applets to accepting
 // stubs to be deterministic on any host.
 function withOkApplets(fn){
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-okstub-'));
@@ -387,8 +390,8 @@ test('child_process.execFileSync rewrites the snapshot-generator command (shell 
     cp.execFileSync('sh', ['-c', snapshotCmd(snap)]);
     const got = fs.readFileSync(snap, 'utf8');
     assert.doesNotMatch(got, /ARGV0=ugrep|ARGV0=bfs|_cc_bin/);
-    assert.match(got, /exec "\$_bin" -G --ignore-files/);
-    assert.match(got, /exec "\$_bin" -S dfs -regextype findutils-default/);
+    assert.match(got, /\n {2}"\$_bin" -G --ignore-files/);
+    assert.match(got, /\n {2}"\$_bin" -S dfs -regextype findutils-default/);
   });
 });
 
@@ -404,7 +407,7 @@ test('child_process.execFile (async) rewrites the snapshot-generator command', {
         assert.ifError(err);
         const got = fs.readFileSync(snap, 'utf8');
         assert.doesNotMatch(got, /ARGV0=ugrep/);
-        assert.match(got, /exec "\$_bin" -G --ignore-files/);
+        assert.match(got, /\n {2}"\$_bin" -G --ignore-files/);
         done();
       } catch (e) { done(e); }
       finally { restore(); }
@@ -425,7 +428,7 @@ test('child_process.spawnSync rewrites the snapshot-generator command', { skip: 
     const snap = path.join(dir, 'shell-snapshots', 'snapshot-zsh-3.sh');
     cp.spawnSync('sh', ['-c', snapshotCmd(snap)]);
     const got = fs.readFileSync(snap, 'utf8');
-    assert.match(got, /exec "\$_bin" -G --ignore-files/);
+    assert.match(got, /\n {2}"\$_bin" -G --ignore-files/);
     assert.doesNotMatch(got, /ARGV0=ugrep/);
   });
 });
@@ -435,7 +438,7 @@ test('child_process.spawnSync rewrites the snapshot-generator command', { skip: 
 // the find shadow skewed, the rewritten shadow must carry the diagnosis, and
 // RUNNING that find must print the self-explaining line on stderr AND still
 // propagate the applet's own exit code. CLODE_UGREP points at an accepting
-// stub, so the grep shadow must keep its exec fast path.
+// stub, so the grep shadow must keep its plain run (no skew trailer).
 test('generated find explains a known skew at the point of use', { skip: SH_SKIP }, () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-skewrun-'));
   const bfsStub = path.join(dir, 'bfs-stub');
@@ -458,7 +461,7 @@ test('generated find explains a known skew at the point of use', { skip: SH_SKIP
   }
   const got = fs.readFileSync(snap, 'utf8');
   assert.match(got, /known applet skew/);
-  assert.match(got, /function grep \{[\s\S]*?exec "\$_bin" -G/);
+  assert.match(got, /function grep \{[\s\S]*?\n {2}"\$_bin" -G[^\n]*\n\}/);
   // run the generated find: stderr carries the stub's error AND clode's diagnosis.
   // bash, not sh: snapshots use the `function name {` form (bash/zsh — what the
   // bundle actually sources them with); Ubuntu's sh is dash, which rejects it.
