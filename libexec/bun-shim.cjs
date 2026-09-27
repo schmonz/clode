@@ -153,12 +153,29 @@ const _rewriteSnapshotArg = (s) => {
   // fatal). When the probe finds skew, rebuild with the findings so the affected
   // shadows carry the self-explaining failure trailer (see buildShadow).
   try {
-    const findings = warnAppletSkew(collectShadows(s));
+    const shadows = collectShadows(s);
+    _warnUnparsedShadows(shadows);
+    const findings = warnAppletSkew(shadows);
     if (findings && findings.length) rewritten = rewriteSnapshot(s, findings);
   } catch (_) {}
   _markSnapshotProbed();
   return rewritten;
 };
+// The loud half of SHADOW_ARG_SPELLINGS: a shadow whose flags could not be read runs
+// its host applet with none, so say so where a person or an agent will see it. Once
+// per (shadow, reason) per process; a new snapshot in the same session stays quiet.
+const _unparsedWarned = new Set();
+function _warnUnparsedShadows(shadows){
+  for (const sh of shadows || []){
+    if (!sh.unparsed) continue;
+    const key = sh.name + '\0' + sh.unparsed;
+    if (_unparsedWarned.has(key)) continue;
+    _unparsedWarned.add(key);
+    process.stderr.write(`clode: could not read upstream's flags for the ${sh.name} shadow ` +
+      `(${sh.unparsed}); it runs ${sh.applet} with none. Please report this with your ` +
+      `Claude Code version.\n`);
+  }
+}
 // Rewrite any snapshot-generator command found in a child_process invocation.
 // execFile/spawn family: the command string is an element of the args ARRAY (2nd arg).
 // exec/execSync family: the command is the FIRST string arg.
@@ -429,18 +446,48 @@ function matchBrace(text, openIdx){
   return -1;
 }
 
-// Pull the applet + the flag string (between "$_cc_bin" and "$@") out of a shadow
-// body, plus the optional passthrough `for _cc_a ... done` guard. Returns null if
-// the body is not an upstream multiplexer shadow.
+// SHADOW_ARG_SPELLINGS — the rule: an upstream shadow's applet call is
+// `"$_cc_bin" <flags> <args>`, where <args> is one of these spellings, and the flags
+// are everything in between. Every carve on the dev box from 2.1.185 to 2.1.283
+// (both the darwin and linux-x64 snapshot writers) spells it `${1+"$@"}`; `"$@"` is
+// the spelling test/fixtures/snapshot-execpath.sh and snapshot-installpath.sh carry.
+// Only `"$@"` was known until 2026-09-27, so against every real snapshot the rewrite
+// read "no flags": the Bash tool's grep searched .gitignored files, find ran without
+// its regex type, and the skew probe had nothing to probe. A call that ends in
+// anything else, or branches (zsh/msys/bash) that disagree, is UNPARSED, never "no
+// flags": the shadow is still routed to the host applet, a comment in its body says
+// the flags could not be read, and the rewrite warns on stderr (_warnUnparsedShadows).
+const SHADOW_ARG_SPELLINGS = ['${1+"$@"}', '"$@"'];
+const _SHADOW_CALL = /(?:ARGV0=|exec -a )[A-Za-z0-9_+-]+\s+"\$_cc_bin"(.*)$/;
+function _shadowCallFlags(body){
+  const seen = new Set();
+  for (const line of body.split('\n')) {
+    const m = _SHADOW_CALL.exec(line);
+    if (!m) continue;
+    let tail = m[1].trim();
+    if (/^\s*\(\s*exec -a /.test(line) && tail.endsWith(')')) tail = tail.slice(0, -1).trim();
+    const spelling = SHADOW_ARG_SPELLINGS.find((a) => tail === a || tail.endsWith(' ' + a));
+    if (spelling === undefined) return { unparsed: `unknown argument spelling in: ${tail}` };
+    seen.add(tail.slice(0, tail.length - spelling.length).trim());
+  }
+  if (seen.size === 0) return { unparsed: 'no applet call on "$_cc_bin"' };
+  if (seen.size > 1) return { unparsed: `branches disagree: ${[...seen].join(' | ')}` };
+  return { flags: [...seen][0] };
+}
+
+// Pull the applet + the flag string (see SHADOW_ARG_SPELLINGS) out of a shadow body,
+// plus the optional passthrough `for _cc_a ... done` guard. Returns null if the body
+// is not an upstream multiplexer shadow.
 function parseShadow(body){
   const am = SHADOW_APPLET.exec(body);
   if (!am || !/_cc_bin|CLAUDE_CODE_EXECPATH|\/claude\b/.test(body)) return null;
   const applet = am[1];
-  const fm = /"\$_cc_bin"\s+([\s\S]*?)\s+"\$@"/.exec(body);
-  const flags = fm ? fm[1].trim() : '';
+  const call = _shadowCallFlags(body);
   const gm = /(\s*local _cc_a[\s\S]*?\n\s*done\n)/.exec(body);
   const guard = gm ? gm[1] : '';
-  return { applet, flags, guard };
+  const parsed = { applet, flags: call.flags || '', guard };
+  if (call.unparsed) parsed.unparsed = call.unparsed;
+  return parsed;
 }
 
 // Embed arbitrary text as a single shell word: single-quote it, escaping any
@@ -476,6 +523,7 @@ function buildShadow(name, known, parsed, finding){
   const flags = parsed.flags ? ' ' + parsed.flags : '';
   const head = `function ${name} {\n` +
     parsed.guard +
+    (parsed.unparsed ? `  # clode: could not read upstream's flags for ${name} (${parsed.unparsed.replace(/\n/g, ' ')}); running ${applet} with none\n` : '') +
     `  local _bin="\${${env}:-$(command -v ${applet} 2>/dev/null)}"\n` +
     `  [ -n "$_bin" ] || { echo "clode: ${name} needs '${applet}' (set ${env} or install it)" >&2; return 127; }\n`;
   if (!finding) return head + `  "$_bin"${flags} "$@"\n}`;
@@ -543,8 +591,11 @@ function collectShadows(text){
   const out = [];
   _eachShadow(String(text), ({ name, parsed }) => {
     const known = CLODE_SHADOWS[name];
-    if (known && known.applet === parsed.applet)
-      out.push({ name, applet: known.applet, env: known.env, flags: parsed.flags });
+    if (known && known.applet === parsed.applet){
+      const sh = { name, applet: known.applet, env: known.env, flags: parsed.flags };
+      if (parsed.unparsed) sh.unparsed = parsed.unparsed;
+      out.push(sh);
+    }
   });
   return out;
 }
