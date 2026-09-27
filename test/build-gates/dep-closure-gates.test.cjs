@@ -377,10 +377,12 @@ function lockfileControlInputs() {
 
 // Measured 2026-09-12: computeDepClosure's versions Map over the real deps/claude
 // closure has 18 entries (18 packages, every one resolved to a version). See
-// task-2-report.md for the exact command.
+// task-2-report.md for the exact command. Re-measured 2026-09-26: 16, because wrap-ansi
+// left deps/claude (Bun.wrapAnsi is libexec/unicode-text.cjs's) and took ansi-styles, its
+// one dependency nothing else needs, with it. Still the exact closure, as GUARD 4's is.
 const guard3 = defineGuard({
   name: 'dep-closure-matches-lockfile',
-  floor: 18,
+  floor: 16,
   read: readLockfileInputs,
   scan: scanClosureMatchesLockfile,
   control: lockfileControlInputs,
@@ -443,9 +445,12 @@ function computeClosureControlInputs() {
 //            const i=d.readComputeClosureInputs(); const v=new Map();
 //            computeDepClosure(i.nmDir,i.directDeps,{versions:v}); console.log(v.size)"
 //   -> 18
+// Re-measured 2026-09-26 by the same command: 7 direct dependencies (wrap-ansi removed:
+// Bun.wrapAnsi is libexec/unicode-text.cjs's now) resolve into 16 packages; the two that left
+// are wrap-ansi and ansi-styles, which only wrap-ansi required.
 const guard4 = defineGuard({
   name: 'dep-closure-computed-closure',
-  floor: 18,
+  floor: 16,
   read: readComputeClosureInputs,
   scan: scanComputeClosure,
   control: computeClosureControlInputs,

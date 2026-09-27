@@ -319,13 +319,13 @@ function makeRequire(fromDir) {
 }
 
 /* ---- minimal ESM -> CJS transpile -------------------------------------------
- * The bundle's text-rendering deps (string-width / strip-ansi / wrap-ansi and
- * their graph: ansi-regex, get-east-asian-width, ansi-styles) are ESM-only
+ * The npm text packages in deps/claude (strip-ansi, which backs Bun.stripANSI, and
+ * string-width, and their graph: ansi-regex, get-east-asian-width) are ESM-only
  * (package "type":"module"). Host node's require() loads ESM; this loader's
  * new Function() host does not. Rather than a full ESM engine, transpile the
  * static import/export forms these well-behaved (Prettier-formatted, no TLA, no
  * import.meta) packages use into CJS. Validated against the real packages: the
- * transpiled string-width/strip-ansi/wrap-ansi produce byte-identical results
+ * transpiled string-width/strip-ansi produce byte-identical results
  * (test/node-shim-esm.test.cjs). NOT a general ESM implementation — dynamic
  * import(), top-level await, live-binding re-exports, and import.meta are NOT
  * handled; a module needing them is a genuine later wall. */
@@ -917,9 +917,9 @@ globalThis.clearImmediate ??= (h) => clearTimeout(h);
 // identifier (e.g. `global.TEST...`). tjs exposes only globalThis, so alias it.
 globalThis.global ??= globalThis;
 
-// Intl polyfill: this tjs build ships NO `Intl` global at all, but the bundle's
-// text deps (wrap-ansi's string-width) do `new Intl.Segmenter()` to split text into
-// grapheme clusters. modules/intl.cjs's Segmenter is real UAX #29 clustering, from
+// Intl polyfill: this tjs build ships NO `Intl` global at all, but the bundle (and npm
+// string-width, which the tests run under tjs) does `new Intl.Segmenter()` to split text
+// into grapheme clusters. modules/intl.cjs's Segmenter is real UAX #29 clustering, from
 // the ONE implementation in libexec/unicode-text.cjs (which is why that file must
 // ride two levels above modules/ in every packaging), judged against native Bun by
 // test/fidelity/text-differential.test.cjs. The bundle uses Segmenter, NumberFormat,

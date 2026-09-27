@@ -19,7 +19,6 @@ const MKFIXTURE = path.join(REPO, 'test', 'mkfixture.cjs');
 const RENDER_FAKES = {
   'string-width': "module.exports = (s) => [...String(s).replace(/\\x1b\\[[0-9;?]*[ -\\/]*[@-~]/g, '')].length;\n",
   'strip-ansi': "module.exports = (s) => String(s).replace(/\\x1b\\][^\\x07\\x1b]*(?:\\x07|\\x1b\\\\)|\\x1b\\[[0-9;?]*[ -\\/]*[@-~]/g, '');\n",
-  'wrap-ansi': "module.exports = (s) => String(s);\n",
   'semver': "const P = (v) => String(v).replace(/^[v=]+/, '').split('.').map((n) => parseInt(n, 10) || 0);\n"
     + "exports.compare = (a, b) => { const x = P(a), y = P(b); for (let i = 0; i < 3; i++) if ((x[i]||0) !== (y[i]||0)) return (x[i]||0) < (y[i]||0) ? -1 : 1; return 0; };\n"
     + "exports.satisfies = () => true;\n",
