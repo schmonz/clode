@@ -8,7 +8,7 @@
 // auto-mode safety gate the same way in both", so no Agent ever ran and the row passed on
 // identical refusals. On the dev Mac (2026-09-27) that gate came from the operator's own
 // ~/.claude settings (defaultMode auto), which the row inherited. A check that passes when no
-// subagent ran cannot fail on a subagent that is broken, and one was: see TOO_MANY_CAPTURES
+// subagent ran cannot fail on a subagent that is broken, and one was: see REGEXP_REFUSED
 // below. The row now runs in a fresh config dir, asks for a synchronous agent, and judges the
 // answer.
 const test = require('node:test');
@@ -46,15 +46,16 @@ function handBack(m) {
   const id = (/agentId: ([0-9a-f]+)/.exec(s) || [])[1];
   return (id ? s.split(id).join('<agentId>') : s).replace(/duration_ms: \d+/g, 'duration_ms: <ms>');
 }
-// quaude cannot finish a subagent at 2.1.283 (measured 2026-09-27, --debug-to-stderr): the
-// completion path compiles a RegExp with more capture groups than QuickJS allows (254: its
-// CAPTURE_COUNT_MAX is 255, counting the whole match), and QuickJS's regexp compiler refuses
-// it ("SyntaxError: too many captures"; V8 and JSC accept it). On 2.1.283 that regex is the
-// carve's bracketedLeadScrubPattern (`get lead()` -> `_No`); this row does not check which
-// regex it is, only the error. naude hands the answer back. The row skips on exactly that
-// tool_result, after proving naude's carries the answer, and asserts in full otherwise
-// (BACKLOG.md, "quaude's Agent tool: too many captures").
-const TOO_MANY_CAPTURES = /^too many captures$/;
+// NO REGEXP REFUSED ON THE TURN. Until LEAD-SCRUB-POSSESSIVE (libexec/extract-claude-js.cjs,
+// 2026-09-27) quaude could not finish a subagent from 2.1.278 on: the completion path built the
+// artifact-lead scrubber's pattern (bracketedLeadScrubPattern, 559 capture groups), QuickJS
+// refused it ("too many captures": it allows 254), and the Task tool_result was that error. The
+// same pattern is read on EVERY turn (the harness-content scan of the model's text), so each turn
+// also logged `SyntaxError ... at RegExp (native) ... at get lead` under --debug-to-stderr, three
+// times on this row's turn. This row now runs both engines with --debug-to-stderr and holds
+// quaude's log free of any RegExp QuickJS refused, whichever pattern it is: the next one upstream
+// builds past QuickJS's limits fails here by name, not as a missing answer.
+const REGEXP_REFUSED = /SyntaxError[^\n]*?at RegExp \(native\)|too many captures/;
 
 // THROUGH CLODE'S OWN STAGING (../oracle-models.cjs's stageCli), not the raw
 // extractor directly. The raw libexec/extract-claude-js.cjs emits the graph
@@ -100,9 +101,10 @@ async function engineRun(cmd, argv) {
   const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'subdiff-cfg-'));
   const env = { ...process.env, ANTHROPIC_BASE_URL: mock.url, ANTHROPIC_API_KEY: 'sk-ant-mock',
     CLAUDE_CONFIG_DIR: configDir, NODE_PATH: path.join(REPO, 'deps', 'claude', 'node_modules') };
-  const r = await run(cmd, [...argv(cli), '-p', 'delegate the work', '--allowedTools', 'Task'], dir, env, 90000);
+  const r = await run(cmd, [...argv(cli), '-p', 'delegate the work', '--allowedTools', 'Task',
+    '--debug', '--debug-to-stderr'], dir, env, 90000);
   fs.rmSync(configDir, { recursive: true, force: true });
-  const result = { status: r.status, done: /TASKDONE/.test(r.stdout), requests: mock.requests };
+  const result = { status: r.status, done: /TASKDONE/.test(r.stdout), requests: mock.requests, stderr: r.stderr };
   await mock.close();
   return result;
 }
@@ -117,13 +119,8 @@ test('subagent (Task) dispatch is identical under naude and quaude', async (t) =
   assert.strictEqual(quaude.status, 0, 'quaude did not exit 0');
   assert.ok(naude.done && quaude.done, 'both engines must reach the final turn');
   assert.ok(answered(naude), `naude's Task tool_result lacks the subagent's answer: ${JSON.stringify(toolResultText(naude, TASK.id))}`);
-  const q = toolResult(quaude, TASK.id);
-  if (q && q.isError && TOO_MANY_CAPTURES.test(q.text)) {
-    t.skip('quaude\'s Agent tool answers "too many captures": a regex on the Agent completion path has more '
-      + 'capture groups than QuickJS allows (254); naude hands the answer back '
-      + '(BACKLOG.md: quaude\'s Agent tool: too many captures)');
-    return;
-  }
   assert.ok(answered(quaude), `quaude's Task tool_result lacks the subagent's answer: ${JSON.stringify(toolResultText(quaude, TASK.id))}`);
   assert.strictEqual(handBack(quaude), handBack(naude), 'quaude Task tool_result must byte-match naude');
+  const refused = quaude.stderr.split('\n').filter((l) => REGEXP_REFUSED.test(l));
+  assert.deepStrictEqual(refused, [], 'quaude refused a RegExp native accepts, on this turn');
 });
