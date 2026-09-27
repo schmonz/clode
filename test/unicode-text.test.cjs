@@ -1076,3 +1076,33 @@ test('WRAP-LINK: the OSC 8 link in force is closed at each row end and reopened 
   assert.strictEqual(wrapAnsi('\x1b]8;;u\x18ab cd', 2), '\x1b]8;;u\x18ab\ncd');
   assert.strictEqual(wrapAnsi('\x1b]8;;u', 2), '\x1b]8;;u');
 });
+
+// wrapAnsi takes two fast paths for input that is printable ASCII, with or without ESC sequences,
+// and finds escapes with indexOf when the input holds no C1 introducer; both are a second statement
+// of rules the general path states (BUN-STRINGWIDTH, ESCAPE-LAYER). WRAP-NEWLINE wraps each line
+// on its own, so a line must wrap the same whatever the other lines hold: a second line holding a
+// non-ASCII character sends the first down the general path, one holding U+009B down the
+// character-by-character scan for introducers. Seeded, so the same strings every run. (Measured
+// 2026-09-26: a fast path that counted a sequence ended by an ESC alone as 0 wide broke it on
+// 40 of these 40,000 strings, where every unit test above and every text gate stayed green.)
+test('wrapAnsi: a line wraps the same whatever the other lines hold (the fast paths are the general one)', () => {
+  let seed = 12345;
+  const rnd = (n) => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed % n; };
+  const atoms = ['a', 'b', 'c', 'x', ' ', ' ', ' ', '  ', '#', '1', 'longword', 'abcdefghij', '\x1b[1m', '\x1b[22m', '\x1b[31m',
+    '\x1b[39m', '\x1b[0m', '\x1b[m', '\x1b[4294967297m', '\x1b[1;31m', '\x1b[38;5;1m', '\x1b]8;;u\x1b\\', '\x1b]8;;\x1b\\',
+    '\x1b]8;id=1;v w\x1b\\', '\x1b ', '\x1b  ', '\x1b', '\x1b\x1b', '\x1b7', '\x1b[1', '\x1b[1 m', '\x1bPq\x1b\\', '\x1b_x',
+    '\x1b]0;t', '\x1b(B'];
+  const others = ['\n' + H(0xe9), '\n\x9b', '\r' + H(0x4e2d) + ' x'];
+  const opts = [];
+  for (const hard of [false, true]) for (const trim of [true, false]) for (const wordWrap of [true, false]) opts.push({ hard, trim, wordWrap });
+  let differ = 0, first = '';
+  for (let k = 0; k < 40000; k++) {
+    let s = '';
+    for (let j = 1 + rnd(12); j > 0; j--) s += atoms[rnd(atoms.length)];
+    const cols = 1 + rnd(14), o = opts[rnd(opts.length)], other = others[rnd(others.length)];
+    const together = wrapAnsi(s + other, cols, o);
+    const apart = wrapAnsi(s, cols, o) + '\n' + wrapAnsi(other.slice(1), cols, o);
+    if (together !== apart && differ++ === 0) first = JSON.stringify([s, cols, o, other, together, apart]);
+  }
+  assert.strictEqual(differ, 0, `${differ} of 40000 strings wrap differently beside another line; first: ${first}`);
+});

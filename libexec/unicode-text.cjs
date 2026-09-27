@@ -1192,9 +1192,33 @@ function sequenceRun(str, i, end) {
 // What the input is made of, read once per call (CR and LF end lines, so no span or row holds
 // one): PLAIN, printable ASCII alone; ESC_ONLY, printable ASCII and ESC; or neither. Speed only:
 // under tjs, counting and scanning character by character in JS is what made this 2x slower
-// than npm wrap-ansi (task 3's timing); every answer is the one the general path gives.
+// than npm wrap-ansi (task 3's timing); every answer is the one the general path gives
+// (test/unicode-text.test.cjs holds the two paths to each other).
+//
+// The paths rest on three facts, each READ FROM THE RULES at load rather than restated, and all
+// of it is off (every input takes the general path) the day one fails: bun-cell clusters printable
+// ASCII as plain Other (plainAscii); every printable ASCII code point is 1 wide either way
+// (codePointWidth); and ESC is the one introducer below U+0080 (startsSequence). The classes
+// below are built from isPrintableAscii and startsSequence over the code units U+0000-U+00FF,
+// the range every one of ESCAPE-LAYER's seven introducers lies in.
 const PLAIN = 1, ESC_ONLY = 2;
-const NOT_PLAIN = /[^\n\r\x20-\x7e]/, NOT_ESC_ONLY = /[^\n\r\x1b\x20-\x7e]/, C1_INTRODUCER = /[\x90\x98\x9b\x9d\x9e\x9f]/;
+function unitClass(negate, keep) {
+  let s = '';
+  for (let c = 0; c <= 0xff; c++) if (keep(c)) s += '\\x' + (c < 0x10 ? '0' : '') + c.toString(16);
+  return new RegExp('[' + (negate ? '^' : '') + s + ']');
+}
+const isLineBreak = (c) => c === 0x0a || c === 0x0d;
+const NOT_PLAIN = unitClass(true, (c) => isPrintableAscii(c) || isLineBreak(c));
+const NOT_ESC_ONLY = unitClass(true, (c) => isPrintableAscii(c) || isLineBreak(c) || c === ESC);
+const C1_INTRODUCER = unitClass(false, (c) => c >= 0x80 && startsSequence(c));
+const ASCII_RUNS = (() => {
+  if (!PROFILES['bun-cell'].plainAscii || !startsSequence(ESC)) return false;
+  for (let c = 0; c < 0x80; c++) {
+    if (isPrintableAscii(c) && (codePointWidth(c, true) !== 1 || codePointWidth(c, false) !== 1)) return false;
+    if (c !== ESC && startsSequence(c)) return false;
+  }
+  return true;
+})();
 
 // Where the next escape introducer at or after i is, looking no further than `end` (`end` when
 // there is none): the next ESC, when the caller knows the string holds no C1 introducer.
@@ -1220,7 +1244,7 @@ function spanWidth(str, a, b, narrow, kind) {
     return width;
   }
   let i = a;
-  while (i < b) { const c = str.charCodeAt(i); if (c < 0x20 || c > 0x7e) break; i++; }
+  if (ASCII_RUNS) while (i < b && isPrintableAscii(str.charCodeAt(i))) i++;
   if (i === b) return b - a;
   return textWidth(escapeLayer(a === 0 && b === str.length ? str : str.slice(a, b)).text, narrow);
 }
@@ -1421,8 +1445,8 @@ function wrapAnsi(input, columns, options) {
     if (a !== undefined) narrow = !!a;
   }
   if (cols === 0) return str;                                                                               // WRAP-NARROW
-  const kind = str.search(NOT_PLAIN) < 0 ? PLAIN : str.search(NOT_ESC_ONLY) < 0 ? ESC_ONLY : 0;
-  const w = { str, cols, hard, wordWrap, trim, narrow, kind, c1: kind === 0 && str.search(C1_INTRODUCER) >= 0,
+  const kind = !ASCII_RUNS ? 0 : str.search(NOT_PLAIN) < 0 ? PLAIN : str.search(NOT_ESC_ONLY) < 0 ? ESC_ONLY : 0;
+  const w = { str, cols, hard, wordWrap, trim, narrow, kind, c1: !ASCII_RUNS || (kind === 0 && str.search(C1_INTRODUCER) >= 0),
     at: { next: -1 }, rows: null, width: 0, stale: false };
   const n = str.length;
   let out = '';
