@@ -86,14 +86,19 @@ test('agentic Write round-trip under tjs: the tool creates the file on disk', as
   } finally { await mock.close(); }
 });
 
-// The Grep tool still exists at 2.1.283 when the Bash tool does not (upstream swaps
-// Grep/Glob for `grep`/`find` via Bash only when Bash is present), which is this row's
-// `--allowedTools Grep`. There it now runs `rg --json`, and the rg->ugrep translation
-// refuses --json by design (RgTranslateError: rg-only output, no faithful ugrep form),
-// so the tool answers "ripgrep not found on PATH". Measured 2026-09-27; the old check
-// passed anyway because it matched MARK in the tool_use's own `pattern`. The row skips
-// on exactly that proven signature and asserts in full otherwise (BACKLOG.md, "the
-// Grep tool fails in quaude at 2.1.283").
+// This row's `--allowedTools Grep` sets upstream's searchToolsOptIn, which keeps the
+// Grep and Glob tools even where upstream would otherwise swap them for `grep`/`find`
+// via Bash. They are also kept under CLAUDE_CODE_ENTRYPOINT=local-agent, and on Windows
+// without Git Bash; `--allowedTools Bash,Grep` keeps Grep, and `--disallowedTools Bash`
+// still removes it (read from the 2.1.283 carve by the F4 review, 2026-09-27). In
+// output_mode "content" the tool runs `rg --json` (from 2.1.251 on; not in .185/.218/
+// .243/.246/.250), which the rg->ugrep translation refuses by design, so the tool
+// answered "ripgrep not found on PATH" here. The old check passed anyway, on MARK in
+// the tool_use's own `pattern`. When the refusal shows on stderr, this row can never
+// count as a pass: it skips with that reason, even if a host rg on PATH answered
+// instead (on a refusal _rewriteRgSpawn hands back the untranslated argv, so a host rg
+// runs, which the rg-divergence rule forbids). Otherwise it asserts in full (BACKLOG.md,
+// "The Grep tool in quaude").
 const GREP_JSON_REFUSED = /rg→ugrep shim doesn't translate --json/;
 const RG_NOT_FOUND = /^ripgrep not found on PATH\./;
 test('agentic Grep round-trip under tjs: search-applet path returns the match', async (t) => {
@@ -111,9 +116,12 @@ test('agentic Grep round-trip under tjs: search-applet path returns the match', 
     assert.strictEqual(r.status, 0, `stderr:\n${r.stderr}`);
     const result = toolResultText(mock, ID);
     assert.ok(result, 'no follow-up POST carrying the Grep tool_result');
-    if (RG_NOT_FOUND.test(result) && GREP_JSON_REFUSED.test(r.stderr)) {
+    if (GREP_JSON_REFUSED.test(r.stderr)) {
       t.skip('the Grep tool runs `rg --json`, which the rg->ugrep translation refuses by design; '
-        + 'the tool answered "ripgrep not found on PATH" (BACKLOG.md: the Grep tool fails in quaude at 2.1.283)');
+        + (RG_NOT_FOUND.test(result)
+          ? 'the tool answered "ripgrep not found on PATH"'
+          : 'a host rg answered instead, which the rg-divergence rule forbids')
+        + ' (BACKLOG.md: The Grep tool in quaude)');
       return;
     }
     assert.match(result, new RegExp(MARK), `Grep tool_result lacks the match:\n${result.slice(0, 1500)}`);
