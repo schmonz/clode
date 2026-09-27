@@ -85,6 +85,17 @@ test('flags that would expand shell text are reported, not copied into a functio
   }
 });
 
+// The braced form, on its own row: `${HOME}` (and `${VAR:-default}`) expand exactly as `$HOME`
+// does, and the argument spelling itself is `${1+"$@"}`, so a rule that only looked for `$(`,
+// `$NAME` or a backtick would miss it. `/[$`]/` catches it today; this row keeps it caught.
+test('a braced ${...} flag is reported as shell text, not copied as a literal', () => {
+  for (const tail of ['-G --exclude-dir=${HOME} ${1+"$@"}', '-G --exclude-dir=${X:-.git} "$@"']) {
+    const [sh] = collectShadows(oddShadow(tail));
+    assert.strictEqual(sh.flags, '', tail);
+    assert.match(sh.unparsed, /flags expand shell text: -G --exclude-dir=\$\{/, tail);
+  }
+});
+
 test('an unparsed shadow reaches /doctor, and an unparsed rg says rg is unaffected', { skip: process.platform === 'win32' ? 'POSIX-shell snapshot generation has no Windows analog' : false }, () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shadow-flags-doctor-'));
   fs.mkdirSync(path.join(dir, 'shell-snapshots'));
