@@ -159,27 +159,48 @@ Bash tool instead".
 - **test/fidelity/agentic-tools.test.cjs checked the whole body, as B1 and B4 did. FIXED
   (f4d763d)**: the Grep, multi-turn and hook rows read the tool_result. The Grep row then went
   red, for the reason in the Grep-tool item above.
-- **quaude's Agent tool: too many captures. A subagent never finishes under quaude at
-  2.1.283.** (Found 2026-09-27 by the live-checks ratchet,
-  test/build-gates/live-checks-gates.test.cjs.) When a subagent completes, the bundle
-  compiles its bracketedLeadScrubPattern (`get lead()` -> `_No` in the carve), a RegExp with
-  more capture groups than QuickJS allows: 254, because its CAPTURE_COUNT_MAX of 255 counts the
-  whole match. QuickJS's regexp compiler refuses it ("SyntaxError: too many captures"); V8 and
-  JSC accept it. A synchronous Agent call answers the model with the error `too many captures`,
-  and the same run's --debug-to-stderr logs `[AsyncAgent <id>] completion sequence threw after
-  finalize: too many captures` with a stack through `_No`. naude hands the subagent's answer
-  back. test/fidelity/agentic-subagent-diff.test.cjs skips on exactly that tool_result, and
-  asserts in full otherwise. Before the ratchet, that row compared two identical ERRORS: it
-  inherited the operator's ~/.claude, whose `"defaultMode": "auto"` sent every Task call to the
-  auto-mode classifier, which the mock cannot answer.
-  - Repro, the engine alone: `"$CLODE_TJS" eval 'try { new RegExp("(a)".repeat(255)) } catch
-    (e) { console.log(String(e)) }'` prints `SyntaxError: too many captures` (254 groups
+- **quaude's Agent tool: too many captures. A subagent never finished under quaude from
+  2.1.278 on. FIXED (4d0a067, 00591cf)**: the artifact-lead scrubber's builder
+  (bracketedLeadScrubPattern) spells a constant list (24 phrases, 104 words, 554 letters) with
+  one atomic separator, and so one capture group, per letter gap and word gap: 559. QuickJS
+  allows 254, and its capture index is a byte in the regexp bytecode, so the engine route was a
+  bytecode format change. The LEAD-SCRUB-POSSESSIVE graph hook builds each separator
+  possessively, with no group (the equivalence argument is in libexec/extract-claude-js.cjs).
+  test/fidelity/lead-scrub-equivalence.test.cjs runs the real carve's builder inside native Bun
+  and the hooked one under quaude: identical over 7055 inputs, while a backtracking joiner
+  differs on 30. The pattern was read on EVERY turn, not only when a subagent completed: a plain
+  -p turn logged `SyntaxError ... at RegExp (native) ... at get lead` twice and a Task turn six
+  times, and the harness-content scan of the model's text never ran. subagent-diff now passes on
+  the subagent's answer and holds quaude's --debug-to-stderr log free of refused RegExps.
+  - Repro, the engine alone (still true): `"$CLODE_TJS" eval 'try { new RegExp("(a)".repeat(255))
+    } catch (e) { console.log(String(e)) }'` prints `SyntaxError: too many captures` (254 groups
     compile); `node -e 'new RegExp("(a)".repeat(255))'` is silent.
-  - Repro, the product: `CLODE_TJS=<tjs> CLODE_PROVIDER_BIN=<2.1.283 claude> node --test
-    test/fidelity/agentic-subagent-diff.test.cjs` skips with that reason; delete the skip and it
-    fails with `quaude's Task tool_result lacks the subagent's answer: "too many captures"`.
-  Not fixed: it needs the regexp compiled within QuickJS's limit, or the pattern rewritten
-  where the shim can see it.
+- **The rewritten scrub pattern costs quaude about 0.4 s a turn on darwin-arm64.** It is 1,557,878
+  characters (native's 879,796: each separator's class appears twice), and QuickJS compiles it in
+  about 140 ms here, three times on a plain turn: `lead` itself, the scan table's clone
+  (`new RegExp(t.source, t.flags)`), and every `matchAll`, because QuickJS recompiles whenever a
+  RegExp is constructed from another with explicit flags (V8 and JavaScriptCore cache compiled
+  patterns). Measured with staged clis under tjs, a canned mock, 2 runs each twice: a plain
+  `-p` turn took 6.8-7.0 s before the hook (the build failing fast) and 7.3-7.4 s after.
+  Unmeasured on the slow boxes (Tiger PPC, sparc), where it multiplies. Levers, none taken yet:
+  a compiled-pattern cache keyed by (source, flags) in the engine or the shim, which would also
+  spare the tag-scrub patterns below their per-`matchAll` recompiles; a rewrite of the letter
+  separators only (93 groups left, about 25% less to compile) was measured and not taken,
+  because it keeps a capture budget the list can outgrow.
+- **A tag-scrub pattern sits three capture groups under QuickJS's limit.** A census of every
+  RegExp naude builds at run time on a plain and on a Task turn (2.1.283, 2026-09-27) found
+  three over 100 groups: the lead pattern (559, now 0 under the hook) and two built by `h6()`
+  from the harness-envelope tag lists, with 251 and 229 groups (191,957 and 175,475
+  characters). Its builder uses the same atomic letter separator (`Hpt`/`pRe`). One more tag,
+  or a longer one, at an upstream bump, and quaude refuses it the same way. subagent-diff's log
+  check names it when that happens; the same possessive rewrite would apply.
+- **tjs's TextDecoder drops U+FEFF anywhere in the text, not only a leading BOM.**
+  `new TextDecoder().decode(new TextEncoder().encode("a" + String.fromCharCode(0xfeff) + "b"))`
+  has length 2 under tjs and 3 under node; with `{ ignoreBOM: true }` it is 3 under both. The
+  shim's `fs.readFileSync(p, 'utf8')` decodes through it, so quaude loses every U+FEFF in a file
+  it reads as text, including JS source through the loader (Buffer's own `toString('utf8')`
+  keeps it). Found building lead-scrub-equivalence's corpus: 1,134 of 25,056 inputs came back
+  one character short. The oracle ships its corpus as ASCII-escaped JSON meanwhile. Not fixed.
 - **The agentic rows run in the operator's own ~/.claude.** node-shim-agentic,
   fidelity/agentic-tools (all but --continue), fidelity/agentic-mcp-ws, quaude-build's
   strict-mode sweep, quaude-naude-updateguard and clode-native's acceptance 3 spread

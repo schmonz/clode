@@ -35,6 +35,9 @@ error with the help under it, not a silent translation:
   installed: the dependency store is now installed from the lockfile with `npm ci`. The
   first build after upgrading reinstalls an existing store once; offline, that build
   needs npm's cache, where before it ran no npm at all
+- (`quaude` only) Fix subagents (the Agent tool) never finishing when built from Claude
+  Code 2.1.278 or newer: the tool answered `too many captures`, and every turn logged the
+  same error and skipped Claude Code's scan of the model's text
 
 ## 0.20260831.1
 
