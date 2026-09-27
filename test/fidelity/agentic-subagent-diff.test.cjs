@@ -56,6 +56,26 @@ function handBack(m) {
 // quaude's log free of any RegExp QuickJS refused, whichever pattern it is: the next one upstream
 // builds past QuickJS's limits fails here by name, not as a missing answer.
 const REGEXP_REFUSED = /SyntaxError[^\n]*?at RegExp \(native\)|too many captures/;
+// ITS CONTROL: two lines, verbatim, from quaude's --debug-to-stderr log of this row's turn before
+// the hook (2026-09-27, 2.1.283): the per-turn stack (the logger writes the stack JSON-escaped,
+// on ONE line, which is what the pattern relies on) and the Agent completion's error. If the
+// logger's format moves, the check below must go red here, not pass on a log it cannot read.
+const RED_STACK_LINE = '2026-09-27T09:11:16.191Z [ERROR] "SyntaxError:     at RegExp (native)'
+  + '\\n    at _No (/$bunfs/root/chunk-v297v4sm.js:12:34516)'
+  + '\\n    at get lead (/$bunfs/root/chunk-3zhhn859.js:18:10679)'
+  + '\\n    at u1r (/$bunfs/root/chunk-3zhhn859.js:18:11912)'
+  + '\\n    at <anonymous> (/$bunfs/root/chunk-3x0j163k.js:27:1625)'
+  + '\\n    at apply (native)'
+  + '\\n    at n (/$bunfs/root/chunk-e3hszgy2.js:12:4640)'
+  + '\\n    at <anonymous> (/$bunfs/root/chunk-3x0j163k.js:27:1790)'
+  + '\\n    at apply (native)'
+  + '\\n    at n (/$bunfs/root/chunk-e3hszgy2.js:12:4640)"';
+const RED_COMPLETION_LINE = '2026-09-27T09:11:16.367Z [ERROR] [AsyncAgent acfbe992aaf6ae6f0] completion sequence threw after finalize: too many captures';
+// A line the same turn logs that is NOT a refusal.
+const RED_BENIGN_LINE = '2026-09-27T09:11:14.334Z [DEBUG] [init] configureGlobalMTLS starting';
+// The log must BE a debug log: a quaude that stopped writing one would pass the check above on
+// silence. The red turn wrote 221 [DEBUG] lines.
+const DEBUG_LINE = /^\S+ \[DEBUG\] /m;
 
 // THROUGH CLODE'S OWN STAGING (../oracle-models.cjs's stageCli), not the raw
 // extractor directly. The raw libexec/extract-claude-js.cjs emits the graph
@@ -109,6 +129,15 @@ async function engineRun(cmd, argv) {
   return result;
 }
 
+test('the refused-RegExp check reads the red run\'s log lines, and not a benign one', () => {
+  assert.match(RED_STACK_LINE, REGEXP_REFUSED);
+  assert.match(RED_COMPLETION_LINE, REGEXP_REFUSED);
+  assert.doesNotMatch(RED_BENIGN_LINE, REGEXP_REFUSED);
+  assert.match(RED_BENIGN_LINE, DEBUG_LINE);
+  const redLog = [RED_BENIGN_LINE, RED_STACK_LINE, RED_COMPLETION_LINE].join('\n');
+  assert.strictEqual(redLog.split('\n').filter((l) => REGEXP_REFUSED.test(l)).length, 2);
+});
+
 test('subagent (Task) dispatch is identical under naude and quaude', async (t) => {
   if (skipUnlessTjs(t)) return;
   if (!providerBin()) { t.skip('no CLODE_PROVIDER_BIN'); return; }
@@ -121,6 +150,7 @@ test('subagent (Task) dispatch is identical under naude and quaude', async (t) =
   assert.ok(answered(naude), `naude's Task tool_result lacks the subagent's answer: ${JSON.stringify(toolResultText(naude, TASK.id))}`);
   assert.ok(answered(quaude), `quaude's Task tool_result lacks the subagent's answer: ${JSON.stringify(toolResultText(quaude, TASK.id))}`);
   assert.strictEqual(handBack(quaude), handBack(naude), 'quaude Task tool_result must byte-match naude');
+  assert.match(quaude.stderr, DEBUG_LINE, 'quaude wrote no --debug-to-stderr log, so the check below would read nothing');
   const refused = quaude.stderr.split('\n').filter((l) => REGEXP_REFUSED.test(l));
   assert.deepStrictEqual(refused, [], 'quaude refused a RegExp native accepts, on this turn');
 });
