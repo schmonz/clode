@@ -92,8 +92,13 @@ fs.readSync = function (fd, bufferOrOpts, ...rest) {
 // We patch the SAME child_process object the bundle uses: `cp` above is
 // require('child_process'), which Node caches, so require('node:child_process')
 // and require('child_process') in the bundle resolve to this very object.
+// How an upstream shadow invokes its applet under an argv0: zsh's `ARGV0=<applet> cmd`,
+// bash's `exec -a <applet> cmd`. Stated ONCE; the snapshot detector below, SHADOW_APPLET
+// and _SHADOW_CALL are all built from it.
+const _SHADOW_INVOKE = '(?:ARGV0=|exec -a )';
+const _SNAPSHOT_SHADOW = new RegExp(_SHADOW_INVOKE);
 const _looksLikeSnapshotCmd = (s) =>
-  typeof s === 'string' && s.indexOf('SNAPSHOT_FILE=') !== -1 && /(ARGV0=|exec -a )/.test(s);
+  typeof s === 'string' && s.indexOf('SNAPSHOT_FILE=') !== -1 && _SNAPSHOT_SHADOW.test(s);
 
 // --- "the skew probe has run" signal -----------------------------------------
 // extract-claude-js's diagnostics splice awaits globalThis.__clodeEnsureSnapshot
@@ -171,9 +176,16 @@ function _warnUnparsedShadows(shadows){
     const key = sh.name + '\0' + sh.unparsed;
     if (_unparsedWarned.has(key)) continue;
     _unparsedWarned.add(key);
+    const known = CLODE_SHADOWS[sh.name];
+    // rg never uses upstream's flags: it is always the rg->ugrep translation, by design.
+    const effect = known && known.translate
+      ? `rg is translated to ugrep and never uses upstream's flags, so nothing changes`
+      : `it runs ${sh.applet} without them`;
+    const issue = `clode could not read upstream's flags for the ${sh.name} shadow (${sh.unparsed}); ${effect}`;
+    const fix = 'report this with your Claude Code version';
     process.stderr.write(`clode: could not read upstream's flags for the ${sh.name} shadow ` +
-      `(${sh.unparsed}); it runs ${sh.applet} with none. Please report this with your ` +
-      `Claude Code version.\n`);
+      `(${sh.unparsed}); ${effect}. Please ${fix}.\n`);
+    _recordSkew({ name: sh.name, applet: sh.applet, why: sh.unparsed, fix, issue });
   }
 }
 // Rewrite any snapshot-generator command found in a child_process invocation.
@@ -323,7 +335,10 @@ const CLODE_SHADOWS = {
   find: { applet: 'bfs',   env: 'CLODE_BFS',
           fix: 'install bfs ≥ 3.3 built with Oniguruma, or set CLODE_BFS to such a build',
           probe: (f) => ({ args: [...f, '-quit', '.'],           skew: (c) => c !== 0 }),
-          skewRcTest: '[ "$_rc" -ne 0 ]' },
+          skewRcTest: '[ "$_rc" -ne 0 ]',
+          // FIND_WITHOUT_ONIGURUMA (see warnAppletSkew): the one flag a bfs without
+          // Oniguruma cannot take, and the find arguments that depend on it.
+          degrade: { drop: ['-regextype', 'findutils-default'], refuseArgs: ['-regex', '-iregex', '-regextype'] } },
   rg:   { applet: 'rg',    env: 'CLODE_UGREP', translate: true,
           fix: 'set CLODE_UGREP to a compatible ugrep, or upgrade it',
           probe: (f) => ({ args: ['--version'],                  skew: (c) => c >= 2 }),
@@ -417,7 +432,7 @@ function rgShadowBody() {
 
 // A shadow body is the upstream multiplexer if it invokes an applet via argv0
 // against the provider binary. We detect the applet from ARGV0=/exec -a.
-const SHADOW_APPLET = /(?:ARGV0=|exec -a )([A-Za-z0-9_+-]+)\b/;
+const SHADOW_APPLET = new RegExp(_SHADOW_INVOKE + '([A-Za-z0-9_+-]+)\\b');
 
 // Find the end index (exclusive) of a brace-balanced block that starts at the
 // '{' at openIdx. Quote/escape aware: braces inside shell single- or
@@ -454,11 +469,12 @@ function matchBrace(text, openIdx){
 // Only `"$@"` was known until 2026-09-27, so against every real snapshot the rewrite
 // read "no flags": the Bash tool's grep searched .gitignored files, find ran without
 // its regex type, and the skew probe had nothing to probe. A call that ends in
-// anything else, or branches (zsh/msys/bash) that disagree, is UNPARSED, never "no
-// flags": the shadow is still routed to the host applet, a comment in its body says
-// the flags could not be read, and the rewrite warns on stderr (_warnUnparsedShadows).
+// anything else, flags that expand shell text (`$`, a backtick), or branches
+// (zsh/msys/bash) that disagree, are UNPARSED, never "no flags": the shadow is still
+// routed to the host applet, a comment in its body says the flags could not be read,
+// and the rewrite warns on stderr and records it for /doctor (_warnUnparsedShadows).
 const SHADOW_ARG_SPELLINGS = ['${1+"$@"}', '"$@"'];
-const _SHADOW_CALL = /(?:ARGV0=|exec -a )[A-Za-z0-9_+-]+\s+"\$_cc_bin"(.*)$/;
+const _SHADOW_CALL = new RegExp(_SHADOW_INVOKE + '[A-Za-z0-9_+-]+\\s+"\\$_cc_bin"(.*)$');
 function _shadowCallFlags(body){
   const seen = new Set();
   for (const line of body.split('\n')) {
@@ -468,7 +484,11 @@ function _shadowCallFlags(body){
     if (/^\s*\(\s*exec -a /.test(line) && tail.endsWith(')')) tail = tail.slice(0, -1).trim();
     const spelling = SHADOW_ARG_SPELLINGS.find((a) => tail === a || tail.endsWith(' ' + a));
     if (spelling === undefined) return { unparsed: `unknown argument spelling in: ${tail}` };
-    seen.add(tail.slice(0, tail.length - spelling.length).trim());
+    const flags = tail.slice(0, tail.length - spelling.length).trim();
+    // Flags are copied into a function that has none of upstream's locals, so a flag
+    // that expands anything ($x, `cmd`, $(cmd)) would expand to something else there.
+    if (/[$`]/.test(flags)) return { unparsed: `flags expand shell text: ${flags}` };
+    seen.add(flags);
   }
   if (seen.size === 0) return { unparsed: 'no applet call on "$_cc_bin"' };
   if (seen.size > 1) return { unparsed: `branches disagree: ${[...seen].join(' | ')}` };
@@ -527,6 +547,22 @@ function buildShadow(name, known, parsed, finding){
     `  local _bin="\${${env}:-$(command -v ${applet} 2>/dev/null)}"\n` +
     `  [ -n "$_bin" ] || { echo "clode: ${name} needs '${applet}' (set ${env} or install it)" >&2; return 127; }\n`;
   if (!finding) return head + `  "$_bin"${flags} "$@"\n}`;
+  if (finding.degraded){
+    // FIND_WITHOUT_ONIGURUMA: run without the dropped flag; refuse only the arguments
+    // that depend on it.
+    const refusal = shQuote(
+      `clode: this ${name} uses a regex, and the host ${applet} cannot read upstream's ` +
+      `\`${finding.degraded.dropped}\`, so the regex would silently mean something else. ` +
+      `${finding.fix}.`);
+    const reduced = finding.degraded.flags ? ' ' + finding.degraded.flags : '';
+    return head +
+      `  local _cc_a\n` +
+      `  for _cc_a in "$@"; do\n` +
+      `    case "$_cc_a" in ${known.degrade.refuseArgs.join('|')}) printf '%s\\n' ${refusal} >&2; return 1 ;; esac\n` +
+      `  done\n` +
+      `  "$_bin"${reduced} "$@"\n` +
+      `}`;
+  }
   const msg = shQuote(
     `clode: known applet skew — host ${applet} rejects the flags this ${name} shadow uses ` +
     `(${finding.why}). ${finding.fix}.`);
@@ -637,6 +673,29 @@ function _surfaceRgSkew(rewritten, status){
     `       file an issue with this command; meanwhile run ugrep directly.\n`);
   _recordSkew({ name: 'rg', applet: 'ugrep', why, fix: 'refine the rg→ugrep translation (rgToUgrep)' });
 }
+// FIND_WITHOUT_ONIGURUMA — the rule (the user's decision, 2026-09-27: "drop only that
+// flag"): when the host bfs rejects upstream's `-regextype findutils-default` but accepts
+// the rest of upstream's find flags, the rewritten find runs WITHOUT that one flag, and
+// refuses (exit 1, with the fix) only a find whose own arguments include -regex, -iregex
+// or -regextype, which would otherwise silently read its regex in another dialect (e.g.
+// `\(a\|b\)` is a GNU basic-regex extension macOS's libc lacks). Every other find runs,
+// `-S dfs` kept, so its results and order match native. Only a bfs built with Oniguruma
+// knows findutils-default; pkgsrc builds bfs --without-oniguruma. A written divergence
+// from upstream's argv (CHANGELOG.md, BACKLOG.md). Returns the reduced flag set, or null
+// when there is nothing to drop or the host rejects the rest too (then the whole shadow
+// keeps the every-invocation skew trailer).
+function _degradeFlags(known, flags, bin, spawn){
+  const d = known.degrade;
+  if (!d) return null;
+  const at = flags.findIndex((f, i) => d.drop.every((x, j) => flags[i + j] === x));
+  if (at === -1) return null;
+  const reduced = [...flags.slice(0, at), ...flags.slice(at + d.drop.length)];
+  const { args, skew } = known.probe(reduced);
+  let r;
+  try { r = spawn(bin, args, { encoding: 'utf8', timeout: 5000 }); } catch (_) { return null; }
+  if (r.error || skew(r.status)) return null;
+  return { flags: reduced.join(' '), dropped: d.drop.join(' ') };
+}
 function warnAppletSkew(shadows, spawn = _rawSpawnSync){
   const found = [];
   for (const sh of shadows){
@@ -665,15 +724,23 @@ function warnAppletSkew(shadows, spawn = _rawSpawnSync){
       const why = informative[0] || lines[0]
         || (r.error && r.error.message) || `exit ${r.status}`;
       const fix = known.fix || `set ${known.env} to a compatible ${sh.applet}, or upgrade it`;
-      const finding = { name: sh.name, applet: sh.applet, why, fix };
+      const degraded = _degradeFlags(known, flags, bin, spawn);
+      const finding = degraded
+        ? { name: sh.name, applet: sh.applet, fix, degraded,
+            why: `${why} (${sh.name} still works; only a ${known.degrade.refuseArgs.join(', ').replace(/, ([^,]*)$/, ' or $1')} ${sh.name} refuses)` }
+        : { name: sh.name, applet: sh.applet, why, fix };
       _skewProbed.set(key, finding);
       _recordSkew(finding);
       found.push(finding);
-      process.stderr.write(
-        `clode: host ${sh.applet} rejects the flags Claude's embedded ${sh.applet} uses — ` +
-        `\`${sh.name}\` will fail:\n` +
-        `       ${why}\n` +
-        `       ${fix}.\n`);
+      process.stderr.write(degraded
+        ? `clode: host ${sh.applet} rejects \`${degraded.dropped}\` — \`${sh.name}\` works without it, ` +
+          `but a ${sh.name} using ${known.degrade.refuseArgs.join(', ').replace(/, ([^,]*)$/, ' or $1')} will refuse:\n` +
+          `       ${why}\n` +
+          `       ${fix}.\n`
+        : `clode: host ${sh.applet} rejects the flags Claude's embedded ${sh.applet} uses — ` +
+          `\`${sh.name}\` will fail:\n` +
+          `       ${why}\n` +
+          `       ${fix}.\n`);
     } else {
       _skewProbed.set(key, null);
     }

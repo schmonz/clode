@@ -230,7 +230,8 @@ const INSTALL_WARNINGS =
 //   2. Defensively push each clode skew finding onto the warnings array `arr`.
 //      Safe by construction: bun-shim always records `name`, `applet`, and `why`
 //      as strings (CLODE_SHADOWS), so the string operations below are always
-//      valid. A no-op when there is no skew.
+//      valid. A finding that is not a rejection (a shadow whose flags could not be
+//      read) carries its own `issue` line, used instead. A no-op when there is no skew.
 // The forEach callback param is deliberately UN-MINIFIABLE (>6 chars): since
 // 2.1.203 the warnings array minifies to `s`, and a 1-6-char param (the old code
 // used `s`) can shadow it — `s.push` then hits the finding object and throws.
@@ -241,7 +242,7 @@ function _skewContribution(arr) {
     + 'try{await globalThis.__clodeAwaitSkewProbe()}catch(__clodeProbeErr){};'
     + 'globalThis.__clodeDoctor&&globalThis.__clodeDoctor.appletSkew&&'
     + 'globalThis.__clodeDoctor.appletSkew.forEach(function(__clodeSkw){' + arr + '.push({'
-    + 'issue:"host "+__clodeSkw.applet+" rejects flags clode\\u2019s bundled /"+__clodeSkw.name+" uses \\u2014 "+__clodeSkw.why,'
+    + 'issue:__clodeSkw.issue||("host "+__clodeSkw.applet+" rejects flags clode\\u2019s bundled /"+__clodeSkw.name+" uses \\u2014 "+__clodeSkw.why),'
     + 'fix:__clodeSkw.fix||("set CLODE_"+__clodeSkw.applet.toUpperCase()+" to a compatible "+__clodeSkw.applet)'
     + '})});'
   );

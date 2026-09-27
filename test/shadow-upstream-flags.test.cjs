@@ -77,6 +77,49 @@ test('an argument spelling it does not know is reported, never read as "no flags
   assert.match(out, /\n {2}"\$_bin" "\$@"\n/);   // still routed to the host applet
 });
 
+test('flags that would expand shell text are reported, not copied into a function without upstream\'s locals', () => {
+  for (const tail of ['-G --exclude-dir=$HOME ${1+"$@"}', '-G `cmd` ${1+"$@"}', '-G $(cmd) "$@"']) {
+    const [sh] = collectShadows(oddShadow(tail));
+    assert.strictEqual(sh.flags, '', tail);
+    assert.match(sh.unparsed, /flags expand shell text/, tail);
+  }
+});
+
+test('an unparsed shadow reaches /doctor, and an unparsed rg says rg is unaffected', { skip: process.platform === 'win32' ? 'POSIX-shell snapshot generation has no Windows analog' : false }, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shadow-flags-doctor-'));
+  fs.mkdirSync(path.join(dir, 'shell-snapshots'));
+  for (const stub of ['bfs', 'ugrep']) fs.writeFileSync(path.join(dir, stub), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  const snap = path.join(dir, 'shell-snapshots', 'snapshot-odd-2.sh');
+  const cmd = [
+    `SNAPSHOT_FILE=${snap}`,
+    `echo "# Snapshot file" >| "$SNAPSHOT_FILE"`,
+    `cat >> "$SNAPSHOT_FILE" << 'SHADOW_END'`,
+    oddShadow('-G --doctor-row-unique $*'),
+    'function rg {',
+    '  local _cc_bin="${CLAUDE_CODE_EXECPATH:-}"',
+    '  ARGV0=rg "$_cc_bin" --rg-doctor-unique $*',
+    '}',
+    'SHADOW_END',
+  ].join('\n');
+  const prev = { b: process.env.CLODE_BFS, u: process.env.CLODE_UGREP };
+  process.env.CLODE_BFS = path.join(dir, 'bfs'); process.env.CLODE_UGREP = path.join(dir, 'ugrep');
+  const orig = process.stderr.write;
+  let err = '';
+  process.stderr.write = (s) => { err += s; return true; };
+  try { cp.execFileSync('sh', ['-c', cmd]); } finally {
+    process.stderr.write = orig;
+    for (const [k, v] of [['CLODE_BFS', prev.b], ['CLODE_UGREP', prev.u]]) {
+      if (v === undefined) delete process.env[k]; else process.env[k] = v;
+    }
+  }
+  const recorded = (globalThis.__clodeDoctor && globalThis.__clodeDoctor.appletSkew) || [];
+  const grepRow = recorded.find((f) => f.name === 'grep' && /doctor-row-unique/.test(f.issue || ''));
+  assert.ok(grepRow, `no /doctor record for the unparsed grep: ${JSON.stringify(recorded)}`);
+  assert.match(grepRow.issue, /it runs ugrep without them/);
+  assert.match(err, /rg is translated to ugrep and never uses upstream's flags, so nothing changes/);
+  assert.doesNotMatch(err, /it runs rg without them/);
+});
+
 test('branches that disagree on the flags are reported, not guessed', () => {
   const snap = [
     'function find {',
@@ -187,12 +230,18 @@ for (const shell of SHELLS) {
     assert.ok(!lines(got.stdout).some((f) => /ignored\.txt$/.test(f)), `listed a .gitignored file: ${got.stdout}`);
     assert.ok(!lines(got.stdout).some((f) => /\.git\//.test(f)), `searched .git: ${got.stdout}`);
     assert.ok(lines(got.stdout).some((f) => /kept\.txt$/.test(f)), `missed kept.txt: ${got.stdout}`);
+    // upstream's --hidden: a hidden file IS searched
+    assert.ok(lines(got.stdout).some((f) => /(^|\/)\.hidden\.txt$/.test(f)), `missed .hidden.txt: ${got.stdout}`);
   });
 }
 
 // find: `-regextype findutils-default` is what makes an emacs-style -regex mean what GNU
-// find means. Only a bfs built with Oniguruma accepts it; a POSIX-only bfs rejects it, and
-// then the rewritten find carries the skew trailer instead (snapshot-rewrite.test.cjs).
+// find means. Only a bfs built with Oniguruma accepts it; on a bfs without it, the rewritten
+// find drops that flag and refuses regex finds (FIND_WITHOUT_ONIGURUMA,
+// find-without-oniguruma.test.cjs). So these rows skip on the dev Mac (pkgsrc bfs
+// --without-oniguruma) and on CI's apt bfs 3.1.2 (regex types other than POSIX arrived in
+// bfs 3.3). They last PASSED on NetBSD 11 arm64, pkgsrc bfs 4.1.3, node 24.18.0,
+// 2026-09-27, with the whole file 14/14.
 const BFS_ACCEPTS = BFS && cp.spawnSync(BFS, [...FIND_FLAGS.split(' '), '-quit', '.']).status === 0;
 for (const shell of SHELLS) {
   const skip = shellSkip(shell) || (!BFS ? 'needs a host bfs (not installed)'

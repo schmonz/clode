@@ -75,6 +75,15 @@ test('spliced builder pushes recorded findings onto the warnings array (shadow r
   assert.strictEqual(diag.warnings[0].fix, 'install bfs >= 3.3');
 });
 
+test('spliced builder uses a finding\'s own issue line when it is not a rejection', async () => {
+  // a shadow whose flags could not be READ (bun-shim _warnUnparsedShadows) is not
+  // "host X rejects flags"; it says what it is
+  const diag = await runBuilder({ __clodeDoctor: { appletSkew: [{ name: 'grep', applet: 'ugrep',
+    why: 'w', fix: 'report this', issue: 'clode could not read upstream\'s flags for the grep shadow (w)' }] } });
+  assert.strictEqual(diag.warnings[0].issue, 'clode could not read upstream\'s flags for the grep shadow (w)');
+  assert.ok(!diag.warnings[0].issue.includes('rejects'));
+});
+
 test('spliced builder falls back to the generic CLODE_<APPLET> fix', async () => {
   const diag = await runBuilder({
     __clodeDoctor: { appletSkew: [{ name: 'grep', applet: 'ugrep', why: 'w' }] },
