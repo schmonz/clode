@@ -22,36 +22,55 @@
 //   -> "Uint8Array 1681" (NOT ArrayBuffer). TextDecoder#decode accepts a
 //   Uint8Array directly, so promises.readFile decodes it with no extra copy.
 //
-// PROC_FD_IS_LINUX_ONLY — the rule: when process.platform is not 'linux', a path
-// under /proc/self/fd or /proc/<pid>/fd does not exist. Every node:fs entry that
-// takes such a path throws ENOENT, in the engine's own error shape: the sync-fs
-// primitive's path arguments (the FSS wrapper below, which every sync form and
-// most promises/callback forms route through), plus the few entries that go
-// straight to tjs's async fs (readFile, createReadStream, utimes, lutimes,
-// statfs, truncate, link), which check at their call sites. The rule is FALSE on
-// the reference box: on Linux it never fires, so quaude, naude and Claude are
-// identical there. macOS has no /proc, so the answer there is the ENOENT the
-// engine would have given anyway.
+// PROC_FD_IS_LINUX_ONLY — the rule: when process.platform is not 'linux', this
+// process's own descriptor directory (/proc/self/fd, /proc/<own pid>/fd) is not
+// Linux's magic-link procfs. Every node:fs operation on it, or on anything beneath
+// it, throws ENOENT in the engine's own error shape, except READING one descriptor
+// by name (open /proc/self/fd/N read-only), which still reaches the kernel. The
+// rule is FALSE on the reference box: on Linux it never fires, so quaude, naude and
+// Claude are identical there. macOS has no /proc, so the answer there is the ENOENT
+// the engine would have given anyway. Another process's /proc/<pid>/fd is not ours
+// to hide (the carve reads it only to find a socket's owner, in a Linux format).
 //
 // Why: a quaude for an OS that upstream does not build (NetBSD, illumos, the other
-// BSDs) runs the LINUX carve. Its platform is constant-folded to "linux" at build
-// time, and that carve treats a readable /proc/self/fd/N as Linux's magic-link
-// procfs: it probes readlink(/proc/self/fd/N) and stat(/proc/self/fd), then writes
-// through /proc/self/fd/<dirfd>/<name>. NetBSD's procfs resolves those lookups but
-// refuses the mutation (rename/unlink -> EROFS), so Write and Edit failed there
-// (the NetBSD spike, 2026-09-26: floor-probe C1 and B4). With the fd paths absent,
-// the carve takes its own `Symbol("no procfs")` route, the same one it takes on a
-// Linux box with no /proc mounted. _FSS_PATH_ARGS names which arguments of each
-// primitive are paths; symlink's first argument is the link's text, not a lookup.
-const PROC_FD_PATH = /^\/proc\/(?:self|\d+)\/fd(?:\/|$)/;
+// BSDs) runs the LINUX carve, whose platform is constant-folded to "linux". That
+// carve reads /proc/self/fd as Linux's magic links: it probes readlink of a
+// descriptor and stat of /proc/self/fd, and when they answer it writes through
+// /proc/self/fd/<dirfd>/<name>. Measured with real node on NetBSD 11 (2026-09-27):
+// the procfs answers readlink for a DIRECTORY descriptor (EINVAL for a file) and
+// lets mkdir/create through a directory descriptor, then refuses rename and unlink
+// there with EROFS. So Write and Edit failed (the NetBSD spike, 2026-09-26:
+// floor-probe C1 and B4). With the directory hidden, the carve takes its own
+// `Symbol("no procfs")` route, the one it takes on a Linux box without /proc.
+//
+// Why reading one descriptor is the exception: NetBSD's procfs opens it the way
+// Linux does (a fresh open of the same file, measured: its own offset), and the
+// carve's auth-token readers (CLAUDE_CODE_{OAUTH_TOKEN,API_KEY,WEBSOCKET_AUTH}_
+// FILE_DESCRIPTOR) read a non-socket descriptor exactly so: open /proc/self/fd/N
+// "r" (the darwin carve says /dev/fd/N; a socket is read directly). Hiding it too
+// (0e24947) turned a token on a file descriptor into "Not logged in" on NetBSD.
+// The one carve open of a descriptor for WRITING is the TUI's nonblocking stdout
+// (O_WRONLY|O_NONBLOCK on /proc/self/fd/1); installed on NetBSD, a turn's answer
+// does not paint until the next keystroke (tui-probe D1 turn=false 7 of 8 runs,
+// against 0 of 7 with it hidden; the same before F1). Hidden, the TUI takes the
+// not-installed route that macOS quaude always takes. _FSS_PATH_ARGS names which
+// arguments of each primitive are paths (symlink's first argument is the link's
+// text, not a lookup). BACKLOG.md ("The NetBSD spike found three bugs") lists every
+// carve site this rule turns.
+const _PROC_FD = /^\/proc\/(self|\d+)\/fd(?:\/(.*))?$/;
 const _FSS_PATH_ARGS = {
   access: [0], chmod: [0], lstat: [0], mkdir: [0], open: [0], readdir: [0], readlink: [0],
   realpath: [0], rename: [0, 1], rmdir: [0], stat: [0], symlink: [1], unlink: [0],
 };
-function _refuseProcFdOffLinux(op, p) {
-  if (typeof p !== 'string' || !PROC_FD_PATH.test(p)) return;
-  const platform = globalThis.process && globalThis.process.platform;
+function _refuseProcFdOffLinux(op, p, flags) {
+  if (typeof p !== 'string') return;
+  const m = _PROC_FD.exec(p);
+  if (!m) return;
+  const proc = globalThis.process;
+  const platform = proc && proc.platform;
   if (!platform || platform === 'linux') return;
+  if (m[1] !== 'self' && m[1] !== String(proc.pid)) return;   // not OUR descriptors
+  if (op === 'open' && flags === 'r' && /^\d+$/.test(m[2] || '')) return;  // reading one descriptor
   const e = new Error(`ENOENT, ${op} '${p}'`);
   e.code = 'ENOENT';
   e.errno = require('./../internal/engine-constants.cjs').errno.ENOENT;
@@ -67,7 +86,7 @@ const FSS = (() => {
     const fn = raw[op];
     if (typeof fn !== 'function') continue;
     gated[op] = function (...a) {
-      for (const i of at) _refuseProcFdOffLinux(op, a[i]);
+      for (const i of at) _refuseProcFdOffLinux(op, a[i], op === 'open' ? a[1] : undefined);
       return fn.apply(raw, a);
     };
   }
@@ -489,7 +508,7 @@ class ReadStream extends require('node:stream').Readable {
     if (o.encoding) this.setEncoding(o.encoding);
     queueMicrotask(async () => {
       try {
-        _refuseProcFdOffLinux('open', p);
+        _refuseProcFdOffLinux('open', p, 'r');
         let data = await tjs.readFile(p);
         if (start || hasEnd) data = data.subarray(start, hasEnd ? o.end + 1 : data.length);
         const CH = 65536;
@@ -773,7 +792,7 @@ function makeFileHandle(fd, p) {
 const promises = {
   readFile: async (p, opts) => {
     const enc = typeof opts === 'string' ? opts : opts?.encoding;
-    _refuseProcFdOffLinux('open', p);
+    _refuseProcFdOffLinux('open', p, 'r');
     const data = await tjs.readFile(p); // Uint8Array, verified against pinned tjs v26.6.0
     if (enc === 'utf8' || enc === 'utf-8') return td.decode(data);
     if (isLatin1(enc)) return latin1Decode(data);
@@ -823,7 +842,7 @@ const promises = {
   rename: async (a, b) => renameReplace(a, b),
   // fs.promises.truncate(path, len): the bundle shrinks large Bash-output files
   // here. tjs's async file handle exposes a real truncate primitive.
-  truncate: async (p, len = 0) => { _refuseProcFdOffLinux('open', p); const th = await tjs.open(p, 'r+'); try { await th.truncate(len); } finally { await th.close(); } },
+  truncate: async (p, len = 0) => { _refuseProcFdOffLinux('open', p, 'r+'); const th = await tjs.open(p, 'r+'); try { await th.truncate(len); } finally { await th.close(); } },
   rmdir: async (p) => FSS.rmdir(p),
   copyFile: async (a, b) => { writeFileSync(b, readFileSync(a)); chmodBestEffort(b, statSync(a).mode & 0o7777); },
   appendFile: async (p, data, opts) => { appendFileSync(p, data, opts); },
