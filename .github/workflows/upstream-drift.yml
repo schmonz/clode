@@ -95,6 +95,28 @@ jobs:
             test/bun-slice-ansi-arity.test.cjs \
             test/build-gates/text-probe-gates.test.cjs
 
+      # THE CAPTURE-GROUP HEADROOM, against the same `next` bundle. QuickJS refuses a RegExp with
+      # more than 254 capture groups, and the bundle BUILDS some with one group per letter of a
+      # word list: at 2.1.283 the artifact-lead scrub pattern had 559 (no subagent could finish
+      # until the LEAD-SCRUB-POSSESSIVE hook), and the harness-tag scrub patterns (h6()) 251 and
+      # 229. One more tag name upstream and quaude refuses the next one the same way, so this asks
+      # every day, on the channel that moves first. The census runs a plain and a Task turn under
+      # naude against the canned mock and counts every pattern built; its verdict names the
+      # headroom and where the largest pattern is built. Staging `next` needs an engine for module
+      # metadata (the bootstrap slice, as the carve job resolves it) and naude needs Claude Code's
+      # ext-deps; without the engine, or when `next` cannot be staged, it SKIPS and says so (the
+      # carve job answers that question). It runs even when the anchor check went red.
+      - name: No RegExp the newest bundle builds has more capture groups than QuickJS allows (h6 headroom)
+        if: ${{ !cancelled() && steps.anchors.outputs.provider != '' }}
+        env:
+          PROV: ${{ steps.anchors.outputs.provider }}
+        run: |
+          set -euo pipefail
+          npm ci --prefix deps/claude 2>&1 | tail -3
+          TJS="$(scripts/bootstrap-engine.sh || true)"
+          CLODE_PROVIDER_BIN="$PROV" CLODE_TJS="$TJS" node --test --test-concurrency=1 \
+            test/fidelity/regexp-capture-census.test.cjs
+
       # WHEN IT BREAKS, SAY WHAT UPSTREAM SAID. Twice now upstream has broken
       # `clode build` with no change in this repo, and both times a public changelog
       # already named the area while we byte-diffed binaries for hours (2.1.238's
