@@ -21,7 +21,58 @@
 //   `build/tjs/tjs eval 'tjs.readFile("/etc/hosts").then(d => console.log(d.constructor.name, d.byteLength))'`
 //   -> "Uint8Array 1681" (NOT ArrayBuffer). TextDecoder#decode accepts a
 //   Uint8Array directly, so promises.readFile decodes it with no extra copy.
-const FSS = globalThis.__tjs_fs_sync;
+//
+// PROC_FD_IS_LINUX_ONLY — the rule: when process.platform is not 'linux', a path
+// under /proc/self/fd or /proc/<pid>/fd does not exist. Every node:fs entry that
+// takes such a path throws ENOENT, in the engine's own error shape: the sync-fs
+// primitive's path arguments (the FSS wrapper below, which every sync form and
+// most promises/callback forms route through), plus the few entries that go
+// straight to tjs's async fs (readFile, createReadStream, utimes, lutimes,
+// statfs, truncate, link), which check at their call sites. The rule is FALSE on
+// the reference box: on Linux it never fires, so quaude, naude and Claude are
+// identical there. macOS has no /proc, so the answer there is the ENOENT the
+// engine would have given anyway.
+//
+// Why: a quaude for an OS that upstream does not build (NetBSD, illumos, the other
+// BSDs) runs the LINUX carve. Its platform is constant-folded to "linux" at build
+// time, and that carve treats a readable /proc/self/fd/N as Linux's magic-link
+// procfs: it probes readlink(/proc/self/fd/N) and stat(/proc/self/fd), then writes
+// through /proc/self/fd/<dirfd>/<name>. NetBSD's procfs resolves those lookups but
+// refuses the mutation (rename/unlink -> EROFS), so Write and Edit failed there
+// (the NetBSD spike, 2026-09-26: floor-probe C1 and B4). With the fd paths absent,
+// the carve takes its own `Symbol("no procfs")` route, the same one it takes on a
+// Linux box with no /proc mounted. _FSS_PATH_ARGS names which arguments of each
+// primitive are paths; symlink's first argument is the link's text, not a lookup.
+const PROC_FD_PATH = /^\/proc\/(?:self|\d+)\/fd(?:\/|$)/;
+const _FSS_PATH_ARGS = {
+  access: [0], chmod: [0], lstat: [0], mkdir: [0], open: [0], readdir: [0], readlink: [0],
+  realpath: [0], rename: [0, 1], rmdir: [0], stat: [0], symlink: [1], unlink: [0],
+};
+function _refuseProcFdOffLinux(op, p) {
+  if (typeof p !== 'string' || !PROC_FD_PATH.test(p)) return;
+  const platform = globalThis.process && globalThis.process.platform;
+  if (!platform || platform === 'linux') return;
+  const e = new Error(`ENOENT, ${op} '${p}'`);
+  e.code = 'ENOENT';
+  e.errno = require('./../internal/engine-constants.cjs').errno.ENOENT;
+  e.syscall = op;
+  e.path = p;
+  throw e;
+}
+const FSS = (() => {
+  const raw = globalThis.__tjs_fs_sync;
+  if (!raw) return raw;
+  const gated = Object.create(raw);   // every other primitive is inherited untouched
+  for (const [op, at] of Object.entries(_FSS_PATH_ARGS)) {
+    const fn = raw[op];
+    if (typeof fn !== 'function') continue;
+    gated[op] = function (...a) {
+      for (const i of at) _refuseProcFdOffLinux(op, a[i]);
+      return fn.apply(raw, a);
+    };
+  }
+  return gated;
+})();
 const path = require('node:path');
 const td = new TextDecoder();
 const te = new TextEncoder();
@@ -438,6 +489,7 @@ class ReadStream extends require('node:stream').Readable {
     if (o.encoding) this.setEncoding(o.encoding);
     queueMicrotask(async () => {
       try {
+        _refuseProcFdOffLinux('open', p);
         let data = await tjs.readFile(p);
         if (start || hasEnd) data = data.subarray(start, hasEnd ? o.end + 1 : data.length);
         const CH = 65536;
@@ -518,7 +570,7 @@ function cpDir(src, dest, opts) {
 // Best-effort — fire the async utime (the bundle stamps files it just wrote,
 // where a slightly-deferred mtime is observably fine) rather than throw.
 function utimesSync(p, atime, mtime) {
-  try { const r = tjs.utime(p, timeToMs(atime), timeToMs(mtime)); if (r && r.catch) r.catch(() => {}); } catch (_) { /* best-effort */ }
+  try { _refuseProcFdOffLinux('utime', p); const r = tjs.utime(p, timeToMs(atime), timeToMs(mtime)); if (r && r.catch) r.catch(() => {}); } catch (_) { /* best-effort */ }
 }
 
 // fs.fchmodSync(fd, mode): the sync-fs patch (spike/quickjs/patches/txiki-sync-fs.patch)
@@ -721,6 +773,7 @@ function makeFileHandle(fd, p) {
 const promises = {
   readFile: async (p, opts) => {
     const enc = typeof opts === 'string' ? opts : opts?.encoding;
+    _refuseProcFdOffLinux('open', p);
     const data = await tjs.readFile(p); // Uint8Array, verified against pinned tjs v26.6.0
     if (enc === 'utf8' || enc === 'utf-8') return td.decode(data);
     if (isLatin1(enc)) return latin1Decode(data);
@@ -729,8 +782,8 @@ const promises = {
   // opts was dropped here entirely, so the promises form ignored BOTH encoding and
   // mode while the sync form honoured encoding. Thread it.
   writeFile: async (p, data, opts) => { writeFileSync(p, data, opts); },
-  utimes: async (p, atime, mtime) => { await tjs.utime(p, timeToMs(atime), timeToMs(mtime)); },
-  lutimes: async (p, atime, mtime) => { await tjs.lutime(p, timeToMs(atime), timeToMs(mtime)); },
+  utimes: async (p, atime, mtime) => { _refuseProcFdOffLinux('utime', p); await tjs.utime(p, timeToMs(atime), timeToMs(mtime)); },
+  lutimes: async (p, atime, mtime) => { _refuseProcFdOffLinux('lutime', p); await tjs.lutime(p, timeToMs(atime), timeToMs(mtime)); },
   // statfs: the bundle CALLS this (not feature-detects it) on its low-disk
   // diagnostic path — `statfs(dir, {bigint:true})`, then
   // `bavail*bsize/(1024n*1024n)` to decide whether to tell the user to free
@@ -747,6 +800,7 @@ const promises = {
   // frsize is the fragment size, which equals bsize on every platform we ship,
   // so it is mapped from bsize rather than invented.
   statfs: async (p, opts) => {
+    _refuseProcFdOffLinux('statfs', p);
     const r = await tjs.statFs(p);
     const big = !!(opts && opts.bigint);
     const n = (v) => (big ? BigInt(Math.trunc(v)) : v);
@@ -769,7 +823,7 @@ const promises = {
   rename: async (a, b) => renameReplace(a, b),
   // fs.promises.truncate(path, len): the bundle shrinks large Bash-output files
   // here. tjs's async file handle exposes a real truncate primitive.
-  truncate: async (p, len = 0) => { const th = await tjs.open(p, 'r+'); try { await th.truncate(len); } finally { await th.close(); } },
+  truncate: async (p, len = 0) => { _refuseProcFdOffLinux('open', p); const th = await tjs.open(p, 'r+'); try { await th.truncate(len); } finally { await th.close(); } },
   rmdir: async (p) => FSS.rmdir(p),
   copyFile: async (a, b) => { writeFileSync(b, readFileSync(a)); chmodBestEffort(b, statSync(a).mode & 0o7777); },
   appendFile: async (p, data, opts) => { appendFileSync(p, data, opts); },
@@ -777,7 +831,7 @@ const promises = {
   symlink: async (target, p) => FSS.symlink(target, p),
   // hardlink: no SYNC primitive in the sync-fs patch, but tjs exposes an async
   // uv link — use it for the async surface (linkSync remains a wall).
-  link: async (existing, p) => { await tjs.link(existing, p); },
+  link: async (existing, p) => { _refuseProcFdOffLinux('link', existing); _refuseProcFdOffLinux('link', p); await tjs.link(existing, p); },
   mkdtemp: async (prefix) => mkdtempSync(prefix),
   // fs.promises.open(path, flags, mode) -> FileHandle. The Bash tool opens its
   // per-command log file here and passes the FileHandle's real fd as child
