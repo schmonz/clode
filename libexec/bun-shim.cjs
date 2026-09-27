@@ -467,7 +467,9 @@ function shQuote(s){ return "'" + String(s).replace(/'/g, "'\\''") + "'"; }
 // stderr right where the cryptic applet error lands, then propagate the
 // applet's own exit code. This is the host-applet (foundation) configuration's
 // answer to skew: the diagnosis travels to the point of use, visible to the
-// user and to any agent reading the failed command's output.
+// user and to any agent reading the failed command's output. A status above 128 is
+// a signal, never skew: `grep ... | head -1` ends the applet with SIGPIPE (141),
+// which `[ "$_rc" -ge 2 ]` alone read as a usage error.
 function buildShadow(name, known, parsed, finding){
   if (known.translate) return rgShadowBody(); // rg → full ugrep-translating body; upstream flags dropped
   const { applet, env } = known;
@@ -483,7 +485,7 @@ function buildShadow(name, known, parsed, finding){
   return head +
     `  "$_bin"${flags} "$@"\n` +
     `  local _rc=$?\n` +
-    `  ${known.skewRcTest} && printf '%s\n' ${msg} >&2\n` +
+    `  ${known.skewRcTest} && [ "$_rc" -le 128 ] && printf '%s\n' ${msg} >&2\n` +
     `  return $_rc\n` +
     `}`;
 }

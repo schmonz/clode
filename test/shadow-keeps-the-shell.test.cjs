@@ -52,7 +52,8 @@ const SHAPES = {
 
 // The stand-in applet. A "match" is an argument spelled NEEDLE; -q silences the
 // output (grep's quiet flag); STDIN copies stdin to stdout (proves stdin reaches the
-// applet); --usage-error writes to stderr and exits 2 (grep's usage-error status).
+// applet); --usage-error writes to stderr and exits 2 (grep's usage-error status);
+// FLOOD writes lines until the reader goes away (so `| head -1` kills it with SIGPIPE).
 const APPLET = [
   '#!/bin/sh',
   'hit=1 quiet=0',
@@ -62,6 +63,7 @@ const APPLET = [
   '    NEEDLE) hit=0 ;;',
   '    STDIN) cat; exit 0 ;;',
   '    --usage-error) echo "stand-in: usage error" >&2; exit 2 ;;',
+  '    FLOOD) while :; do echo flood; done ;;',
   '  esac',
   'done',
   'if [ "$hit" -eq 0 ] && [ "$quiet" -eq 0 ]; then printf "match-1\\nmatch-2\\n"; fi',
@@ -90,6 +92,11 @@ const ROWS = [
     cmd: 'echo from-stdin | grep STDIN; echo rc=$?', stdout: 'from-stdin\nrc=0\n', status: 0 },
   { name: 'a usage error keeps status 2 and its stderr',
     cmd: 'grep --usage-error f; echo rc=$?', stdout: 'rc=2\n', status: 0, stderr: /stand-in: usage error/ },
+  // SIGPIPE is not skew. `grep ... | head -1` ends the applet with SIGPIPE (status
+  // 141); the skew trailer's `[ "$_rc" -ge 2 ]` used to read that as a usage error
+  // and print "known applet skew" under a perfectly healthy pipeline.
+  { name: 'an applet killed by SIGPIPE in a pipeline reports no skew',
+    cmd: 'grep FLOOD f | head -1', stdout: 'flood\n', status: 0, noStderr: /known applet skew/ },
 ];
 
 // Resolve each shell by NAME, absolutely, once. The Bash tool runs the user's own
@@ -135,6 +142,7 @@ for (const shell of SHELLS) {
         assert.strictEqual(r.stdout, row.stdout, where);
         assert.strictEqual(r.status, row.status, where);
         if (row.stderr) assert.match(r.stderr, row.stderr, where);
+        if (row.noStderr) assert.doesNotMatch(r.stderr, row.noStderr, where);
       }
     });
   }

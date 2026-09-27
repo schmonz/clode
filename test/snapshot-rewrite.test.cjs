@@ -182,7 +182,7 @@ test('rewriteSnapshot with a skew finding: shadow diagnoses on failure, exit cod
   assert.doesNotMatch(out, /\bexec\b/);
   assert.match(out, /\n {2}"\$_bin" -S dfs -regextype findutils-default "\$@"\n/);
   assert.match(out, /local _rc=\$\?/);
-  assert.match(out, /\[ "\$_rc" -ne 0 \] && printf/);
+  assert.match(out, /\[ "\$_rc" -ne 0 \] && \[ "\$_rc" -le 128 \] && printf/); // a signal is not skew
   assert.match(out, /known applet skew/);
   assert.match(out, /Oniguruma/);
   assert.match(out, /return \$_rc/);
