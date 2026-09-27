@@ -69,23 +69,83 @@ function toolResultText(source, id) {
   return r ? r.text : '';
 }
 
-// THE RULE, stated once: a live check never reads a logged request's raw body as text. The
-// spellings: `.body` (except as the whole argument of JSON.parse, which reads a structured
-// field such as the model), `['body']`, and a destructured `{ body }`. Returns the spellings
-// found in `code`, [] when none. Applied twice: over the test tree by the build gate (on a
-// code mask, so prose never counts), and here over each check's own source.
+// THE RULE, stated once: a live check never reads a logged request's raw body, or the log
+// itself, as text. Returns [{ at, what }] for each read found in `code` (at = index), [] when
+// none. The spellings:
+//   `.body`, `['body']`, and a destructured body (`{ body }`, `{ body: b }`) bound by `=`,
+//   an arrow's parameter list or a for-of;
+//   EXCEPT `JSON.parse(X.body)` (optionally `|| '{}'` / `?? ...`) read straight through to a
+//   field other than `messages` -- the model, the max_tokens: a structured field, not the
+//   history. `.messages` IS the history, tool_use and all, so it counts as a read;
+//   JSON.stringify / Object.values / Object.entries over anything naming `requests`, and one
+//   of them inside a callback of `.requests.some|find|map|...(` or on a `for (... of
+//   X.requests)` line: stringifying a request searches its body.
+// Applied twice: over the test tree by the build gate (on a code mask, so prose never counts),
+// and at run time over each check's own source by assertFailsOnMissingOutput.
+function closeParen(s, open) {
+  let d = 0;
+  for (let i = open; i < s.length; i++) {
+    if (s[i] === '(') d++;
+    else if (s[i] === ')' && --d === 0) return i;
+  }
+  return -1;
+}
+function openParen(s, at) {
+  let d = 0;
+  for (let i = at - 1; i >= 0; i--) {
+    if (s[i] === ')') d++;
+    else if (s[i] === '(') { if (d === 0) return i; d--; }
+  }
+  return -1;
+}
+// The `(...)` argument text of the call whose name ends at s[i] (s[i] is at or before its '(').
+function argOf(s, i) {
+  const open = s.indexOf('(', i);
+  const close = open < 0 ? -1 : closeParen(s, open);
+  return close < 0 ? '' : s.slice(open + 1, close);
+}
+// `.body` read straight through JSON.parse to a field that is not the history.
+function isStructuredParse(s, at) {
+  const open = openParen(s, at);
+  if (open < 0 || !/JSON\.parse\s*$/.test(s.slice(Math.max(0, open - 24), open))) return false;
+  const close = closeParen(s, open);
+  if (close < 0) return false;
+  const fallback = /^\s*(?:(?:\|\||\?\?)\s*(?:(['"`])[^'"`]*\1|\{\s*\}|[\w$.]+))?\s*$/;
+  if (!fallback.test(s.slice(at + '.body'.length, close))) return false;
+  const field = /^\s*(?:\?\.|\.)\s*([\w$]+)|^\s*\[\s*(['"`])([\w$]+)\2\s*\]/.exec(s.slice(close + 1));
+  const name = field && (field[1] || field[3]);
+  return !!name && name !== 'messages';
+}
+const STRINGIFY = /\b(?:JSON\.stringify|Object\.(?:values|entries))\s*\(/g;
 function rawBodyReads(code) {
   const s = String(code);
   const out = [];
   for (const m of s.matchAll(/\.body\b/g)) {
-    const before = s.slice(Math.max(0, m.index - 120), m.index);
-    const after = s.slice(m.index + m[0].length);
-    if (/JSON\.parse\(\s*[\w$.[\]]*$/.test(before) && /^\s*\)/.test(after)) continue;
-    out.push('.body');
+    if (!isStructuredParse(s, m.index)) out.push({ at: m.index, what: '.body' });
   }
-  for (const m of s.matchAll(/\[\s*(['"`])body\1\s*\]/g)) out.push(m[0]);
-  for (const m of s.matchAll(/\{[^{}]*\bbody\b[^{}]*\}\s*(?:\)\s*=>|=(?![=>]))/g)) out.push(`destructured ${m[0].replace(/\s+/g, ' ')}`);
-  return out;
+  for (const m of s.matchAll(/\[\s*(['"`])body\1\s*\]/g)) out.push({ at: m.index, what: m[0] });
+  for (const m of s.matchAll(/\{[^{}]*\bbody\b[^{}]*\}\s*(?:\)\s*=>|=(?![=>])|of\b)/g)) {
+    out.push({ at: m.index, what: `destructured ${m[0].replace(/\s+/g, ' ')}` });
+  }
+  for (const m of s.matchAll(STRINGIFY)) {
+    if (/\brequests\b/.test(argOf(s, m.index))) out.push({ at: m.index, what: `${m[0].replace(/\s*\($/, '')} over the request log` });
+  }
+  const inLog = [];
+  for (const m of s.matchAll(/\.requests\s*\.\s*(?:some|every|find|findLast|findIndex|filter|map|flatMap|forEach|reduce)\s*\(/g)) {
+    const open = m.index + m[0].length - 1;
+    inLog.push([open, closeParen(s, open)]);
+  }
+  for (const m of s.matchAll(/\bof\s+[\w$.]*\brequests\b/g)) {
+    const eol = s.indexOf('\n', m.index);
+    inLog.push([m.index, eol < 0 ? s.length : eol]);
+  }
+  for (const m of s.matchAll(STRINGIFY)) {
+    if (out.some((r) => r.at === m.index)) continue;
+    if (inLog.some(([a, b]) => m.index > a && (b < 0 || m.index < b))) {
+      out.push({ at: m.index, what: `${m[0].replace(/\s*\($/, '')} of a logged request` });
+    }
+  }
+  return out.sort((a, b) => a.at - b.at);
 }
 
 // The command text of a tool_use: a Bash command, or every string the input carries.
@@ -143,7 +203,7 @@ function assertFailsOnMissingOutput(check, command) {
   }
   const reads = rawBodyReads(String(check));
   if (reads.length) {
-    throw new Error(`assertFailsOnMissingOutput: this check reads a raw request body (${reads.join(', ')}). `
+    throw new Error(`assertFailsOnMissingOutput: this check reads a raw request body (${reads.map((r) => r.what).join(', ')}). `
       + 'Every follow-up also carries the tool_use, i.e. the command, so the check can pass on the command '
       + 'text alone. Judge toolResult()/toolResultText() instead.');
   }

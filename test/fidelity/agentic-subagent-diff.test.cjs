@@ -47,11 +47,13 @@ function handBack(m) {
   return (id ? s.split(id).join('<agentId>') : s).replace(/duration_ms: \d+/g, 'duration_ms: <ms>');
 }
 // quaude cannot finish a subagent at 2.1.283 (measured 2026-09-27, --debug-to-stderr): the
-// completion path compiles the bundle's bracketedLeadScrubPattern (`get lead()` -> `_No`),
-// a RegExp with more than 255 capture groups, and QuickJS's regexp compiler refuses it
-// ("SyntaxError: too many captures"; V8 and JSC have no such limit). naude hands the answer
-// back. The row skips on exactly that tool_result, after proving naude's carries the answer,
-// and asserts in full otherwise (BACKLOG.md, "quaude's Agent tool: too many captures").
+// completion path compiles a RegExp with more capture groups than QuickJS allows (254: its
+// CAPTURE_COUNT_MAX is 255, counting the whole match), and QuickJS's regexp compiler refuses
+// it ("SyntaxError: too many captures"; V8 and JSC accept it). On 2.1.283 that regex is the
+// carve's bracketedLeadScrubPattern (`get lead()` -> `_No`); this row does not check which
+// regex it is, only the error. naude hands the answer back. The row skips on exactly that
+// tool_result, after proving naude's carries the answer, and asserts in full otherwise
+// (BACKLOG.md, "quaude's Agent tool: too many captures").
 const TOO_MANY_CAPTURES = /^too many captures$/;
 
 // THROUGH CLODE'S OWN STAGING (../oracle-models.cjs's stageCli), not the raw
@@ -117,8 +119,8 @@ test('subagent (Task) dispatch is identical under naude and quaude', async (t) =
   assert.ok(answered(naude), `naude's Task tool_result lacks the subagent's answer: ${JSON.stringify(toolResultText(naude, TASK.id))}`);
   const q = toolResult(quaude, TASK.id);
   if (q && q.isError && TOO_MANY_CAPTURES.test(q.text)) {
-    t.skip('quaude\'s Agent tool answers "too many captures": QuickJS refuses the bundle\'s bracketedLeadScrubPattern '
-      + '(more than 255 capture groups) when a subagent completes; naude hands the answer back '
+    t.skip('quaude\'s Agent tool answers "too many captures": a regex on the Agent completion path has more '
+      + 'capture groups than QuickJS allows (254); naude hands the answer back '
       + '(BACKLOG.md: quaude\'s Agent tool: too many captures)');
     return;
   }

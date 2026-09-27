@@ -163,15 +163,23 @@ Bash tool instead".
   2.1.283.** (Found 2026-09-27 by the live-checks ratchet,
   test/build-gates/live-checks-gates.test.cjs.) When a subagent completes, the bundle
   compiles its bracketedLeadScrubPattern (`get lead()` -> `_No` in the carve), a RegExp with
-  more than 255 capture groups. QuickJS's regexp compiler refuses that ("SyntaxError: too many
-  captures"). V8 and JSC have no such limit. A synchronous Agent call answers the model with
-  the error `too many captures`, and --debug-to-stderr shows the async completion path throwing
-  the same error ("completion sequence threw after finalize"). naude hands the subagent's answer
+  more capture groups than QuickJS allows: 254, because its CAPTURE_COUNT_MAX of 255 counts the
+  whole match. QuickJS's regexp compiler refuses it ("SyntaxError: too many captures"); V8 and
+  JSC accept it. A synchronous Agent call answers the model with the error `too many captures`,
+  and the same run's --debug-to-stderr logs `[AsyncAgent <id>] completion sequence threw after
+  finalize: too many captures` with a stack through `_No`. naude hands the subagent's answer
   back. test/fidelity/agentic-subagent-diff.test.cjs skips on exactly that tool_result, and
   asserts in full otherwise. Before the ratchet, that row compared two identical ERRORS: it
   inherited the operator's ~/.claude, whose `"defaultMode": "auto"` sent every Task call to the
-  auto-mode classifier, which the mock cannot answer. Not fixed: it needs the regexp compiled
-  within QuickJS's limit, or the pattern rewritten where the shim can see it.
+  auto-mode classifier, which the mock cannot answer.
+  - Repro, the engine alone: `"$CLODE_TJS" eval 'try { new RegExp("(a)".repeat(255)) } catch
+    (e) { console.log(String(e)) }'` prints `SyntaxError: too many captures` (254 groups
+    compile); `node -e 'new RegExp("(a)".repeat(255))'` is silent.
+  - Repro, the product: `CLODE_TJS=<tjs> CLODE_PROVIDER_BIN=<2.1.283 claude> node --test
+    test/fidelity/agentic-subagent-diff.test.cjs` skips with that reason; delete the skip and it
+    fails with `quaude's Task tool_result lacks the subagent's answer: "too many captures"`.
+  Not fixed: it needs the regexp compiled within QuickJS's limit, or the pattern rewritten
+  where the shim can see it.
 - **The agentic rows run in the operator's own ~/.claude.** node-shim-agentic,
   fidelity/agentic-tools (all but --continue), fidelity/agentic-mcp-ws, quaude-build's
   strict-mode sweep, quaude-naude-updateguard and clode-native's acceptance 3 spread

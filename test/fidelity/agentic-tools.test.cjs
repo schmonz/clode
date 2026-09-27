@@ -49,7 +49,9 @@ function mockEnv(dir, url) {
 // tool's INPUT (`pattern: MARK`, `echo A`) "came back" whether or not the tool ran (f4d763d;
 // scripts/floor-probe.mjs's B1/B4 were corrected the same way in b4ff3f2). Each judgment is
 // one function, run first through assertFailsOnMissingOutput (it must FAIL with the output
-// missing and the command text present) and then on the real mock.
+// missing and the command text present) and then on the real mock. The private reader this
+// file kept joined every tool_result for the id across all requests and turns; the shared one
+// reads the LAST user turn of the FIRST request carrying it (the same for these includes()).
 
 const MARK = 'AGT-NEEDLE-5501';
 

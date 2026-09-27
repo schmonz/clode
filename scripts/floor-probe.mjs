@@ -266,6 +266,12 @@ const posted = (mock) => mock.requests.some((q) => q.method === 'POST' && /\/mes
 // run first through assertFailsOnMissingOutput (it must FAIL with the output missing and the
 // command text present) and then on the real mock: a control that cannot drift from the
 // check it controls.
+//
+// The READER CHANGED here, not only moved. The private copy this file kept joined EVERY
+// tool_result block for the id across every logged request and every turn, so a result that
+// later requests carried again in their history came back once per request. The shared reader
+// returns the one the model was answering: the LAST user turn of the FIRST request that carries
+// it. B1 and B4 judge with includes()/test(), which read the same either way.
 
 // ---- the checks. Each maps to ONE RECIPE floor row. ------------------------
 // GUARD 2: exercise the tmpdir-ownership guard every time. The bundle only
