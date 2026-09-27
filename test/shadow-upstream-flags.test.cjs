@@ -245,7 +245,7 @@ for (const shell of SHELLS) {
 const BFS_ACCEPTS = BFS && cp.spawnSync(BFS, [...FIND_FLAGS.split(' '), '-quit', '.']).status === 0;
 for (const shell of SHELLS) {
   const skip = shellSkip(shell) || (!BFS ? 'needs a host bfs (not installed)'
-    : (BFS_ACCEPTS ? false : 'host bfs rejects -regextype findutils-default (a POSIX-only build); the rewritten find carries the skew trailer instead'));
+    : (BFS_ACCEPTS ? false : 'host bfs rejects -regextype findutils-default (built without Oniguruma); the rewritten find drops that flag and refuses regex finds (find-without-oniguruma.test.cjs)'));
   test(`${shell.name}: the rewritten find applies upstream's regex type`, { skip }, () => {
     const d = fs.mkdtempSync(path.join(os.tmpdir(), 'shadow-flags-find-'));
     for (const n of ['foo', 'far', 'fzz']) fs.writeFileSync(path.join(d, n), '');
