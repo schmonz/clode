@@ -22,6 +22,10 @@ error with the help under it, not a silent translation:
 - Fix Bash commands stopping after their first `grep`, `find` or `rg`, on every platform
   (0.20260831.1 has it too): `grep -q x f && echo found; echo done` printed neither line
 - Fix a false "known applet skew" warning when a skewed `grep` feeds `head`
+- Fix Bash-tool `grep` and `find` running without Claude Code's own flags, on every platform
+  and in every release so far: `grep` searched `.gitignore`d files and skipped hidden ones,
+  and `find` lost its regex type. On a host whose `bfs` lacks Oniguruma, `find` now fails
+  with an explanation of how to fix it, instead of quietly searching differently
 - (NetBSD, and other platforms upstream does not build) Fix Write and Edit failing
 - Fix `clode build` from a source checkout refusing the dependencies it had just
   installed: the dependency store is now installed from the lockfile with `npm ci`. The

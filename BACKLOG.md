@@ -39,6 +39,26 @@ after scores 5/5, under zsh and under bash.
   the manifest's own lockfile, `npm ci`, and a sig that covers the lock. A released clode
   never reached this code: a blobulated builder builds from its embedded node_modules and
   never calls ensureDeps. The 0.20260831.1 NetBSD builder embeds get-east-asian-width 1.6.0.
+- **F4, every platform: the shadow rewrite dropped every upstream flag** (6e34eae; found while
+  fixing F2, approved "before release" 2026-09-27).
+  Upstream's shadows spell their args `${1+"$@"}`, as every carve on this box from 2.1.185
+  to 2.1.283 writes them. parseShadow knew only `"$@"` (the fixtures' spelling), so on every
+  real snapshot, in every clode release, the flags were read as "none". Measured on a real
+  native 2.1.283 snapshot: collectShadows gave `flags: ""` for rg, find and grep. Results:
+  - grep ran ugrep without `-G --ignore-files --hidden -I --exclude-dir=...`;
+  - find ran bfs without `-S dfs -regextype findutils-default`;
+  - the skew probe was blind.
+  The rule is SHADOW_ARG_SPELLINGS. Both spellings are read; anything else is UNPARSED: a
+  marker comment goes in the rewritten function, a stderr warning is printed, and the flags
+  are never silently empty. Through a real quaude's Bash tool, with a mock turn, under zsh
+  and bash:
+  - darwin: `grep -rl NEEDLE .` went from `ignored.txt kept.txt sub/deep.txt` to
+    `.hidden.txt kept.txt sub/deep.txt`;
+  - NetBSD: the same, and `find -regex '.*/\(kept\|nope\)\.txt'` went from no match to
+    `./kept.txt`;
+  - floor-probe 5/5 and D1 on NetBSD, 5/5 on darwin.
+  test/fixtures/snapshot-2.1.283.sh is the verbatim shadow text (its provenance is in the
+  header).
 
 **The probe could not have seen F2, and could not see a missing Bash output at all.** Before
 b4ff3f2, B1 ran `echo MARK` and B4 ran a Grep tool, and both checked the WHOLE follow-up
@@ -59,24 +79,34 @@ Bash tool instead".
   `__tjs_constants.errno` (scripts/gen-node-constants.mjs lists EROFS, EXDEV and ENOTEMPTY).
   So the shim can name an EUNKNOWN from its errno with that table. Either route is
   diff-reducing (node names them). Pick one, with a test that throws each errno.
-- **Upstream's current shadow spelling loses the upstream flags: every platform, P1.**
-  Upstream's shadows now pass `${1+"$@"}` where they used to pass `"$@"`. This was seen in
-  2.1.283's generator (`dbe`) and in a real native 2.1.283 snapshot on this box. parseShadow's
-  flag regex wants whitespace before `"$@"`, so it matches nothing. Measured 2026-09-26:
-  rewriteSnapshot of that real snapshot gives `"$_bin" "$@"` for both grep and find, and
-  collectShadows reports `flags: ""` for all three.
-  - grep loses `-G --ignore-files --hidden -I --exclude-dir=.git ...`, so Bash `grep` ignores
-    .gitignore, skips hidden files and reads binaries.
-  - find loses `-S dfs -regextype findutils-default`.
-  - The skew probe goes blind: it has no flags to probe.
-  Every test fixture still spells `"$@"` (2.1.179), so nothing is red. Teach parseShadow both
-  spellings, with a fixture captured from a current snapshot.
-- **test/fidelity/agentic-tools.test.cjs checks the whole body, as B1 and B4 did.** Its Grep
-  row puts MARK in the tool_use input (`pattern: MARK`), then asserts
-  `followUp.body` matches MARK, so it cannot fail on a missing result. On 2.1.283 the Grep
-  tool answered "No such tool available" in the floor probe's `-p` run. Whether it does under
-  that test's `--allowedTools Grep` was not measured. Audit the file's other rows for the same
-  shape.
+- **With the flags back, the skew design is LIVE, and it bites on a POSIX-only bfs.** The
+  probe now sees `-regextype findutils-default`. pkgsrc bfs 4.1.3 on this Mac rejects it;
+  pkgsrc bfs 4.1.3 on NetBSD accepts it. So on this Mac:
+  - every quaude session prints "clode: host bfs rejects the flags ... `find` will fail" at
+    snapshot time (in a TUI, onto the terminal);
+  - every Bash `find` exits 1 with the self-explaining skew line.
+  Before F4, find "worked" by silently running bfs without upstream's flags. This is the
+  designed behaviour (b74ec46: the diagnosis travels to the point of use), but it was never
+  live before. Decide deliberately: keep failing loudly (match upstream's flags or explain),
+  or drop only the flag the host rejects.
+- **The Grep tool fails in quaude at 2.1.283, when it is reachable.** Upstream swaps Grep/Glob
+  for `grep`/`find` via Bash only when the Bash tool is present (`pfe`/`uw`), so Grep still
+  exists in a session without Bash (e.g. `--allowedTools Grep`). There it runs `rg --json`,
+  which the rg->ugrep translation refuses by design, and the tool answers "ripgrep not found
+  on PATH". test/fidelity/agentic-tools.test.cjs's Grep row checked the whole body and passed
+  on its own `pattern:`. It now reads the tool_result and skips on exactly this signature
+  (f4d763d). To fix it, emit rg's `--json` event stream from ugrep's output, or refuse
+  honestly with a message that names --json.
+- **Upstream's rg shadow is guarded by `if ! (unalias rg; command -v rg)`**, so with a host rg
+  on PATH the snapshot defines no rg function, and Bash `rg` runs the host rg. That is the
+  shell-path exception to "a host rg is never called" (rg-divergence), and it is not changed
+  here.
+- **The two older fixtures' labels do not match the carves.** snapshot-execpath.sh says 2.1.179
+  and snapshot-installpath.sh says 2.1.185, and both spell `"$@"`. The 2.1.185 carve on this
+  box writes `${1+"$@"}`. Treat them as hand-shaped, and prefer snapshot-2.1.283.sh.
+- **test/fidelity/agentic-tools.test.cjs checked the whole body, as B1 and B4 did. FIXED
+  (f4d763d)**: the Grep, multi-turn and hook rows read the tool_result. The Grep row then went
+  red, for the reason in the Grep-tool item above.
 - **The floor-probe B1/B4 rows in test/fidelity/RESULTS.md before 2026-09-26 came from a check
   that could not fail on missing output.** They could still fail with no follow-up request or
   a non-zero exit. Six B1/B4 rows came from other instruments that read the tool_result
@@ -85,11 +115,12 @@ Bash tool instead".
   - 2026-07-29 darwin-arm64 and cosmo B1;
   - 2026-07-30 darwin and cosmo B4 (the agentic suite);
   - 2026-07-31 darwin-ppc B1.
-  tjs-legs.mjs derives floor notes from these rows (netbsd-arm64 says 6/6). Re-drive the floor
-  rows per run-target with the corrected probe. The netbsd-arm64 rows from this fix (5/5,
-  both shells, `--bundle 2.1.283`, 2026-09-27) were not pasted. Without `--bundle`, the probe
-  reads deps/claude/package.json, which is the target-deps manifest (version 0.0.0), so every
-  row it prints says bundle 0.0.0.
+  tjs-legs.mjs derives floor notes from these rows (netbsd-arm64 says 6/6). RESULTS.md now
+  carries a dated note saying so, and the first netbsd-arm64 rows driven with the corrected
+  probe (2026-09-27, 2.1.283, 6/6). Every other run-target still needs a re-drive. Without
+  `--bundle`, the probe reads deps/claude/package.json, which is the target-deps manifest
+  (version 0.0.0), so every row it prints says bundle 0.0.0: default it to the staged
+  provider's version.
 - **Over ssh the probe needs the applets on PATH.** A NetBSD guest's non-interactive PATH has
   no /opt/pkg/bin, so the Bash tool's grep fails loud with 127. The fixed B1 still passes
   (the echo runs), but B4's grep cannot. The 5/5 was driven with
