@@ -45,6 +45,26 @@ function mockEnv(dir, url) {
 function followUpFor(mock, id) {
   return mock.requests.find((q) => q.method === 'POST' && q.body && q.body.includes(id) && q.body.includes('tool_result'));
 }
+// The text of the tool_result the target sent back for tool_use `id`: the model's
+// view of the tool's output, and nothing else. NOT a substring search of the request
+// body: every follow-up also carries the assistant's own tool_use block, so a marker
+// spelled in the tool's INPUT (`pattern: MARK`, `echo A`) "came back" whether or not
+// the tool ran. scripts/floor-probe.mjs's B1/B4 were corrected the same way (b4ff3f2).
+function toolResultText(mock, id) {
+  let out = '';
+  for (const q of mock.requests) {
+    let j;
+    try { j = JSON.parse(q.body || ''); } catch { continue; }
+    for (const m of (j && Array.isArray(j.messages) ? j.messages : [])) {
+      for (const b of (Array.isArray(m && m.content) ? m.content : [])) {
+        if (!b || b.type !== 'tool_result' || b.tool_use_id !== id) continue;
+        out += typeof b.content === 'string' ? b.content
+          : (Array.isArray(b.content) ? b.content.map((c) => (c && c.text) || '').join('') : '');
+      }
+    }
+  }
+  return out;
+}
 
 const MARK = 'AGT-NEEDLE-5501';
 
@@ -66,6 +86,16 @@ test('agentic Write round-trip under tjs: the tool creates the file on disk', as
   } finally { await mock.close(); }
 });
 
+// The Grep tool still exists at 2.1.283 when the Bash tool does not (upstream swaps
+// Grep/Glob for `grep`/`find` via Bash only when Bash is present), which is this row's
+// `--allowedTools Grep`. There it now runs `rg --json`, and the rg->ugrep translation
+// refuses --json by design (RgTranslateError: rg-only output, no faithful ugrep form),
+// so the tool answers "ripgrep not found on PATH". Measured 2026-09-27; the old check
+// passed anyway because it matched MARK in the tool_use's own `pattern`. The row skips
+// on exactly that proven signature and asserts in full otherwise (BACKLOG.md, "the
+// Grep tool fails in quaude at 2.1.283").
+const GREP_JSON_REFUSED = /rg→ugrep shim doesn't translate --json/;
+const RG_NOT_FOUND = /^ripgrep not found on PATH\./;
 test('agentic Grep round-trip under tjs: search-applet path returns the match', async (t) => {
   if (skipUnlessTjs(t)) return;
   const bin = providerBin(); if (!bin) { t.skip('no CLODE_PROVIDER_BIN'); return; }
@@ -79,9 +109,14 @@ test('agentic Grep round-trip under tjs: search-applet path returns the match', 
   try {
     const r = await bootP(cli, dir, ['-p', 'find the needle', '--allowedTools', 'Grep'], mockEnv(dir, mock.url), 120000);
     assert.strictEqual(r.status, 0, `stderr:\n${r.stderr}`);
-    const followUp = followUpFor(mock, ID);
-    assert.ok(followUp, 'no follow-up POST carrying the Grep tool_result');
-    assert.match(followUp.body, new RegExp(MARK), `Grep tool_result lacks the match:\n${followUp.body.slice(0, 1500)}`);
+    const result = toolResultText(mock, ID);
+    assert.ok(result, 'no follow-up POST carrying the Grep tool_result');
+    if (RG_NOT_FOUND.test(result) && GREP_JSON_REFUSED.test(r.stderr)) {
+      t.skip('the Grep tool runs `rg --json`, which the rg->ugrep translation refuses by design; '
+        + 'the tool answered "ripgrep not found on PATH" (BACKLOG.md: the Grep tool fails in quaude at 2.1.283)');
+      return;
+    }
+    assert.match(result, new RegExp(MARK), `Grep tool_result lacks the match:\n${result.slice(0, 1500)}`);
   } finally { await mock.close(); }
 });
 
@@ -103,9 +138,9 @@ test('agentic multi-turn under tjs: a 2-tool loop keeps both tool_results cohere
     const r = await bootP(cli, dir, ['-p', 'run two commands', '--allowedTools', 'Bash'], mockEnv(dir, mock.url), 120000);
     assert.strictEqual(r.status, 0, `stderr:\n${r.stderr}`);
     assert.match(r.stdout, /MULTIDONE/, `did not reach the final turn:\n${r.stdout}`);
-    const fu1 = followUpFor(mock, ID1), fu2 = followUpFor(mock, ID2);
-    assert.ok(fu1 && fu1.body.includes(A), 'turn-1 tool_result missing echo A');
-    assert.ok(fu2 && fu2.body.includes(B), 'turn-2 tool_result missing echo B');
+    const r1 = toolResultText(mock, ID1), r2 = toolResultText(mock, ID2);
+    assert.ok(r1.includes(A), `turn-1 tool_result missing echo A: ${JSON.stringify(r1)}`);
+    assert.ok(r2.includes(B), `turn-2 tool_result missing echo B: ${JSON.stringify(r2)}`);
   } finally { await mock.close(); }
 });
 
@@ -168,10 +203,10 @@ process.stdin.on('end', () => {
       ['-p', 'update yourself', '--allowedTools', 'Bash', '--settings', settings],
       mockEnv(dir, mock.url), 120000);
     assert.strictEqual(r.status, 0, `stderr:\n${r.stderr}`);
-    const followUp = followUpFor(mock, ID);
-    assert.ok(followUp, 'no follow-up POST carrying the Bash tool_result (hook path not reached)');
+    assert.ok(followUpFor(mock, ID), 'no follow-up POST carrying the Bash tool_result (hook path not reached)');
     // The PreToolUse deny reason (update-guard) must be surfaced in the tool_result,
     // and the command must NOT have actually run.
-    assert.match(followUp.body, /clode manages Claude Code|rebuilds itself/, `hook deny reason not in tool_result:\n${followUp.body.slice(0, 1500)}`);
+    const result = toolResultText(mock, ID);
+    assert.match(result, /clode manages Claude Code|rebuilds itself/, `hook deny reason not in tool_result:\n${result.slice(0, 1500)}`);
   } finally { await mock.close(); }
 });
