@@ -85,7 +85,7 @@ function runNpmQuiet(verbose, npm, args, spawn, stderr, env) {
 //     HERE/../deps/claude/package.json (the normal repo layout: ROOT/deps/claude)
 //   - early returns: no manifest; deps already installed at a sibling
 //     deps/claude/node_modules ($HERE/../deps/claude/node_modules — a source
-//     checkout that already ran `npm install --prefix deps/claude`); a
+//     checkout that already ran `npm ci --prefix deps/claude`); a
 //     user-managed CLODE_DEPS (node_modules, no .deps-sig); the sig gate (fresh).
 //   - else: log, resolve npm (CLODE_NPM verbatim, else `command -v npm`; none ->
 //     two-line fail-loud + exit 1), mkdir DEPS_ROOT, copy manifest AND its
@@ -102,9 +102,17 @@ function runNpmQuiet(verbose, npm, args, spawn, stderr, env) {
 // install`, which resolved every range anew: on 2026-09-26 that landed
 // get-east-asian-width 1.7.0 against the lock's 1.6.0, and `clode build`
 // refused the store it had just installed (found by the NetBSD spike). Only a
-// source checkout without deps/claude/node_modules reaches this: a released
-// clode embeds its deps and never calls ensureDeps (clode-build.cjs builds from
-// the materialized payload's node_modules under a blobulated builder).
+// source checkout without deps/claude/node_modules reaches this. A released clode
+// never calls ensureDeps:
+//   - clode-build.cjs:565-566 (resolveClaudeNmDir) is its only caller;
+//   - under a blobulated builder, clode-build.cjs:1543-1552 sets nmDir from the
+//     materialized payload, and :1861-1863 calls resolveClaudeNmDir only if
+//     !nmDir; the naude branch, :1379-1381, uses the payload too;
+//   - the payload was installed with `npm ci --prefix deps/claude`
+//     (.github/workflows/release.yml:145 and :224).
+// The .deps-sig format changed with this rule (manifest AND lock), so the first
+// build after upgrading re-runs `npm ci` on every clode-managed store once. Offline,
+// that one build now depends on npm's own cache, where before it ran no npm at all.
 //
 // opts: { libexec, here, verbose=false, npmPath=env.CLODE_NPM, env, fsm, stderr,
 //         exit, log, spawn }. stderr/exit/spawn/log injectable for testability.
@@ -146,7 +154,7 @@ function ensureDeps(opts = {}) {
   if (!manifest) return; // no manifest shipped -> nothing to ensure
 
   // deps/claude/node_modules already installed beside this checkout (a dev ran
-  // `npm install --prefix deps/claude`, or CI already did it) -> nothing to
+  // `npm ci --prefix deps/claude`, or CI already did it) -> nothing to
   // install here; clode-build.cjs's nmDir resolution finds it directly. This
   // used to check $HERE/../node_modules (the REPO ROOT's own node_modules,
   // from `npm install -g .`) — that was the exact conflation this whole
@@ -180,10 +188,10 @@ function ensureDeps(opts = {}) {
   if (!install) {
     // Reachable only on a non-blobulated clode (scripts/stage0.mjs under node) whose deps aren't
     // present — in practice a SOURCE CHECKOUT that never ran
-    // `npm install --prefix deps/claude`. Point there first; a released binary
+    // `npm ci --prefix deps/claude`. Point there first; a released binary
     // carries its deps as members and never lands here.
     stderr.write('clode: runtime dependencies (ws, yaml, string-width, ...) are not installed.\n');
-    stderr.write('clode: - in a source checkout, run `npm install --prefix deps/claude` (or `npm ci --prefix deps/claude`) here.\n');
+    stderr.write('clode: - in a source checkout, run `npm ci --prefix deps/claude` here.\n');
     stderr.write('clode: - otherwise use a released clode binary (deps are embedded), or point\n');
     stderr.write('clode:   CLODE_DEPS at a node_modules you have populated with them.\n');
     return exit(1);

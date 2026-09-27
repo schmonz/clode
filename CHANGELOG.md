@@ -19,6 +19,14 @@ error with the help under it, not a silent translation:
 - `--target` means one thing everywhere now: the artifact is for another machine. It no
   longer changes meaning depending on which other flag is present.
 - `clode fetch node` replaces `clode fetch --naude`.
+- Fix Bash commands stopping after their first `grep`, `find` or `rg`, on every platform
+  (0.20260831.1 has it too): `grep -q x f && echo found; echo done` printed neither line
+- Fix a false "known applet skew" warning when a skewed `grep` feeds `head`
+- (NetBSD, and other platforms upstream does not build) Fix Write and Edit failing
+- Fix `clode build` from a source checkout refusing the dependencies it had just
+  installed: the dependency store is now installed from the lockfile with `npm ci`. The
+  first build after upgrading reinstalls an existing store once; offline, that build
+  needs npm's cache, where before it ran no npm at all
 
 ## 0.20260831.1
 

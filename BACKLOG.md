@@ -21,12 +21,18 @@ after scores 5/5, under zsh and under bash.
   neither echo. Under zsh, `... | grep x; echo after` also lost the tail. The rule is
   SHADOW_KEEPS_THE_SHELL: a shadow runs its applet as a child. That is upstream's shape too
   (`ARGV0=` in zsh, `( exec -a ... )` in bash).
-- **F1, NetBSD and any non-Linux host with a procfs: Write and Edit failed** (0e24947). The
-  linux carve (every OS upstream does not build) writes through
+- **F1, NetBSD and any non-Linux host with a procfs: Write and Edit failed** (0e24947,
+  narrowed in 7a9dc77). The linux carve (every OS upstream does not build) writes through
   `/proc/self/fd/<dirfd>/<name>` whenever readlink of that path answers. NetBSD's procfs
-  answers the readlink, then returns EROFS for the rename and unlink. The rule is
-  PROC_FD_IS_LINUX_ONLY: off Linux, `/proc/<self|pid>/fd` does not exist for node:fs, so the
-  carve takes its own "no procfs" route. The rule is false on the reference box.
+  answers the readlink for a directory, then returns EROFS for the rename and unlink. The rule
+  is PROC_FD_IS_LINUX_ONLY: off Linux, our own `/proc/<self|own pid>/fd` is not magic-link
+  procfs, and everything on or beneath it is hidden except reading one descriptor by name. So
+  the carve takes its own "no procfs" route. The rule is false on the reference box.
+  0e24947 hid opens as well, which broke token-on-a-file-descriptor auth (below); 7a9dc77
+  restored reading one descriptor.
+- **A skewed grep shadow warned under a healthy `grep ... | head -1`** (f7c6ff4). The skew
+  trailer read SIGPIPE (141) as a usage error. It was found in review of the three fixes and
+  is fixed: a status above 128 is a signal, never skew.
 - **F3, a source checkout with a fresh deps store: `clode build` refused its own install**
   (f650045). The store copied only package.json and ran `npm install`, which landed
   get-east-asian-width 1.7.0 against the lock's 1.6.0. The rule is DEPS_STORE_FROM_LOCKFILE:
@@ -71,17 +77,79 @@ Bash tool instead".
   tool answered "No such tool available" in the floor probe's `-p` run. Whether it does under
   that test's `--allowedTools Grep` was not measured. Audit the file's other rows for the same
   shape.
-- **Every B1/B4 pass in test/fidelity/RESULTS.md before 2026-09-26 came from the check that
-  could not fail**, and tjs-legs.mjs derives floor notes from those rows (netbsd-arm64 says
-  6/6). Re-drive the floor rows per run-target with the corrected probe. The netbsd-arm64
-  rows from this fix (5/5, both shells) were not pasted; paste them from a run with
-  `--bundle 2.1.283`. The probe's default `--bundle` reads deps/claude/package.json, which is
-  the target-deps manifest (version 0.0.0), so every row it prints says bundle 0.0.0.
+- **The floor-probe B1/B4 rows in test/fidelity/RESULTS.md before 2026-09-26 came from a check
+  that could not fail on missing output.** They could still fail with no follow-up request or
+  a non-zero exit. Six B1/B4 rows came from other instruments that read the tool_result
+  itself, and they are not affected:
+  - 2026-07-09 netbsd-arm64 B1;
+  - 2026-07-29 darwin-arm64 and cosmo B1;
+  - 2026-07-30 darwin and cosmo B4 (the agentic suite);
+  - 2026-07-31 darwin-ppc B1.
+  tjs-legs.mjs derives floor notes from these rows (netbsd-arm64 says 6/6). Re-drive the floor
+  rows per run-target with the corrected probe. The netbsd-arm64 rows from this fix (5/5,
+  both shells, `--bundle 2.1.283`, 2026-09-27) were not pasted. Without `--bundle`, the probe
+  reads deps/claude/package.json, which is the target-deps manifest (version 0.0.0), so every
+  row it prints says bundle 0.0.0.
 - **Over ssh the probe needs the applets on PATH.** A NetBSD guest's non-interactive PATH has
   no /opt/pkg/bin, so the Bash tool's grep fails loud with 127. The fixed B1 still passes
   (the echo runs), but B4's grep cannot. The 5/5 was driven with
   `--ssh 'ssh -p 2230 schmonz@localhost env PATH=/opt/pkg/bin:/usr/bin:/bin:/usr/pkg/bin sh'`.
   Either document that, or let the probe take a PATH.
+- **Every linux-carve site PROC_FD_IS_LINUX_ONLY turns** (read from the 2.1.283 linux-x64 carve,
+  2026-09-27; NetBSD behaviour measured with real node on the guest). Turned to the carve's
+  own non-procfs branch:
+  - the write path (chunk-skc0kcp7) takes the path route: this is F1;
+  - the sync hardened read (chunk-379zyrv7 `Yl`): before F1 it read "descriptor path
+    unreadable" and refused, because readlink of a FILE descriptor is EINVAL there and
+    `/proc/self/fd` stats; now it reads "no procfs" and proceeds;
+  - the hardened-read availability probe (chunk-m8ebe51k, lstat of `/proc/self/fd`) now says
+    unavailable and uses its post-open recheck;
+  - the fd-relative directory walk (chunk-fjegvw7t, lstat of `/proc/self/fd/N/.`) now takes
+    paths;
+  - the search tool's ripgrep spawn cwd (chunk-gpsyc3w1) now uses the canonical path instead
+    of `/proc/self/fd/N`. Both work on NetBSD; spawning with that cwd was measured;
+  - the TUI's nonblocking-stdout reopen of `/proc/self/fd/1` (chunk-14ycq111) is now
+    `open_failed`, not installed, the route macOS quaude always takes. That is deliberate,
+    and it is better; see the stall below;
+  - the sandbox's secure mkdir chain (chunk-gpsyc3w1 `NO`) now returns false. It runs only
+    for the Linux sandbox, which NetBSD does not have;
+  - a diagnostics readdir of `/proc/self/fd` (chunk-h06g0wet) reports no fd count.
+  Unchanged in practice:
+  - the task-output ioPath (chunk-spmtf5nr): readlink of a file descriptor was already
+    EINVAL on NetBSD, so it already took the path;
+  - the other readlink-a-file-descriptor callers already caught that EINVAL.
+  Not ours to hide: chunk-gayc48yd reads OTHER pids' `/proc/<pid>/fd` to find a socket's
+  owner, in a Linux-only format.
+- **Auth tokens on a file descriptor, in the linux carve: /proc, not /dev/fd.** The auth-token
+  readers (CLAUDE_CODE_{OAUTH_TOKEN,API_KEY,WEBSOCKET_AUTH}_FILE_DESCRIPTOR, chunk-3cvbcwb5)
+  read a socket directly. Any other descriptor they open by name:
+  - `/proc/self/fd/N` in the linux carve;
+  - `/dev/fd/N` in the darwin carve.
+  So F1 does affect them, unless reading one descriptor passes, which is what 7a9dc77 made
+  it do. Measured on NetBSD with a mock that records Authorization and a token on fd 3 from a
+  regular file:
+  - pre-F1 build: Bearer, PONG;
+  - 0e24947: none, "Not logged in";
+  - 7a9dc77: Bearer, PONG.
+  Upstream's own eval children get the token on a fourth `stdio: "pipe"` fd. libuv (our
+  engine's) creates such pipes as socketpairs, which the readers read directly. Whether our
+  child_process shim supports a fourth stdio pipe at all was not checked.
+- **A token on a PIPE descriptor cannot be read on NetBSD at all**, before or after F1.
+  NetBSD's fstat of a pipe fd reports neither FIFO nor socket, and `/proc/self/fd/N` for it is
+  ENOENT (measured with real node). So neither the direct read nor the /proc read applies.
+  This is not ours to fix in fs.cjs; it would need the carve's direct read to accept a pipe.
+- **The TUI's nonblocking stdout stalls a turn's paint under this engine: suspected on Linux
+  quaude too.** When chunk-14ycq111 installs its nonblocking writer (writeSync to a reopened
+  O_NONBLOCK fd, an EAGAIN queue, `setTimeout(...).unref()` retries), the answer does not paint
+  until the next keystroke. On NetBSD, tui-probe D1 turn=false in 7 of 8 runs with the reopen
+  allowed; the screen captured afterwards holds the answer. PROC_FD_IS_LINUX_ONLY keeps it
+  uninstalled off Linux. On Linux the rule does not fire and the reopen succeeds, so a Linux
+  quaude TUI may stall the same way. Measure D1 on the Ubuntu guest (port 1213) before the
+  release, then find the cause: an EAGAIN from our write path, or the unref'd retry timer.
+- **pP, the linux carve's hardened open of a git-written file (chunk-5t3x93y6), refuses every
+  file on NetBSD**, before and after F1. It readlinks `/proc/self/fd/N` for a FILE descriptor
+  with no fallback, and NetBSD answers EINVAL. What reads through pP, and what degrades,
+  is not measured.
 - **The spike's secondary findings, not re-measured here:**
   - The TUI's startup `npm config get prefix` dumps node.core (SIGTRAP) into $HOME on
     NetBSD.

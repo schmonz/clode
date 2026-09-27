@@ -89,8 +89,8 @@ test('install:false (runtime) never shells npm — fails loud, installs nothing'
   });
   assert.strictEqual(log.calls.length, 0, 'must not invoke npm at runtime');
   assert.strictEqual(exitCode, 1);
-  // actionable for the reachable audience: dev checkout -> npm install; else binary / CLODE_DEPS
-  assert.match(err, /npm install/);
+  // actionable for the reachable audience: dev checkout -> npm ci; else binary / CLODE_DEPS
+  assert.match(err, /npm ci --prefix deps\/claude/);
   assert.match(err, /CLODE_DEPS/);
   assert.ok(!fs.existsSync(path.join(deps, 'node_modules', '.installed')), 'nothing installed');
 });
@@ -179,7 +179,7 @@ test('a user-managed CLODE_DEPS (node_modules, no .deps-sig) is left alone', () 
 });
 
 test('deps already installed at a sibling deps/claude/node_modules -> no auto-install', () => {
-  // what `npm install --prefix deps/claude` leaves next to bin/
+  // what `npm ci --prefix deps/claude` leaves next to bin/
   // ($HERE/../deps/claude/node_modules) — a source checkout that already
   // provisioned Claude Code's deps. This used to check $HERE/../node_modules
   // (`npm install -g .`'s layout) and call it "clode's own node_modules" —
