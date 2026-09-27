@@ -99,6 +99,12 @@ Bash tool instead".
   `find . -name kept.txt` gives `./kept.txt`, rc 0; `find . -regex '.*x'` refuses, rc 1.
   Tests: test/find-without-oniguruma.test.cjs, 9 rows, red on 87678b6 and green on this Mac
   and on NetBSD.
+- **FIND_WITHOUT_ONIGURUMA refuses a literal `-regex`, `-iregex` or `-regextype` that is not
+  a primary** (from the F4 fix-round review, 2026-09-27). The refusing body matches every
+  argument exactly, so `find . -name -regex` (a file NAMED -regex) and `find -- -regex` refuse
+  too. It is a false positive that fails LOUD (rc 1, with the fix), never a silently wrong
+  search. Not fixed: telling a primary from an operand needs find's expression grammar (which
+  primaries take a value), which is not trivial. Fix it with that, and a row per case.
 - **The Grep tool in quaude: broken in content mode since 2.1.251, probably in every mode.**
   (Corrected 2026-09-27 from the F4 review's reading of the 2.1.283 carve.)
   - **When the tool exists.** Upstream swaps Grep and Glob for `grep`/`find` via Bash when
