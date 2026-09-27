@@ -105,7 +105,25 @@ Bash tool instead".
   too. It is a false positive that fails LOUD (rc 1, with the fix), never a silently wrong
   search. Not fixed: telling a primary from an operand needs find's expression grammar (which
   primaries take a value), which is not trivial. Fix it with that, and a row per case.
-- **The Grep tool in quaude: broken in content mode since 2.1.251, probably in every mode.**
+- **The Grep tool in quaude: broken in EVERY mode, and the Glob tool too, in every carve since
+  2.1.185.** (Measured 2026-09-27: a real quaude, 675f1f5's libexec, and native 2.1.283 against
+  the same mock and tree; full evidence in the grep task's report.)
+  - files_with_matches answers "No files found" and count answers "Found 0 total occurrences":
+    SILENTLY wrong, because ugrep exits 2 on `--max-columns` and the tool reads that as no
+    matches. content answers "ripgrep not found on PATH. Install it". Glob (`rg --files --null
+    --glob P --sort=modified`, `--sort=modified` in every carve) answers the same.
+  - With an rg on PATH, the bundle resolves rg through Bun.which to an ABSOLUTE path, and the
+    spawn wrappers translate only a bare `rg`: the HOST rg answers every Grep and Glob call.
+  - With no rg on PATH, a Grep path outside the working directory refuses: "ripgrep was found
+    only by name on PATH ... Install ripgrep at an absolute path".
+  - With `--max-columns` dropped, 44 of the 60 files/count argv x tree cells still differ from
+    native (the other 16 are empty on both sides): `--glob '!.git'` excludes no directory in
+    ugrep (.git/HEAD is searched); ugrep -I drops invalid-UTF-8 files; `-c` prints zero counts;
+    outside a git repo rg ignores .gitignore and honors .ignore, ugrep the reverse; an rg
+    whitelist glob overrides ignore rules; `**/*.{ts,tsx}` matches nothing in ugrep; `-U` is
+    ugrep's `--binary` and `--multiline-dotall` is rejected; `--type` is refused; rg reports
+    matches before a NUL that lies past its first 64 KiB read, and renumbers lines in an
+    explicitly named binary file.
   (Corrected 2026-09-27 from the F4 review's reading of the 2.1.283 carve.)
   - **When the tool exists.** Upstream swaps Grep and Glob for `grep`/`find` via Bash when
     bash is available (`wa()`), UNLESS `searchToolsOptIn` is set. That opt-in is set
@@ -115,10 +133,10 @@ Bash tool instead".
   - **What breaks.** output_mode "content" pushes `--json` (first in 2.1.251; absent in .185,
     .218, .243, .246 and .250, so 0.20260831.1 already shipped this broken). The rg->ugrep
     translation refuses --json by design, and the tool answers "ripgrep not found on PATH".
-  - **To measure.** Every mode since 2.1.185 passes `--max-columns 500`. rgToUgrep passes it
+  - **--max-columns.** Every mode since 2.1.185 passes `--max-columns 500`. rgToUgrep passes it
     through, and mis-splits its value: `--max-columns` is followed by `500` as a
     positional. ugrep 7.8.2 rejects it ("invalid option --max-columns"). So
-    files_with_matches and count modes very likely fail too.
+    files_with_matches and count modes fail too (measured above).
   - **On a refusal, `_rewriteRgSpawn` hands back the UNTRANSLATED argv.** With no rg, the
     model is told "Install ripgrep". With an rg on PATH, the host rg runs, contradicting
     the rg-divergence rule.
