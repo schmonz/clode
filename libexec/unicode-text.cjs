@@ -349,8 +349,11 @@ function cellClusterWidth(str, start, end, ambiguousIsNarrow = true) {
 //   U+0098 SOS, U+009E PM and U+009F APC start a sequence, which is taken out of the text.
 //   ESC      then `[` is a CSI, `]` an OSC, `P` `X` `^` `_` a DCS/SOS/PM/APC string; a byte
 //            0x30-0x7E, or a CANCEL, ends it (`a ESC 7 b` is `a b`); ONE byte 0x20-0x2F is an
-//            intermediate, and whatever single character follows it ends it (`a ESC SP SP
-//            b` is `a b`, `a ESC SP TAB b` has no tab); a second ESC starts over (`a ESC
+//            intermediate, and whatever single code UNIT follows it ends it (`a ESC SP SP
+//            b` is `a b`, `a ESC SP TAB b` has no tab, and `a ESC SP U+1F600 b` takes the
+//            pair's high half only: the low half left is a lone surrogate, which the text
+//            leaves out anyway, but which Bun.wrapAnsi reads as its own code point, measured
+//            2026-09-26 at WRAP-ROW-WIDTH); a second ESC starts over (`a ESC
 //            ESC b c` is `a c`, and so does one after the intermediate). Anything else
 //            after it (a control, DEL, another C1, a non-ASCII or lone surrogate code unit)
 //            drops the ESC ALONE and is read again: `a ESC TAB` keeps its tab, `a ESC
@@ -381,13 +384,15 @@ const isC1String = (c) => c === 0x90 || c === 0x98 || c === 0x9e || c === 0x9f; 
 const startsSequence = (c) => c === ESC || c === C1_CSI || c === C1_OSC || isC1String(c);
 
 // A CSI from j (just past its introducer). Returns where the text resumes; a CSI that
-// reaches its final is recorded, `ignored` if it met a character it cannot hold.
-function readCsi(str, j, at, out) {
+// reaches its final is recorded in `out` (unless it is null), `ignored` if it met a character
+// it cannot hold. The three readers stop at `n`, the end of the string unless a caller reads
+// only part of it (Bun.wrapAnsi reads one line at a time: WRAP-NEWLINE).
+function readCsi(str, j, at, out, n = str.length) {
   const start = j;
   let ignored = false;
-  for (; j < str.length; j++) {
+  for (; j < n; j++) {
     const c = str.charCodeAt(j);
-    if (c >= 0x40 && c <= 0x7e) { out.push({ at, kind: 'csi', params: str.slice(start, j), final: str[j], ignored }); return j + 1; }
+    if (c >= 0x40 && c <= 0x7e) { if (out !== null) out.push({ at, kind: 'csi', params: str.slice(start, j), final: str[j], ignored }); return j + 1; }
     if (c === ESC) return j;
     if (isCancel(c)) return j + 1;
     if (c < 0x20 || c > 0x3f) ignored = true;
@@ -399,13 +404,13 @@ function readCsi(str, j, at, out) {
 // introducer. Recorded with the terminator it ended at: BEL or U+009C, `ESC \` when the ESC
 // that ended it is the ST (the ESC is still read again, as the two-character sequence it
 // is), '' when any other ESC ended it.
-function readString(str, j, kind, at, out) {
+function readString(str, j, kind, at, out, n = str.length) {
   const start = j;
-  for (; j < str.length; j++) {
+  for (; j < n; j++) {
     const c = str.charCodeAt(j);
-    if (c === ST || (c === BEL && kind === 'osc')) { out.push({ at, kind, params: str.slice(start, j), final: str[j] }); return j + 1; }
+    if (c === ST || (c === BEL && kind === 'osc')) { if (out !== null) out.push({ at, kind, params: str.slice(start, j), final: str[j] }); return j + 1; }
     if (c === ESC) {
-      out.push({ at, kind, params: str.slice(start, j), final: str.charCodeAt(j + 1) === 0x5c ? '\x1b\\' : '' });
+      if (out !== null) out.push({ at, kind, params: str.slice(start, j), final: j + 1 < n && str.charCodeAt(j + 1) === 0x5c ? '\x1b\\' : '' });
       return j;
     }
     if (isCancel(c)) return j + 1;                                    // CAN, SUB: abandoned
@@ -414,25 +419,24 @@ function readString(str, j, kind, at, out) {
 }
 
 // One sequence from i (an ESC or a C1 introducer); returns where the text resumes.
-function readSequence(str, i, at, out) {
-  const n = str.length;
+function readSequence(str, i, at, out, n = str.length) {
   const c = str.charCodeAt(i);
-  if (c === C1_CSI) return readCsi(str, i + 1, at, out);
-  if (c === C1_OSC) return readString(str, i + 1, 'osc', at, out);
-  if (c !== ESC) return readString(str, i + 1, 'string', at, out);
+  if (c === C1_CSI) return readCsi(str, i + 1, at, out, n);
+  if (c === C1_OSC) return readString(str, i + 1, 'osc', at, out, n);
+  if (c !== ESC) return readString(str, i + 1, 'string', at, out, n);
   for (;;) {
     if (i + 1 >= n) return n;
     const d = str.charCodeAt(i + 1);
     if (d === ESC) { i++; continue; }
-    if (d === 0x5b) return readCsi(str, i + 2, at, out);
-    if (d === 0x5d) return readString(str, i + 2, 'osc', at, out);
-    if (d === 0x50 || d === 0x58 || d === 0x5e || d === 0x5f) return readString(str, i + 2, 'string', at, out);
+    if (d === 0x5b) return readCsi(str, i + 2, at, out, n);
+    if (d === 0x5d) return readString(str, i + 2, 'osc', at, out, n);
+    if (d === 0x50 || d === 0x58 || d === 0x5e || d === 0x5f) return readString(str, i + 2, 'string', at, out, n);
     if ((d >= 0x30 && d <= 0x7e) || isCancel(d)) return i + 2;
     if (d >= 0x20 && d <= 0x2f) {
       const j = i + 2;
       if (j >= n) return n;
       if (str.charCodeAt(j) === ESC) { i = j; continue; }
-      return j + cpLen(cpAt(str, j, n));
+      return j + 1;                                                   // one code UNIT
     }
     return i + 1;
   }
@@ -1081,5 +1085,351 @@ function sliceAnsi(input, start, end, options, narrowOption) {
   return out + closeStyles(styles);
 }
 
+// ---- Bun.wrapAnsi -------------------------------------------------------------------------
+// Bun.wrapAnsi(input, columns, options): `input` broken into rows no wider than `columns`, the
+// style and hyperlink in force closed at each row's end and reopened after the break. The
+// bundle's wrap helper (`X(e,t,r)` in the 2.1.283 carve) calls it for every Ink text node that
+// wraps, from Yoga's measure function and again when it paints, with the option shapes
+// scripts/lib/text-probe.cjs lists (WRAP_OPTIONS). It used to be npm wrap-ansi, which is not
+// native's: 236,398 of the text gates' 1,182,173 strings differed from native 2.1.283 (tabs,
+// nested styles, CR, NFC, wide code points at the edge). Native's is a walk of its own: words
+// placed by Bun.stringWidth, broken by each code point's own width, one style and one link
+// carried across a break. Every rule below was measured against native 2.1.283 (Bun 1.4.3) on
+// 2026-09-26 and is pinned by a same-named test in test/unicode-text.test.cjs;
+// test/fidelity/text-differential.test.cjs judges the whole against native over every corpus
+// the other text gates use (text-diff-wrapansi) and over the wrap corpus at every width 1-80
+// (text-diff-wrapansi-cases).
+//
+// WRAP-ARGUMENTS (rule): the input is converted as a template literal converts it (a Symbol
+//   throws), and an empty one is '' before anything else is read. columns are
+//   ToIntegerOrInfinity'd (2.9 is 2, '2' is 2, true is 1). Options are read only from an object,
+//   in the order hard, wordWrap, trim, ambiguousIsNarrow: hard by its truthiness, wordWrap and
+//   trim true unless exactly false (0 and null keep them), ambiguousIsNarrow true unless given,
+//   then by its truthiness (null makes Ambiguous wide).
+// WRAP-NARROW (rule): a width that is not positive and finite (undefined, 0, 0.9, negative, NaN,
+//   either Infinity) wraps nothing: the input comes back exactly as given, CR included. One
+//   column is a width like any other.
+// WRAP-NEWLINE (rule): LF, a lone CR and CRLF each end a line and each comes out as ONE LF
+//   (`a LF CR b` is `a LF LF b`). Lines are found before any escape is read (a LF inside an OSC
+//   ends the line), and each line is wrapped on its own: it starts with no style and no link,
+//   and what is open at its end is neither closed there nor reopened on the next line. U+2028
+//   and NEL are ordinary characters.
+// WRAP-VERBATIM (rule): the text is copied code unit for code unit. Nothing is normalised
+//   (U+0340 stays U+0340 and `e U+0301` two code points, where npm wrap-ansi's NFC made them
+//   U+0300 and U+00E9), and controls, VT, FF and lone surrogates stay where they stand. All
+//   wrapAnsi writes of its own is LF, the separators it keeps, and WRAP-SGR's and WRAP-LINK's
+//   sequences.
+// WRAP-SPACE (rule): U+0020 is the one separator, and only outside an escape sequence (a space
+//   in an OSC 8 URI or among a CSI's intermediates is part of it); NBSP, U+2003, U+3000 and TAB
+//   are word characters. Each separator ends a word, so a run of n spaces holds n - 1 empty
+//   words. A word goes on the row in progress after ONE space (unless WRAP-TRIM leaves it out),
+//   and if the row's width, that space and the word's width come to more than columns, the word
+//   starts the next row instead, its separator left at the end of the row before (where trim
+//   drops it).
+// WRAP-TAB (rule): a tab is an ordinary character of its word and 0 wide, in Bun.stringWidth
+//   and in WRAP-HARD alike: never a separator, never expanded to a tab stop. WRAP-TRIM drops it
+//   as it drops a space at the start of a row and in a blank line, but not at a row's end.
+// WRAP-TRIM (rule): with trim (the default), a line of nothing but spaces and tabs has no rows
+//   (it is empty). Each time a word is placed, the row in progress first loses its leading
+//   spaces and tabs (its escape sequences stay), so a leading tab stays when no word follows it
+//   on its row. No separator is written while the row has no width, so 0-wide words run
+//   together. Once the line is placed, each row loses the SPACES after its last word with a
+//   width; tabs, escapes and 0-wide text after it stay. Without trim nothing is dropped, and a
+//   row whose width has reached columns is ended BEFORE the separator, which then leads the
+//   next row (`ab cd` at 2 is `ab`, ` `, `cd`).
+// WRAP-HARD (rule): with hard, a word wider than columns (by Bun.stringWidth) is broken code
+//   point by code point, each at ITS OWN width, which is codePointWidth except for U+20E3: 0
+//   there (the 2 codePointWidth gives it is the keycap cluster's, WIDTH-KEYCAP). So clusters
+//   come apart. It starts on a new row only when that saves a break: when, `room` being the row's
+//   room left after the separator, floor((width - 1) / columns) is less than 1 + floor((width -
+//   room - 1) / columns) (the second term only when width > room). wordWrap: false breaks the
+//   same way, but only a word that does not fit, and into the room left on the row in progress
+//   when there is some.
+// WRAP-WIDE (rule): while a word is broken (WRAP-HARD), a code point wider than the room left
+//   starts a new row, even from an empty one (at 1 column, `U+4E2D` is `LF U+4E2D`); a row
+//   filled exactly is ended before the word's next code point or escape sequence; and what is
+//   left after the last break with no width (escapes, marks) goes back onto the row before it.
+//   Without hard, a word wider than the row stays whole on a row of its own.
+// WRAP-ROW-WIDTH (rule): the width of the row in progress is a running sum, 1 per separator plus
+//   Bun.stringWidth of each word, less the spaces WRAP-TRIM drops from its start; it is measured
+//   afresh with Bun.stringWidth (clusters run across the separators and escapes) only after a
+//   word is broken, or when the word's first code point after its leading escape sequences would
+//   join the separator into one cluster (bun-cell: an Extend that is not an Emoji_Modifier, a
+//   ZWJ, a SpacingMark). So a lone surrogate first hides a keycap after it: `aa SP DC00 20E3 bb`
+//   counts 3 + 4 where Bun.stringWidth of it is 6. (After a word placed with no separator, on a
+//   row with no width, Bun's source sums across an ASCII-to-ASCII seam and measures otherwise;
+//   nothing on a row with no width can join a following ASCII character into a wider cluster, so
+//   the sum there IS the measure: this always measures, and no input can tell the two apart.)
+// WRAP-SGR (rule): the one style carried is that of the LAST SGR (ESC [ or U+009B) whose
+//   parameters are digits alone, the number taken modulo 2^32 (4294967297 is 1): 0, none and 39
+//   clear it, any other number is it. At each break inside a line it is closed at the row's end
+//   with its SGR-CLOSES code and reopened after the LF as `ESC[<number>m`, but only when it has a
+//   close code (after 22 or 99, nothing). Compound (`1;31`), extended (`38;5;n`), colon and
+//   abandoned forms change nothing, and a style opened before the last is neither closed nor
+//   reopened: it stays open across the break.
+// WRAP-LINK (rule): the link in force (OSC-8; an empty URI closes it) is closed at each break
+//   inside a line with `ESC]8;;BEL`, before the style is, and reopened after the style is as
+//   `ESC]8;`, its parameters and URI as written, and BEL, whatever introducer and terminator it
+//   was written with.
+
+// Where the run of escape sequences from i (an introducer) ends, reading no further than `end`:
+// ESCAPE-LAYER's sequences one after another until text, or until an ESC nothing valid follows,
+// which is dropped alone and ends the run at the character after it (as native reads a word's
+// leading escapes for WRAP-ROW-WIDTH; everywhere else a run is as good as its sequences).
+function sequenceRun(str, i, end) {
+  while (i < end && startsSequence(str.charCodeAt(i))) {
+    const j = readSequence(str, i, 0, null, end);
+    if (j < end && str.charCodeAt(j - 1) === ESC) return j;
+    i = j;
+  }
+  return i;
+}
+
+// What the input is made of, read once per call (CR and LF end lines, so no span or row holds
+// one): PLAIN, printable ASCII alone; ESC_ONLY, printable ASCII and ESC; or neither. Speed only:
+// under tjs, counting and scanning character by character in JS is what made this 2x slower
+// than npm wrap-ansi (task 3's timing); every answer is the one the general path gives.
+const PLAIN = 1, ESC_ONLY = 2;
+const NOT_PLAIN = /[^\n\r\x20-\x7e]/, NOT_ESC_ONLY = /[^\n\r\x1b\x20-\x7e]/, C1_INTRODUCER = /[\x90\x98\x9b\x9d\x9e\x9f]/;
+
+// Where the next escape introducer at or after i is, looking no further than `end` (`end` when
+// there is none): the next ESC, when the caller knows the string holds no C1 introducer.
+function nextIntroducer(str, i, end, c1) {
+  if (!c1) { const e = str.indexOf('\x1b', i); return e < 0 || e > end ? end : e; }
+  for (; i < end; i++) if (startsSequence(str.charCodeAt(i))) return i;
+  return end;
+}
+
+// Bun.stringWidth of str[a, b) (BUN-STRINGWIDTH). Printable ASCII is 1 wide and joins nothing
+// (plainAscii), so a PLAIN span is as wide as it is long, and an ESC_ONLY one is that less its
+// escape sequences (ESCAPE-LAYER's, read by the same readSequence); anything else goes through
+// the escape layer and the clusterer.
+function spanWidth(str, a, b, narrow, kind) {
+  if (kind === PLAIN) return b - a;
+  if (kind === ESC_ONLY) {
+    let width = b - a;
+    for (let i = str.indexOf('\x1b', a); i >= 0 && i < b; i = str.indexOf('\x1b', i)) {
+      const e = readSequence(str, i, 0, null, b);
+      width -= e - i;
+      i = e;
+    }
+    return width;
+  }
+  let i = a;
+  while (i < b) { const c = str.charCodeAt(i); if (c < 0x20 || c > 0x7e) break; i++; }
+  if (i === b) return b - a;
+  return textWidth(escapeLayer(a === 0 && b === str.length ? str : str.slice(a, b)).text, narrow);
+}
+
+// WRAP-SPACE: where the word from `start` ends, looking no further than `end`: at the first
+// U+0020 no escape sequence holds, or at `end`. `at` remembers the next introducer found, so a
+// line's words, read left to right, look for each introducer once ({ next: -1 } to start).
+function wordEnd(str, start, end, c1, at) {
+  let space = str.indexOf(' ', start);
+  if (space < 0 || space >= end) space = end;
+  for (let i = start; ;) {
+    if (at.next < i) at.next = nextIntroducer(str, i, str.length, c1);
+    if (at.next >= space) return space;
+    i = sequenceRun(str, at.next, end);
+    if (i > space) { space = str.indexOf(' ', i); if (space < 0 || space >= end) space = end; }
+  }
+}
+
+// WRAP-ROW-WIDTH: whether cp, after a space, would be in the space's cluster (bun-cell).
+function joinsSpace(cp) {
+  if (isEmojiModifier(cp)) return false;                                        // MODIFIER-NEEDS-BASE
+  const g = cellGcbOf(cp);
+  return g === EXTEND || g === ZWJ || g === SPACINGMARK;
+}
+
+// A row: its text, and how far WRAP-TRIM has looked at its start (`at`; `done` once it met a
+// character that is neither space, tab nor escape).
+const newRow = () => ({ s: '', at: 0, done: false });
+
+// WRAP-TRIM: the row's leading spaces and tabs go, from where the last look stopped; escape
+// sequences stay. Returns how many SPACES went (a tab is 0 wide).
+function trimRowStart(row) {
+  if (row.done) return 0;
+  const s = row.s, n = s.length;
+  let i = row.at, gone = 0, kept = null;                  // kept: the text before i, once any went
+  while (i < n) {
+    const c = s.charCodeAt(i);
+    if (startsSequence(c)) { const e = sequenceRun(s, i, n); if (kept !== null) kept += s.slice(i, e); i = e; continue; }
+    if (c !== 0x20 && c !== 0x09) { row.done = true; break; }
+    if (kept === null) kept = s.slice(0, i);
+    if (c === 0x20) gone++;
+    i++;
+  }
+  if (kept === null) row.at = i;
+  else { row.at = kept.length; row.s = kept + s.slice(i); }
+  return gone;
+}
+
+// WRAP-TRIM: past the row's last word with a width, the spaces go.
+function trimRowEnd(row, w) {
+  const s = row.s, n = s.length;
+  if (s.indexOf(' ') < 0) return;
+  const at = { next: -1 };
+  let last = 0;
+  for (let a = 0; ;) {
+    const b = wordEnd(s, a, n, w.c1, at);
+    if (spanWidth(s, a, b, w.narrow, w.kind) > 0) last = b;
+    if (b === n) break;
+    a = b + 1;
+  }
+  let out = s.slice(0, last), from = last;                // [from, i): kept, not yet in out
+  for (let i = last; i < n;) {
+    const c = s.charCodeAt(i);
+    if (startsSequence(c)) { i = sequenceRun(s, i, n); continue; }
+    if (c === 0x20) { out += s.slice(from, i); from = i + 1; }
+    i++;
+  }
+  row.s = out + s.slice(from);
+}
+
+// WRAP-HARD and WRAP-WIDE: the word [a, b) onto the rows, code point by code point.
+function breakWord(w, a, b) {
+  const { str, cols, rows, narrow } = w;
+  let row = rows[rows.length - 1];
+  let used = spanWidth(row.s, 0, row.s.length, narrow, w.kind);
+  let from = a;                                           // [from, i): the row's, not yet in row.s
+  for (let i = a; i < b;) {
+    if (startsSequence(str.charCodeAt(i))) { i = sequenceRun(str, i, b); continue; }
+    const cp = cpAt(str, i, b);
+    const cw = cp === KEYCAP ? 0 : codePointWidth(cp, narrow);                 // WRAP-HARD: its own width
+    if (used + cw > cols) { row.s += str.slice(from, i); from = i; rows.push(row = newRow()); used = 0; }   // WRAP-WIDE
+    used += cw;
+    i += cpLen(cp);
+    if (used === cols && i < b) { row.s += str.slice(from, i); from = i; rows.push(row = newRow()); used = 0; } // WRAP-WIDE
+  }
+  row.s += str.slice(from, b);
+  if (used === 0 && row.s.length > 0 && rows.length > 1) { rows.pop(); rows[rows.length - 1].s += row.s; } // WRAP-WIDE
+  w.stale = true;                                                               // WRAP-ROW-WIDTH
+}
+
+// The word [a, b) onto the rows (`first`: the line's first word, with no separator before it).
+function placeWord(w, a, b, first) {
+  const { str, cols, rows, trim, narrow } = w;
+  let row = rows[rows.length - 1];
+  if (trim) { const gone = trimRowStart(row); if (!w.stale) w.width = gone < w.width ? w.width - gone : 0; }   // WRAP-TRIM
+  if (w.stale) { w.width = spanWidth(row.s, 0, row.s.length, narrow, w.kind); w.stale = false; }                     // WRAP-ROW-WIDTH
+  let used = w.width, spaced = true;
+  if (!first) {
+    if (used >= cols && (!w.wordWrap || !trim)) { rows.push(row = newRow()); used = 0; }                   // WRAP-TRIM
+    if (used > 0 || !trim) { row.s += ' '; used++; }                                                        // WRAP-SPACE
+    else spaced = false;                                                                                    // WRAP-TRIM
+  }
+  const width = spanWidth(str, a, b, narrow, w.kind);
+  if (w.hard && width > cols) {                                                                              // WRAP-HARD
+    const room = cols > used ? cols - used : 0;
+    const here = 1 + (width > room ? Math.floor((width - room - 1) / cols) : 0);
+    if (Math.floor((width - 1) / cols) < here) rows.push(newRow());
+    breakWord(w, a, b);
+    return;
+  }
+  if (used + width > cols && used > 0 && width > 0) {
+    if (!w.wordWrap && used < cols) { breakWord(w, a, b); return; }                                          // WRAP-HARD
+    rows.push(row = newRow());                                                                                // WRAP-SPACE
+    used = 0;
+  }
+  if (used + width > cols && !w.wordWrap) { breakWord(w, a, b); return; }                                    // WRAP-HARD
+  row.s += str.slice(a, b);
+  const f = a < b && startsSequence(str.charCodeAt(a)) ? sequenceRun(str, a, b) : a;
+  if (spaced && (f >= b || !joinsSpace(cpAt(str, f, b)))) w.width = used + width;                            // WRAP-ROW-WIDTH
+  else w.stale = true;
+}
+
+// SGR code of a CSI the escape layer recorded (WRAP-SGR), or -1 when it is not one number.
+function sgrNumber(q) {
+  if (q.final !== 'm') return -1;
+  const p = q.params;
+  let code = 0;
+  for (let i = 0; i < p.length; i++) {
+    const c = p.charCodeAt(i);
+    if (c < 0x30 || c > 0x39) return -1;
+    code = (code * 10 + (c - 0x30)) % 4294967296;
+  }
+  return code;
+}
+
+// The rows of one line, joined with LF, the style and link in force closed at each row's end and
+// reopened after the break (WRAP-SGR, WRAP-LINK); both start empty on every line (WRAP-NEWLINE).
+function joinRows(rows, out, c1) {
+  let code = 0, link = null;                              // 0: no style carried
+  const rec = [];
+  for (let r = 0; r < rows.length; r++) {
+    const s = rows[r].s;
+    if (r > 0) {
+      out += '\n';
+      if (code !== 0 && sgrCloseCode(code) !== 0) out += escSgr(code);                                      // WRAP-SGR
+      if (link !== null) out += '\x1b]8;' + link + '\x07';                                                  // WRAP-LINK
+    }
+    for (let i = nextIntroducer(s, 0, s.length, c1); i < s.length; i = nextIntroducer(s, i, s.length, c1)) {
+      rec.length = 0;
+      i = readSequence(s, i, 0, rec);
+      if (rec.length === 0) continue;
+      const q = rec[0];
+      if (q.kind === 'csi') { const k = sgrNumber(q); if (k >= 0) code = k === 39 ? 0 : k; }               // WRAP-SGR
+      else if (q.kind === 'osc') { const u = oscLink(q.params, q.final); if (u !== null) link = u === '' ? null : q.params.slice(2); } // WRAP-LINK
+    }
+    out += s;
+    if (r + 1 < rows.length) {
+      if (link !== null) out += '\x1b]8;;\x07';                                                              // WRAP-LINK
+      if (code !== 0 && sgrCloseCode(code) !== 0) out += escSgr(sgrCloseCode(code));                        // WRAP-SGR
+    }
+  }
+  return out;
+}
+
+// The line [from, to) wrapped onto `out`.
+function wrapLine(w, from, to, out) {
+  const str = w.str;
+  if (w.trim) {                                                                                             // WRAP-TRIM
+    let i = from;
+    while (i < to && (str.charCodeAt(i) === 0x20 || str.charCodeAt(i) === 0x09)) i++;
+    if (i === to) return out;
+  }
+  w.rows = [newRow()];
+  w.width = 0;
+  w.stale = false;
+  for (let a = from, first = true; ; first = false) {
+    const b = wordEnd(str, a, to, w.c1, w.at);
+    placeWord(w, a, b, first);
+    if (b === to) break;
+    a = b + 1;
+  }
+  if (w.trim) for (const row of w.rows) trimRowEnd(row, w);                                                 // WRAP-TRIM
+  return joinRows(w.rows, out, w.c1);
+}
+
+function wrapAnsi(input, columns, options) {
+  const str = `${input}`;                                                                                   // WRAP-ARGUMENTS
+  if (str.length === 0) return '';
+  let cols = 0;
+  if (columns !== undefined) { const c = toIntegerOrInfinity(columns); if (c > 0 && c !== Infinity) cols = c; }
+  let hard = false, wordWrap = true, trim = true, narrow = true;
+  if (options !== null && (typeof options === 'object' || typeof options === 'function')) {
+    hard = !!options.hard;
+    wordWrap = options.wordWrap !== false;
+    trim = options.trim !== false;
+    const a = options.ambiguousIsNarrow;
+    if (a !== undefined) narrow = !!a;
+  }
+  if (cols === 0) return str;                                                                               // WRAP-NARROW
+  const kind = str.search(NOT_PLAIN) < 0 ? PLAIN : str.search(NOT_ESC_ONLY) < 0 ? ESC_ONLY : 0;
+  const w = { str, cols, hard, wordWrap, trim, narrow, kind, c1: kind === 0 && str.search(C1_INTRODUCER) >= 0,
+    at: { next: -1 }, rows: null, width: 0, stale: false };
+  const n = str.length;
+  let out = '';
+  for (let from = 0; ;) {                                                                                   // WRAP-NEWLINE
+    let to = from;
+    while (to < n && str.charCodeAt(to) !== 0x0a && str.charCodeAt(to) !== 0x0d) to++;
+    if (from > 0) out += '\n';
+    out = wrapLine(w, from, to, out);
+    if (to === n) return out;
+    from = str.charCodeAt(to) === 0x0d && str.charCodeAt(to + 1) === 0x0a ? to + 2 : to + 1;
+  }
+}
+
 module.exports = { graphemeBoundaries, clusterWidth: cellClusterWidth, codePointWidth, escapeLayer, textWidth, stringWidth, forEachCell, cellSgr,
-  oscLink, sliceAnsi, UNICODE_DATA };
+  oscLink, sliceAnsi, wrapAnsi, UNICODE_DATA };

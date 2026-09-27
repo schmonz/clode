@@ -5,8 +5,8 @@
 // test/update-shim-fidelity.cjs, so a clean run reproduces test/shim-fidelity.json
 // byte-for-byte (mirrors test/golden-shas-lib.cjs).
 //
-// Requires the REAL npm packages with the same interop the shim uses: string-width/
-// strip-ansi/wrap-ansi are ESM-only, and require() of ESM returns a namespace whose
+// Requires the REAL npm packages with the same interop the shim uses: strip-ansi is
+// ESM-only, and require() of ESM returns a namespace whose
 // .default is the function (Node >=24, no top-level await) — hence `.default || m`.
 // The deps MUST be installed (npm ci); the gate is meaningless against absent deps, so
 // we throw loudly rather than skip.
@@ -20,11 +20,12 @@
 // shim wrapper ever gains real logic — e.g. passing options to wrap-ansi to close the Bun
 // {trim,hard,wordWrap} divergence — update THIS lib to measure the shim's wrapped behavior,
 // or the guard will silently keep measuring the raw package and miss both the fix and any
-// regression of it. That day came for stringWidth (phase 3, 2026-09-24) and sliceAnsi
-// (2026-09-25): Bun.stringWidth and Bun.sliceAnsi are no longer npm string-width and
-// slice-ansi but libexec/unicode-text.cjs's, which are pure and side-effect free, so they are
-// measured HERE directly — the functions bun-shim.cjs ships. (The golden did not move: the
-// npm packages and native agree on every string in this corpus.)
+// regression of it. That day came for stringWidth (phase 3, 2026-09-24), sliceAnsi
+// (2026-09-25) and wrapAnsi (2026-09-26): Bun.stringWidth, Bun.sliceAnsi and Bun.wrapAnsi are
+// no longer npm string-width, slice-ansi and wrap-ansi but libexec/unicode-text.cjs's, which
+// are pure and side-effect free, so they are measured HERE directly — the functions
+// bun-shim.cjs ships. (The golden did not move: the npm packages and native agree on every
+// string in this corpus.)
 
 // Claude Code's runtime deps (deps/claude/package.json) — NOT clode's own;
 // clode has none (test/clode-self-deps.test.cjs). Resolved via an explicit
@@ -45,9 +46,8 @@ function req(pkg) {
   return (m && m.default) || m;
 }
 
-const { stringWidth, sliceAnsi } = require(path.join(__dirname, '..', 'libexec', 'unicode-text.cjs'));
+const { stringWidth, sliceAnsi, wrapAnsi } = require(path.join(__dirname, '..', 'libexec', 'unicode-text.cjs'));
 const stripAnsi   = req('strip-ansi');
-const wrapAnsi    = req('wrap-ansi');
 const YAML        = req('yaml');
 const semver      = req('semver');
 

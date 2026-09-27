@@ -1,9 +1,10 @@
-// test/text-utils.test.cjs — Bun.stripANSI / wrapAnsi backed by the npm strip-ansi /
-// wrap-ansi deps (the ext-dep pattern). These are CORE (every render), so a missing one
-// is fatal: write the install hint and exit, like ws — clode can't render without them,
-// so there's nothing to recover. Bun.stringWidth and Bun.sliceAnsi are NOT npm-backed any
-// more (phase 3, 2026-09-24 and -25): they are libexec/unicode-text.cjs's, judged against
-// native by test/fidelity/text-differential.test.cjs, so they need no module and ignore one.
+// test/text-utils.test.cjs — Bun.stripANSI backed by the npm strip-ansi dep (the ext-dep
+// pattern). It is CORE (every render), so a missing one is fatal: write the install hint
+// and exit, like ws — clode can't render without it, so there's nothing to recover.
+// Bun.stringWidth, Bun.sliceAnsi and Bun.wrapAnsi are NOT npm-backed any more (phase 3,
+// 2026-09-24 and -25; wrapAnsi 2026-09-26): they are libexec/unicode-text.cjs's, judged
+// against native by test/fidelity/text-differential.test.cjs, so they need no module and
+// ignore one.
 const { test } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
@@ -13,8 +14,8 @@ const { runShimChild } = require('./isolated-shim.cjs');
 
 // Fake string-width/strip-ansi/wrap-ansi/slice-ansi on a NODE_PATH dir. string-width and
 // strip-ansi are ESM-only upstream (default export), so model that shape — a
-// `{default: fn}` namespace — to prove the shim unwraps `.default`. wrap-ansi echoes
-// all three args so we can prove forwarding.
+// `{default: fn}` namespace — to prove the shim unwraps `.default`. The fakes of the
+// packages the shim no longer uses are there to prove it ignores them.
 function withFakes() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-text-'));
   const mk = (name, body) => {
@@ -32,8 +33,7 @@ function withFakes() {
   return dir;
 }
 
-for (const [api, call] of [['stripANSI', "Bun.stripANSI('x')"],
-                           ['wrapAnsi', "Bun.wrapAnsi('x', 10)"]]) {
+for (const [api, call] of [['stripANSI', "Bun.stripANSI('x')"]]) {
   test(`fail-loud: Bun.${api} exits with an install hint when its module is absent`, () => {
     const r = runShimChild(`${call}; console.log('CONTINUED');`);
     assert.notStrictEqual(r.status, 0, 'must exit non-zero when the dep is missing');
@@ -66,11 +66,22 @@ test('Bun.sliceAnsi needs no npm module, and ignores one that is there', () => {
   assert.strictEqual(faked.stdout.trim(), want, 'a slice-ansi module on NODE_PATH must not be used');
 });
 
+test('Bun.wrapAnsi needs no npm module, and ignores one that is there', () => {
+  // native 2.1.283: a tab is a 0-wide word character, never expanded (WRAP-TAB), and only the
+  // last style is closed and reopened at a break, so the italic runs on (WRAP-SGR).
+  const probe = 'const E = String.fromCharCode(0x1b), T = String.fromCharCode(9); console.log(JSON.stringify(['
+    + 'Bun.wrapAnsi("a" + T + "b c", 3), Bun.wrapAnsi(E + "[3mab " + E + "[1mcd" + E + "[22m", 2)]));';
+  const want = JSON.stringify(['a\tb\nc', '\x1b[3mab\x1b[23m\n\x1b[3m\x1b[1mcd\x1b[22m']);
+  const bare = runShimChild(probe);
+  assert.strictEqual(bare.status, 0, bare.stderr);
+  assert.strictEqual(bare.stdout.trim(), want);
+  const faked = runShimChild(probe, { NODE_PATH: withFakes() });
+  assert.strictEqual(faked.stdout.trim(), want, 'a wrap-ansi module on NODE_PATH must not be used');
+});
+
 test('forwards all args to the real modules and unwraps ESM .default', () => {
   const r = runShimChild(
-    `console.log(Bun.stripANSI('\\u001b[31mhi\\u001b[0m'));
-     console.log(Bun.wrapAnsi('hi there', 4, {hard:true}));`,
+    `console.log(Bun.stripANSI('\\u001b[31mhi\\u001b[0m'));`,
     { NODE_PATH: withFakes() });
   assert.match(r.stdout, /STRIP:\[31mhi\[0m/);                // default-export unwrapped
-  assert.match(r.stdout, /WRAP:\["hi there",4,\{"hard":true\}\]/);        // CJS-function shape works
 });

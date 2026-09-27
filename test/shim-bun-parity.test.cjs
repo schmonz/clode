@@ -3,8 +3,8 @@
 // only knows our own past output), these encode KNOWN-GOOD values so a bump that drifts the
 // shim away from Bun's behavior fails with a meaningful message. Values below are
 // Unicode-standard widths/wraps that Bun.stringWidth / Bun.wrapAnsi agree on for these
-// inputs; no Bun runs in CI. Cases where wrap-ansi is KNOWN to diverge from Bun (LONG-TERM.md:
-// {trim,hard,wordWrap} option handling) are recorded as `todo` until the shim closes the gap.
+// inputs; no Bun runs in CI. (All three are libexec/unicode-text.cjs's now, judged against
+// native over whole corpora by test/fidelity/text-differential.test.cjs; these are anchors.)
 const { test } = require('node:test');
 const assert = require('node:assert');
 const { fns } = require('./shim-fidelity-lib.cjs');
@@ -28,11 +28,14 @@ test('wrapAnsi: hard-breaks a long unbreakable word (Bun agrees)', () => {
     'longword\nwithoutb\nreaks');
 });
 
-// Known divergence (LONG-TERM.md): wrap-ansi's handling of {trim,wordWrap} differs from
-// native Bun.wrapAnsi. Recorded as a gap; promote to a real assertion (with the
-// Bun-measured expected value) when the shim closes it.
-test('wrapAnsi: {wordWrap:false} keeps long words intact like Bun',
-  { todo: 'wrap-ansi vs Bun.wrapAnsi option drift — see LONG-TERM.md' }, () => {});
+// wordWrap: false breaks a word that does not fit at the column, into the room left on its
+// row, where the default moves it whole to a row of its own (native 2.1.283, 2026-09-26:
+// WRAP-HARD). This was a `todo` while Bun.wrapAnsi was npm wrap-ansi, titled as if Bun kept
+// the long word intact; measured, it does not.
+test('wrapAnsi: {wordWrap:false} breaks a long word at the column (Bun agrees)', () => {
+  assert.strictEqual(wrapAnsi('a longwordwithoutbreaks', 8, { wordWrap: false }), 'a longwo\nrdwithou\ntbreaks');
+  assert.strictEqual(wrapAnsi('a longwordwithoutbreaks', 8), 'a\nlongwordwithoutbreaks');
+});
 
 // Bun.sliceAnsi — NEW in upstream 2.1.278, and the member whose absence made the
 // interactive TUI paint nothing at all. Upstream's own use pins the contract:

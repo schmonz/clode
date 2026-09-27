@@ -211,8 +211,8 @@ for (const m of ['exec', 'execSync']) {
 const TODO = (name) => { const f = () => { throw new Error(`Bun.${name} not yet implemented in the Node host shim`); }; f.__bunShimStub = true; return f; };
 
 // --- text: the ONE clustering/width implementation --------------------------
-// Bun.stringWidth, Bun.sliceAnsi and Bun.ant.CellSegmenter (below) all come from
-// unicode-text.cjs, which travels beside this file in every packaging
+// Bun.stringWidth, Bun.sliceAnsi, Bun.wrapAnsi and Bun.ant.CellSegmenter (below) all come
+// from unicode-text.cjs, which travels beside this file in every packaging
 // (test/shim-companions.test.cjs), so they can never disagree about a width.
 // Bun.stringWidth used to be npm string-width, whose width rules are its own, not
 // Bun's (4206 code points differed from native 2.1.278).
@@ -236,17 +236,26 @@ const TODO = (name) => { const f = () => { throw new Error(`Bun.${name} not yet 
 // the text gates' 1,176,930 strings differed from native 2.1.278: negative indices,
 // a wide cluster at the cut, styles replayed and closed differently).
 //
-// All three are judged against native by test/fidelity/text-differential.test.cjs.
+// Bun.wrapAnsi wraps every Ink text node that wraps (the bundle's wrap helper, from
+// Yoga's measure function and again at paint). It used to be npm wrap-ansi, whose
+// rules are its own (236,398 of the text gates' 1,182,173 strings differed from native
+// 2.1.283: tabs expanded where native keeps them 0 wide, every nested style reopened
+// where native carries only the last, CR kept, NFC applied, a wide code point at the
+// edge placed differently). The quaude painted a table's italic run onto its borders
+// and, below a tabbed code block, bold on the wrong words.
+//
+// All four are judged against native by test/fidelity/text-differential.test.cjs.
 const _ut = require(__dirname + '/unicode-text.cjs');
 const stringWidth = _ut.stringWidth;
 const sliceAnsi = _ut.sliceAnsi;
+const wrapAnsi = _ut.wrapAnsi;
 
 // --- external deps backed by real npm packages -----------------------------
-// stripANSI / wrapAnsi (and semver, below) are backed by the npm
-// strip-ansi / wrap-ansi / semver packages -- no in-house clones.
+// stripANSI (and semver, below) are backed by the npm strip-ansi / semver
+// packages -- no in-house clones.
 // They render every frame / gate versions, so a missing one is FATAL: write the
 // install hint and exit (nothing to recover, unlike the optional ws/yaml features).
-// require() resolves these even though strip-ansi/wrap-ansi are ESM-
+// require() resolves these even though strip-ansi is ESM-
 // only: Node (clode floors at 24) supports require() of ESM with no top-level await
 // and returns a namespace whose `.default` is the function -- hence `.default || m`.
 // (A future top-level-await release would make require() throw ERR_REQUIRE_ASYNC_
@@ -260,13 +269,10 @@ function _extFatal(msg){ try { fs.writeSync(2, '\n' + msg + '\n'); } catch (_) {
 function _extResolve(pkg){ try { const m = require(pkg); return (m && m.default) || m; } catch (_) { return undefined; } }
 
 const _stripAnsiFn   = _extResolve('strip-ansi');
-const _wrapAnsiFn    = _extResolve('wrap-ansi');
 function stripANSI(...a){ return _stripAnsiFn ? _stripAnsiFn(...a) : _extFatal(_extMissing('strip-ansi', 'text rendering (ANSI stripping)')); }
-function wrapAnsi(...a){ return _wrapAnsiFn ? _wrapAnsiFn(...a) : _extFatal(_extMissing('wrap-ansi', 'text rendering (line wrapping)')); }
-// Without the real module these are fail-loud stubs, not implementations -- tag so
-// inspect-claude-bundle coverage reports them honestly (see Bun.YAML).
+// Without the real module this is a fail-loud stub, not an implementation -- tag so
+// inspect-claude-bundle coverage reports it honestly (see Bun.YAML).
 if (!_stripAnsiFn) stripANSI.__bunShimStub = true;
-if (!_wrapAnsiFn) wrapAnsi.__bunShimStub = true;
 
 // --- rewriteSnapshot: rewrite Claude Code's grep/find/rg shell-snapshot shadows
 // to exec the REAL host applet instead of the upstream native multiplexer (which

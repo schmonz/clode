@@ -12,7 +12,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
 const { graphemeBoundaries, clusterWidth, codePointWidth, escapeLayer, forEachCell, cellSgr, oscLink, textWidth, stringWidth, sliceAnsi,
-  UNICODE_DATA } = require('../libexec/unicode-text.cjs');
+  wrapAnsi, UNICODE_DATA } = require('../libexec/unicode-text.cjs');
 const { clodeCacheDir } = require('../libexec/clode-paths.cjs');
 const ucd = require('../scripts/lib/ucd.cjs');
 
@@ -857,4 +857,222 @@ test('ESCAPE-LAYER: an OSC ended by ESC \\ is recorded with that terminator; by 
   assert.deepStrictEqual(finals('\x1b]0;t\x1b\\a\x1b]0;t\x1b[1mb\x1bPq\x1b\\c'), ['\x1b\\', '', '\x1b\\']);
   // the ST is still read as the two-character sequence it is: nothing of it is text
   assert.strictEqual(escapeLayer('\x1b]0;t\x1b\\a').text, 'a');
+});
+
+// ---- Bun.wrapAnsi ---------------------------------------------------------------------------
+// Every expectation is native 2.1.283's Bun.wrapAnsi (Bun 1.4.3), measured 2026-09-26, and each
+// test pins ONE rule libexec/unicode-text.cjs names (WRAP-...). Strings are built from code points
+// (H) where they are not ASCII. test/fidelity/text-differential.test.cjs judges the whole against
+// native over every text corpus (text-diff-wrapansi) and the wrap corpus at every width 1-80
+// (text-diff-wrapansi-cases).
+const HARD = { hard: true }, KEEP = { trim: false }, HARD_KEEP = { hard: true, trim: false };
+
+test('WRAP-ARGUMENTS: the input as a template literal converts it, columns as integers, options only from an object', () => {
+  assert.strictEqual(wrapAnsi('', 5), '');
+  assert.strictEqual(wrapAnsi(undefined, 5), 'undefined');
+  assert.strictEqual(wrapAnsi(null, 3), 'null');
+  assert.strictEqual(wrapAnsi(12345, 2, HARD), '12\n34\n5');
+  assert.strictEqual(wrapAnsi(true, 2, HARD), 'tr\nue');
+  assert.throws(() => wrapAnsi(Symbol('x'), 3), TypeError);
+  // an empty input is answered before the columns are read
+  assert.strictEqual(wrapAnsi('', Symbol('x')), '');
+  assert.throws(() => wrapAnsi('a', Symbol('x')), TypeError);
+  assert.strictEqual(wrapAnsi('ab cd', 2.9), 'ab\ncd');
+  assert.strictEqual(wrapAnsi('ab cd', '2'), 'ab\ncd');
+  assert.strictEqual(wrapAnsi('ab cd', true), 'ab\ncd');
+  // only an object is read: hard by its truthiness, wordWrap and trim only when exactly false
+  assert.strictEqual(wrapAnsi('abc de', 2, true), 'abc\nde');
+  assert.strictEqual(wrapAnsi('abc de', 2, 'hard'), 'abc\nde');
+  assert.strictEqual(wrapAnsi('abc de', 2, { hard: 1 }), 'ab\nc\nde');
+  assert.strictEqual(wrapAnsi('  ab  ', 5, { trim: 0 }), 'ab');
+  assert.strictEqual(wrapAnsi('  ab  ', 5, { trim: null }), 'ab');
+  assert.strictEqual(wrapAnsi('  ab  ', 5, { trim: false }), '  ab \n ');
+  assert.strictEqual(wrapAnsi('abc de', 2, { wordWrap: 0 }), 'abc\nde');
+  assert.strictEqual(wrapAnsi('abc de', 2, { wordWrap: false }), 'ab\nc\nde');
+  // ambiguousIsNarrow is true unless given, then taken for its truthiness (U+00A7 is Ambiguous)
+  assert.strictEqual(wrapAnsi(H(0xa7) + ' a', 3), H(0xa7) + ' a');
+  assert.strictEqual(wrapAnsi(H(0xa7) + ' a', 3, { ambiguousIsNarrow: undefined }), H(0xa7) + ' a');
+  assert.strictEqual(wrapAnsi(H(0xa7) + ' a', 3, { ambiguousIsNarrow: false }), H(0xa7) + '\na');
+  assert.strictEqual(wrapAnsi(H(0xa7) + ' a', 3, { ambiguousIsNarrow: null }), H(0xa7) + '\na');
+});
+
+test('WRAP-NARROW: with no positive finite width the input comes back as given, line breaks and all', () => {
+  for (const c of [0, -1, NaN, Infinity, -Infinity, 0.9]) assert.strictEqual(wrapAnsi('a\rb c', c), 'a\rb c', String(c));
+  assert.strictEqual(wrapAnsi('ab cd', undefined), 'ab cd');
+  assert.strictEqual(wrapAnsi('ab cd', -0.5), 'ab cd');
+  assert.strictEqual(wrapAnsi('a\r\nb', -3), 'a\r\nb');
+  assert.strictEqual(wrapAnsi('  a  ', 0), '  a  ');
+  // one column is a width, and so is a finite huge one
+  assert.strictEqual(wrapAnsi('a b', 1), 'a\nb');
+  assert.strictEqual(wrapAnsi('a b', 1.9), 'a\nb');
+  assert.strictEqual(wrapAnsi('ab cd', 1e30), 'ab cd');
+});
+
+test('WRAP-NEWLINE: LF, a lone CR and CRLF each end a line and come out as one LF; nothing carries across one', () => {
+  assert.strictEqual(wrapAnsi('a\rb', 3), 'a\nb');
+  assert.strictEqual(wrapAnsi('a\r\nb', 3), 'a\nb');
+  assert.strictEqual(wrapAnsi('a\n\rb', 3), 'a\n\nb');
+  assert.strictEqual(wrapAnsi('a\r\rb', 3), 'a\n\nb');
+  assert.strictEqual(wrapAnsi('a\r\r\nb', 2), 'a\n\nb');
+  assert.strictEqual(wrapAnsi('a\r', 3), 'a\n');
+  assert.strictEqual(wrapAnsi('\r\n', 3), '\n');
+  assert.strictEqual(wrapAnsi('ab cd\r', 2), 'ab\ncd\n');
+  // each line is wrapped on its own: what is open at a line break is not closed before it nor
+  // reopened after it
+  assert.strictEqual(wrapAnsi('\x1b[31mab cd\nef gh', 2), '\x1b[31mab\x1b[39m\n\x1b[31mcd\nef\ngh');
+  assert.strictEqual(wrapAnsi('\x1b]8;;u\x07ab\ncd ef', 2), '\x1b]8;;u\x07ab\ncd\nef');
+  // lines are split before any escape is read: a LF inside an OSC ends the line
+  assert.strictEqual(wrapAnsi('\x1b]8;;u\nv\x07ab', 2), '\x1b]8;;u\nv\x07ab');
+  // U+2028 and NEL are not line breaks
+  assert.strictEqual(wrapAnsi('a' + H(0x2028) + 'b c', 3), 'a' + H(0x2028) + 'b\nc');
+  assert.strictEqual(wrapAnsi('a' + H(0x85) + 'b c', 3), 'a' + H(0x85) + 'b\nc');
+});
+
+test('WRAP-VERBATIM: text is copied code unit for code unit, never normalised', () => {
+  // npm wrap-ansi NFC-normalised its input: U+0340 came back U+0300, `e U+0301` came back U+00E9
+  assert.strictEqual(wrapAnsi(H(0x340), 1), H(0x340));
+  assert.strictEqual(wrapAnsi(H(0x65, 0x301), 1), H(0x65, 0x301));
+  assert.strictEqual(wrapAnsi(H(0x958) + ' ' + H(0x958), 1), H(0x958) + '\n' + H(0x958));
+  assert.strictEqual(wrapAnsi(H(0x212b) + ' ' + H(0x212b), 1, HARD), H(0x212b) + '\n' + H(0x212b));
+  // controls and lone surrogates stay (two 0-wide lone halves even meet: WRAP-TRIM)
+  assert.strictEqual(wrapAnsi('a\x00b c', 2), 'a\x00b\nc');
+  assert.strictEqual(wrapAnsi('ab\x0bcd ef', 2), 'ab\x0bcd\nef');
+  assert.strictEqual(wrapAnsi(H(0xd800) + ' ' + H(0xdc00), 2), H(0xd800, 0xdc00));
+});
+
+test('WRAP-SPACE: U+0020 outside an escape sequence is the one separator, and each one is kept or broken at', () => {
+  assert.strictEqual(wrapAnsi('ab cd', 2), 'ab\ncd');
+  assert.strictEqual(wrapAnsi('ab' + H(0xa0) + 'cd', 2), 'ab' + H(0xa0) + 'cd');
+  assert.strictEqual(wrapAnsi('ab' + H(0x3000) + 'cd', 2), 'ab' + H(0x3000) + 'cd');
+  assert.strictEqual(wrapAnsi('ab' + H(0x2003) + 'cd', 2), 'ab' + H(0x2003) + 'cd');
+  // a run of spaces is a run of empty words, each written back as one space
+  assert.strictEqual(wrapAnsi('a  b', 10), 'a  b');
+  assert.strictEqual(wrapAnsi('ab   cd', 3, KEEP), 'ab \n  \ncd');
+  assert.strictEqual(wrapAnsi('a     b', 4, KEEP), 'a   \n  b');
+  assert.strictEqual(wrapAnsi('a b c d e f', 3, KEEP), 'a b\n c \nd e\n f');
+  // a space inside a sequence separates nothing (here, in an OSC 8 URI)
+  assert.strictEqual(wrapAnsi('\x1b]8;;http://a b\x07cd ef', 2),
+    '\x1b]8;;http://a b\x07cd\x1b]8;;\x07\n\x1b]8;;http://a b\x07ef');
+});
+
+test('WRAP-TAB: a tab is a 0-wide character of its word: never a separator, never expanded', () => {
+  assert.strictEqual(wrapAnsi('a\tb', 1), 'a\tb');
+  assert.strictEqual(wrapAnsi('a\tb', 1, HARD), 'a\n\tb');
+  assert.strictEqual(wrapAnsi('a\tb\tc', 2, HARD), 'a\tb\n\tc');
+  assert.strictEqual(wrapAnsi('aa\t\t\t\tbb', 2, HARD), 'aa\n\t\t\t\tbb');
+  assert.strictEqual(wrapAnsi('ab\tcd ef', 5), 'ab\tcd\nef');
+  assert.strictEqual(wrapAnsi('ab\tcd ef', 4, KEEP), 'ab\tcd\n ef');
+});
+
+test('WRAP-TRIM: a blank line is empty; a row loses its leading spaces and tabs as words are placed, and its trailing spaces', () => {
+  assert.strictEqual(wrapAnsi('  ab  ', 5), 'ab');
+  assert.strictEqual(wrapAnsi(' ab cd ', 4), 'ab\ncd');
+  assert.strictEqual(wrapAnsi('\t\t', 5), '');
+  assert.strictEqual(wrapAnsi(' \t ', 5), '');
+  assert.strictEqual(wrapAnsi(' \t ', 1, KEEP), ' \t\n ');
+  // a leading tab goes when the next word is placed on its row, and stays when none is
+  assert.strictEqual(wrapAnsi('\tab cd', 5), 'ab cd');
+  assert.strictEqual(wrapAnsi('\tab', 5), '\tab');
+  // leading spaces go around an escape, which stays
+  assert.strictEqual(wrapAnsi('  \x1b[1mab', 2), '\x1b[1mab');
+  assert.strictEqual(wrapAnsi('\x1b[1m  ab', 2), '\x1b[1mab');
+  // past the row's last word with a width only spaces go: tabs and escapes stay
+  assert.strictEqual(wrapAnsi('a \t b', 1), 'a\t\nb');
+  assert.strictEqual(wrapAnsi('ab \x1b[1m  ', 10), 'ab\x1b[1m');
+  assert.strictEqual(wrapAnsi('ab\x1b[1m \x1b[22m cd', 3), 'ab\x1b[1m\x1b[22m\ncd');
+  // no separator is written at the start of a row that has no width, so 0-wide words run together
+  assert.strictEqual(wrapAnsi(H(0x340) + ' ' + H(0x340), 1), H(0x340, 0x340));
+  // without trim a row already full is ended BEFORE the separator, which then leads the next row
+  assert.strictEqual(wrapAnsi('ab cd', 2, KEEP), 'ab\n \ncd');
+  assert.strictEqual(wrapAnsi('\x1b[1m  ab', 2, KEEP), '\x1b[1m  \x1b[22m\n\x1b[1mab');
+});
+
+test('WRAP-HARD: a word wider than the row is broken code point by code point, on a fresh row only when that saves a break', () => {
+  assert.strictEqual(wrapAnsi('abcdefgh', 3, HARD), 'abc\ndef\ngh');
+  assert.strictEqual(wrapAnsi('ab cdefgh', 3, HARD), 'ab\ncde\nfgh');
+  assert.strictEqual(wrapAnsi('a bcdefg', 3, HARD), 'a\nbcd\nefg');
+  assert.strictEqual(wrapAnsi('a bcdefgh', 3, HARD), 'a b\ncde\nfgh');
+  assert.strictEqual(wrapAnsi('abcdef ghijklmnop', 5, HARD), 'abcde\nf\nghijk\nlmnop');
+  assert.strictEqual(wrapAnsi('abcdef ghijklmnop', 5, HARD_KEEP), 'abcde\nf \nghijk\nlmnop');
+  // each code point at its own width, and U+20E3 is 0 there (a CLUSTER holding it is 2: WIDTH-KEYCAP)
+  assert.strictEqual(wrapAnsi('ab' + H(0x20e3) + 'cd', 2, HARD_KEEP), 'ab\n' + H(0x20e3) + 'cd');
+  assert.strictEqual(wrapAnsi('ab#' + H(0x20e3) + 'cd', 2, HARD_KEEP), 'ab\n#' + H(0x20e3) + 'c\nd');
+  // wordWrap: false breaks a word that does not fit into the rest of its row, the same way
+  assert.strictEqual(wrapAnsi('abc defg', 3, { wordWrap: false }), 'abc\ndef\ng');
+  assert.strictEqual(wrapAnsi('abc defg', 3, { wordWrap: false, trim: false }), 'abc\n de\nfg');
+  assert.strictEqual(wrapAnsi('abcdefg hi', 3, { wordWrap: false }), 'abc\ndef\ng h\ni');
+});
+
+test('WRAP-WIDE: a code point wider than the room left starts a row, even from an empty one; a full row ends before what follows', () => {
+  assert.strictEqual(wrapAnsi(H(0x4e2d), 1, HARD), '\n' + H(0x4e2d));
+  assert.strictEqual(wrapAnsi(H(0x1f600), 1, HARD), '\n' + H(0x1f600));
+  assert.strictEqual(wrapAnsi('a' + H(0x4e2d), 2, HARD), 'a\n' + H(0x4e2d));
+  assert.strictEqual(wrapAnsi(H(0x4e2d, 0x6587), 3, HARD), H(0x4e2d) + '\n' + H(0x6587));
+  assert.strictEqual(wrapAnsi(H(0x4e2d), 1), H(0x4e2d));
+  // a cluster is broken like any word: each code point of a ZWJ sequence at its own width
+  assert.strictEqual(wrapAnsi(H(0x1f468, 0x200d, 0x1f469), 1, HARD), '\n' + H(0x1f468) + '\n' + H(0x200d) + '\n' + H(0x1f469));
+  assert.strictEqual(wrapAnsi(H(0x1f468, 0x200d, 0x1f469), 2, HARD), H(0x1f468, 0x200d, 0x1f469));
+  // a row filled exactly ends before the next code point or escape; what is left with no width rejoins it
+  assert.strictEqual(wrapAnsi('ab\x1b[1mcd', 2, HARD), 'ab\n\x1b[1mcd');
+  assert.strictEqual(wrapAnsi('ab\x1b[1m', 1, HARD), 'a\nb\x1b[1m');
+  assert.strictEqual(wrapAnsi('ab' + H(0x301), 1, HARD), 'a\nb' + H(0x301));
+  assert.strictEqual(wrapAnsi('ab' + H(0x301) + 'c', 2, HARD), 'ab\n' + H(0x301) + 'c');
+});
+
+test('WRAP-ROW-WIDTH: the row is re-measured when a word may join the separator before it, and summed otherwise', () => {
+  // U+20E3 after the separator joins it (WIDTH-KEYCAP): re-measured, the row is 6 wide and `cc` fits at 9
+  assert.strictEqual(wrapAnsi('aa ' + H(0x20e3) + 'bb cc', 9), 'aa ' + H(0x20e3) + 'bb cc');
+  assert.strictEqual(wrapAnsi('aa \x1b[1m' + H(0x20e3) + 'bb cc', 9), 'aa \x1b[1m' + H(0x20e3) + 'bb cc');
+  assert.strictEqual(wrapAnsi('aa \x1b x' + H(0x20e3) + 'bb cc', 9), 'aa \x1b x' + H(0x20e3) + 'bb cc');
+  // a word starting with anything else is summed: a lone surrogate first hides the keycap, so the
+  // row counts 3 + 4 (Bun.stringWidth of it is 6) and `cc` goes down
+  assert.strictEqual(wrapAnsi('aa ' + H(0xdc00, 0x20e3) + 'bb cc', 9), 'aa ' + H(0xdc00, 0x20e3) + 'bb\ncc');
+  // ...as does the low half an escape's intermediate leaves: it takes ONE code unit (ESCAPE-LAYER)
+  assert.strictEqual(wrapAnsi('aa \x1b ' + H(0x1f600, 0x20e3) + 'bb cc', 9), 'aa \x1b ' + H(0x1f600, 0x20e3) + 'bb\ncc');
+});
+
+test('WRAP-SGR: the last one-number SGR is closed at each row end by its close code and reopened after the break', () => {
+  assert.strictEqual(wrapAnsi('\x1b[31mab cd\x1b[39m', 2), '\x1b[31mab\x1b[39m\n\x1b[31mcd\x1b[39m');
+  assert.strictEqual(wrapAnsi('\x1b[31mab cd\x1b[39m', 2, KEEP), '\x1b[31mab\x1b[39m\n\x1b[31m \x1b[39m\n\x1b[31mcd\x1b[39m');
+  // only the LAST style: italic then bold closes and reopens the bold, and the italic runs on
+  assert.strictEqual(wrapAnsi('\x1b[3mab \x1b[1mcd ef\x1b[22m gh\x1b[23m', 2),
+    '\x1b[3mab\x1b[23m\n\x1b[3m\x1b[1mcd\x1b[22m\n\x1b[1mef\x1b[22m\ngh\x1b[23m');
+  assert.strictEqual(wrapAnsi('\x1b[1m\x1b[31mBold Red text here\x1b[0m', 2),
+    '\x1b[1m\x1b[31mBold\x1b[39m\n\x1b[31mRed\x1b[39m\n\x1b[31mtext\x1b[39m\n\x1b[31mhere\x1b[0m');
+  // a close code, 0 or an empty SGR, and 39 leave nothing to close or reopen
+  assert.strictEqual(wrapAnsi('\x1b[1mab\x1b[22m cd', 2), '\x1b[1mab\x1b[22m\ncd');
+  assert.strictEqual(wrapAnsi('\x1b[31mab\x1b[m cd', 2), '\x1b[31mab\x1b[m\ncd');
+  assert.strictEqual(wrapAnsi('\x1b[31mab\x1b[39m cd', 2), '\x1b[31mab\x1b[39m\ncd');
+  // compound, extended and empty-parameter forms change nothing
+  assert.strictEqual(wrapAnsi('\x1b[1;31mab cd\x1b[0m', 2), '\x1b[1;31mab\ncd\x1b[0m');
+  assert.strictEqual(wrapAnsi('\x1b[38;5;196mRed text here\x1b[0m', 2), '\x1b[38;5;196mRed\ntext\nhere\x1b[0m');
+  assert.strictEqual(wrapAnsi('\x1b[;31mab cd', 2), '\x1b[;31mab\ncd');
+  // a code with no close code is neither closed nor reopened (99); one with one is (100, by 49)
+  assert.strictEqual(wrapAnsi('\x1b[99mab cd', 2), '\x1b[99mab\ncd');
+  assert.strictEqual(wrapAnsi('\x1b[100mab cd', 2), '\x1b[100mab\x1b[49m\n\x1b[100mcd');
+  // the number is 32 bits: 2^32 + 1 is bold, reopened as 1, and 2^32 + 39 closes
+  assert.strictEqual(wrapAnsi('\x1b[4294967297mab cd', 2), '\x1b[4294967297mab\x1b[22m\n\x1b[1mcd');
+  assert.strictEqual(wrapAnsi('\x1b[4294967335mab cd', 2), '\x1b[4294967335mab\ncd');
+  // a C1 CSI counts, and is reopened in the ESC form; an abandoned CSI does not
+  assert.strictEqual(wrapAnsi('\x9b31mab cd', 2), '\x9b31mab\x1b[39m\n\x1b[31mcd');
+  assert.strictEqual(wrapAnsi('\x1b[1\x1b[31mab cd', 2), '\x1b[1\x1b[31mab\x1b[39m\n\x1b[31mcd');
+});
+
+test('WRAP-LINK: the OSC 8 link in force is closed at each row end and reopened after the break, with BEL', () => {
+  assert.strictEqual(wrapAnsi('\x1b]8;;u\x07ab cd', 2), '\x1b]8;;u\x07ab\x1b]8;;\x07\n\x1b]8;;u\x07cd');
+  assert.strictEqual(wrapAnsi('\x1b]8;id=1;u\x1b\\ab cd', 2), '\x1b]8;id=1;u\x1b\\ab\x1b]8;;\x07\n\x1b]8;id=1;u\x07cd');
+  assert.strictEqual(wrapAnsi('\x9d8;;u\x9cab cd', 2), '\x9d8;;u\x9cab\x1b]8;;\x07\n\x1b]8;;u\x07cd');
+  assert.strictEqual(wrapAnsi('\x1b]8;a;b;c\x07ab cd', 2), '\x1b]8;a;b;c\x07ab\x1b]8;;\x07\n\x1b]8;a;b;c\x07cd');
+  // with a style: the link is closed first and reopened last
+  assert.strictEqual(wrapAnsi('\x1b[31m\x1b]8;;u\x07ab cd', 2),
+    '\x1b[31m\x1b]8;;u\x07ab\x1b]8;;\x07\x1b[39m\n\x1b[31m\x1b]8;;u\x07cd');
+  // a link replaces the one in force; an empty URI closes it
+  assert.strictEqual(wrapAnsi('\x1b]8;;u\x07ab \x1b]8;;v\x07cd ef', 2),
+    '\x1b]8;;u\x07ab\x1b]8;;\x07\n\x1b]8;;u\x07\x1b]8;;v\x07cd\x1b]8;;\x07\n\x1b]8;;v\x07ef');
+  assert.strictEqual(wrapAnsi('\x1b]8;;u\x07ab \x1b]8;;\x07cd ef', 2), '\x1b]8;;u\x07ab\x1b]8;;\x07\n\x1b]8;;u\x07\x1b]8;;\x07cd\nef');
+  // not links (OSC-8): one `;`, ended by an ESC that is not ST, by CAN, or not ended
+  assert.strictEqual(wrapAnsi('\x1b]8;u\x07ab cd', 2), '\x1b]8;u\x07ab\ncd');
+  assert.strictEqual(wrapAnsi('\x1b]8;;u\x1bxab cd', 2), '\x1b]8;;u\x1bxab\ncd');
+  assert.strictEqual(wrapAnsi('\x1b]8;;u\x18ab cd', 2), '\x1b]8;;u\x18ab\ncd');
+  assert.strictEqual(wrapAnsi('\x1b]8;;u', 2), '\x1b]8;;u');
 });

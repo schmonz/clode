@@ -662,8 +662,9 @@ process.stdout.write(JSON.stringify({ keys, stubs, modules }));
   try {
     // NODE_PATH at the ext-dep closure, because that is what a quaude actually IS.
     // Without it this probe reports the world as if deps/claude were not installed:
-    // Bun.semver, stringWidth, stripANSI, wrapAnsi and YAML come back "stubbed —
-    // throws when used" (all five are reached and working on every driven flow), and
+    // Bun.semver, stripANSI and YAML come back "stubbed — throws when used" (all three
+    // are reached and working on every driven flow; stringWidth, sliceAnsi and wrapAnsi
+    // are libexec/unicode-text.cjs's and need no package), and
     // ws / node-fetch come back "MISSING -> SILENT TUI HANG risk" though both are in
     // deps/claude/package.json. A gate that overstates risk on exactly the surfaces
     // that matter teaches people to discount it.
@@ -706,7 +707,7 @@ const ACCEPTED_MISSING_EXTERNALS = new Set([
 ]);
 
 const ACCEPTED_STUBBED_BUN = new Set(['serve', 'listen', 'file', 'write', 'Terminal', 'Transpiler',
-  'YAML', 'stringWidth', 'stripANSI', 'wrapAnsi', 'semver',
+  'YAML', 'stringWidth', 'stripANSI', 'semver',
   // connect (TCP direct-dial), TOML (config parse): niche/feature-gated; stubbed
   // in bun-shim with clear errors rather than left raw-undefined (API-gate pass).
   'connect', 'TOML',
