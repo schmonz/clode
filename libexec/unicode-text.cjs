@@ -1151,15 +1151,19 @@ function sliceAnsi(input, start, end, options, narrowOption) {
 //   left after the last break with no width (escapes, marks) goes back onto the row before it.
 //   Without hard, a word wider than the row stays whole on a row of its own.
 // WRAP-ROW-WIDTH (rule): the width of the row in progress is a running sum, 1 per separator plus
-//   Bun.stringWidth of each word, less the spaces WRAP-TRIM drops from its start; it is measured
+//   Bun.stringWidth of each word, less the spaces WRAP-TRIM drops from its start. It is measured
 //   afresh with Bun.stringWidth (clusters run across the separators and escapes) only after a
-//   word is broken, or when the word's first code point after its leading escape sequences would
-//   join the separator into one cluster (bun-cell: an Extend that is not an Emoji_Modifier, a
-//   ZWJ, a SpacingMark). So a lone surrogate first hides a keycap after it: `aa SP DC00 20E3 bb`
-//   counts 3 + 4 where Bun.stringWidth of it is 6. (After a word placed with no separator, on a
-//   row with no width, Bun's source sums across an ASCII-to-ASCII seam and measures otherwise;
-//   nothing on a row with no width can join a following ASCII character into a wider cluster, so
-//   the sum there IS the measure: this always measures, and no input can tell the two apart.)
+//   word is broken, or after a word whose seam with the row might join into one cluster, judged
+//   by the word's first code point after its leading escape sequences: after a separator (or on
+//   an empty row), when that code point would join a space (bun-cell: an Extend that is not an
+//   Emoji_Modifier, a ZWJ, a SpacingMark); after no separator (WRAP-TRIM, on a row that has no
+//   width yet), unless the row's last code unit and the word's first are both ASCII. So a lone
+//   surrogate first hides a keycap after it: `aa SP DC00 20E3 bb` counts 3 + 4 where
+//   Bun.stringWidth of it is 6. The ASCII seam is Bun's source's; the sum there is always what a
+//   fresh measure would give (nothing on a row with no width joins a following ASCII character
+//   into a wider cluster), so it shows in no output, only in time: native wraps `ESC[1m SP` x n
+//   and `NUL SP` x n in time linear in n (0.66 and 0.11 ms at n = 8000), where measuring afresh
+//   there is quadratic.
 // WRAP-SGR (rule): the one style carried is that of the LAST SGR (ESC [ or U+009B) whose
 //   parameters are digits alone, the number taken modulo 2^32 (4294967297 is 1): 0, none and 39
 //   clear it, any other number is it. At each break inside a line it is closed at the row's end
@@ -1313,11 +1317,11 @@ function placeWord(w, a, b, first) {
   let row = rows[rows.length - 1];
   if (trim) { const gone = trimRowStart(row); if (!w.stale) w.width = gone < w.width ? w.width - gone : 0; }   // WRAP-TRIM
   if (w.stale) { w.width = spanWidth(row.s, 0, row.s.length, narrow, w.kind); w.stale = false; }                     // WRAP-ROW-WIDTH
-  let used = w.width, spaced = true;
+  let used = w.width, seam = -1;                          // the row's last code unit, when no separator comes
   if (!first) {
     if (used >= cols && (!w.wordWrap || !trim)) { rows.push(row = newRow()); used = 0; }                   // WRAP-TRIM
     if (used > 0 || !trim) { row.s += ' '; used++; }                                                        // WRAP-SPACE
-    else spaced = false;                                                                                    // WRAP-TRIM
+    else if (row.s.length > 0) seam = row.s.charCodeAt(row.s.length - 1);                                  // WRAP-TRIM
   }
   const width = spanWidth(str, a, b, narrow, w.kind);
   if (w.hard && width > cols) {                                                                              // WRAP-HARD
@@ -1335,7 +1339,8 @@ function placeWord(w, a, b, first) {
   if (used + width > cols && !w.wordWrap) { breakWord(w, a, b); return; }                                    // WRAP-HARD
   row.s += str.slice(a, b);
   const f = a < b && startsSequence(str.charCodeAt(a)) ? sequenceRun(str, a, b) : a;
-  if (spaced && (f >= b || !joinsSpace(cpAt(str, f, b)))) w.width = used + width;                            // WRAP-ROW-WIDTH
+  const summed = f >= b || (seam < 0 ? !joinsSpace(cpAt(str, f, b)) : seam < 0x80 && str.charCodeAt(f) < 0x80);  // WRAP-ROW-WIDTH
+  if (summed) w.width = used + width;
   else w.stale = true;
 }
 
