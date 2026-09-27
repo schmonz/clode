@@ -475,13 +475,16 @@ const LEGS = [
     // constants ABI). Same 6/6 at the PINNED bundle. The candidate bundle 2.1.278
     // clears the five headless rows here and FAILS D1; that is a finding about
     // upstream's new TUI, recorded in RESULTS.md, and it is why the pin has not moved.
-    fidelity: { tier: 1, date: '2026-09-22', bundle: '2.1.251', how: 'netbsd-aarch64-spike-vm',
-                note: 'floor 6/6 GREEN (A1,B1,B4,C1,D1,G7) — re-driven 2026-09-22 against an '
-                      + 'engine rebuilt ON the guest from current sources, at the pinned bundle. '
-                      + 'F4 also driven here for the first time and PASSES (real keystrokes over '
-                      + 'a pty advance the trust prompt), so the iTerm2-scoped F4 is no longer '
-                      + 'this leg tier-2 blocker; F3 is unrunnable as written. The 2.1.278 '
-                      + 'candidate FAILS D1 — see RESULTS.md' } },
+    // RE-DRIVEN 2026-09-27 at the new pin with the CORRECTED floor-probe (b4ff3f2): the
+    // 2026-09-22 B1/B4 were judged by a check that could not fail on missing output.
+    fidelity: { tier: 1, date: '2026-09-27', bundle: '2.1.283', how: 'netbsd-aarch64-spike-vm',
+                note: 'floor 6/6 GREEN (A1,B1,B4,C1,D1,G7) — re-driven 2026-09-27 at the pinned '
+                      + 'bundle 2.1.283 with the corrected floor-probe (b4ff3f2: every Bash and '
+                      + 'grep step judged on its tool_result), under zsh and bash, from a quaude '
+                      + 'carrying the NetBSD-spike fixes (b4ff3f2, 7a9dc77, 6e34eae), onto the engine compiled on the guest by the '
+                      + '2026-09-26 spike. F4 PASSED here on 2026-09-22 (real keystrokes over a pty '
+                      + 'advance the trust prompt), so the iTerm2-scoped F4 is not this leg '
+                      + 'tier-2 blocker; F3 is unrunnable as written — see RESULTS.md' } },
   { leg: 'freebsd-arm64', os: 'ubuntu-latest', 'guest-platform': 'freebsd', 'guest-arch': 'arm64',
     'guest-version': '14.4', 'guest-packages': 'cmake gmake node git bash', floor: '14.4',
     wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, timeout: 300, 'soft-fail': true,  // cpa, TCG

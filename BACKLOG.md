@@ -79,24 +79,46 @@ Bash tool instead".
   `__tjs_constants.errno` (scripts/gen-node-constants.mjs lists EROFS, EXDEV and ENOTEMPTY).
   So the shim can name an EUNKNOWN from its errno with that table. Either route is
   diff-reducing (node names them). Pick one, with a test that throws each errno.
-- **With the flags back, the skew design is LIVE, and it bites on a POSIX-only bfs.** The
-  probe now sees `-regextype findutils-default`. pkgsrc bfs 4.1.3 on this Mac rejects it;
-  pkgsrc bfs 4.1.3 on NetBSD accepts it. So on this Mac:
-  - every quaude session prints "clode: host bfs rejects the flags ... `find` will fail" at
-    snapshot time (in a TUI, onto the terminal);
-  - every Bash `find` exits 1 with the self-explaining skew line.
-  Before F4, find "worked" by silently running bfs without upstream's flags. This is the
-  designed behaviour (b74ec46: the diagnosis travels to the point of use), but it was never
-  live before. Decide deliberately: keep failing loudly (match upstream's flags or explain),
-  or drop only the flag the host rejects.
-- **The Grep tool fails in quaude at 2.1.283, when it is reachable.** Upstream swaps Grep/Glob
-  for `grep`/`find` via Bash only when the Bash tool is present (`pfe`/`uw`), so Grep still
-  exists in a session without Bash (e.g. `--allowedTools Grep`). There it runs `rg --json`,
-  which the rg->ugrep translation refuses by design, and the tool answers "ripgrep not found
-  on PATH". test/fidelity/agentic-tools.test.cjs's Grep row checked the whole body and passed
-  on its own `pattern:`. It now reads the tool_result and skips on exactly this signature
-  (f4d763d). To fix it, emit rg's `--json` event stream from ugrep's output, or refuse
-  honestly with a message that names --json.
+- **A bfs without Oniguruma: find runs without `-regextype findutils-default`. A WRITTEN
+  DIVERGENCE from upstream's argv** (the user's decision, 2026-09-27: "drop only that flag").
+  With F4's flags back, the probe saw this Mac's pkgsrc bfs 4.1.3 (built
+  --without-oniguruma) reject `-regextype findutils-default`, and EVERY Bash `find` failed
+  with the skew trailer. Yet only a regex find depends on that flag.
+  The rule is FIND_WITHOUT_ONIGURUMA (libexec/bun-shim.cjs, warnAppletSkew/buildShadow). When
+  the host bfs rejects that flag but accepts the rest:
+  - the rewritten find runs with `-S dfs` alone, so results and order match native;
+  - it refuses (exit 1, with the fix) only a find whose own arguments include -regex,
+    -iregex or -regextype. Such a find would otherwise silently read its regex in another
+    dialect: `\(a\|b\)` alternation is a GNU basic-regex extension that macOS's libc lacks;
+  - the session-start line now says "`find` works without it, but a find using -regex,
+    -iregex or -regextype will refuse";
+  - /doctor records the same.
+  A bfs that rejects even `-S dfs` keeps the every-find skew trailer. A bfs with Oniguruma
+  (NetBSD's pkgsrc bfs 4.1.3) runs upstream's flags unchanged.
+  Measured through a real quaude's Bash tool on this Mac, zsh and bash:
+  `find . -name kept.txt` gives `./kept.txt`, rc 0; `find . -regex '.*x'` refuses, rc 1.
+  Tests: test/find-without-oniguruma.test.cjs, 9 rows, red on 87678b6 and green on this Mac
+  and on NetBSD.
+- **The Grep tool in quaude: broken in content mode since 2.1.251, probably in every mode.**
+  (Corrected 2026-09-27 from the F4 review's reading of the 2.1.283 carve.)
+  - **When the tool exists.** Upstream swaps Grep and Glob for `grep`/`find` via Bash when
+    bash is available (`wa()`), UNLESS `searchToolsOptIn` is set. That opt-in is set
+    whenever `--tools` or `--allowedTools` names Grep or Glob. The tools are also kept under
+    CLAUDE_CODE_ENTRYPOINT=local-agent, and on Windows without Git Bash.
+    `--allowedTools Bash,Grep` keeps Grep; `--disallowedTools Bash` still removes it.
+  - **What breaks.** output_mode "content" pushes `--json` (first in 2.1.251; absent in .185,
+    .218, .243, .246 and .250, so 0.20260831.1 already shipped this broken). The rg->ugrep
+    translation refuses --json by design, and the tool answers "ripgrep not found on PATH".
+  - **To measure.** Every mode since 2.1.185 passes `--max-columns 500`. rgToUgrep passes it
+    through, and mis-splits its value: `--max-columns` is followed by `500` as a
+    positional. ugrep 7.8.2 rejects it ("invalid option --max-columns"). So
+    files_with_matches and count modes very likely fail too.
+  - **On a refusal, `_rewriteRgSpawn` hands back the UNTRANSLATED argv.** With no rg, the
+    model is told "Install ripgrep". With an rg on PATH, the host rg runs, contradicting
+    the rg-divergence rule.
+  test/fidelity/agentic-tools.test.cjs's Grep row checked the whole body and passed on its
+  own `pattern:`. Since f4d763d it reads the tool_result, and a `--json` refusal on stderr
+  never counts as a pass. The fix is the next task.
 - **Upstream's rg shadow is guarded by `if ! (unalias rg; command -v rg)`**, so with a host rg
   on PATH the snapshot defines no rg function, and Bash `rg` runs the host rg. That is the
   shell-path exception to "a host rg is never called" (rg-divergence), and it is not changed
@@ -104,16 +126,24 @@ Bash tool instead".
 - **The two older fixtures' labels do not match the carves.** snapshot-execpath.sh says 2.1.179
   and snapshot-installpath.sh says 2.1.185, and both spell `"$@"`. The 2.1.185 carve on this
   box writes `${1+"$@"}`. Treat them as hand-shaped, and prefer snapshot-2.1.283.sh.
+- **The real-bfs find-semantics rows skip on the dev Mac and on CI.**
+  test/shadow-upstream-flags.test.cjs "the rewritten find applies upstream's regex type"
+  needs a bfs with Oniguruma. The dev Mac's pkgsrc bfs has none, and CI's apt bfs 3.1.2
+  predates bfs 3.3's regex types. They last PASSED on NetBSD 11 arm64 (pkgsrc bfs 4.1.3,
+  node 24.18.0), on 2026-09-27: the whole file 14/14, find-without-oniguruma 9/9 and
+  shadow-keeps-the-shell 22/22. Nothing runs them daily.
 - **test/fidelity/agentic-tools.test.cjs checked the whole body, as B1 and B4 did. FIXED
   (f4d763d)**: the Grep, multi-turn and hook rows read the tool_result. The Grep row then went
   red, for the reason in the Grep-tool item above.
 - **The floor-probe B1/B4 rows in test/fidelity/RESULTS.md before 2026-09-26 came from a check
   that could not fail on missing output.** They could still fail with no follow-up request or
-  a non-zero exit. Six B1/B4 rows came from other instruments that read the tool_result
-  itself, and they are not affected:
+  a non-zero exit. The 2026-07-30 darwin-arm64 and cosmo-macos-aarch64 B4 rows ("the agentic
+  suite", "tools 5/5") are affected too: at 2eaebbb, agentic-tools asserted its Grep,
+  multi-turn and hook rows on `followUp.body`, the same whole-body check (fixed in f4d763d).
+  Four B1 rows came from instruments that read the tool_result itself, and they are not
+  affected:
   - 2026-07-09 netbsd-arm64 B1;
   - 2026-07-29 darwin-arm64 and cosmo B1;
-  - 2026-07-30 darwin and cosmo B4 (the agentic suite);
   - 2026-07-31 darwin-ppc B1.
   tjs-legs.mjs derives floor notes from these rows (netbsd-arm64 says 6/6). RESULTS.md now
   carries a dated note saying so, and the first netbsd-arm64 rows driven with the corrected

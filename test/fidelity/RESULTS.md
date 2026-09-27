@@ -263,7 +263,6 @@ never gated).
 | 2026-09-26 | darwin-arm64 | F6 | quaude | 2.1.278 | pass | RE-DRIVEN because BUILTIN-PLUGIN-BUNDLED changes which branch 2.1.278's built-in plugins take, and nothing had driven that: fresh quaude built on this box from native 2.1.278 and 18bcb7d's libexec plus the independent hook canaries (BUILTIN-PLUGIN-BUNDLED applied once, no folder descriptor left in the staged graph; PONG and attest smokes ok). tui-initial-frame-cells against native 2.1.278 at 100x40: OK, 353 cells, 0 differences |
 | 2026-09-26 | darwin-arm64 | F2 | quaude | 2.1.278 | pass | as the F6 row above, same quaude: tui-reply-hyperlinks against native 2.1.278: OK, 398 cells, 0 differences, the reference painting both links |
 | 2026-09-26 | darwin-arm64 | F5 | quaude | 2.1.278 | open | PARTIAL DRIVE (wide / emoji / combining only), as the F6 row above, same quaude: tui-prompt-wide-glyphs against native 2.1.278: OK, 336 cells, 0 differences |
-
 | 2026-09-27 | netbsd-arm64 | G7 | quaude | 2.1.283 | pass | THE PIN. fresh quaude cross-blobulated on darwin-arm64 from 6e34eae's tree (F1 7a9dc77, F2 b4ff3f2, F4 6e34eae) onto an engine compiled ON the guest by the 2026-09-26 NetBSD spike, driven on the live NetBSD 11.0_RC2 evbarm guest over ssh with /opt/pkg/bin on PATH. floor-probe over ssh, SHELL=zsh and SHELL=bash: exit 0, PONG, POST landed |
 | 2026-09-27 | netbsd-arm64 | B1 | quaude | 2.1.283 | pass | THE PIN. fresh quaude cross-blobulated on darwin-arm64 from 6e34eae's tree (F1 7a9dc77, F2 b4ff3f2, F4 6e34eae) onto an engine compiled ON the guest by the 2026-09-26 NetBSD spike, driven on the live NetBSD 11.0_RC2 evbarm guest over ssh with /opt/pkg/bin on PATH. floor-probe over ssh (the CORRECTED B1, b4ff3f2: `grep -c FLOOR /dev/null; echo FLOOR-BASH-$((6*7))`, judged on the tool_result only), SHELL=zsh and SHELL=bash: tool_result carried FLOOR-BASH-42 |
 | 2026-09-27 | netbsd-arm64 | C1 | quaude | 2.1.283 | pass | THE PIN. fresh quaude cross-blobulated on darwin-arm64 from 6e34eae's tree (F1 7a9dc77, F2 b4ff3f2, F4 6e34eae) onto an engine compiled ON the guest by the 2026-09-26 NetBSD spike, driven on the live NetBSD 11.0_RC2 evbarm guest over ssh with /opt/pkg/bin on PATH. floor-probe over ssh, SHELL=zsh and SHELL=bash: Write wrote 15 bytes, content exact (red before F1: exists=false) |
@@ -281,10 +280,14 @@ so a marker spelled in the command (`echo FLOOR-BASH-OK`) or in the Grep tool's 
 still fail with no follow-up request or a non-zero exit, but NOT on missing output. The
 netbsd-arm64 spike of 2026-09-26 showed what that hid: every Bash command stopped at its first
 grep, find or rg (F2), and B1 still passed. scripts/floor-probe.mjs judges the tool_result
-itself since b4ff3f2. The rows from other instruments read the tool_result directly and are
-unaffected: 2026-07-09 netbsd-arm64 B1, 2026-07-29 darwin-arm64 and cosmo B1, 2026-07-30
-darwin and cosmo B4, 2026-07-31 darwin-ppc B1. The netbsd-arm64 rows dated 2026-09-27 above
-are the first driven with the corrected probe.
+itself since b4ff3f2. The 2026-07-30 darwin-arm64 and cosmo-macos-aarch64 B4 rows ("the
+agentic suite", "tools 5/5") are affected too: at 2eaebbb (2026-07-30),
+test/fidelity/agentic-tools.test.cjs asserted its Grep, multi-turn and hook rows on
+`followUp.body`, the same whole-body check, fixed by f4d763d (2026-09-27). Re-judged on the
+tool_result, its Grep row does not pass at 2.1.283 (see BACKLOG.md, "The Grep tool in
+quaude"). The rows whose notes say they read the tool_result itself are unaffected:
+2026-07-09 netbsd-arm64 B1, 2026-07-29 darwin-arm64 and cosmo B1, 2026-07-31 darwin-ppc B1.
+The netbsd-arm64 rows dated 2026-09-27 above are the first driven with the corrected probe.
 
 ## Attempted, not evidence
 

@@ -24,8 +24,12 @@ error with the help under it, not a silent translation:
 - Fix a false "known applet skew" warning when a skewed `grep` feeds `head`
 - Fix Bash-tool `grep` and `find` running without Claude Code's own flags, on every platform
   and in every release so far: `grep` searched `.gitignore`d files and skipped hidden ones,
-  and `find` lost its regex type. On a host whose `bfs` lacks Oniguruma, `find` now fails
-  with an explanation of how to fix it, instead of quietly searching differently
+  and `find` lost its regex type
+- (divergence) On a host whose `bfs` lacks Oniguruma (pkgsrc builds it without), `find`
+  runs without Claude Code's `-regextype findutils-default`, which that `bfs` cannot read.
+  A `find` using `-regex`, `-iregex` or `-regextype` refuses, with the fix, rather than
+  silently reading its regex in another dialect. Every other `find` works, with the same
+  results and order
 - (NetBSD, and other platforms upstream does not build) Fix Write and Edit failing
 - Fix `clode build` from a source checkout refusing the dependencies it had just
   installed: the dependency store is now installed from the lockfile with `npm ci`. The
