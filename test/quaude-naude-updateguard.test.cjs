@@ -39,6 +39,7 @@ const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
 const { tjsPath, REPO } = require('./node-shim-helper.cjs');
 const { startMockAnthropic, cannedSSE, cannedToolUseSSE } = require('./mock-anthropic-helper.cjs');
+const { toolResult, toolResultText, assertFailsOnMissingOutput } = require('../scripts/lib/tool-result.cjs');
 const cpaths = require('../libexec/clode-paths.cjs');
 const { stateRoot } = require('./state-root-helper.cjs');
 
@@ -129,46 +130,28 @@ function cleanEnv(extra) {
   return env;
 }
 
-// Extract the assistant-turn tool_result content block for toolId from a
-// follow-up POST body (the Messages request the CLI sends back carrying the
-// tool's outcome). Returns { content, isError } or null if not found.
-function toolResultFrom(body, toolId) {
-  let parsed;
-  try { parsed = JSON.parse(body); } catch { return null; }
-  for (const msg of parsed.messages || []) {
-    if (msg.role !== 'user' || !Array.isArray(msg.content)) continue;
-    for (const block of msg.content) {
-      if (block.type === 'tool_result' && block.tool_use_id === toolId) {
-        return { content: block.content, isError: !!block.is_error };
-      }
-    }
-  }
-  return null;
-}
-
-// Drives ONE Bash-tool turn against `bin`: the mock returns a single Bash
-// tool_use of `command`, then (once the CLI's follow-up POST carrying the
-// tool_result arrives) a final "TOOLDONE" text turn. Returns
-// { run: {status,stdout,stderr}, toolResult: {content,isError}|null }.
+// Drives ONE Bash-tool turn against `bin`: the mock returns the single Bash
+// tool_use `bash` ({ name, input, id }), then (once the CLI's follow-up POST
+// carrying the tool_result arrives) a final "TOOLDONE" text turn. Returns
+// { run: {status,stdout,stderr}, requests } — the mock's request log, which the
+// caller judges through scripts/lib/tool-result.cjs (the tool_result the model saw,
+// never the follow-up body, which also carries the tool_use, i.e. the command).
 // --dangerously-skip-permissions is REQUIRED here (see file header): it
 // removes Claude Code's own auto-mode safety-classifier round-trip, which the
 // single-conversation mock cannot answer and which is unrelated to the guard
 // under test; the guard's PreToolUse deny fires regardless of this flag.
-async function driveBashTurn(bin, command, toolId) {
+async function driveBashTurn(bin, bash) {
   const mock = await startMockAnthropic({
-    respond: (body) => body.includes(toolId)
+    respond: (body) => body.includes(bash.id)
       ? cannedSSE('TOOLDONE')
-      : cannedToolUseSSE('Bash', { command }, toolId),
+      : cannedToolUseSSE(bash.name, bash.input, bash.id),
   });
   try {
     const env = cleanEnv({ ANTHROPIC_BASE_URL: mock.url, ANTHROPIC_API_KEY: 'sk-ant-mock' });
     const run = await runTarget(bin,
       ['-p', 'run the command', '--allowedTools', 'Bash', '--dangerously-skip-permissions'],
       env, 60000);
-    const followUp = mock.requests.find((q) => q.method === 'POST' && q.body
-      && q.body.includes(toolId) && q.body.includes('tool_result'));
-    const toolResult = followUp ? toolResultFrom(followUp.body, toolId) : null;
-    return { run, toolResult };
+    return { run, requests: mock.requests };
   } finally { await mock.close(); }
 }
 
@@ -180,29 +163,46 @@ function runUpdateGuardAcceptance(t, kind, bin, skipReason) {
     // sole purpose is to prove the WHOLE Bash call never ran (a deny reason
     // alone doesn't rule out a shell that ran and merely got told "no" after
     // the fact — the file's absence is definitive).
+    //
+    // Each tool_result judgment is one function, run first through
+    // assertFailsOnMissingOutput (it must FAIL with the output missing and the command
+    // text present) and then on the real request log.
     const markerDenied = path.join(DIR, `${kind}-MARKER-DENIED-${Date.now()}`);
-    const denyId = `toolu_${kind}_deny`;
-    const deny = await driveBashTurn(bin, `claude update; touch ${markerDenied}`, denyId);
+    const DENY = { name: 'Bash', input: { command: `claude update; touch ${markerDenied}` }, id: `toolu_${kind}_deny` };
+    const deniedWithReason = (m) => {
+      const r = toolResult(m, DENY.id);
+      return !!r && r.isError && /clode manages Claude Code/.test(r.text);
+    };
+    assertFailsOnMissingOutput(deniedWithReason, DENY);
+    // The benign command also ECHOES a marker the shell computes, so the control turn's
+    // tool_result is judged on output that only a command that ran can produce. The old
+    // row asserted only is_error === false there, which a missing or empty tool_result
+    // satisfies too: assertFailsOnMissingOutput refused it.
+    const markerOk = path.join(DIR, `${kind}-MARKER-OK-${Date.now()}`);
+    const ALLOW = { name: 'Bash', input: { command: `touch ${markerOk} && echo UPDATEGUARD-ALLOWED-$((6*7))` }, id: `toolu_${kind}_ok` };
+    const allowedAndRan = (m) => {
+      const r = toolResult(m, ALLOW.id);
+      return !!r && !r.isError && r.text.includes('UPDATEGUARD-ALLOWED-42');
+    };
+    assertFailsOnMissingOutput(allowedAndRan, ALLOW);
+
+    const deny = await driveBashTurn(bin, DENY);
     assert.strictEqual(deny.run.status, 0, `${kind} deny-turn run failed:\nstdout:\n${deny.run.stdout}\nstderr:\n${deny.run.stderr}`);
     assert.match(deny.run.stdout, /TOOLDONE/, `${kind} deny-turn stdout:\n${deny.run.stdout}`);
     // Definitive: the command never ran.
     assert.ok(!fs.existsSync(markerDenied), `${kind}: MARKER_DENIED exists — claude update's Bash call was NOT blocked`);
-    // Corroborating: the guard's actual deny reason surfaced to the model.
-    assert.ok(deny.toolResult, `${kind}: no tool_result found for the deny turn`);
-    assert.strictEqual(deny.toolResult.isError, true, `${kind}: deny tool_result was not is_error`);
-    assert.match(String(deny.toolResult.content), /clode manages Claude Code/,
-      `${kind}: deny tool_result did not carry the guard's reason: ${deny.toolResult.content}`);
+    // Corroborating: the guard's actual deny reason surfaced to the model, as an error.
+    assert.ok(deniedWithReason(deny), `${kind}: the deny turn's tool_result is not an error carrying the guard's `
+      + `reason: ${JSON.stringify(toolResult(deny, DENY.id))}`);
 
     // -- CONTROL: a benign command must still be ALLOWED (the guard denies
     // ONLY update/reinstall commands, not everything).
-    const markerOk = path.join(DIR, `${kind}-MARKER-OK-${Date.now()}`);
-    const okId = `toolu_${kind}_ok`;
-    const allow = await driveBashTurn(bin, `touch ${markerOk}`, okId);
+    const allow = await driveBashTurn(bin, ALLOW);
     assert.strictEqual(allow.run.status, 0, `${kind} control-turn run failed:\nstdout:\n${allow.run.stdout}\nstderr:\n${allow.run.stderr}`);
     assert.match(allow.run.stdout, /TOOLDONE/, `${kind} control-turn stdout:\n${allow.run.stdout}`);
     assert.ok(fs.existsSync(markerOk), `${kind}: MARKER_OK does not exist — a benign Bash command was blocked`);
-    assert.ok(allow.toolResult, `${kind}: no tool_result found for the control turn`);
-    assert.strictEqual(allow.toolResult.isError, false, `${kind}: control tool_result reported an error: ${allow.toolResult.content}`);
+    assert.ok(allowedAndRan(allow), `${kind}: the control turn's tool_result is not the command's output: `
+      + JSON.stringify(toolResultText(allow, ALLOW.id)));
   })();
 }
 

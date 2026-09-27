@@ -613,6 +613,16 @@ test('the controlled set is EXACTLY the modules a guard was deliberately written
   // baseline of 28 and went red at authoring time; test/build-gates/reset-patch-gates.test.cjs
   // controls the refusal against the provider's own carve, which returned the count to 28.
   // The baseline did not move.
+  //
+  // scripts/lib/tool-result.cjs ADDED 2026-09-27 (grep-native plan, task 1), the mechanism a
+  // ninth time, gate-shaped on the day it was written: the one reader of what the model saw of
+  // a tool call, and assertFailsOnMissingOutput, which REFUSES (throws) a live check whose own
+  // source reads a raw request body (`.test(` over it) or which passes on a follow-up with the
+  // output missing. Test- and probe-only, like reset-patch.cjs; scripts/floor-probe.mjs and the
+  // agentic tests require it. It landed with its guard,
+  // test/build-gates/live-checks-gates.test.cjs (missing-output-control-refuses controls the
+  // refusal), so uncontrolled stayed at 28 (measured: 44 gate-shaped, 14 controlled, 2
+  // excluded); without that guard it reads 29. The baseline did not move.
   assert.deepStrictEqual([...controlledProductionModules().keys()].sort(), [
     'libexec/clode-build.cjs',
     'libexec/host-provision.cjs',
@@ -625,6 +635,7 @@ test('the controlled set is EXACTLY the modules a guard was deliberately written
     'scripts/lib/paint-probe.cjs',
     'scripts/lib/reset-patch.cjs',
     'scripts/lib/text-probe.cjs',
+    'scripts/lib/tool-result.cjs',
     'scripts/oracle-native-version.cjs',
     'scripts/render-build-graph.cjs',
   ].sort(),

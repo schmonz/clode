@@ -31,6 +31,12 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { createRequire } from 'node:module';
+
+// What the model saw of a tool call, and the control each B-row carries: the one reader
+// shared with the tests (test/build-gates/live-checks-gates.test.cjs holds the tree to it).
+const require = createRequire(import.meta.url);
+const { toolResultText, assertFailsOnMissingOutput } = require('./lib/tool-result.cjs');
 
 const [, , BIN, RUN_TARGET, ...rest] = process.argv;
 const AS_JSON = rest.includes('--json');
@@ -252,26 +258,14 @@ async function sandboxWasUsed(sbx) {
 
 const posted = (mock) => mock.requests.some((q) => q.method === 'POST' && /\/messages/.test(q.url));
 
-// The text of the tool_result the target sent back for tool_use `id`. NOT a substring
-// search of the whole request body: every follow-up also carries the assistant's own
-// tool_use block, i.e. the COMMAND, so a marker spelled in the command (`echo MARK`)
-// "came back" whether or not the command ran or its output was returned. B1 and B4
-// both checked the body that way and could not fail on missing output.
-function toolResultText(mock, id) {
-  let out = '';
-  for (const q of mock.requests) {
-    let j;
-    try { j = JSON.parse(q.body || ''); } catch { continue; }
-    for (const m of (j && Array.isArray(j.messages) ? j.messages : [])) {
-      for (const b of (Array.isArray(m && m.content) ? m.content : [])) {
-        if (!b || b.type !== 'tool_result' || b.tool_use_id !== id) continue;
-        out += typeof b.content === 'string' ? b.content
-          : (Array.isArray(b.content) ? b.content.map((c) => (c && c.text) || '').join('') : '');
-      }
-    }
-  }
-  return out;
-}
+// B1 and B4 judge toolResultText(mock, id): the tool_result the target sent back for that
+// tool_use, NOT a substring search of the whole request body. Every follow-up also carries
+// the assistant's own tool_use block, i.e. the COMMAND, so a marker spelled in the command
+// (`echo MARK`) "came back" whether or not the command ran. Both rows once checked the body
+// that way and could not fail on missing output (b4ff3f2). Each judgment is ONE function,
+// run first through assertFailsOnMissingOutput (it must FAIL with the output missing and the
+// command text present) and then on the real mock: a control that cannot drift from the
+// check it controls.
 
 // ---- the checks. Each maps to ONE RECIPE floor row. ------------------------
 // GUARD 2: exercise the tmpdir-ownership guard every time. The bundle only
@@ -310,16 +304,19 @@ const CHECKS = [
       // `echo MARK` alone could never see that. The marker is COMPUTED ($((6*7))), so
       // the output spells it and the command does not.
       const MARK = 'FLOOR-BASH-42';
+      const BASH = { name: 'Bash', input: { command: 'grep -c FLOOR /dev/null; echo FLOOR-BASH-$((6*7))' }, id: ID };
+      const carried = (m) => toolResultText(m, ID).includes(MARK);
+      assertFailsOnMissingOutput(carried, BASH);
       const mock = await startMock([
         { match: ID, text: 'done' },                                   // the follow-up carrying tool_result
-        { tool: { name: 'Bash', input: { command: 'grep -c FLOOR /dev/null; echo FLOOR-BASH-$((6*7))' }, id: ID } },
+        { tool: BASH },
       ]);
       try {
         const r = await run(BIN, ['-p', 'run it', '--permission-mode', 'bypassPermissions', '--allowedTools', 'Bash'],
           { home: sbx.home, cwd: sbx.cwd, extraEnv: { ANTHROPIC_BASE_URL: mock.url } });
         // The proof is the tool_result echoed back to the model, not the prose:
         // the bundle sends the command's OUTPUT in the follow-up request.
-        const echoed = toolResultText(mock, ID).includes(MARK);
+        const echoed = carried(mock);
         const ok = r.code === 0 && echoed;
         return { ok, how: ok ? `exit 0, tool_result carried ${MARK}` : `exit=${r.code ?? r.sig} echoed=${echoed} stderr=${JSON.stringify(r.err.slice(-160))}` };
       } finally { await mock.close(); }
@@ -394,10 +391,20 @@ const CHECKS = [
       const f = `${sbx.cwdNative}${sep}b4.txt`;
       const shell = `${sbx.cwd}/b4.txt`;                 // OUR view, for checks
       const ids = { w: 'toolu_b4_w', r: 'toolu_b4_r', e: 'toolu_b4_e', g: 'toolu_b4_g', b: 'toolu_b4_b' };
+      // The two tool_result judgments, each controlled. The grep's output names the file,
+      // which its command does not; the echo's marker is COMPUTED, so the output spells
+      // B4-BASH-42 and the command does not (`echo B4-BASH-OK` could pass on a tool_result
+      // that merely quoted the command, e.g. an error: assertFailsOnMissingOutput refused it).
+      const GREP = { name: 'Bash', input: { command: 'grep -rl B4-EDITED .' }, id: ids.g };
+      const ECHO = { name: 'Bash', input: { command: 'echo B4-BASH-$((6*7))' }, id: ids.b };
+      const foundFile = (m) => /b4\.txt/.test(toolResultText(m, ids.g));
+      const echoed = (m) => toolResultText(m, ids.b).includes('B4-BASH-42');
+      assertFailsOnMissingOutput(foundFile, GREP);
+      assertFailsOnMissingOutput(echoed, ECHO);
       const mock = await startMock([
         { match: ids.b, text: 'all four done' },
-        { match: ids.g, tool: { name: 'Bash', input: { command: 'echo B4-BASH-OK' }, id: ids.b } },
-        { match: ids.e, tool: { name: 'Bash', input: { command: 'grep -rl B4-EDITED .' }, id: ids.g } },
+        { match: ids.g, tool: ECHO },
+        { match: ids.e, tool: GREP },
         { match: ids.r, tool: { name: 'Edit', input: { file_path: f, old_string: 'B4-ORIGINAL', new_string: 'B4-EDITED' }, id: ids.e } },
         { match: ids.w, tool: { name: 'Read', input: { file_path: f }, id: ids.r } },
         { tool: { name: 'Write', input: { file_path: f, content: 'B4-ORIGINAL\n' }, id: ids.w } },
@@ -408,8 +415,8 @@ const CHECKS = [
         const content = (await sbx.exists(shell)) ? await sbx.read(shell) : '';
         const wrote = /B4-/.test(content);                        // Write landed
         const edited = /B4-EDITED/.test(content);                 // Edit applied on disk
-        const grepped = /b4\.txt/.test(toolResultText(mock, ids.g));        // grep found the file
-        const bashed = toolResultText(mock, ids.b).includes('B4-BASH-OK'); // Bash output came back
+        const grepped = foundFile(mock);                          // grep found the file
+        const bashed = echoed(mock);                              // Bash output came back
         const ok = r.code === 0 && wrote && edited && grepped && bashed;
         return { ok, how: ok
           ? 'Write+Read+Edit+grep+Bash all round-tripped; file reads B4-EDITED on disk'

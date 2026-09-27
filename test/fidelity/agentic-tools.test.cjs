@@ -13,6 +13,7 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { REPO, tjsPath, skipUnlessTjs, engineSpawn, LOADER } = require('../node-shim-helper.cjs');
 const { startMockAnthropic, cannedSSE, cannedToolUseSSE } = require('../mock-anthropic-helper.cjs');
+const { toolResult, toolResultText, assertFailsOnMissingOutput } = require('../../scripts/lib/tool-result.cjs');
 
 function providerBin() { const p = process.env.CLODE_PROVIDER_BIN; return p && fs.existsSync(p) ? p : null; }
 // THROUGH CLODE'S OWN STAGING (../oracle-models.cjs's stageCli), not the raw
@@ -42,29 +43,13 @@ function bootP(cli, dir, args, env, timeoutMs) {
 function mockEnv(dir, url) {
   return { ...process.env, ANTHROPIC_BASE_URL: url, ANTHROPIC_API_KEY: 'sk-ant-mock', NODE_PATH: path.join(REPO, 'deps', 'claude', 'node_modules') };
 }
-function followUpFor(mock, id) {
-  return mock.requests.find((q) => q.method === 'POST' && q.body && q.body.includes(id) && q.body.includes('tool_result'));
-}
-// The text of the tool_result the target sent back for tool_use `id`: the model's
-// view of the tool's output, and nothing else. NOT a substring search of the request
-// body: every follow-up also carries the assistant's own tool_use block, so a marker
-// spelled in the tool's INPUT (`pattern: MARK`, `echo A`) "came back" whether or not
-// the tool ran. scripts/floor-probe.mjs's B1/B4 were corrected the same way (b4ff3f2).
-function toolResultText(mock, id) {
-  let out = '';
-  for (const q of mock.requests) {
-    let j;
-    try { j = JSON.parse(q.body || ''); } catch { continue; }
-    for (const m of (j && Array.isArray(j.messages) ? j.messages : [])) {
-      for (const b of (Array.isArray(m && m.content) ? m.content : [])) {
-        if (!b || b.type !== 'tool_result' || b.tool_use_id !== id) continue;
-        out += typeof b.content === 'string' ? b.content
-          : (Array.isArray(b.content) ? b.content.map((c) => (c && c.text) || '').join('') : '');
-      }
-    }
-  }
-  return out;
-}
+// Every tool row judges toolResultText(mock, id) (scripts/lib/tool-result.cjs): the model's
+// view of the tool's output, and nothing else. NOT a substring search of the request body:
+// every follow-up also carries the assistant's own tool_use block, so a marker spelled in the
+// tool's INPUT (`pattern: MARK`, `echo A`) "came back" whether or not the tool ran (f4d763d;
+// scripts/floor-probe.mjs's B1/B4 were corrected the same way in b4ff3f2). Each judgment is
+// one function, run first through assertFailsOnMissingOutput (it must FAIL with the output
+// missing and the command text present) and then on the real mock.
 
 const MARK = 'AGT-NEEDLE-5501';
 
@@ -105,16 +90,23 @@ test('agentic Grep round-trip under tjs: search-applet path returns the match', 
   if (skipUnlessTjs(t)) return;
   const bin = providerBin(); if (!bin) { t.skip('no CLODE_PROVIDER_BIN'); return; }
   const { cli, dir } = stageBundle(bin);
-  fs.writeFileSync(path.join(dir, 'hay.txt'), `alpha\n${MARK}\ngamma\n`);
-  const ID = 'toolu_grep_1';
+  // The matched line carries a TAIL the pattern does not spell: content mode prints the whole
+  // line, so the tail proves the tool searched the file. MARK alone could come back in a
+  // tool_result that merely quoted the pattern (an rg error, say): assertFailsOnMissingOutput
+  // refuses a check that looks for it.
+  const TAIL = 'HAY-LINE-TAIL-5502';
+  fs.writeFileSync(path.join(dir, 'hay.txt'), `alpha\n${MARK} ${TAIL}\ngamma\n`);
+  const GREP = { name: 'Grep', input: { pattern: MARK, path: dir, output_mode: 'content' }, id: 'toolu_grep_1' };
+  const found = (m) => toolResultText(m, GREP.id).includes(TAIL);
+  assertFailsOnMissingOutput(found, GREP);
   const mock = await startMockAnthropic({
-    respond: (body) => body.includes(ID) ? cannedSSE('GREPDONE')
-      : cannedToolUseSSE('Grep', { pattern: MARK, path: dir, output_mode: 'content' }, ID),
+    respond: (body) => body.includes(GREP.id) ? cannedSSE('GREPDONE')
+      : cannedToolUseSSE(GREP.name, GREP.input, GREP.id),
   });
   try {
     const r = await bootP(cli, dir, ['-p', 'find the needle', '--allowedTools', 'Grep'], mockEnv(dir, mock.url), 120000);
     assert.strictEqual(r.status, 0, `stderr:\n${r.stderr}`);
-    const result = toolResultText(mock, ID);
+    const result = toolResultText(mock, GREP.id);
     assert.ok(result, 'no follow-up POST carrying the Grep tool_result');
     if (GREP_JSON_REFUSED.test(r.stderr)) {
       t.skip('the Grep tool runs `rg --json`, which the rg->ugrep translation refuses by design; '
@@ -124,31 +116,37 @@ test('agentic Grep round-trip under tjs: search-applet path returns the match', 
         + ' (BACKLOG.md: The Grep tool in quaude)');
       return;
     }
-    assert.match(result, new RegExp(MARK), `Grep tool_result lacks the match:\n${result.slice(0, 1500)}`);
+    assert.ok(found(mock), `Grep tool_result lacks the matched line:\n${result.slice(0, 1500)}`);
   } finally { await mock.close(); }
 });
 
 // H1 — multi-turn coherence: a 2-tool conversation loop (Bash echo A -> result
 // -> Bash echo B -> result -> final). Both tool_results must carry their own
 // stdout, in order — the turn loop stays coherent across turns under quaude.
+// A and B are COMPUTED by the shell ($((40+2)), $((40+3))), so the output spells them and
+// the commands do not: `echo ${A}` could pass on a tool_result that only quoted it.
 test('agentic multi-turn under tjs: a 2-tool loop keeps both tool_results coherent', async (t) => {
   if (skipUnlessTjs(t)) return;
   const bin = providerBin(); if (!bin) { t.skip('no CLODE_PROVIDER_BIN'); return; }
   const { cli, dir } = stageBundle(bin);
-  const ID1 = 'toolu_mt_1', ID2 = 'toolu_mt_2';
-  const A = MARK + '-A', B = MARK + '-B';
+  const A = `${MARK}-A42`, B = `${MARK}-B43`;
+  const ONE = { name: 'Bash', input: { command: `echo ${MARK}-A$((40+2))` }, id: 'toolu_mt_1' };
+  const TWO = { name: 'Bash', input: { command: `echo ${MARK}-B$((40+3))` }, id: 'toolu_mt_2' };
+  const saidA = (m) => toolResultText(m, ONE.id).includes(A);
+  const saidB = (m) => toolResultText(m, TWO.id).includes(B);
+  assertFailsOnMissingOutput(saidA, ONE);
+  assertFailsOnMissingOutput(saidB, TWO);
   const mock = await startMockAnthropic({
-    respond: (body) => body.includes(ID2) ? cannedSSE('MULTIDONE')
-      : body.includes(ID1) ? cannedToolUseSSE('Bash', { command: `echo ${B}` }, ID2)
-        : cannedToolUseSSE('Bash', { command: `echo ${A}` }, ID1),
+    respond: (body) => body.includes(TWO.id) ? cannedSSE('MULTIDONE')
+      : body.includes(ONE.id) ? cannedToolUseSSE(TWO.name, TWO.input, TWO.id)
+        : cannedToolUseSSE(ONE.name, ONE.input, ONE.id),
   });
   try {
     const r = await bootP(cli, dir, ['-p', 'run two commands', '--allowedTools', 'Bash'], mockEnv(dir, mock.url), 120000);
     assert.strictEqual(r.status, 0, `stderr:\n${r.stderr}`);
     assert.match(r.stdout, /MULTIDONE/, `did not reach the final turn:\n${r.stdout}`);
-    const r1 = toolResultText(mock, ID1), r2 = toolResultText(mock, ID2);
-    assert.ok(r1.includes(A), `turn-1 tool_result missing echo A: ${JSON.stringify(r1)}`);
-    assert.ok(r2.includes(B), `turn-2 tool_result missing echo B: ${JSON.stringify(r2)}`);
+    assert.ok(saidA(mock), `turn-1 tool_result missing echo A: ${JSON.stringify(toolResultText(mock, ONE.id))}`);
+    assert.ok(saidB(mock), `turn-2 tool_result missing echo B: ${JSON.stringify(toolResultText(mock, TWO.id))}`);
   } finally { await mock.close(); }
 });
 
@@ -201,20 +199,21 @@ process.stdin.on('end', () => {
   fs.writeFileSync(settings, JSON.stringify({
     hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: `${process.execPath} ${hook}` }] }] },
   }));
-  const ID = 'toolu_update_1';
+  const UPDATE = { name: 'Bash', input: { command: 'claude update' }, id: 'toolu_update_1' };
+  const denied = (m) => /clode manages Claude Code|rebuilds itself/.test(toolResultText(m, UPDATE.id));
+  assertFailsOnMissingOutput(denied, UPDATE);
   const mock = await startMockAnthropic({
-    respond: (body) => body.includes(ID) ? cannedSSE('HOOKDONE')
-      : cannedToolUseSSE('Bash', { command: 'claude update' }, ID),
+    respond: (body) => body.includes(UPDATE.id) ? cannedSSE('HOOKDONE')
+      : cannedToolUseSSE(UPDATE.name, UPDATE.input, UPDATE.id),
   });
   try {
     const r = await bootP(cli, dir,
       ['-p', 'update yourself', '--allowedTools', 'Bash', '--settings', settings],
       mockEnv(dir, mock.url), 120000);
     assert.strictEqual(r.status, 0, `stderr:\n${r.stderr}`);
-    assert.ok(followUpFor(mock, ID), 'no follow-up POST carrying the Bash tool_result (hook path not reached)');
+    assert.ok(toolResult(mock, UPDATE.id), 'no follow-up POST carrying the Bash tool_result (hook path not reached)');
     // The PreToolUse deny reason (update-guard) must be surfaced in the tool_result,
     // and the command must NOT have actually run.
-    const result = toolResultText(mock, ID);
-    assert.match(result, /clode manages Claude Code|rebuilds itself/, `hook deny reason not in tool_result:\n${result.slice(0, 1500)}`);
+    assert.ok(denied(mock), `hook deny reason not in tool_result:\n${toolResultText(mock, UPDATE.id).slice(0, 1500)}`);
   } finally { await mock.close(); }
 });

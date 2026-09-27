@@ -17,6 +17,7 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { REPO, tjsPath, skipUnlessTjs, engineSpawn, LOADER } = require('./node-shim-helper.cjs');
 const { startMockAnthropic, cannedSSE, cannedToolUseSSE } = require('./mock-anthropic-helper.cjs');
+const { toolResult, toolResultText, assertFailsOnMissingOutput } = require('../scripts/lib/tool-result.cjs');
 const { stageCli } = require('./oracle-models.cjs');
 
 function providerBin() { const p = process.env.CLODE_PROVIDER_BIN; return p && fs.existsSync(p) ? p : null; }
@@ -70,37 +71,35 @@ function bootP(cli, dir, args, env, timeoutMs) {
   });
 }
 
+// Both rows judge the tool_result itself (scripts/lib/tool-result.cjs), never the follow-up
+// body: that body also carries the tool_use, i.e. the command, and a raw slice of it truncates
+// before the tool_result content anyway (it leads with the system prompt and prior turns),
+// which is exactly where a failed atomic write reports its exception. Each judgment is one
+// function, run first through assertFailsOnMissingOutput (it must FAIL with the output
+// missing and the command text present) and then on the real mock.
+//
+// The marker is COMPUTED by the shell, so the output spells it and the command does not.
+// The old check searched the whole body for `echo ${MARKER}`'s marker: it could not fail on
+// missing output.
 const MARKER = 'AGENTIC-MARKER-7391';
-const TOOL_ID = 'toolu_mock_bash_1';
-
-// Pull the actual tool_result block for a tool_use_id out of a follow-up POST
-// body. The raw body is a big /messages JSON whose leading bytes are the system
-// prompt + prior turns, so a plain body.slice() truncates BEFORE the tool_result
-// content — and that content is exactly what carries the exception a failed
-// atomic write reported. Parse it out instead.
-function toolResultContent(body, id) {
-  try {
-    const j = JSON.parse(body);
-    for (const m of j.messages || []) {
-      for (const b of (Array.isArray(m.content) ? m.content : [])) {
-        if (b && b.type === 'tool_result' && b.tool_use_id === id) return JSON.stringify(b.content);
-      }
-    }
-  } catch { /* not JSON / shape drift — caller falls back to a raw slice */ }
-  return null;
-}
+const BASH = { name: 'Bash', input: { command: 'echo AGENTIC-MARKER-$((7300+91))' }, id: 'toolu_mock_bash_1' };
+const stdoutInline = (m) => {
+  const out = toolResultText(m, BASH.id);
+  return out.includes(MARKER) && !out.includes('bash output unavailable') && !out.includes('Output too large');
+};
 
 test('agentic Bash round-trip under tjs: tool_result carries real stdout inline', async (t) => {
   if (skipUnlessTjs(t)) return;
   const bin = providerBin();
   if (!bin) { t.skip('no CLODE_PROVIDER_BIN'); return; }
+  assertFailsOnMissingOutput(stdoutInline, BASH);
   // Key the scripted turns off request content, not POST order: side calls
   // (title generation etc.) also hit /messages, but only the main loop's
   // follow-up POST carries our tool_result id.
   const mock = await startMockAnthropic({
-    respond: (body) => body.includes(TOOL_ID)
+    respond: (body) => body.includes(BASH.id)
       ? cannedSSE('TOOLDONE')
-      : cannedToolUseSSE('Bash', { command: `echo ${MARKER}` }, TOOL_ID),
+      : cannedToolUseSSE(BASH.name, BASH.input, BASH.id),
   });
   try {
     const { cli, dir } = stageBundle(bin);
@@ -114,11 +113,8 @@ test('agentic Bash round-trip under tjs: tool_result carries real stdout inline'
       }, 120000);
     assert.strictEqual(r.status, 0, `stderr:\n${r.stderr}`);
     assert.match(r.stdout, /TOOLDONE/, `stdout:\n${r.stdout}`);
-    const followUp = mock.requests.find((q) => q.method === 'POST' && q.body && q.body.includes(TOOL_ID) && q.body.includes('tool_result'));
-    assert.ok(followUp, 'no follow-up POST carrying the tool_result');
-    assert.ok(followUp.body.includes(MARKER), `tool_result lacks the command's stdout:\n${followUp.body.slice(0, 2000)}`);
-    assert.ok(!followUp.body.includes('bash output unavailable'), 'tool_result degraded to the output-file readback failure');
-    assert.ok(!followUp.body.includes('Output too large'), 'tool_result degraded to the persisted-file detour');
+    assert.ok(stdoutInline(mock), 'tool_result lacks the command\'s stdout inline (missing, or degraded to the '
+      + `output-file readback failure or the persisted-file detour): ${JSON.stringify(toolResultText(mock, BASH.id).slice(0, 2000))}`);
   } finally { await mock.close(); }
 });
 
@@ -135,14 +131,23 @@ test('agentic Edit round-trip under tjs: overwriting an existing file works (Fil
   const { cli, dir } = stageBundle(bin);
   const target = path.join(dir, 'edit-target.txt');
   fs.writeFileSync(target, 'hello world\nsecond line\n');
-  const READ_ID = 'toolu_read_edit';
-  const EDIT_ID = 'toolu_edit_edit';
+  const READ = { name: 'Read', input: { file_path: target }, id: 'toolu_read_edit' };
+  const EDIT = { name: 'Edit', input: { file_path: target, old_string: 'world', new_string: 'universe' }, id: 'toolu_edit_edit' };
+  // The Edit tool's own report of success, as the model reads it (2.1.283's carve returns
+  // `The file ${path} has been updated successfully.`). The old row asserted only that the
+  // result was NOT the shim-gap "not a function" error, which an empty or missing tool_result
+  // also satisfies: assertFailsOnMissingOutput refused it.
+  const editReported = (m) => {
+    const r = toolResult(m, EDIT.id);
+    return !!r && !r.isError && /has been updated successfully/.test(r.text);
+  };
+  assertFailsOnMissingOutput(editReported, EDIT);
   // Read (satisfy read-before-edit) -> Edit -> done, keyed off request content.
   const mock = await startMockAnthropic({
     respond: (body) =>
-      body.includes(EDIT_ID) ? cannedSSE('EDITDONE')
-        : body.includes(READ_ID) ? cannedToolUseSSE('Edit', { file_path: target, old_string: 'world', new_string: 'universe' }, EDIT_ID)
-          : cannedToolUseSSE('Read', { file_path: target }, READ_ID),
+      body.includes(EDIT.id) ? cannedSSE('EDITDONE')
+        : body.includes(READ.id) ? cannedToolUseSSE(EDIT.name, EDIT.input, EDIT.id)
+          : cannedToolUseSSE(READ.name, READ.input, READ.id),
   });
   try {
     // --debug-to-stderr surfaces the bundle's atomic-write breadcrumbs (and any
@@ -170,22 +175,21 @@ test('agentic Edit round-trip under tjs: overwriting an existing file works (Fil
         NODE_PATH: path.join(REPO, 'deps', 'claude', 'node_modules'),
       }, 120000);
     assert.strictEqual(r.status, 0, `stderr:\n${r.stderr}`);
-    const editResult = mock.requests.find((q) => q.body && q.body.includes(EDIT_ID) && q.body.includes('tool_result'));
     // Ground-truth oracle: the edit actually landed on disk. On failure, surface
-    // what the Edit tool actually REPORTED — the tool_result CONTENT (parsed out,
-    // not a leading raw slice that truncates before it) carries any exception the
-    // atomic write threw (e.g. a chmod/rename error code) so a platform-specific
-    // regression names its own failing step instead of just "did not apply".
+    // what the Edit tool actually REPORTED — the tool_result CONTENT carries any
+    // exception the atomic write threw (e.g. a chmod/rename error code, or the
+    // FileHandle-shim-gap "not a function") so a platform-specific regression names
+    // its own failing step instead of just "did not apply".
     const onDisk = fs.readFileSync(target, 'utf8');
-    const editContent = editResult && toolResultContent(editResult.body, EDIT_ID);
+    const edit = toolResult(mock, EDIT.id);
+    const editContent = edit ? JSON.stringify({ content: edit.content, is_error: edit.isError }) : '<none>';
     assert.strictEqual(onDisk, 'hello universe\nsecond line\n',
       `Edit did not apply on disk.\n on-disk: ${JSON.stringify(onDisk)}\n`
-      + ` Edit tool_result content: ${editContent || (editResult ? editResult.body.slice(0, 1500) : '<none>')}\n`
+      + ` Edit tool_result content: ${editContent}\n`
       + ` stderr tail:\n${(r.stderr || '').slice(-3000)}`);
-    // And the Edit tool_result must not be the FileHandle-shim-gap error.
-    assert.ok(editResult, 'no follow-up POST carrying the Edit tool_result');
-    assert.ok(!/"content":"not a function","is_error":true,"tool_use_id":"toolu_edit_edit"/.test(editResult.body),
-      `Edit tool_result is the shim-gap "not a function":\n${editResult.body.slice(0, 800)}`);
+    // And the Edit tool_result is the tool's success report, which the FileHandle-shim-gap
+    // error ("not a function", is_error) is not.
+    assert.ok(editReported(mock), `Edit tool_result is not the success report: ${editContent.slice(0, 800)}`);
   } finally { await mock.close(); }
 });
 

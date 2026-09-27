@@ -31,6 +31,7 @@ const { spawn, spawnSync } = require('node:child_process');
 const { createRequire } = require('node:module');
 const { tjsPath, skipUnlessTjs, REPO } = require('./node-shim-helper.cjs');
 const { startMockAnthropic, cannedSSE, cannedToolUseSSE } = require('./mock-anthropic-helper.cjs');
+const { toolResultText, assertFailsOnMissingOutput } = require('../scripts/lib/tool-result.cjs');
 const { toolchainDir } = require('../scripts/platform-tag.cjs');
 const { stateRoot } = require('./state-root-helper.cjs');
 
@@ -267,12 +268,18 @@ test('acceptance 3: quaude-from-native passes the agentic Bash mock oracle', asy
   if (SKIP) { t.skip(SKIP); return; }
   if (SKIP_PRODUCT) { t.skip(SKIP_PRODUCT); return; }
   if (!fs.existsSync(QUAUDE)) { t.skip('no quaude-from-native (acceptance 2 did not produce one)'); return; }
+  // The judgment reads the tool_result (scripts/lib/tool-result.cjs), and the marker is
+  // COMPUTED by the shell, so the output spells it and the command does not. The old check
+  // searched the whole follow-up body for `echo ${MARKER}`'s marker, and that body also
+  // carries the tool_use: it could not fail on missing output.
   const MARKER = 'CLODE-NATIVE-AGENTIC-MARKER-7311';
-  const TOOL_ID = 'toolu_mock_native_bash_1';
+  const BASH = { name: 'Bash', input: { command: 'echo CLODE-NATIVE-AGENTIC-MARKER-$((7300+11))' }, id: 'toolu_mock_native_bash_1' };
+  const carriesStdout = (m) => toolResultText(m, BASH.id).includes(MARKER);
+  assertFailsOnMissingOutput(carriesStdout, BASH);
   const mock = await startMockAnthropic({
-    respond: (body) => body.includes(TOOL_ID)
+    respond: (body) => body.includes(BASH.id)
       ? cannedSSE('TOOLDONE')
-      : cannedToolUseSSE('Bash', { command: `echo ${MARKER}` }, TOOL_ID),
+      : cannedToolUseSSE(BASH.name, BASH.input, BASH.id),
   });
   try {
     const env = { ...process.env, ANTHROPIC_BASE_URL: mock.url, ANTHROPIC_API_KEY: 'sk-ant-mock' };
@@ -280,10 +287,7 @@ test('acceptance 3: quaude-from-native passes the agentic Bash mock oracle', asy
     const r = await runNative(QUAUDE, ['-p', 'run the command', '--allowedTools', 'Bash'], env, 120000);
     assert.strictEqual(r.status, 0, `stderr:\n${r.stderr}`);
     assert.match(r.stdout, /TOOLDONE/, `stdout:\n${r.stdout}`);
-    const followUp = mock.requests.find((q) => q.method === 'POST' && q.body
-      && q.body.includes(TOOL_ID) && q.body.includes('tool_result'));
-    assert.ok(followUp, 'no follow-up POST carrying the tool_result');
-    assert.ok(followUp.body.includes(MARKER), `tool_result lacks the command's stdout:\n${followUp.body.slice(0, 2000)}`);
+    assert.ok(carriesStdout(mock), `tool_result lacks the command's stdout: ${JSON.stringify(toolResultText(mock, BASH.id).slice(0, 2000))}`);
   } finally { await mock.close(); }
 });
 

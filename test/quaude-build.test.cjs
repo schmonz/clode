@@ -28,6 +28,7 @@ const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
 const { tjsPath, skipUnlessTjs, REPO } = require('./node-shim-helper.cjs');
 const { startMockAnthropic, cannedSSE, cannedToolUseSSE } = require('./mock-anthropic-helper.cjs');
+const { toolResultText, assertFailsOnMissingOutput } = require('../scripts/lib/tool-result.cjs');
 const { cacheKey } = require('../libexec/clode-resolve.cjs');
 const { providerPlatformOf } = require('../libexec/extract-claude-js.cjs');
 const { readManifest } = require('./quaude-archive.cjs');
@@ -268,12 +269,22 @@ test('the retired --quaude-attest is no longer a quaude flag', async (t) => {
 
 test('strict-mode sweep: agentic Bash mock oracle against the blobulated quaude', async (t) => {
   if (SKIP) { t.skip(SKIP); return; }
+  // Judged on the tool_result (scripts/lib/tool-result.cjs), with a marker the shell
+  // COMPUTES, so the output spells it and the command does not. The old check searched the
+  // whole follow-up body, which also carries the tool_use, for `echo ${MARKER}`'s marker: it
+  // could not fail on missing output. The two degradations stay refused, now read from the
+  // tool_result they would appear in.
   const MARKER = 'QUAUDE-AGENTIC-MARKER-4207';
-  const TOOL_ID = 'toolu_mock_quaude_bash_1';
+  const BASH = { name: 'Bash', input: { command: 'echo QUAUDE-AGENTIC-MARKER-$((4200+7))' }, id: 'toolu_mock_quaude_bash_1' };
+  const stdoutInline = (m) => {
+    const out = toolResultText(m, BASH.id);
+    return out.includes(MARKER) && !out.includes('bash output unavailable') && !out.includes('Output too large');
+  };
+  assertFailsOnMissingOutput(stdoutInline, BASH);
   const mock = await startMockAnthropic({
-    respond: (body) => body.includes(TOOL_ID)
+    respond: (body) => body.includes(BASH.id)
       ? cannedSSE('TOOLDONE')
-      : cannedToolUseSSE('Bash', { command: `echo ${MARKER}` }, TOOL_ID),
+      : cannedToolUseSSE(BASH.name, BASH.input, BASH.id),
   });
   try {
     const r = await runQuaude(
@@ -281,12 +292,8 @@ test('strict-mode sweep: agentic Bash mock oracle against the blobulated quaude'
       cleanEnv({ ANTHROPIC_BASE_URL: mock.url, ANTHROPIC_API_KEY: 'sk-ant-mock' }));
     assert.strictEqual(r.status, 0, `stderr:\n${r.stderr}`);
     assert.match(r.stdout, /TOOLDONE/, `stdout:\n${r.stdout}`);
-    const followUp = mock.requests.find((q) => q.method === 'POST' && q.body
-      && q.body.includes(TOOL_ID) && q.body.includes('tool_result'));
-    assert.ok(followUp, 'no follow-up POST carrying the tool_result');
-    assert.ok(followUp.body.includes(MARKER), `tool_result lacks the command's stdout:\n${followUp.body.slice(0, 2000)}`);
-    assert.ok(!followUp.body.includes('bash output unavailable'), 'tool_result degraded to the output-file readback failure');
-    assert.ok(!followUp.body.includes('Output too large'), 'tool_result degraded to the persisted-file detour');
+    assert.ok(stdoutInline(mock), 'tool_result lacks the command\'s stdout inline (missing, or degraded to the '
+      + `output-file readback failure or the persisted-file detour): ${JSON.stringify(toolResultText(mock, BASH.id).slice(0, 2000))}`);
   } finally { await mock.close(); }
 });
 

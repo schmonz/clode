@@ -2,20 +2,57 @@
 // H6 — subagent/Task dispatch, as a TRUE three-engine differential (the recipe's
 // localization model in a test): run the SAME Task scenario under naude (node
 // cli.cjs) AND quaude (tjs loader cli.cjs), each against a fresh mock, and assert
-// the Task tool_result is IDENTICAL. This guards the subagent-dispatch/marshaling
-// path for fidelity (quaude == naude) without depending on the -p+mock being able
-// to fully run the Agent (it hits an auto-mode safety gate the same way in both).
+// the Task tool_result carries the subagent's answer and is IDENTICAL on both.
+//
+// Until 2026-09-27 this row deliberately compared two ERRORS: the -p+mock "hits an
+// auto-mode safety gate the same way in both", so no Agent ever ran and the row passed on
+// identical refusals. On the dev Mac (2026-09-27) that gate came from the operator's own
+// ~/.claude settings (defaultMode auto), which the row inherited. A check that passes when no
+// subagent ran cannot fail on a subagent that is broken, and one was: see TOO_MANY_CAPTURES
+// below. The row now runs in a fresh config dir, asks for a synchronous agent, and judges the
+// answer.
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { REPO, tjsPath, skipUnlessTjs, isApeFile, wantsTrampoline, LOADER } = require('../node-shim-helper.cjs');
 const { startMockAnthropic, cannedSSE, cannedToolUseSSE } = require('../mock-anthropic-helper.cjs');
+const { toolResult, toolResultText, assertFailsOnMissingOutput } = require('../../scripts/lib/tool-result.cjs');
 
 function providerBin() { const p = process.env.CLODE_PROVIDER_BIN; return p && fs.existsSync(p) ? p : null; }
 const TASK_ID = 'toolu_task_diff_1';
 const SUBTOKEN = 'SUBDIFF-PROMPT-77', SUBANSWER = 'SUBDIFF-ANSWER-77';
+// `run_in_background: false`: at 2.1.283 "Agents run in the background by default" (the
+// tool's own schema text), and a background launch answers with launch metadata (a random
+// agentId, an output file), never the subagent's answer. A synchronous agent hands its answer
+// back in the tool_result.
+const TASK = { name: 'Task', input: { description: 'delegate', prompt: `answer with ${SUBTOKEN}`, subagent_type: 'general-purpose', run_in_background: false }, id: TASK_ID };
+// The Task tool_result must carry the SUBAGENT'S answer (SUBANSWER, which only the mock's
+// reply to the subagent spells), judged on the tool_result (scripts/lib/tool-result.cjs). The
+// old row only required naude's result to be truthy and quaude's to equal it; an empty
+// tool_result serialises to '""', which is truthy, so two engines that both lost the answer
+// passed: assertFailsOnMissingOutput refused that check. On this box they both had: see the
+// config-dir note in engineRun.
+const answered = (m) => toolResultText(m, TASK.id).includes(SUBANSWER);
+// What must match byte for byte, less the two parts a synchronous Agent tool_result varies
+// per run BY DESIGN (measured on naude, 2.1.283, 2026-09-27): the agentId, random, spelled
+// twice (`agentId: X` and `to: 'X'`), and the wall-clock `duration_ms`. Normalised here and
+// nowhere else.
+function handBack(m) {
+  const r = toolResult(m, TASK.id);
+  const s = JSON.stringify(r ? { content: r.content, isError: r.isError } : null);
+  const id = (/agentId: ([0-9a-f]+)/.exec(s) || [])[1];
+  return (id ? s.split(id).join('<agentId>') : s).replace(/duration_ms: \d+/g, 'duration_ms: <ms>');
+}
+// quaude cannot finish a subagent at 2.1.283 (measured 2026-09-27, --debug-to-stderr): the
+// completion path compiles the bundle's bracketedLeadScrubPattern (`get lead()` -> `_No`),
+// a RegExp with more than 255 capture groups, and QuickJS's regexp compiler refuses it
+// ("SyntaxError: too many captures"; V8 and JSC have no such limit). naude hands the answer
+// back. The row skips on exactly that tool_result, after proving naude's carries the answer,
+// and asserts in full otherwise (BACKLOG.md, "quaude's Agent tool: too many captures").
+const TOO_MANY_CAPTURES = /^too many captures$/;
 
 // THROUGH CLODE'S OWN STAGING (../oracle-models.cjs's stageCli), not the raw
 // extractor directly. The raw libexec/extract-claude-js.cjs emits the graph
@@ -43,28 +80,27 @@ function run(cmd, args, dir, env, timeoutMs) {
     c.on('error', (e) => { clearTimeout(to); res({ status: null, stdout: so, stderr: String(e) }); });
   });
 }
-function taskResult(requests) {
-  const fu = requests.find((q) => q.method === 'POST' && q.body && q.body.includes(TASK_ID) && q.body.includes('tool_result'));
-  if (!fu) return null;
-  try {
-    const j = JSON.parse(fu.body);
-    for (const m of j.messages || []) for (const b of (Array.isArray(m.content) ? m.content : [])) {
-      if (b && b.type === 'tool_result' && b.tool_use_id === TASK_ID) return JSON.stringify(b.content);
-    }
-  } catch { /* shape drift */ }
-  return null;
-}
 async function engineRun(cmd, argv) {
   const bin = providerBin();
   const { dir, cli } = stage(bin);
   const mock = await startMockAnthropic({
-    respond: (body) => (body.includes('"tool_result"') && body.includes(TASK_ID)) ? cannedSSE('TASKDONE')
+    respond: (body) => (body.includes('"tool_result"') && body.includes(TASK.id)) ? cannedSSE('TASKDONE')
       : body.includes(SUBTOKEN) ? cannedSSE(SUBANSWER)
-        : cannedToolUseSSE('Task', { description: 'delegate', prompt: `answer with ${SUBTOKEN}`, subagent_type: 'general-purpose' }, TASK_ID),
+        : cannedToolUseSSE(TASK.name, TASK.input, TASK.id),
   });
-  const env = { ...process.env, ANTHROPIC_BASE_URL: mock.url, ANTHROPIC_API_KEY: 'sk-ant-mock', NODE_PATH: path.join(REPO, 'deps', 'claude', 'node_modules') };
+  // A FRESH CONFIG DIR per run, never the operator's ~/.claude. Inheriting it let the
+  // operator's own settings decide what this row measured: with `"defaultMode": "auto"` there
+  // (this box, 2026-09-27) every Task call went to upstream's auto-mode safety classifier,
+  // which this one-conversation mock cannot answer, and BOTH engines returned the same
+  // "...is temporarily unavailable, so auto mode cannot determine the safety of Agent..."
+  // tool_result. The old byte-equality check passed on those two identical errors, with no
+  // subagent ever dispatched; judging the tool_result for the subagent's answer found it.
+  const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'subdiff-cfg-'));
+  const env = { ...process.env, ANTHROPIC_BASE_URL: mock.url, ANTHROPIC_API_KEY: 'sk-ant-mock',
+    CLAUDE_CONFIG_DIR: configDir, NODE_PATH: path.join(REPO, 'deps', 'claude', 'node_modules') };
   const r = await run(cmd, [...argv(cli), '-p', 'delegate the work', '--allowedTools', 'Task'], dir, env, 90000);
-  const result = { status: r.status, done: /TASKDONE/.test(r.stdout), taskResult: taskResult(mock.requests) };
+  fs.rmSync(configDir, { recursive: true, force: true });
+  const result = { status: r.status, done: /TASKDONE/.test(r.stdout), requests: mock.requests };
   await mock.close();
   return result;
 }
@@ -72,11 +108,20 @@ async function engineRun(cmd, argv) {
 test('subagent (Task) dispatch is identical under naude and quaude', async (t) => {
   if (skipUnlessTjs(t)) return;
   if (!providerBin()) { t.skip('no CLODE_PROVIDER_BIN'); return; }
+  assertFailsOnMissingOutput(answered, TASK);
   const naude = await engineRun(process.execPath, (cli) => [cli]);
   const quaude = await engineRun(tjsPath(), (cli) => ['run', LOADER, cli]);
   assert.strictEqual(naude.status, 0, 'naude did not exit 0');
   assert.strictEqual(quaude.status, 0, 'quaude did not exit 0');
   assert.ok(naude.done && quaude.done, 'both engines must reach the final turn');
-  assert.ok(naude.taskResult, 'naude produced no Task tool_result');
-  assert.strictEqual(quaude.taskResult, naude.taskResult, 'quaude Task tool_result must byte-match naude');
+  assert.ok(answered(naude), `naude's Task tool_result lacks the subagent's answer: ${JSON.stringify(toolResultText(naude, TASK.id))}`);
+  const q = toolResult(quaude, TASK.id);
+  if (q && q.isError && TOO_MANY_CAPTURES.test(q.text)) {
+    t.skip('quaude\'s Agent tool answers "too many captures": QuickJS refuses the bundle\'s bracketedLeadScrubPattern '
+      + '(more than 255 capture groups) when a subagent completes; naude hands the answer back '
+      + '(BACKLOG.md: quaude\'s Agent tool: too many captures)');
+    return;
+  }
+  assert.ok(answered(quaude), `quaude's Task tool_result lacks the subagent's answer: ${JSON.stringify(toolResultText(quaude, TASK.id))}`);
+  assert.strictEqual(handBack(quaude), handBack(naude), 'quaude Task tool_result must byte-match naude');
 });

@@ -11,6 +11,7 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { REPO, tjsPath, skipUnlessTjs, engineSpawn, LOADER } = require('../node-shim-helper.cjs');
 const { startMockAnthropic, cannedSSE, cannedToolUseSSE } = require('../mock-anthropic-helper.cjs');
+const { toolResultText, assertFailsOnMissingOutput } = require('../../scripts/lib/tool-result.cjs');
 const { startMockMcpWs } = require('./mock-mcp-ws.cjs');
 
 function providerBin() { const p = process.env.CLODE_PROVIDER_BIN; return p && fs.existsSync(p) ? p : null; }
@@ -36,9 +37,6 @@ function bootP(cli, dir, args, env, timeoutMs) {
     child.on('exit', (status) => { clearTimeout(to); resolve({ status, stdout, stderr }); });
     child.on('error', (e) => { clearTimeout(to); resolve({ status: null, stdout, stderr: String(e) }); });
   });
-}
-function followUpFor(mock, id) {
-  return mock.requests.find((q) => q.method === 'POST' && q.body && q.body.includes(id) && q.body.includes('tool_result'));
 }
 const MCP_MARKER = 'MCP-WS-NEEDLE-8842';
 
@@ -76,21 +74,24 @@ test('MCP-over-WebSocket under tjs: connect + handshake + tool call over the nat
     const { dir, cli } = stageBundle(bin);
     const mcpConfig = path.join(dir, 'mcp.json');
     fs.writeFileSync(mcpConfig, JSON.stringify({ mcpServers: { mymock: { type: 'ws', url: mcp.url } } }));
-    const TOOL = 'mcp__mymock__echo_needle';
-    const ID = 'toolu_mcp_1';
+    // Judged on the tool_result (scripts/lib/tool-result.cjs), not the follow-up body: the
+    // body carries the tool_use and the tool definitions too, so a substring search of it
+    // proves nothing about what the MCP call returned.
+    const MCP = { name: 'mcp__mymock__echo_needle', input: {}, id: 'toolu_mcp_1' };
+    const returned = (m) => toolResultText(m, MCP.id).includes(MCP_MARKER);
+    assertFailsOnMissingOutput(returned, MCP);
     const mock = await startMockAnthropic({
-      respond: (body) => body.includes(ID) ? cannedSSE('MCPDONE') : cannedToolUseSSE(TOOL, {}, ID),
+      respond: (body) => body.includes(MCP.id) ? cannedSSE('MCPDONE') : cannedToolUseSSE(MCP.name, MCP.input, MCP.id),
     });
     try {
       const env = { ...process.env, ANTHROPIC_BASE_URL: mock.url, ANTHROPIC_API_KEY: 'sk-ant-mock', NODE_PATH: path.join(REPO, 'deps', 'claude', 'node_modules') };
-      const r = await bootP(cli, dir, ['-p', 'call the mcp tool', '--allowedTools', TOOL, '--mcp-config', mcpConfig], env, 120000);
+      const r = await bootP(cli, dir, ['-p', 'call the mcp tool', '--allowedTools', MCP.name, '--mcp-config', mcpConfig], env, 120000);
       assert.ok(mcp.seen.includes('initialize'),
         `MCP server never got initialize — the ws transport failed to connect. seen=${JSON.stringify(mcp.seen)}\nstderr:\n${r.stderr.slice(-600)}`);
       assert.ok(mcp.seen.includes('tools/call'),
         `MCP tool was never called over ws. seen=${JSON.stringify(mcp.seen)}`);
-      const fu = followUpFor(mock, ID);
-      assert.ok(fu && fu.body.includes(MCP_MARKER),
-        `MCP tool result did not propagate to the tool_result:\n${fu ? fu.body.slice(0, 1500) : '(no follow-up)'}`);
+      assert.ok(returned(mock),
+        `MCP tool result did not propagate to the tool_result: ${JSON.stringify(toolResultText(mock, MCP.id).slice(0, 1500))}`);
     } finally { await mock.close(); }
   } finally { await mcp.close(); }
 });

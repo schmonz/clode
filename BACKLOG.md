@@ -159,6 +159,29 @@ Bash tool instead".
 - **test/fidelity/agentic-tools.test.cjs checked the whole body, as B1 and B4 did. FIXED
   (f4d763d)**: the Grep, multi-turn and hook rows read the tool_result. The Grep row then went
   red, for the reason in the Grep-tool item above.
+- **quaude's Agent tool: too many captures. A subagent never finishes under quaude at
+  2.1.283.** (Found 2026-09-27 by the live-checks ratchet,
+  test/build-gates/live-checks-gates.test.cjs.) When a subagent completes, the bundle
+  compiles its bracketedLeadScrubPattern (`get lead()` -> `_No` in the carve), a RegExp with
+  more than 255 capture groups. QuickJS's regexp compiler refuses that ("SyntaxError: too many
+  captures"). V8 and JSC have no such limit. A synchronous Agent call answers the model with
+  the error `too many captures`, and --debug-to-stderr shows the async completion path throwing
+  the same error ("completion sequence threw after finalize"). naude hands the subagent's answer
+  back. test/fidelity/agentic-subagent-diff.test.cjs skips on exactly that tool_result, and
+  asserts in full otherwise. Before the ratchet, that row compared two identical ERRORS: it
+  inherited the operator's ~/.claude, whose `"defaultMode": "auto"` sent every Task call to the
+  auto-mode classifier, which the mock cannot answer. Not fixed: it needs the regexp compiled
+  within QuickJS's limit, or the pattern rewritten where the shim can see it.
+- **The agentic rows run in the operator's own ~/.claude.** node-shim-agentic,
+  fidelity/agentic-tools (all but --continue), fidelity/agentic-mcp-ws, quaude-build's
+  strict-mode sweep, quaude-naude-updateguard and clode-native's acceptance 3 spread
+  process.env and set no CLAUDE_CONFIG_DIR. So the operator's settings (permission mode,
+  model) shape what they measure, and each run writes sessions under the real
+  ~/.claude/projects. subagent-diff now runs in a fresh config dir (see the item above). The
+  others pass here because an `echo`, an explicitly allowed tool, a hook's deny, or
+  --dangerously-skip-permissions never reaches the auto-mode classifier. (Unmeasured: whether
+  the classifier round-trip quaude-naude-updateguard's header describes also came from the
+  operator's settings rather than the harness.)
 - **The floor-probe B1/B4 rows in test/fidelity/RESULTS.md before 2026-09-26 came from a check
   that could not fail on missing output.** They could still fail with no follow-up request or
   a non-zero exit. The 2026-07-30 darwin-arm64 and cosmo-macos-aarch64 B4 rows ("the agentic
