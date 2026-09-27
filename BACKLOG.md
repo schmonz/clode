@@ -8,6 +8,92 @@ Concrete clode-under-Node divergences from native Claude Code, to triage and fix
 That page is GENERATED from `scripts/build-graph.cjs` — the one declaration of the build — so it
 cannot drift from it; it is also where the honest answer to "does this need node?" lives.
 
+## The NetBSD spike found three bugs, all fixed; what it left open (2026-09-26)
+
+**Found by the NetBSD 11 arm64 spike, fixed the same day.** The spike cross-built a
+netbsd-arm64 quaude and found that it scored 3/5 on `scripts/floor-probe.mjs`. With the probe
+corrected (below), a quaude built from the tree before these fixes scores 2/5, and one built
+after scores 5/5, under zsh and under bash.
+
+- **F2, every platform: a Bash command died after its first grep, find or rg** (b4ff3f2). The
+  rewritten snapshot shadows are functions in the ONE shell that evals the model's whole
+  command, and they ended in `exec "$_bin" ...`. So `grep -q x f && echo A; echo B` printed
+  neither echo. Under zsh, `... | grep x; echo after` also lost the tail. The rule is
+  SHADOW_KEEPS_THE_SHELL: a shadow runs its applet as a child. That is upstream's shape too
+  (`ARGV0=` in zsh, `( exec -a ... )` in bash).
+- **F1, NetBSD and any non-Linux host with a procfs: Write and Edit failed** (0e24947). The
+  linux carve (every OS upstream does not build) writes through
+  `/proc/self/fd/<dirfd>/<name>` whenever readlink of that path answers. NetBSD's procfs
+  answers the readlink, then returns EROFS for the rename and unlink. The rule is
+  PROC_FD_IS_LINUX_ONLY: off Linux, `/proc/<self|pid>/fd` does not exist for node:fs, so the
+  carve takes its own "no procfs" route. The rule is false on the reference box.
+- **F3, a source checkout with a fresh deps store: `clode build` refused its own install**
+  (f650045). The store copied only package.json and ran `npm install`, which landed
+  get-east-asian-width 1.7.0 against the lock's 1.6.0. The rule is DEPS_STORE_FROM_LOCKFILE:
+  the manifest's own lockfile, `npm ci`, and a sig that covers the lock. A released clode
+  never reached this code: a blobulated builder builds from its embedded node_modules and
+  never calls ensureDeps. The 0.20260831.1 NetBSD builder embeds get-east-asian-width 1.6.0.
+
+**The probe could not have seen F2, and could not see a missing Bash output at all.** Before
+b4ff3f2, B1 ran `echo MARK` and B4 ran a Grep tool, and both checked the WHOLE follow-up
+request body for the marker. That body also carries the assistant's tool_use, so the command's
+own text satisfied the check. Both rows now read the tool_result. B1 runs a shadowed grep and
+then echoes a computed marker. B4 searches with `grep` through Bash, because 2.1.283 answers a
+Grep tool_use with "No such tool available: Grep ... search file contents with `grep` via the
+Bash tool instead".
+
+**Still open:**
+
+- **F1b, the engine's errno map.** errno_code (spike/quickjs/patches/txiki-sync-fs.patch ->
+  mod_fs_sync.c) names 13 values. EROFS, EXDEV, ENOTEMPTY, EBUSY, EMFILE and ENAMETOOLONG
+  come out EUNKNOWN, which is why the spike saw EUNKNOWN where node says EROFS. It was not
+  changed here, because changing it is an ENGINE change: a rebuild on every leg, and the
+  stale-engine refusal. There is a contained route that needs no engine change. The error
+  already carries the raw `errno`, and the engine already reports every one of those names in
+  `__tjs_constants.errno` (scripts/gen-node-constants.mjs lists EROFS, EXDEV and ENOTEMPTY).
+  So the shim can name an EUNKNOWN from its errno with that table. Either route is
+  diff-reducing (node names them). Pick one, with a test that throws each errno.
+- **Upstream's current shadow spelling loses the upstream flags: every platform, P1.**
+  Upstream's shadows now pass `${1+"$@"}` where they used to pass `"$@"`. This was seen in
+  2.1.283's generator (`dbe`) and in a real native 2.1.283 snapshot on this box. parseShadow's
+  flag regex wants whitespace before `"$@"`, so it matches nothing. Measured 2026-09-26:
+  rewriteSnapshot of that real snapshot gives `"$_bin" "$@"` for both grep and find, and
+  collectShadows reports `flags: ""` for all three.
+  - grep loses `-G --ignore-files --hidden -I --exclude-dir=.git ...`, so Bash `grep` ignores
+    .gitignore, skips hidden files and reads binaries.
+  - find loses `-S dfs -regextype findutils-default`.
+  - The skew probe goes blind: it has no flags to probe.
+  Every test fixture still spells `"$@"` (2.1.179), so nothing is red. Teach parseShadow both
+  spellings, with a fixture captured from a current snapshot.
+- **test/fidelity/agentic-tools.test.cjs checks the whole body, as B1 and B4 did.** Its Grep
+  row puts MARK in the tool_use input (`pattern: MARK`), then asserts
+  `followUp.body` matches MARK, so it cannot fail on a missing result. On 2.1.283 the Grep
+  tool answered "No such tool available" in the floor probe's `-p` run. Whether it does under
+  that test's `--allowedTools Grep` was not measured. Audit the file's other rows for the same
+  shape.
+- **Every B1/B4 pass in test/fidelity/RESULTS.md before 2026-09-26 came from the check that
+  could not fail**, and tjs-legs.mjs derives floor notes from those rows (netbsd-arm64 says
+  6/6). Re-drive the floor rows per run-target with the corrected probe. The netbsd-arm64
+  rows from this fix (5/5, both shells) were not pasted; paste them from a run with
+  `--bundle 2.1.283`. The probe's default `--bundle` reads deps/claude/package.json, which is
+  the target-deps manifest (version 0.0.0), so every row it prints says bundle 0.0.0.
+- **Over ssh the probe needs the applets on PATH.** A NetBSD guest's non-interactive PATH has
+  no /opt/pkg/bin, so the Bash tool's grep fails loud with 127. The fixed B1 still passes
+  (the echo runs), but B4's grep cannot. The 5/5 was driven with
+  `--ssh 'ssh -p 2230 schmonz@localhost env PATH=/opt/pkg/bin:/usr/bin:/bin:/usr/pkg/bin sh'`.
+  Either document that, or let the probe take a PATH.
+- **The spike's secondary findings, not re-measured here:**
+  - The TUI's startup `npm config get prefix` dumps node.core (SIGTRAP) into $HOME on
+    NetBSD.
+  - There are 3 RegExp SyntaxErrors per turn (bracketedLeadScrubPattern), and one
+    `[uds-messaging]` TypeError per run.
+  - netbsd-arm64 has no `ci: true` engine artifact (scripts/tjs-legs.mjs: publish true,
+    soft-fail, no ci), so the spike compiled its engine on the guest.
+  - The netbsd provider is the linux-x64 carve, and the carve check only NOTES it. The note
+    (clode-build.cjs carveVerdict) says "The quaude will report itself as linux". That is
+    wrong: process.platform is honest ('netbsd'), and only the carve's constant-folded
+    branches are linux, which is exactly the gap F1 fell into.
+
 ## 2.1.283 broke every `clode build`, and nothing daily could see it (2026-09-26)
 
 **Found moving UPSTREAM_PIN to 2.1.283, fixed in the same change.** The first full suite at the
