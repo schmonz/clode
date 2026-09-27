@@ -88,9 +88,23 @@ function runNpmQuiet(verbose, npm, args, spawn, stderr, env) {
 //     checkout that already ran `npm install --prefix deps/claude`); a
 //     user-managed CLODE_DEPS (node_modules, no .deps-sig); the sig gate (fresh).
 //   - else: log, resolve npm (CLODE_NPM verbatim, else `command -v npm`; none ->
-//     two-line fail-loud + exit 1), mkdir DEPS_ROOT, copy manifest, `npm install
-//     --prefix DEPS_ROOT --no-audit --no-fund --omit=dev` (run_quiet; failure ->
-//     fail-loud + exit 1), write .deps-sig.
+//     two-line fail-loud + exit 1), mkdir DEPS_ROOT, copy manifest AND its
+//     package-lock.json, `npm ci --prefix DEPS_ROOT --no-audit --no-fund
+//     --omit=dev` (run_quiet; failure -> fail-loud + exit 1), write .deps-sig.
+//
+// DEPS_STORE_FROM_LOCKFILE — the rule: the deps store is installed from the
+// manifest's own package-lock.json, with `npm ci`, so it holds exactly what the
+// lock pins: the same bytes `npm ci --prefix deps/claude` gives CI, and what
+// clode-build.cjs's lockfile gate (assertClosureMatchesLockfile) demands. The
+// .deps-sig covers the lock as well as the manifest, so a lock-only change
+// re-installs. No lockfile beside the manifest is a loud failure, never a fresh
+// resolution. Before this, only package.json was copied and the store ran `npm
+// install`, which resolved every range anew: on 2026-09-26 that landed
+// get-east-asian-width 1.7.0 against the lock's 1.6.0, and `clode build`
+// refused the store it had just installed (found by the NetBSD spike). Only a
+// source checkout without deps/claude/node_modules reaches this: a released
+// clode embeds its deps and never calls ensureDeps (clode-build.cjs builds from
+// the materialized payload's node_modules under a blobulated builder).
 //
 // opts: { libexec, here, verbose=false, npmPath=env.CLODE_NPM, env, fsm, stderr,
 //         exit, log, spawn }. stderr/exit/spawn/log injectable for testability.
@@ -151,7 +165,9 @@ function ensureDeps(opts = {}) {
     return;
   }
 
-  const sig = sigOf(manifest);
+  // The manifest's own lockfile — same directory, never the other layout's.
+  const lockfile = path.join(path.dirname(manifest), 'package-lock.json');
+  const sig = isFile(lockfile) ? `${sigOf(manifest)}+${sigOf(lockfile)}` : sigOf(manifest);
   if (isDir(path.join(depsRoot, 'node_modules')) &&
       readSig(path.join(depsRoot, '.deps-sig')) === sig) {
     return; // already fresh for this manifest
@@ -173,6 +189,12 @@ function ensureDeps(opts = {}) {
     return exit(1);
   }
 
+  if (!isFile(lockfile)) {
+    stderr.write(`clode: no package-lock.json beside ${manifest};\n`);
+    stderr.write('       the runtime dependencies are installed from the lockfile (npm ci), never resolved afresh.\n');
+    return exit(1);
+  }
+
   clodeLog('clode: installing dependencies...');
 
   // `${CLODE_NPM:-$(command -v npm)}`: CLODE_NPM used verbatim when set, else PATH.
@@ -185,8 +207,9 @@ function ensureDeps(opts = {}) {
 
   fs.mkdirSync(depsRoot, { recursive: true });
   fs.copyFileSync(manifest, path.join(depsRoot, 'package.json'));
+  fs.copyFileSync(lockfile, path.join(depsRoot, 'package-lock.json'));
 
-  const args = ['install', '--prefix', depsRoot, '--no-audit', '--no-fund', '--omit=dev'];
+  const args = ['ci', '--prefix', depsRoot, '--no-audit', '--no-fund', '--omit=dev'];
   if (!runNpmQuiet(verbose, npm, args, spawn, stderr, env)) {
     stderr.write('clode: dependency install failed (see npm output above).\n');
     return exit(1);

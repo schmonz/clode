@@ -36,6 +36,7 @@ function makePkg() {
   fs.mkdirSync(libexec, { recursive: true });
   fs.mkdirSync(targetDeps, { recursive: true });
   fs.writeFileSync(path.join(targetDeps, 'package.json'), '{"name":"clode-target-deps","dependencies":{}}\n');
+  fs.writeFileSync(path.join(targetDeps, 'package-lock.json'), '{"name":"clode-target-deps","lockfileVersion":3,"packages":{}}\n');
   const deps = path.join(root, 'store');
   return { root, here, libexec, deps };
 }
@@ -115,7 +116,7 @@ test('auto-install runs when the deps dir is empty, and records a sig', () => {
   const { exitCode } = run({ here, libexec, npmPath: 'npm', spawn: fakeNpmOk(log), env: { CLODE_DEPS: deps } });
   assert.strictEqual(exitCode, null);
   const calls = log.calls.join('\n');
-  assert.match(calls, /install/);
+  assert.match(calls, /^npm ci --prefix /m); // from the lockfile (DEPS_STORE_FROM_LOCKFILE)
   // npm flags carried through, in the sh order.
   assert.match(calls, /--no-audit --no-fund --omit=dev/);
   assert.ok(fs.existsSync(path.join(deps, 'node_modules', '.installed')));
@@ -136,7 +137,7 @@ test('auto-install is skipped when the manifest sig already matches', () => {
   run({ here, libexec, npmPath: 'npm', spawn, env: { CLODE_DEPS: deps } });
   log.calls.length = 0; // clear
   run({ here, libexec, npmPath: 'npm', spawn, env: { CLODE_DEPS: deps } });
-  assert.doesNotMatch(log.calls.join('\n'), /install/);
+  assert.deepStrictEqual(log.calls, [], 'a fresh store must not run npm at all');
 });
 
 test('a changed manifest triggers a reinstall', () => {
@@ -148,7 +149,7 @@ test('a changed manifest triggers a reinstall', () => {
   // mutate the manifest -> size (and mtime) change -> sig changes
   fs.appendFileSync(path.join(root, 'deps', 'claude', 'package.json'), '\n');
   run({ here, libexec, npmPath: 'npm', spawn, env: { CLODE_DEPS: deps } });
-  assert.match(log.calls.join('\n'), /install/);
+  assert.strictEqual(log.calls.length, 1, 'expected exactly one reinstall');
 });
 
 // --- fail-loud -------------------------------------------------------------
@@ -174,7 +175,7 @@ test('a user-managed CLODE_DEPS (node_modules, no .deps-sig) is left alone', () 
   const log = { calls: [] };
   fs.mkdirSync(path.join(deps, 'node_modules', '.user'), { recursive: true });
   run({ here, libexec, npmPath: 'npm', spawn: fakeNpmOk(log), env: { CLODE_DEPS: deps } });
-  assert.doesNotMatch(log.calls.join('\n'), /install/);
+  assert.deepStrictEqual(log.calls, [], 'a user-managed store must not run npm at all');
 });
 
 test('deps already installed at a sibling deps/claude/node_modules -> no auto-install', () => {
@@ -188,7 +189,7 @@ test('deps already installed at a sibling deps/claude/node_modules -> no auto-in
   const log = { calls: [] };
   fs.mkdirSync(path.join(root, 'deps', 'claude', 'node_modules', '.shipped'), { recursive: true });
   run({ here, libexec, npmPath: 'npm', spawn: fakeNpmOk(log), env: { CLODE_DEPS: deps } });
-  assert.doesNotMatch(log.calls.join('\n'), /install/);
+  assert.deepStrictEqual(log.calls, [], 'shipped deps must not run npm at all');
 });
 
 test('no manifest anywhere -> nothing to ensure (no install, no exit)', () => {
@@ -200,7 +201,7 @@ test('no manifest anywhere -> nothing to ensure (no install, no exit)', () => {
   const log = { calls: [] };
   const { exitCode } = run({ here, libexec, npmPath: 'npm', spawn: fakeNpmOk(log), env: { CLODE_DEPS: path.join(root, 'deps') } });
   assert.strictEqual(exitCode, null);
-  assert.doesNotMatch(log.calls.join('\n'), /install/);
+  assert.deepStrictEqual(log.calls, [], 'no manifest must not run npm at all');
 });
 
 // --- manifest search order -------------------------------------------------
@@ -212,9 +213,12 @@ test('the manifest in libexec/deps/claude/package.json wins over here/../deps/cl
   // CLODE_LIBEXEC ships its own deps/claude alongside the libexec scripts.
   fs.mkdirSync(path.join(libexec, 'deps', 'claude'), { recursive: true });
   fs.writeFileSync(path.join(libexec, 'deps', 'claude', 'package.json'), '{"name":"clode-libexec-target-deps"}\n');
+  fs.writeFileSync(path.join(libexec, 'deps', 'claude', 'package-lock.json'), '{"name":"clode-libexec-target-lock"}\n');
   run({ here, libexec, npmPath: 'npm', spawn: fakeNpmOk(log), env: { CLODE_DEPS: deps } });
   const copied = fs.readFileSync(path.join(deps, 'package.json'), 'utf8');
   assert.match(copied, /clode-libexec-target-deps/);
+  // the lockfile travels with ITS manifest, never mixed with the other layout's
+  assert.match(fs.readFileSync(path.join(deps, 'package-lock.json'), 'utf8'), /clode-libexec-target-lock/);
 });
 
 // --- DEPS_ROOT resolution --------------------------------------------------
@@ -233,4 +237,110 @@ test('DEPS_ROOT defaults to HOME/.local/share/clode when neither is set', () => 
   const home = path.join(root, 'home');
   run({ here, libexec, npmPath: 'npm', spawn: fakeNpmOk(log), env: { HOME: home } });
   assert.ok(fs.existsSync(path.join(home, '.local', 'share', 'clode', 'node_modules', '.installed')));
+});
+
+// --- THE STORE IS INSTALLED FROM THE LOCKFILE --------------------------------
+// The rule (DEPS_STORE_FROM_LOCKFILE, libexec/clode-deps.cjs): the deps store gets the
+// manifest's own package-lock.json beside it and is installed with `npm ci`, so it holds
+// exactly what the lock pins — the same bytes `npm ci --prefix deps/claude` gives CI.
+//
+// Before, only package.json was copied and the store ran `npm install`: a FRESH store
+// resolved every range anew, and on 2026-09-26 the registry had moved on
+// (get-east-asian-width 1.7.0, published 2026-09-17, vs the lock's 1.6.0), so `clode
+// build`'s own lockfile gate refused the build it had just installed for. The NetBSD
+// spike found it; nothing here could have, because every test's fake npm "succeeded"
+// by touching a marker file — it could not say WHAT got installed.
+//
+// So this fake npm keeps npm's documented contract, and the assertion is the build's
+// own gate (assertClosureMatchesLockfile) run over what landed in the store:
+//   npm ci       installs exactly package-lock.json's versions; with no lockfile it
+//                refuses (npm: "can only install with an existing package-lock.json").
+//   npm install  honours a lockfile it can see; with none, it resolves every range
+//                afresh, and the registry has moved on: it lands NEWER than the lock.
+const { computeDepClosure, readDirectDeps, assertClosureMatchesLockfile } = require('../libexec/clode-build.cjs');
+
+const LOCKED = '1.6.0';
+const NEWER = '1.7.0';
+function fakeNpmRegistry(log) {
+  return (npm, args) => {
+    log.calls.push({ args });
+    const prefix = args[args.indexOf('--prefix') + 1];
+    const manifest = JSON.parse(fs.readFileSync(path.join(prefix, 'package.json'), 'utf8'));
+    let lock = null;
+    try { lock = JSON.parse(fs.readFileSync(path.join(prefix, 'package-lock.json'), 'utf8')); } catch { /* none */ }
+    if (args[0] === 'ci' && !lock) {
+      return { status: 1, stdout: '', stderr: 'npm error The `npm ci` command can only install with an existing package-lock.json\n' };
+    }
+    for (const name of Object.keys(manifest.dependencies || {})) {
+      const entry = lock && lock.packages && lock.packages[`node_modules/${name}`];
+      const version = entry ? entry.version : NEWER;
+      const dir = path.join(prefix, 'node_modules', name);
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name, version }));
+    }
+    return { status: 0, stdout: '', stderr: '' };
+  };
+}
+
+// A package whose manifest ranges a dependency the lock pins OLDER than the registry's
+// newest — the exact shape of the spike's failure.
+function makeLockedPkg() {
+  const p = makePkg();
+  const claude = path.join(p.root, 'deps', 'claude');
+  fs.writeFileSync(path.join(claude, 'package.json'),
+    JSON.stringify({ name: 'clode-target-deps', dependencies: { 'get-east-asian-width': '^1.0.0' } }));
+  fs.writeFileSync(path.join(claude, 'package-lock.json'), JSON.stringify({
+    name: 'clode-target-deps', lockfileVersion: 3,
+    packages: { '': { name: 'clode-target-deps' }, 'node_modules/get-east-asian-width': { version: LOCKED } },
+  }));
+  return { ...p, claude };
+}
+
+test('a fresh deps store holds exactly what the lockfile pins (the build\'s own gate passes)', () => {
+  const { here, libexec, deps, claude } = makeLockedPkg();
+  const log = { calls: [] };
+  const { exitCode, err } = run({ here, libexec, npmPath: 'npm', spawn: fakeNpmRegistry(log), env: { CLODE_DEPS: deps } });
+  assert.strictEqual(exitCode, null, err);
+  const versions = new Map();
+  computeDepClosure(path.join(deps, 'node_modules'), readDirectDeps(path.join(claude, 'package.json')), { versions });
+  assert.deepStrictEqual([...versions], [['get-east-asian-width', LOCKED]]);
+  assert.doesNotThrow(() => assertClosureMatchesLockfile(versions, path.join(claude, 'package-lock.json')));
+});
+
+test('the store install is `npm ci` from the copied lockfile, with the flags it always had', () => {
+  const { here, libexec, deps, claude } = makeLockedPkg();
+  const log = { calls: [] };
+  run({ here, libexec, npmPath: 'npm', spawn: fakeNpmRegistry(log), env: { CLODE_DEPS: deps } });
+  assert.strictEqual(log.calls.length, 1);
+  assert.deepStrictEqual(log.calls[0].args, ['ci', '--prefix', deps, '--no-audit', '--no-fund', '--omit=dev']);
+  assert.strictEqual(fs.readFileSync(path.join(deps, 'package-lock.json'), 'utf8'),
+    fs.readFileSync(path.join(claude, 'package-lock.json'), 'utf8'));
+});
+
+test('a changed lockfile alone (manifest untouched) re-installs the store', () => {
+  const { here, libexec, deps, claude } = makeLockedPkg();
+  const log = { calls: [] };
+  const spawn = fakeNpmRegistry(log);
+  run({ here, libexec, npmPath: 'npm', spawn, env: { CLODE_DEPS: deps } });
+  log.calls.length = 0;
+  // a transitive bump lands in the lock only — the store must follow it, or the
+  // build's gate refuses a store that was "fresh" by the manifest's signature
+  const lockPath = path.join(claude, 'package-lock.json');
+  const lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+  lock.packages['node_modules/get-east-asian-width'].version = '1.6.1';
+  fs.writeFileSync(lockPath, JSON.stringify(lock, null, 2));
+  run({ here, libexec, npmPath: 'npm', spawn, env: { CLODE_DEPS: deps } });
+  assert.strictEqual(log.calls.length, 1, 'expected a reinstall after the lockfile changed');
+  const got = JSON.parse(fs.readFileSync(path.join(deps, 'node_modules', 'get-east-asian-width', 'package.json'), 'utf8'));
+  assert.strictEqual(got.version, '1.6.1');
+});
+
+test('a manifest with no lockfile beside it fails loud instead of resolving afresh', () => {
+  const { here, libexec, deps, claude } = makeLockedPkg();
+  fs.rmSync(path.join(claude, 'package-lock.json'));
+  const log = { calls: [] };
+  const { exitCode, err } = run({ here, libexec, npmPath: 'npm', spawn: fakeNpmRegistry(log), env: { CLODE_DEPS: deps } });
+  assert.strictEqual(exitCode, 1);
+  assert.strictEqual(log.calls.length, 0, 'must not install without the lockfile');
+  assert.match(err, /package-lock\.json/);
 });
