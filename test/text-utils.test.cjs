@@ -15,8 +15,9 @@ const { runShimChild } = require('./isolated-shim.cjs');
 // Fake string-width/strip-ansi/wrap-ansi/slice-ansi on a NODE_PATH dir. string-width and
 // strip-ansi are ESM-only upstream (default export), so model that shape — a
 // `{default: fn}` namespace — to prove the shim unwraps `.default`. The fakes of the
-// packages the shim no longer uses are there to prove it ignores them.
-function withFakes() {
+// packages the shim no longer uses are there to prove it ignores them. `over` replaces a
+// fake's body (the CJS-function shape, below).
+function withFakes(over = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-text-'));
   const mk = (name, body) => {
     fs.mkdirSync(path.join(dir, name));
@@ -24,12 +25,15 @@ function withFakes() {
       `{"name":"${name}","version":"0.0.0-clode-test","main":"index.js"}`);
     fs.writeFileSync(path.join(dir, name, 'index.js'), body);
   };
-  // ESM-default shape: module.exports.default = fn (what require(esm) yields)
-  mk('string-width', 'exports.default=(...a)=>"SW:"+JSON.stringify(a);');
-  mk('strip-ansi', 'exports.default=(s)=>"STRIP:"+s;');
-  // CJS-function shape: module.exports = fn (proves `.default || m` falls back to m)
-  mk('wrap-ansi', 'module.exports=(...a)=>"WRAP:"+JSON.stringify(a);');
-  mk('slice-ansi', 'exports.default=(...a)=>"SLICE:"+JSON.stringify(a);');
+  const bodies = {
+    // ESM-default shape: module.exports.default = fn (what require(esm) yields)
+    'string-width': 'exports.default=(...a)=>"SW:"+JSON.stringify(a);',
+    'strip-ansi': 'exports.default=(s)=>"STRIP:"+s;',
+    'wrap-ansi': 'module.exports=(...a)=>"WRAP:"+JSON.stringify(a);',
+    'slice-ansi': 'exports.default=(...a)=>"SLICE:"+JSON.stringify(a);',
+    ...over,
+  };
+  for (const [name, body] of Object.entries(bodies)) mk(name, body);
   return dir;
 }
 
@@ -84,4 +88,10 @@ test('forwards all args to the real modules and unwraps ESM .default', () => {
     `console.log(Bun.stripANSI('\\u001b[31mhi\\u001b[0m'));`,
     { NODE_PATH: withFakes() });
   assert.match(r.stdout, /STRIP:\[31mhi\[0m/);                // default-export unwrapped
+  // CJS-function shape: module.exports = fn, no `.default` (proves `(m && m.default) || m`
+  // falls back to m; bun-shim's _extResolve still resolves strip-ansi this way).
+  const cjs = runShimChild("console.log(Bun.stripANSI('x', 'y'));",
+    { NODE_PATH: withFakes({ 'strip-ansi': 'module.exports=(...a)=>"CJS:"+JSON.stringify(a);' }) });
+  assert.strictEqual(cjs.status, 0, cjs.stderr);
+  assert.strictEqual(cjs.stdout.trim(), 'CJS:["x","y"]');
 });
