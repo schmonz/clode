@@ -1026,7 +1026,17 @@ function isRecordedProductionGateExclusion(rel) {
 //       `Bun.ant.CellSegmenter` — which upstream does NOT tolerate being absent — and the
 //       gate stayed green because the accepted sentence was still true about the NAME.
 //       test/build-gates/bun-ant-surface-gate.test.cjs controls the level below the name.
-const UNCONTROLLED_GATE_BASELINE = 28;
+//   27  2026-09-28 (grep-native plan, task 0b) — libexec/bun-shim.cjs gained a control. It
+//       has been gate-shaped since rewriteSnapshot()'s `throw new Error('clode: unrecognized
+//       search shadow function ...')` landed and was uncontrolled for just as long: F4
+//       (2026-09-27) showed why that mattered — every carve from 2.1.185 to 2.1.283 spells a
+//       shell-snapshot shadow's argument list `${1+"$@"}`, our OWN test fixtures spelled the
+//       older `"$@"`, and the parser silently read "no flags" against every real snapshot for
+//       months with nothing red. test/build-gates/shadow-writer-gates.test.cjs controls it: it
+//       reads the PINNED carve's own shadow writer and runs what it writes through the real
+//       parseShadow/collectShadows/rewriteSnapshot, so an upstream spelling change (or a
+//       regression in these functions) goes red the day it lands on `next`.
+const UNCONTROLLED_GATE_BASELINE = 27;
 
 // GATE_SHAPED_FLOOR — the OTHER half of the ratchet, and the reason a fall can be trusted.
 // FIX ROUND 1 (reviewer, 2026-09-12): the uncontrolled count alone cannot tell "someone wrote

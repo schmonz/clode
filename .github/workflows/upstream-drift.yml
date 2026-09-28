@@ -95,6 +95,26 @@ jobs:
             test/bun-slice-ansi-arity.test.cjs \
             test/build-gates/text-probe-gates.test.cjs
 
+      # THE SHELL-SNAPSHOT SHADOW WRITER, against the same `next` bundle (0b, the "grep and
+      # glob = native" plan's task 0; .superpowers/sdd/2026-09-27-grep-native/design.md,
+      # .superpowers/sdd/2026-09-26-netbsd-fixes/report.md "F4"). Every carve from 2.1.185 to
+      # 2.1.283 spells the grep/find/rg shadows' trailing argument list `${1+"$@"}`; our own
+      # fixtures spelled the older `"$@"`, so the parser silently read "no flags" against every
+      # real snapshot for months and nothing noticed. This reads the WRITER live from `next`
+      # (test/build-gates/shadow-writer-gates.test.cjs), runs what it writes through the real
+      # parseShadow/collectShadows/rewriteSnapshot, and fails the day a future carve's writer
+      # spells the argument list something SHADOW_ARG_SPELLINGS does not know, or stops baking
+      # grep/find's flags in — the exact way F4 broke, months before anyone would have re-run
+      # the fixture by hand.
+      - name: The shell-snapshot shadow writer still parses on the newest bundle (grep/find/rg)
+        if: ${{ !cancelled() && steps.anchors.outputs.provider != '' }}
+        env:
+          PROV: ${{ steps.anchors.outputs.provider }}
+        run: |
+          set -euo pipefail
+          CLODE_PROVIDER_BIN="$PROV" node --test --test-concurrency=1 \
+            test/build-gates/shadow-writer-gates.test.cjs
+
       # THE CAPTURE-GROUP HEADROOM, against the same `next` bundle. QuickJS refuses a RegExp with
       # more than 254 capture groups, and the bundle BUILDS some with one group per letter of a
       # word list: at 2.1.283 the artifact-lead scrub pattern had 559 (no subagent could finish

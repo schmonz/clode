@@ -707,8 +707,9 @@ them.
 - **refreshGenerations' reset branch never fires live.** No session moves the style or chalk
   generation, so under the patched quaude it fired 0 times; only `test/reset-patch.test.cjs`
   runs it (it calls the same resetNative() every other reset takes).
-- **`readCarve` has four copies** in test/build-gates, and their consumer tests have drifted
-  (`sgrCloseKeys` in one, `/\bCellSegmenter\b/` in another): one shared carve reader.
+- **`readCarve` has five copies** in test/build-gates (shadow-writer-gates.test.cjs added a
+  fifth, 2026-09-28, task 0b — same convention, not a fix), and their consumer tests have
+  drifted (`sgrCloseKeys` in one, `/\bCellSegmenter\b/` in another): one shared carve reader.
 - **The naude deps fix (ccc2a04) is partial.** It detects a purge by each package's
   `package.json` only, so a lazily required file inside a used package that the $TMPDIR cleaner
   aged out is still lost, and the comment at naude-sea.cjs:32 claims more. On Windows a failed

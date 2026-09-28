@@ -623,7 +623,21 @@ test('the controlled set is EXACTLY the modules a guard was deliberately written
   // test/build-gates/live-checks-gates.test.cjs (missing-output-control-refuses controls the
   // refusal), so uncontrolled stayed at 28 (measured: 44 gate-shaped, 14 controlled, 2
   // excluded); without that guard it reads 29. The baseline did not move.
+  //
+  // libexec/bun-shim.cjs ADDED 2026-09-28 (grep-native plan, task 0b), and unlike the nine
+  // entries above it this one is a file that was gate-shaped ALL ALONG rather than newly so:
+  // rewriteSnapshot()'s `throw new Error('clode: unrecognized search shadow function ...')`
+  // has been there since the shadow rewrite was written, and it sat uncontrolled the whole
+  // time — the same shape as libexec/inspect-claude-bundle.cjs above, and the same
+  // consequence: F4 (2026-09-27) found that every carve from 2.1.185 to 2.1.283 spells a
+  // shadow's argument list `${1+"$@"}`, this repo's OWN fixtures spelled the older `"$@"`,
+  // and the parser silently read "no flags" against every real snapshot for months with
+  // nothing red anywhere. test/build-gates/shadow-writer-gates.test.cjs controls it: it reads
+  // the PINNED carve's own shadow writer BY STRUCTURE and runs what it writes through the
+  // real parseShadow/collectShadows/rewriteSnapshot, which pushed uncontrolled from 28 to 27
+  // — the baseline MOVED for this one (test/guards-population.cjs).
   assert.deepStrictEqual([...controlledProductionModules().keys()].sort(), [
+    'libexec/bun-shim.cjs',
     'libexec/clode-build.cjs',
     'libexec/host-provision.cjs',
     'libexec/inspect-claude-bundle.cjs',
