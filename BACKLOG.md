@@ -175,25 +175,66 @@ Bash tool instead".
   - Repro, the engine alone (still true): `"$CLODE_TJS" eval 'try { new RegExp("(a)".repeat(255))
     } catch (e) { console.log(String(e)) }'` prints `SyntaxError: too many captures` (254 groups
     compile); `node -e 'new RegExp("(a)".repeat(255))'` is silent.
-- **The rewritten scrub pattern costs quaude about 0.4 s a turn on darwin-arm64.** It is 1,557,878
-  characters (native's 879,796: each separator's class appears twice), and QuickJS compiles it in
-  about 140 ms here, three times on a plain turn: `lead` itself, the scan table's clone
-  (`new RegExp(t.source, t.flags)`), and every `matchAll`, because QuickJS recompiles whenever a
-  RegExp is constructed from another with explicit flags (V8 and JavaScriptCore cache compiled
-  patterns). Measured with staged clis under tjs, a canned mock, 2 runs each twice: a plain
-  `-p` turn took 6.8-7.0 s before the hook (the build failing fast) and 7.3-7.4 s after.
-  Unmeasured on the slow boxes (Tiger PPC, sparc), where it multiplies. Levers, none taken yet:
-  a compiled-pattern cache keyed by (source, flags) in the engine or the shim, which would also
-  spare the tag-scrub patterns below their per-`matchAll` recompiles; a rewrite of the letter
-  separators only (93 groups left, about 25% less to compile) was measured and not taken,
-  because it keeps a capture budget the list can outgrow.
+- **DECIDED, not yet done: the rewritten scrub pattern is compiled again for every assistant
+  reply, about 8 s a reply on an emulated G4.** (Corrected 2026-09-27: this item said "about 0.4 s
+  a turn"; the cost is once per text block of every assistant message, plus two one-time
+  compiles.) DECISION (user, 2026-09-27): "Engine patch: reuse compiled regex", the first lever
+  below. A separate task implements it: about 15 lines in `js_regexp_constructor` that reuse
+  `re->bytecode` when the explicit flags equal the bytecode's flags. Then re-measure on the Tiger
+  PPC VM with the same two turns and the same micro-benchmark as below.
+  The pattern is 1,557,878 characters
+  (native's 879,796: each separator's class appears twice). It is compiled twice once per
+  process, `lead` itself and the scan table's clone (`KTo`: `new RegExp(t.source, t.flags)`),
+  and then ONCE PER TEXT BLOCK OF EVERY ASSISTANT MESSAGE: the harness-content scan (`BAt()`,
+  chunk-wyjbafrm) runs `text.matchAll(re)` for every text block against every pattern in its
+  table, and QuickJS compiles again on each, because `js_regexp_constructor` (quickjs.c:48462-48466,
+  `goto no_compilation`) reuses the bytecode only when the flags argument is undefined, and
+  `RegExp.prototype[@@matchAll]` always passes the flags (quickjs.c:49334-49335). V8 and
+  JavaScriptCore cache compiled patterns. Before the hook none of this ran: the scan threw on the
+  refused pattern, after rebuilding the table up to it. So the cost is all new, and it is the
+  scan doing the work native does, slowly.
+  - Measured on darwin-arm64 (tjs): one compile and one `matchAll` each cost 134 ms for the
+    rewritten pattern, 23 and 22 ms for the two large tag-scrub patterns; an exec loop on the
+    same RegExp, 0.1 ms. The original failed after 45 ms.
+  - Measured on Tiger PPC, EMULATED (qemu mac99 TCG, Mac OS X 10.4.11, 1 CPU, not real
+    hardware; quaude cross-blobulated from this tree onto the 0.20260831.1 release's darwin-ppc
+    engine, whose regexp code is today's): one compile and one `matchAll` cost 3.9 s for the
+    rewritten pattern (the original failed after 1.2 s), 0.7 and 0.6 s for the tag-scrub ones.
+    Whole turns against the canned mock, before and after the hook:
+    - a plain `-p` turn took 178.4 s before and 206.0 s after (+27.6 s);
+    - a 5-reply turn (4 text-plus-Read replies, then a final text) took 307.1 s before and
+      365.6 s after (+58.5 s);
+    - the mock's request intervals: the first reply cost 30 s more (the one-time compiles), and
+      each later reply about 7.8 s more (32.5 s against 40.3 s).
+  - Levers (the first is the user's decision; not yet implemented):
+    - CHOSEN: an engine patch of about 15 lines: `js_regexp_constructor` reuses `re->bytecode`
+      when the explicit flags equal the bytecode's. It is invisible to JS, changes no format, and
+      would also end the tag-scrub recompiles. It means rebuilding every engine leg.
+    - not chosen: a shim override of `RegExp.prototype[Symbol.matchAll]` that constructs the
+      species copy without a flags argument when they match. No engine rebuild, but a built-in
+      replaced.
+  - Neither lever touches the two one-time compiles, about 8 s per process on the emulated G4.
 - **A tag-scrub pattern sits three capture groups under QuickJS's limit.** A census of every
   RegExp naude builds at run time on a plain and on a Task turn (2.1.283, 2026-09-27) found
   three over 100 groups: the lead pattern (559, now 0 under the hook) and two built by `h6()`
   from the harness-envelope tag lists, with 251 and 229 groups (191,957 and 175,475
   characters). Its builder uses the same atomic letter separator (`Hpt`/`pRe`). One more tag,
-  or a longer one, at an upstream bump, and quaude refuses it the same way. subagent-diff's log
-  check names it when that happens; the same possessive rewrite would apply.
+  or a longer one, at an upstream bump, and quaude refuses it the same way. The census is now a
+  guard, test/fidelity/regexp-capture-census.test.cjs: it fails on any pattern above 254 groups
+  and its verdict names the headroom (3 at 2.1.283). It runs in the suite and daily in
+  upstream-drift.yml against `next`. The same possessive rewrite would apply.
+- **What watches the lead-scrub hook, and where.** Recorded 2026-09-27, not fixed:
+  - The dead-hook canary goes by the builder's WORDS (bracketedLeadScrubPattern, the two
+    Symbol descriptions), not its structure. A reworded builder the anchor also misses reads as
+    "absent", benign.
+  - The only backstop for that is the subagent row (test/fidelity/agentic-subagent-diff), and
+    it runs only on dev boxes. CI's jobs that have tjs and a provider run only
+    test/node-shim-*.test.cjs, and the suite job has no engine, so the row skips there.
+  - test/fidelity/lead-scrub-equivalence skips on CI: it needs a provider that runs on the
+    host, which is the native oracle, and CI's provider is minimised.
+  - The subagent row gives each engine 90 s. Under a load average of 150 on the dev Mac
+    (2026-09-27, other sessions compiling) that killed quaude once: "quaude did not exit 0";
+    it passed in 56 s when rerun under the same load.
 - **tjs's TextDecoder drops U+FEFF anywhere in the text, not only a leading BOM.**
   `new TextDecoder().decode(new TextEncoder().encode("a" + String.fromCharCode(0xfeff) + "b"))`
   has length 2 under tjs and 3 under node; with `{ ignoreBOM: true }` it is 3 under both. The
