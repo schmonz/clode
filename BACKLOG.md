@@ -8,6 +8,32 @@ Concrete clode-under-Node divergences from native Claude Code, to triage and fix
 That page is GENERATED from `scripts/build-graph.cjs` — the one declaration of the build — so it
 cannot drift from it; it is also where the honest answer to "does this need node?" lives.
 
+## 87 of the 90 tools the carve can register have no driver that can fail (2026-09-28)
+
+`every-tool-driven` (test/build-gates/tool-coverage-gates.test.cjs; the grep-native plan's task
+0c) reads the tool registry from the pinned carve and requires each tool to have a live check
+that judges its tool_result, or a dated entry in that file's EXEMPTIONS table. At 2.1.283 the
+darwin-arm64 and linux-amd64 carves both register the same 90 tools (87 in getAllBaseTools, 3
+outside it: SubagentHandback, ObserverReport, the MCP template). Three are driven: Agent, Bash,
+Edit. Grep's one driver (agentic-tools) skips on the `rg --json` refusal. The other 87 are the
+table, and the table is the to-do list, grouped by what a driver would need:
+- **18 local tools a canned-mock turn could drive today** (Read, Write, NotebookEdit, the Task*
+  list, TaskStop, Skill, the worktree and cron tools, ScheduleWakeup, ReportFindings, Workflow,
+  ListAgents). Read and Write are near misses: floor-probe B4 and node-shim-agentic's Edit row
+  script Read, agentic-tools' Write row and floor-probe C1 script Write, and none of them judges
+  the tool_result.
+- 16 more, each with its own need: a subagent or observer turn, a teammate, a language server,
+  PowerShell, a local HTTP server (WebFetch), the web_search server tool, tool-search mode, the
+  "tools" memory mode, the Task*-off switch (TodoWrite), a GrowthBook config (EndConversation),
+  the brief channel, and two whose gates were not decoded (Poll, SendFeedback).
+- 4 off in every `-p` turn (AskUserQuestion, ExitPlanMode, EnterPlanMode, ProposeGoal: a pty
+  driver); 4 behind a default-off GrowthBook flag; 6 MCP (agentic-mcp-ws is DEFERRED); 16
+  claude.ai features and 8 remote/bridged-session tools; 9 self-hosted runner operator tools; 4
+  device-relay stubs.
+Grep and Glob fall due 2026-10-12 (the plan's Task 11 drives them and deletes both entries).
+Every other entry falls due 2026-12-31: that day the gate goes red, and each must be driven or
+re-dated with a new reason.
+
 ## The NetBSD spike found three bugs, all fixed; what it left open (2026-09-26)
 
 **Found by the NetBSD 11 arm64 spike, fixed the same day.** The spike cross-built a
@@ -707,12 +733,13 @@ them.
 - **refreshGenerations' reset branch never fires live.** No session moves the style or chalk
   generation, so under the patched quaude it fired 0 times; only `test/reset-patch.test.cjs`
   runs it (it calls the same resetNative() every other reset takes).
-- **`readCarve` has five copies** in test/build-gates (shadow-writer-gates.test.cjs added a
-  fifth, 2026-09-28, task 0b — same convention, not a fix), and their consumer tests have
-  drifted (`sgrCloseKeys` in one, `/\bCellSegmenter\b/` in another): one shared carve reader.
-  The fifth is unnamed: bun-ant-surface-gate.test.cjs's carve reader is an inline `read()`
+- **`readCarve` has six copies** in test/build-gates (shadow-writer-gates.test.cjs added a
+  fifth, 2026-09-28, task 0b, and tool-coverage-gates.test.cjs a sixth the same day, task 0c —
+  same convention, not a fix), and their consumer tests have drifted (`sgrCloseKeys` in one,
+  `/\bCellSegmenter\b/` in another): one shared carve reader.
+  One is unnamed: bun-ant-surface-gate.test.cjs's carve reader is an inline `read()`
   on its `defineGuard({...})` call, not a standalone `function readCarve`, so `grep -rn
-  'function readCarve' test/build-gates` finds only the other four — check for this shape
+  'function readCarve' test/build-gates` finds only the other five — check for this shape
   too before trusting that grep's count.
 - **The naude deps fix (ccc2a04) is partial.** It detects a purge by each package's
   `package.json` only, so a lazily required file inside a used package that the $TMPDIR cleaner
