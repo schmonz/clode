@@ -251,14 +251,39 @@ Bash tool instead".
   it reads as text, including JS source through the loader (Buffer's own `toString('utf8')`
   keeps it). Found building lead-scrub-equivalence's corpus: 1,134 of 25,056 inputs came back
   one character short. The oracle ships its corpus as ASCII-escaped JSON meanwhile. Not fixed.
-- **QuickJS-ng parses v-flag set subtraction after a property escape as a range.** Under the
-  `v` flag, tjs refuses `[\p{L}--[a-z]]`, `[\p{L}--a]` and `[\p{L}--\q{a}]` with
-  "SyntaxError: invalid class range", all three of which node (V8) accepts; and it accepts
-  `[a-z--b]`, which V8 refuses ("Invalid set operation in character class"). `[[a-z]--b]`
-  and `[\p{L}&&[A-Z]]` parse in both. Found 2026-09-28 building
-  test/engine-regexp-reuse.test.cjs's corpus, which now uses only forms both engines parse.
-  No 2.1.283 pattern is known to hit it: the subagent row's log check names any RegExp quaude
-  refuses on a turn, and the census counts only groups. Not fixed.
+- **QuickJS-ng honors `\p`/`\P` only under the `u` flag; under `v` alone they are literal
+  characters, not a property escape.** CORRECTED 2026-09-28 (was: "QuickJS-ng parses v-flag
+  set subtraction after a property escape as a range" — the wrong cause). At
+  spike/quickjs/vendor/txiki.js/deps/quickjs/libregexp.c:727, `\p`/`\P` is honoured only
+  `if (s->is_unicode)`, and `is_unicode` comes from the `u` flag alone; `v` never sets it. So
+  under `v`, `\p{Lu}` is the four literal characters `p`, `{`, `L`, `}`. Measured on this box:
+  `/\p{Lu}/v.test("B")` is `false` under tjs (93c6a64f…, the patched local build) and `true`
+  under node v24.21.0; `/[\p{Lu}]/v.test("p")` is `true` under tjs and `false` under node —
+  opposite verdicts both ways. `[\p{L}&&[A-Z]]` parses in both engines but matches nothing
+  under QuickJS. The refused-RegExp log check (the subagent row) cannot see any of this: such
+  a pattern is ACCEPTED, it just matches the wrong text, never refused. A heuristic scan of
+  the 2.1.283 cli found 819 `\p{` occurrences, none under a `v` flag. Found 2026-09-28
+  building test/engine-regexp-reuse.test.cjs's corpus, which now uses only forms both engines
+  parse and agree on. Not fixed.
+- **On big-endian hosts, `OP_regexp` recompiles little-endian regexp literals on every
+  evaluation, not once.** Pre-existing in the canonical-LE patch, not caused by
+  REGEXP-REUSE-SAME-FLAGS; found reviewing it, 2026-09-28.
+  spike/quickjs/patches/quickjs-ng-canonical-le-bytecode.patch:33 (`CASE(OP_regexp)`) calls
+  `js_re_recompile_le(ctx, sp[-2], sp[-1])` and replaces only the STACK copy, `sp[-1]`; the
+  function's cpool entry that supplies that operand keeps the original LE bytecode, so the
+  same literal — inside a loop, or on each call — recompiles again next time it evaluates.
+  Not fixed.
+- **A second pre-existing bug in the canonical-LE patch: its native-vs-LE guard can misread
+  a genuine LE literal as already-native.** Found reviewing REGEXP-REUSE-SAME-FLAGS,
+  2026-09-28; not caused by it.
+  spike/quickjs/patches/quickjs-ng-canonical-le-bytecode.patch:291
+  (`js_re_recompile_le`, quickjs.c:39633 as applied) treats a bytecode as already native
+  whenever `bswap32(L) <= cap`, where `L` is the true little-endian bytecode length and `cap`
+  the buffer's usable length — the wrong direction: it should test `L` itself. On a
+  big-endian host this misreads any LE literal whose bytecode length `L` is at least 64 KiB,
+  a multiple of 256, with byte1 <= byte2 (e.g. `L = 65536`, whose bswap32 is 256 <= cap): the
+  function hands back the untouched LE bytecode as "native", so that literal is broken on BE.
+  Not fixed.
 - **The agentic rows run in the operator's own ~/.claude.** node-shim-agentic,
   fidelity/agentic-tools (all but --continue), fidelity/agentic-mcp-ws, quaude-build's
   strict-mode sweep, quaude-naude-updateguard and clode-native's acceptance 3 spread

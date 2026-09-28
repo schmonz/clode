@@ -132,9 +132,9 @@ function semanticsProbe() {
     ['a', ''], ['a', 'g'], ['A', 'gi'], ['^b', 'gm'], ['a.c', 'gs'], ['a', 'y'], ['a', 'gy'],
     ['(?<x>a)(b)?', 'dg'], ['(?<x>a)|(?<y>b)', 'g'], ['(\\d+)-(\\d+)', 'g'], ['\\b\\w+\\b', 'gi'],
     ['x*', 'g'], ['', 'g'], ['/', 'g'], ['\\n|\\r', 'g'], ['[/]', ''], ['(?:)', 'dgimsuy'],
-    // v-flag set operations both engines parse. (QuickJS-ng refuses `[\p{L}--[a-z]]`, which
-    // V8 accepts, and accepts `[a-z--b]`, which V8 refuses: a divergence of its own, in
-    // BACKLOG.md, not this patch's.)
+    // v-flag set operations both engines parse. (QuickJS-ng honors \p/\P only under the u
+    // flag, so under v alone \p{...} is literal characters, not a property escape, while V8
+    // treats it as one: a divergence of its own, in BACKLOG.md, not this patch's.)
     ['\\p{Lu}+', 'gu'], ['.', 'gu'], ['.', 'g'], ['[[a-z]--b]', 'gv'], ['[\\p{L}&&[A-Z]]', 'gv'], ['\\p{L}', 'giv'],
     [cp(0x430) + '+', 'giu'], ['(a)\\1', 'gi'], ['(?<=a)b', 'g'], ['(?=(a+))a*b\\1', 'g'],
   ];
@@ -186,6 +186,15 @@ function semanticsProbe() {
     const a = c.test('a');
     c.lastIndex = 0;
     out.obs.reentrantCompile = { calls, source: c.source, flags: c.flags, a, b: c.test('b'), r: r.source };
+  }
+  // A flags object whose toString throws: the error must propagate, and the source RegExp's
+  // lastIndex (set before the throwing ToString(flags) runs) must be untouched.
+  {
+    const r = /a/g;
+    r.lastIndex = 2;
+    const flags = { toString() { throw new RangeError('nope'); } };
+    const error = errOf(() => new RegExp(r, flags));
+    out.obs.throwingFlags = { error, lastIndex: r.lastIndex };
   }
   // An overridden flags getter: @@matchAll clones with what the getter says, not the bytecode.
   {
