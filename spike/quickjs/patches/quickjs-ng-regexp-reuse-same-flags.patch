@@ -1,0 +1,120 @@
+# REGEXP-REUSE-SAME-FLAGS: `new RegExp(re, flags)` reuses re's compiled bytecode when
+# `flags` names exactly the flags that bytecode was compiled with.
+#
+# WHY. QuickJS-ng's js_regexp_constructor reuses a RegExp's bytecode only when the flags
+# argument is undefined (`goto no_compilation`); with explicit flags it compiles the
+# pattern again, and RegExp.prototype[@@matchAll] ALWAYS passes the flags to its species
+# copy. Claude Code's harness-content scan runs text.matchAll(re) once per text block of
+# every assistant message against a table of patterns, one of them 1,557,878 characters
+# (the LEAD-SCRUB-POSSESSIVE rewrite, libexec/extract-claude-js.cjs). Measured before this
+# patch: one such compile 131 ms on darwin-arm64 and 3.9 s on an emulated G4 (Tiger VM),
+# about 7.8 s per assistant reply there. V8 and JavaScriptCore cache compiled patterns.
+#
+# THE INVARIANT. For every call `new RegExp(R, F)` (or RegExp(R, F), or a species
+# constructor reaching it through super) where R is a RegExp object and F is not
+# undefined, everything JavaScript can observe is what it was before this patch:
+#   - the result is a NEW object, created from new_target exactly as before (the species
+#     path only chooses new_target, which this patch does not touch);
+#   - its lastIndex is its own, 0; R's lastIndex is untouched;
+#   - its source, flags and toString() are R's pattern and the flags F names, read from
+#     the new object's own fields as before;
+#   - ToString(F) runs exactly once, at the same point, and R's pattern AND bytecode are
+#     both taken BEFORE it (it can run JS that recompiles R in place through
+#     RegExp.prototype.compile; the clone keeps R's original source and matcher, as the
+#     spec's [[OriginalSource]] requires);
+#   - flags F refuses (a repeat, an unknown letter, u with v) throw the same SyntaxError
+#     from the same, unchanged code: the new parser only ever says "equal" or "compile".
+# WHY IT IS INVISIBLE. lre_compile is a pure function of (pattern, flags). The reuse
+# happens only when F parses (as js_compile_regexp parses it) to exactly the flag bits in
+# R's bytecode header (LRE_FLAG_NAMED_GROUPS, which lre_compile derives from the pattern,
+# is masked off), so the compile it skips would have returned byte-identical bytecode.
+# Every RegExp this engine makes pairs its pattern with bytecode compiled from it (the
+# constructor, RegExp.prototype.compile, regexp literals via ctx->compile_regexp, and the
+# canonical-LE recompile on big-endian hosts, which always leaves native bytecode).
+# Compiled bytecode is immutable (lre_exec takes it const; nothing writes it after
+# lre_compile), and the constructor's flags-undefined path already shares it by
+# reference count. What does change: time, memory (one shared buffer instead of two),
+# and a compile that could previously fail for RESOURCE reasons alone (out of memory, or
+# the C stack limit inside lre_compile) no longer runs.
+#
+# NOT A FORMAT CHANGE: no bytecode, header or serialization byte moves; BC_VERSION is
+# untouched. Order-independent of the other quickjs-ng-*.patch files (its two hunks are
+# in the RegExp constructor, far from theirs). Tests: test/engine-regexp-reuse.test.cjs
+# (timing red then green; semantics against the uncloned RegExp and against node).
+diff --git a/quickjs.c b/quickjs.c
+index e4b4c60..6331459 100644
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -48483,6 +48483,47 @@ static int js_is_regexp(JSContext *ctx, JSValueConst obj)
+     return js_get_regexp(ctx, obj, false) != NULL;
+ }
+ 
++/* REGEXP-REUSE-SAME-FLAGS (clode: spike/quickjs/patches/
++   quickjs-ng-regexp-reuse-same-flags.patch, which states the invariant).
++   `new RegExp(re, flags)` compiled again even when `flags` named exactly the
++   flags re's bytecode was compiled with, and RegExp.prototype[@@matchAll]
++   always passes them. lre_compile is a pure function of (pattern, flags), so
++   that compile can only rebuild the bytes re already holds; reuse them, as
++   the constructor's flags-undefined path already does. Bytecode is
++   immutable: nothing writes it after lre_compile returns. */
++#define LRE_FLAGS_FROM_STRING (LRE_FLAG_INDICES | LRE_FLAG_GLOBAL | \
++    LRE_FLAG_IGNORECASE | LRE_FLAG_MULTILINE | LRE_FLAG_DOTALL | \
++    LRE_FLAG_UNICODE | LRE_FLAG_UNICODE_SETS | LRE_FLAG_STICKY)
++
++/* The flag set a flags string names, parsed exactly as js_compile_regexp
++   parses it, or -1 for every string js_compile_regexp refuses: the caller
++   then compiles, so the refusal is thrown by the unchanged code. */
++static int js_regexp_flags_of(JSString *p)
++{
++    uint32_t i;
++    int mask, re_flags = 0;
++
++    for (i = 0; i < p->len; i++) {
++        switch (string_get(p, i)) {
++        case 'd': mask = LRE_FLAG_INDICES; break;
++        case 'g': mask = LRE_FLAG_GLOBAL; break;
++        case 'i': mask = LRE_FLAG_IGNORECASE; break;
++        case 'm': mask = LRE_FLAG_MULTILINE; break;
++        case 's': mask = LRE_FLAG_DOTALL; break;
++        case 'u': mask = LRE_FLAG_UNICODE; break;
++        case 'v': mask = LRE_FLAG_UNICODE_SETS; break;
++        case 'y': mask = LRE_FLAG_STICKY; break;
++        default: return -1;
++        }
++        if (re_flags & mask)
++            return -1;
++        re_flags |= mask;
++    }
++    if ((re_flags & LRE_FLAG_UNICODE) && (re_flags & LRE_FLAG_UNICODE_SETS))
++        return -1;
++    return re_flags;
++}
++
+ static JSValue js_regexp_constructor(JSContext *ctx, JSValueConst new_target,
+                                      int argc, JSValueConst *argv)
+ {
+@@ -48518,9 +48559,23 @@ static JSValue js_regexp_constructor(JSContext *ctx, JSValueConst new_target,
+             bc = js_dup(JS_MKPTR(JS_TAG_STRING, re->bytecode));
+             goto no_compilation;
+         } else {
++            /* REGEXP-REUSE-SAME-FLAGS: hold the bytecode compiled from
++               `pattern` BEFORE ToString(flags), which can run JS that
++               recompiles `pat` in place (RegExp.prototype.compile). */
++            bc = js_dup(JS_MKPTR(JS_TAG_STRING, re->bytecode));
+             flags = JS_ToString(ctx, flags1);
+-            if (JS_IsException(flags))
++            if (JS_IsException(flags)) {
++                JS_FreeValue(ctx, bc);
+                 goto fail;
++            }
++            if (JS_VALUE_GET_TAG(flags) == JS_TAG_STRING &&
++                js_regexp_flags_of(JS_VALUE_GET_STRING(flags)) ==
++                (lre_get_flags(str8(JS_VALUE_GET_STRING(bc))) &
++                 LRE_FLAGS_FROM_STRING)) {
++                JS_FreeValue(ctx, flags);
++                goto no_compilation;
++            }
++            JS_FreeValue(ctx, bc);
+         }
+     } else {
+         flags = JS_UNDEFINED;
