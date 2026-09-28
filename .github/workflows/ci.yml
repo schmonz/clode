@@ -714,6 +714,12 @@ jobs:
             console.log("seeded real cache:", cacheDir);
           ' "$PIN"
           FILES="$FILES test/guard-subcommands-gate.test.cjs"
+          # test/engine-regexp-reuse.test.cjs tests the ENGINE, not the shim: the
+          # REGEXP-REUSE-SAME-FLAGS patch (a RegExp rebuilt with its own flags reuses
+          # its compiled bytecode), by timing and by semantics against this job's node.
+          # It needs CLODE_TJS and nothing else, and the suite job has no engine, so
+          # without this line it would run on dev boxes only.
+          FILES="$FILES test/engine-regexp-reuse.test.cjs"
           node --test --test-concurrency=1 $FILES 2>&1 | tee shim-oracle.out
           # A SKIPPED run of either newly-added file must be distinguishable from a
           # clean one — never a silent pass (phase-5 doctrine: a red that cannot
