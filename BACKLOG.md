@@ -710,6 +710,10 @@ them.
 - **`readCarve` has five copies** in test/build-gates (shadow-writer-gates.test.cjs added a
   fifth, 2026-09-28, task 0b — same convention, not a fix), and their consumer tests have
   drifted (`sgrCloseKeys` in one, `/\bCellSegmenter\b/` in another): one shared carve reader.
+  The fifth is unnamed: bun-ant-surface-gate.test.cjs's carve reader is an inline `read()`
+  on its `defineGuard({...})` call, not a standalone `function readCarve`, so `grep -rn
+  'function readCarve' test/build-gates` finds only the other four — check for this shape
+  too before trusting that grep's count.
 - **The naude deps fix (ccc2a04) is partial.** It detects a purge by each package's
   `package.json` only, so a lazily required file inside a used package that the $TMPDIR cleaner
   aged out is still lost, and the comment at naude-sea.cjs:32 claims more. On Windows a failed
