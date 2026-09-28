@@ -175,45 +175,54 @@ Bash tool instead".
   - Repro, the engine alone (still true): `"$CLODE_TJS" eval 'try { new RegExp("(a)".repeat(255))
     } catch (e) { console.log(String(e)) }'` prints `SyntaxError: too many captures` (254 groups
     compile); `node -e 'new RegExp("(a)".repeat(255))'` is silent.
-- **DECIDED, not yet done: the rewritten scrub pattern is compiled again for every assistant
-  reply, about 8 s a reply on an emulated G4.** (Corrected 2026-09-27: this item said "about 0.4 s
-  a turn"; the cost is once per text block of every assistant message, plus two one-time
-  compiles.) DECISION (user, 2026-09-27): "Engine patch: reuse compiled regex", the first lever
-  below. A separate task implements it: about 15 lines in `js_regexp_constructor` that reuse
-  `re->bytecode` when the explicit flags equal the bytecode's flags. Then re-measure on the Tiger
-  PPC VM with the same two turns and the same micro-benchmark as below.
-  The pattern is 1,557,878 characters
-  (native's 879,796: each separator's class appears twice). It is compiled twice once per
-  process, `lead` itself and the scan table's clone (`KTo`: `new RegExp(t.source, t.flags)`),
-  and then ONCE PER TEXT BLOCK OF EVERY ASSISTANT MESSAGE: the harness-content scan (`BAt()`,
-  chunk-wyjbafrm) runs `text.matchAll(re)` for every text block against every pattern in its
-  table, and QuickJS compiles again on each, because `js_regexp_constructor` (quickjs.c:48462-48466,
-  `goto no_compilation`) reuses the bytecode only when the flags argument is undefined, and
-  `RegExp.prototype[@@matchAll]` always passes the flags (quickjs.c:49334-49335). V8 and
-  JavaScriptCore cache compiled patterns. Before the hook none of this ran: the scan threw on the
-  refused pattern, after rebuilding the table up to it. So the cost is all new, and it is the
-  scan doing the work native does, slowly.
-  - Measured on darwin-arm64 (tjs): one compile and one `matchAll` each cost 134 ms for the
-    rewritten pattern, 23 and 22 ms for the two large tag-scrub patterns; an exec loop on the
-    same RegExp, 0.1 ms. The original failed after 45 ms.
-  - Measured on Tiger PPC, EMULATED (qemu mac99 TCG, Mac OS X 10.4.11, 1 CPU, not real
-    hardware; quaude cross-blobulated from this tree onto the 0.20260831.1 release's darwin-ppc
-    engine, whose regexp code is today's): one compile and one `matchAll` cost 3.9 s for the
-    rewritten pattern (the original failed after 1.2 s), 0.7 and 0.6 s for the tag-scrub ones.
-    Whole turns against the canned mock, before and after the hook:
-    - a plain `-p` turn took 178.4 s before and 206.0 s after (+27.6 s);
-    - a 5-reply turn (4 text-plus-Read replies, then a final text) took 307.1 s before and
-      365.6 s after (+58.5 s);
-    - the mock's request intervals: the first reply cost 30 s more (the one-time compiles), and
-      each later reply about 7.8 s more (32.5 s against 40.3 s).
-  - Levers (the first is the user's decision; not yet implemented):
-    - CHOSEN: an engine patch of about 15 lines: `js_regexp_constructor` reuses `re->bytecode`
-      when the explicit flags equal the bytecode's. It is invisible to JS, changes no format, and
-      would also end the tag-scrub recompiles. It means rebuilding every engine leg.
-    - not chosen: a shim override of `RegExp.prototype[Symbol.matchAll]` that constructs the
-      species copy without a flags argument when they match. No engine rebuild, but a built-in
-      replaced.
-  - Neither lever touches the two one-time compiles, about 8 s per process on the emulated G4.
+- **The rewritten scrub pattern was compiled again for every assistant reply, about 8 s a
+  reply on an emulated G4. DONE (REGEXP-REUSE-SAME-FLAGS, 2026-09-28)**: the engine now reuses
+  a RegExp's compiled bytecode when it is rebuilt with the flags that bytecode was compiled
+  with (spike/quickjs/patches/quickjs-ng-regexp-reuse-same-flags.patch, whose header states the
+  invariant; test/engine-regexp-reuse.test.cjs). DECISION (user, 2026-09-27): "Engine patch:
+  reuse compiled regex", over a shim override of `RegExp.prototype[Symbol.matchAll]`.
+  - The cause. The pattern is 1,557,878 characters (native's 879,796: each separator's class
+    appears twice). The harness-content scan (`BAt()`, chunk-wyjbafrm) runs `text.matchAll(re)`
+    for every text block of every assistant message against every pattern in its table, and
+    `RegExp.prototype[@@matchAll]` always constructs its species copy WITH the flags, while
+    `js_regexp_constructor` reused bytecode only when the flags argument was undefined. V8 and
+    JavaScriptCore cache compiled patterns.
+  - The patch: 56 added lines at the RegExp constructor, no format change. It parses the flags
+    exactly as `js_compile_regexp` does and reuses only on an exact match with the bytecode's
+    flag bits; anything else compiles as before, so refusals throw from the unchanged code. It
+    takes the bytecode BEFORE `ToString(flags)`, which can run JS that recompiles the source
+    RegExp in place. The test's semantics half compares the clone with the uncloned RegExp over
+    26 patterns and 17 texts (3,402 checks) and the edge cases with node; two deliberately wrong
+    builds (reuse regardless of flags; take the bytecode after ToString) each fail it.
+  - darwin-arm64 (tjs, 2026-09-28): a `matchAll` of the rewritten pattern 131 ms before, 0.01
+    ms after; the tag-scrub patterns 23 and 22 ms before, 0.01 ms after. A clone with other
+    flags still compiles (132 ms). Against the canned mock, 3 interleaved runs each: the gap
+    between reply requests fell from about 0.65 s to 0.27 s (the first, 1.12 to 0.75 s); a
+    5-reply turn took 10.1 s before and 8.4 s after (medians), a plain turn 7.7 and 7.0 s.
+  - EMULATED G4 (the Tiger PPC VM: qemu mac99 TCG, Mac OS X 10.4.11, 1 CPU, not real hardware),
+    quaudes cross-blobulated from this tree onto the 0.20260831.1 release's darwin-ppc engine
+    (before) and onto a darwin-ppc engine built with the patch (after):
+    - a `matchAll` of the rewritten pattern 4.06-4.08 s before, 0.13-0.73 ms after; the
+      tag-scrub ones 0.71 and 0.61 s before, under 0.5 ms after. A darwin-ppc engine built
+      from this tree WITHOUT the patch measured as the release engine did (3.6-4.3 s), so the
+      release engine is a fair before;
+    - the gaps between reply requests: 64.3, 40.3, 41.4, 39.3 s before; 42.3, 16.8, 17.9,
+      16.9 s after, about 23 s less per reply (before the lead-scrub hook they were 33.7, 32.1,
+      33.4, 30.6 s, so replies are now faster than before the hook: the tag-scrub patterns
+      were being recompiled too);
+    - a 5-reply turn (--debug) took 367.5 s before and 265.6 s after; a plain `-p` turn 203.5
+      and 208.3 s before, 199.0 and 196.7 s after. The before 5-reply run logged "Streaming
+      stall detected: 30.4s gap between events"; the after run logged none.
+  - Still paid: the two one-time compiles of the rewritten pattern (`lead` itself and the scan
+    table's clone, `KTo`: `new RegExp(t.source, t.flags)`, a string source that must compile),
+    about 8 s per process on the emulated G4 and 0.26 s on darwin-arm64.
+  - How the darwin-ppc engine was built, since `docker pull` of the pinned
+    gcc-powerpc-apple-darwin8 image no longer fits ultimate-hat's daemon disk (18G, 5.5G free;
+    one layer holds a multi-GB gcc build tree a later layer deletes): the image's 16 layers,
+    each digest-checked, were extracted into a helper container without /home, whiteouts
+    applied in order, then chrooted into for `./build.sh --only engine.compile --needs assume`
+    with the darwin-ppc leg's environment, over a tree whose source and bytecode phases ran
+    on the dev Mac (as CI's exec=cross step does).
 - **A tag-scrub pattern sits three capture groups under QuickJS's limit.** A census of every
   RegExp naude builds at run time on a plain and on a Task turn (2.1.283, 2026-09-27) found
   three over 100 groups: the lead pattern (559, now 0 under the hook) and two built by `h6()`
@@ -242,6 +251,14 @@ Bash tool instead".
   it reads as text, including JS source through the loader (Buffer's own `toString('utf8')`
   keeps it). Found building lead-scrub-equivalence's corpus: 1,134 of 25,056 inputs came back
   one character short. The oracle ships its corpus as ASCII-escaped JSON meanwhile. Not fixed.
+- **QuickJS-ng parses v-flag set subtraction after a property escape as a range.** Under the
+  `v` flag, tjs refuses `[\p{L}--[a-z]]`, `[\p{L}--a]` and `[\p{L}--\q{a}]` with
+  "SyntaxError: invalid class range", all three of which node (V8) accepts; and it accepts
+  `[a-z--b]`, which V8 refuses ("Invalid set operation in character class"). `[[a-z]--b]`
+  and `[\p{L}&&[A-Z]]` parse in both. Found 2026-09-28 building
+  test/engine-regexp-reuse.test.cjs's corpus, which now uses only forms both engines parse.
+  No 2.1.283 pattern is known to hit it: the subagent row's log check names any RegExp quaude
+  refuses on a turn, and the census counts only groups. Not fixed.
 - **The agentic rows run in the operator's own ~/.claude.** node-shim-agentic,
   fidelity/agentic-tools (all but --continue), fidelity/agentic-mcp-ws, quaude-build's
   strict-mode sweep, quaude-naude-updateguard and clode-native's acceptance 3 spread

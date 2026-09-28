@@ -38,6 +38,12 @@ error with the help under it, not a silent translation:
 - (`quaude` only) Fix subagents (the Agent tool) never finishing when built from Claude
   Code 2.1.278 or newer: the tool answered `too many captures`, and every turn logged the
   same error and skipped Claude Code's scan of the model's text
+- (`quaude` only) Faster replies on slow machines: the engine reuses a compiled regular
+  expression when it is rebuilt with the same flags, instead of compiling it again
+  (REGEXP-REUSE-SAME-FLAGS). Claude Code scans every reply's text with large patterns,
+  one of them 1.5 million characters, and each scan compiled them again: on an emulated
+  PowerPC G4 a reply now takes about 23 s less (40 s to 17 s), and 0.4 s less on
+  `macos-arm64`
 
 ## 0.20260831.1
 
