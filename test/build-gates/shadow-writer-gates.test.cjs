@@ -345,7 +345,11 @@ function scanShadowWriter({ bundle, what }) {
   for (const name of SHADOW_NAMES) {
     const known = CLODE_SHADOWS[name];
     const hits = findCallSites(bundle, w.name, name);
-    if (hits.length !== 1) continue;   // structural absence: the floor reads this as BROKEN, not a finding
+    if (hits.length !== 1) {
+      findings.push(`the ${name} shadow call site (${w.name}("${name}", ...)) occurs ${hits.length} `
+        + `time(s) in ${what}, not exactly once`);
+      continue;
+    }
     const { parts } = hits[0];
     const appletLiteral = parseStringLiteral(parts[1]);
     // rg's applet argument is a runtime expression (Claude's own embedded-rg argv0), never
@@ -450,17 +454,23 @@ const MINIMAL_WRITER =
   + '"  else",`    (exec -a ${n} "$_cc_bin" ${g})`,"  fi","}"].join(`\\n`)}';
 
 test('shadow-writer-gates step 2: red-then-green scenarios named in the brief', () => {
-  // (a) a synthetic writer using an unknown argument spelling -> one finding.
+  // (a) a synthetic writer using an unknown argument spelling -> the grep finding, plus a
+  // named "occurs 0 time(s)" finding for each of find and rg, which this bundle never calls.
   const unknownSpelling = MINIMAL_WRITER.replace('\\${1+"$@"}`', '\\${9+"$@"}`') + 'W("grep","ugrep",["-G"]);';
   const a = scanShadowWriter({ bundle: unknownSpelling, what: 'x' });
-  assert.strictEqual(a.findings.length, 1, a.findings.join('\n'));
+  assert.strictEqual(a.findings.length, 3, a.findings.join('\n'));
   assert.match(a.findings[0], /grep shadow's argument spelling.*not one SHADOW_ARG_SPELLINGS knows/);
+  assert.match(a.findings[1], /find shadow call site .* occurs 0 time\(s\) in x, not exactly once/);
+  assert.match(a.findings[2], /rg shadow call site .* occurs 0 time\(s\) in x, not exactly once/);
 
-  // (b) a writer whose grep has no flags -> one finding.
+  // (b) a writer whose grep has no flags -> the no-flags finding, plus the same two
+  // "occurs 0 time(s)" findings for the shadows this bundle never calls.
   const noFlags = MINIMAL_WRITER + 'W("grep","ugrep",[]);';
   const b = scanShadowWriter({ bundle: noFlags, what: 'x' });
-  assert.strictEqual(b.findings.length, 1, b.findings.join('\n'));
+  assert.strictEqual(b.findings.length, 3, b.findings.join('\n'));
   assert.match(b.findings[0], /grep shadow in x carries no flags/);
+  assert.match(b.findings[1], /find shadow call site .* occurs 0 time\(s\) in x, not exactly once/);
+  assert.match(b.findings[2], /rg shadow call site .* occurs 0 time\(s\) in x, not exactly once/);
 
   // (c) the real 2.1.283 writer -> no findings, all 3 shadows examined.
   const c = scanShadowWriter({ bundle: CARVE_2_1_283, what: 'x' });
@@ -482,20 +492,25 @@ test('scanShadowWriter: structural absence is BROKEN territory (examined 0), nev
 });
 
 test('scanShadowWriter: a shadow present for one call site but missing for another is only PARTLY examined', () => {
-  // find and rg present, grep absent entirely: examined stays at 2, no finding for the
-  // missing one (structural absence reads through the floor, not as a violation).
+  // find and rg present, grep absent entirely: examined stays at 2, and a named finding
+  // says which shadow's call site went missing.
   const partial = MINIMAL_WRITER
     .replace('function W(', 'function Z(')
     + 'Z("find","bfs",["-S","dfs"]);Z("rg",e.argv0);';
   const r = scanShadowWriter({ bundle: partial, what: 'x' });
   assert.strictEqual(r.examined, 2);
-  assert.deepStrictEqual(r.findings, []);
+  assert.strictEqual(r.findings.length, 1);
+  assert.match(r.findings[0], /grep shadow call site .* occurs 0 time\(s\) in x, not exactly once/);
 });
 
 test('resolveArrayLiteral: grep\'s spread-map --exclude-dir list resolves against the NEAREST array definition', () => {
   const bundle = 'var lAn=[".git",".svn"];' + MINIMAL_WRITER.replace('function W(', 'function Y(')
     + 'Y("grep","ugrep",["-G",...lAn.map((e)=>`--exclude-dir=${e}`)]);';
   const r = scanShadowWriter({ bundle, what: 'x' });
-  assert.deepStrictEqual(r.findings, []);
+  // grep resolves clean; find and rg are never called in this bundle, so each gets a named
+  // "occurs 0 time(s)" finding (the same shape as the step-2 (a)/(b) scenarios above).
+  assert.strictEqual(r.findings.length, 2, r.findings.join('\n'));
+  assert.match(r.findings[0], /find shadow call site .* occurs 0 time\(s\) in x, not exactly once/);
+  assert.match(r.findings[1], /rg shadow call site .* occurs 0 time\(s\) in x, not exactly once/);
   assert.strictEqual(r.examined, 1);
 });
