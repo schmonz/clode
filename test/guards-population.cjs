@@ -336,6 +336,20 @@ const GUARD_EXCLUSIONS = [
       + "reports the same constants node does, and whether the generator's own ratchet "
       + 'still fires.',
   },
+  {
+    file: 'source-scan.test.cjs',
+    because: 'it BUILDS every input it looks at: an mkdtemp holding a real .test.cjs file '
+      + 'plus a real AppleDouble sidecar (the true 24-byte 0x00051607 magic header, not a '
+      + "stand-in), then asserts on what discoverFilesByExt did with THAT fixture. Both "
+      + "classifier signals are false positives on that shape: READS_ARTIFACT fires on the "
+      + "word 'repo' inside prose comments (this file's own header, explaining why the test "
+      + "exists) combined with the readdirSync/fs.readdirSync calls the fixture assertions "
+      + "make against a dir this test just created, and PATTERN_MATCHES fires on "
+      + "`names.includes('._real.test.cjs')` — a fixture-sanity check on bytes this test "
+      + 'just wrote. There is no fixed artifact to scan and no violation pattern to look '
+      + 'for; the subject is whether the shared discoverer skips a sidecar this test '
+      + 'built, not whether some upstream artifact is well-formed.',
+  },
 ];
 
 function isRecordedExclusion(file) {

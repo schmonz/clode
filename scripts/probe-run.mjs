@@ -109,9 +109,17 @@ function defaultProviderBin() {
   return null;
 }
 
+// AppleDouble `._*` sidecars (this checkout lives on an NFS/SMB mount that sprays them
+// next to every file, gitignored) are excluded up front, before `re` ever runs: today
+// `re` is anchored (`^agentic-…`/`^interactive-…`) so a `._agentic-*.test.cjs` sidecar
+// would never match it anyway, but the exclusion is one line and keeps this glob
+// correct if `re` ever widens. Inline rather than routed through
+// test/source-scan.cjs's discoverFilesByExt — that walker recurses and matches by
+// extension list, this one stays a flat single-directory regex glob; a shared helper
+// would have to abstract over a shape difference that does not otherwise exist here.
 function globTestFiles(dir, re) {
   if (!fs.existsSync(dir)) return [];
-  return fs.readdirSync(dir).filter((f) => re.test(f)).sort().map((f) => path.join(dir, f));
+  return fs.readdirSync(dir).filter((f) => !f.startsWith('._') && re.test(f)).sort().map((f) => path.join(dir, f));
 }
 
 // ---- corpus: apicheck ----------------------------------------------------
