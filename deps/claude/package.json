@@ -7,7 +7,7 @@
     "buffer": "6.0.3",
     "node-fetch": "3.3.2",
     "semver": "7.8.5",
-    "string-width": "8.2.2",
+    "string-width": "8.3.0",
     "strip-ansi": "7.2.0",
     "wrap-ansi": "10.0.2",
     "ws": "8.21.3",
