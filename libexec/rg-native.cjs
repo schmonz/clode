@@ -209,7 +209,9 @@ function ugrepMatchArgv(pattern, opts = {}) {
   return ['-Y', '-H', '--null', UGREP_RANGE_FORMAT, ...(opts.ignoreCase ? ['-i'] : []), '-e', pattern, '--'];
 }
 
-// A name ugrep could read as an option or as stdin (`-`, `-x`) goes in as `./-`, `./-x`.
+// A name ugrep could read as an option or as stdin (`-`, `-x`) goes in as `./-`, `./-x`: every
+// name ugrepMatches is given is a FILE. rg's POSITIONAL `-` means stdin, not a file named `-`;
+// the emulation answers that in its stdin branch and must never pass it in here.
 const spellForUgrep = (f) => (f.startsWith('-') ? './' + f : f);
 
 // Files, greedily, into lists whose names (plus a separator each) fit `budget` bytes; a name

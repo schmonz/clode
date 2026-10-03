@@ -102,13 +102,18 @@ test('RG-EMPTY-AFTER-MATCH: an empty match at the end of the match before it is 
   });
 });
 
-test('ugrepMatches: names that look like options or stdin, or hold a newline, are files (native)', needUgrep, () => {
+// NATIVE covers `-dash.txt`, `nl\nname.txt` and `./-` (`rg --json needle -- -dash.txt 'nl<LF>name.txt' ./-`
+// gave each [[2,8]]). A BARE `-` is NOT a file to rg: as a positional it reads stdin (`<stdin>`).
+// ugrepMatches is file-level plumbing, so every name it is given is a FILE, `-` included (it goes
+// in as ./-); rg's positional `-` is the stdin branch, and the emulation must answer it there and
+// NEVER pass it into ugrepMatches.
+test('ugrepMatches: names that look like options, or hold a newline, are files (native); a bare - is the file ./-', needUgrep, () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-native-odd-'));
   try {
     const names = ['-dash.txt', 'nl\nname.txt', '-', './-'];
     for (const n of ['-dash.txt', 'nl\nname.txt', '-']) fs.writeFileSync(path.join(dir, n), 'x needle\n');
     const got = rgn.ugrepMatches(names, 'needle', { ugrep: UGREP, cwd: dir });
-    // native: {"-dash.txt":[[2,8]],"nl\nname.txt":[[2,8]],"./-":[[2,8]]}; a bare `-` is that same file
+    // native: {"-dash.txt":[[2,8]],"nl\nname.txt":[[2,8]],"./-":[[2,8]]}; `-` here is the file ./- (ours only)
     assert.deepStrictEqual(asObj(got), { '-dash.txt': [[2, 8]], 'nl\nname.txt': [[2, 8]], '-': [[2, 8]], './-': [[2, 8]] });
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
