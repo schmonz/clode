@@ -85,9 +85,11 @@ const refusesGuard = defineGuard({
 });
 guardTests(refusesGuard);
 
-test('rg-regex-refuses covers every stated refusal but the runtime one', () => {
+// The run-time refusals (a line's look-behind, a line's cost) are judged per line, not per
+// pattern; test/rg-regex.test.cjs and test/rg-native.test.cjs pin them, as it pins the non-ASCII one.
+test('rg-regex-refuses covers every stated refusal but the run-time ones', () => {
   const covered = new Set(MUST_REFUSE.map(([, r]) => r));
-  const stated = Object.keys(rgRegex.REFUSALS).filter((r) => r !== 'RG-RE-REFUSE-LOOKBEHIND' && r !== 'RG-RE-REFUSE-CAPTURE-NAME');
+  const stated = Object.keys(rgRegex.REFUSALS).filter((r) => !['RG-RE-REFUSE-LOOKBEHIND', 'RG-RE-REFUSE-COST', 'RG-RE-REFUSE-CAPTURE-NAME'].includes(r));
   assert.deepStrictEqual(stated.filter((r) => !covered.has(r)), []);
 });
 

@@ -13,9 +13,13 @@
 // run the way its PikeVM runs it (thread priority, the epsilon closure's visited set, the
 // unanchored start added at every position until a match is found). That is rg's own
 // leftmost-first semantics, by construction, not by translation to a backtracking engine.
-// RG-RE-LINEAR-TIME, the safety bound: a search does O(bytes x NFA states) work, whatever the
-// pattern, so `(a+)+$` or `(a|aa)*b` cost what `a` costs per state; there is no backtracking
-// to explode. The NFA's size is bounded (MAX_STATES): a pattern past it refuses by name.
+// RG-RE-LINEAR-TIME, and its scope, stated honestly: ONE search does at most 2 x states x positions
+// steps, whatever the pattern, so `(a+)+$` or `(a|aa)*b` cost what `a` costs per state; there is
+// no backtracking to explode. But the constant is the NFA's state count (`.{0,1000}needle` has
+// 2,009 states), and rg's find_iter searches a line once per match, so ONE LINE costs up to
+// O(states x length^2) (`a.*z|a`), as rg's own does. RG-RE-REFUSE-COST bounds a line's steps
+// (LINE_STEP_BUDGET), the async twin decides in slices of steps, and the NFA's size is bounded
+// (MAX_STATES, and rg's own limit, RG-RE-REFUSE-SIZE-LIMIT): each refuses by name.
 //
 // THE BYTES (stated once). The matcher reads a line's BYTES as rg does. A valid UTF-8 sequence
 // (Rust's own decode: no overlongs, no surrogates, nothing past U+10FFFF) is one code point;
@@ -51,7 +55,8 @@
 //   RG-RE-LITERAL          a plain literal matches its bytes, leftmost, without overlap
 //   RG-RE-MATCH-AT-UNTERMINATED-END  the matcher's match at the end of an unterminated last line
 //                          is reported (rg selects the line by it; its printers do not print it)
-//   RG-RE-LINEAR-TIME      a search is at most 2 x states x positions steps
+//   RG-RE-LINEAR-TIME      ONE search is at most 2 x states x positions steps (a line, up to
+//                          states x length^2: RG-RE-REFUSE-COST bounds it)
 //   RG-RE-PREFILTER-SUPERSET  ugrep, given prefilter(), proposes every line rg selects
 //   RG-RE-REFUSE-*         REFUSALS, below
 //
@@ -168,6 +173,7 @@ const REFUSALS = {
   'RG-RE-REFUSE-NEWLINE': { rgRejects: true, what: 'can match a line terminator, which rg refuses without -U' },
   'RG-RE-REFUSE-NUL': { rgRejects: true, what: 'matches only NUL, which rg refuses while it detects binary files' },
   'RG-RE-REFUSE-SIZE': { what: 'is larger or deeper than quaude\'s rg compiles' },
+  'RG-RE-REFUSE-COST': { what: 'needs more matching on one line than quaude\'s rg allows a line (LINE_STEP_BUDGET steps), where rg would take far less time' },
   'RG-RE-REFUSE-SIZE-LIMIT': { what: `may compile past the size rg allows a regex (${NFA_SIZE_LIMIT} bytes of NFA, rg's limit; quaude's rg bounds that size from above and refuses when the bound passes it)` },
   'RG-RE-REFUSE-CAPTURE-NAME': { what: 'names a group with non-ASCII characters' },
   'RG-RE-REFUSE-LOOKBEHIND': { what: 'looks behind a line that starts inside a character (\\B or \\b{start-half} on a line whose first byte is a UTF-8 continuation byte), where rg\'s answer depends on the bytes before the line (measured)' },
@@ -956,19 +962,29 @@ function closure(sid, p, S, T, N, start) {
   }
   return N;
 }
-function search(prog, buf, from, end, at) {
-  const { kind, next, arg, cls, marks } = prog;
+// One leftmost-first search of the line [from, end) starting at `at`, RESUMABLE: searchStart sets it
+// up in prog.cur, searchRun runs it until it ends (1: a match, in prog.mStart/prog.mEnd; 0: none) or
+// has taken `limit` steps (-1: paused between two positions, to be run again). Pausing changes
+// nothing it finds: the threads, the landing set and the visited stamps all wait in prog.cur.
+function searchStart(prog, buf, from, end, at) {
+  const { marks } = prog;
   if (prog.stamp > 0x3fffffff - 2 * (end - at + 2)) { marks.fill(0); prog.stamp = 0; }
-  _cProg = prog; _cBuf = buf; _cFrom = from; _cEnd = end; _cSteps = 0;
-  _cBase = prog.stamp + 1 - at;          // the visited stamp for position p is _cBase + p
+  const base = prog.stamp + 1 - at;        // the visited stamp for position p is base + p
   prog.stamp += end - at + 2;
-  let curS = prog.aS, curT = prog.aT, landS = prog.bS, landT = prog.bT;
-  let curN = 0, landN = 0, landAt = -1;
+  prog.cur = { buf, from, end, base, p: at, curS: prog.aS, curT: prog.aT, landS: prog.bS, landT: prog.bT,
+    landN: 0, landAt: -1, hmStart: -1, hmEnd: -1 };
+}
+function searchRun(prog, limit) {
+  const { kind, next, arg, cls, accel, firstAscii, firstNonAscii } = prog;
+  const st0 = prog.cur;
+  const { buf, from, end } = st0;
+  _cProg = prog; _cBuf = buf; _cFrom = from; _cEnd = end; _cSteps = 0; _cBase = st0.base;
+  let { p, curS, curT, landS, landT, landN, landAt, hmStart, hmEnd } = st0;
+  let curN = 0, steps = 0, paused = false;
   // RG-RE-LINEAR-TIME, counted: each state is entered at most once per position (the closure's
   // visited stamp) and each thread stepped at most once, so steps <= 2 x states x positions.
-  let steps = 0, hmStart = -1, hmEnd = -1;
-  const { accel, firstAscii, firstNonAscii } = prog;
-  for (let p = at; p <= end; p++) {
+  for (; p <= end; p++) {
+    if (steps + _cSteps >= limit) { paused = true; break; }
     if (p === landAt) {
       const s0 = curS, t0 = curT;
       curS = landS; curT = landT; curN = landN;
@@ -990,33 +1006,50 @@ function search(prog, buf, from, end, at) {
     if (!curN) continue;
     const c = p < end ? decode(buf, p, end) : -1, len = _len;
     for (let i = 0; i < curN; i++) {
-      const st = curS[i];
+      const sid = curS[i];
       steps++;
-      if (kind[st] === MATCH) { hmStart = curT[i]; hmEnd = p; break; }
+      if (kind[sid] === MATCH) { hmStart = curT[i]; hmEnd = p; break; }
       if (c < 0) continue;
-      const k = cls[arg[st]];
-      if (c < 128 ? k.ascii[c] : has(k.set, c)) { landN = closure(next[st], p + len, landS, landT, landN, curT[i]); landAt = p + len; }
+      const k = cls[arg[sid]];
+      if (c < 128 ? k.ascii[c] : has(k.set, c)) { landN = closure(next[sid], p + len, landS, landT, landN, curT[i]); landAt = p + len; }
     }
   }
-  prog.steps += steps + _cSteps;
+  const used = steps + _cSteps;
+  prog.steps += used;
   _cProg = null; _cBuf = null;
-  if (hmEnd < 0) return false;
+  if (paused) {
+    Object.assign(st0, { p, curS, curT, landS, landT, landN, landAt, hmStart, hmEnd });
+    return { state: -1, used };
+  }
+  prog.cur = null;
+  if (hmEnd < 0) return { state: 0, used };
   prog.mStart = hmStart; prog.mEnd = hmEnd;
-  return true;
+  return { state: 1, used };
 }
 
 // ---- rg's find_iter over one line (grep-matcher's try_find_iter_at) ------------------------------
-// verifyLine(buf, start, end, compiled) -> [{ start, end }] in buf's offsets: every match rg's
-// matcher reports on the line [start, end) (the terminator excluded). RG-EMPTY-AFTER-MATCH: an
-// empty match at the end of the match before it is skipped, and after an empty match the next
-// search starts one BYTE on (so inside a character, where only empty matches occur). An empty
-// result means rg does not select the line.
+// lineVerifier(buf, start, end, compiled) -> { run(maxSteps) }: every match rg's matcher reports on
+// the line [start, end) (the terminator excluded), as [{ start, end }] in buf's offsets, once run()
+// has taken the steps it needs; until then run() returns null (paused) and is called again.
+// verifyLine is one run to the end. RG-EMPTY-AFTER-MATCH: an empty match at the end of the match
+// before it is skipped, and after an empty match the next search starts one BYTE on (so inside a
+// character, where only empty matches occur). An empty result means rg does not select the line.
 // RG-RE-REFUSE-LOOKBEHIND (measured 2026-10-03): on a line whose first byte is a UTF-8
 // continuation byte, rg answers \B and \b{start-half} one byte into the line by the bytes
 // BEFORE the line: `\b{start-half}` on `\x80 x` reports offset 1 when the line starts at byte 4
 // or later and not when it starts at 2 or 3, while its line selection sees the line alone. On
 // every other line the look-behind stops inside the line, and both readings agree.
-function verifyLine(buf, start, end, compiled) {
+// RG-RE-REFUSE-COST: one line's matching may take at most LINE_STEP_BUDGET steps. RG-RE-LINEAR-TIME
+// bounds ONE search by 2 x states x positions, so a line costs states x length per search, and rg's
+// find_iter can search a line once per match, which makes a line O(states x length^2) at worst
+// (`a.*z|a`). Measured (review, 2026-10-03) on single lines: `[a-z]{1,64}@` over 200 KB takes 39
+// million steps, `.{0,100}needle` 61 million, `.{0,1000}needle` 600 million, `\w{2000}` over 20 KB
+// 40 million, `a.*z|a` over 5 KB 63 million; ordinary patterns over the same 200 KB lines take about
+// one million (`\w+`, `(?i)[a-z]+ing\b`, `import.*from`). tjs here runs about 5 million steps a
+// second, so 2^24 leaves sixteen times that headroom and refuses within about 3 s on this Mac: a
+// line past it is refused by name, as rg's refusal, rather than stalling its caller for minutes.
+const LINE_STEP_BUDGET = 2 ** 24;
+function lineVerifier(buf, start, end, compiled) {
   const prog = compiled.prog || compiled;
   if (prog.lookbehind && start < end && (buf[start] & 0xc0) === 0x80) {
     throw new RgRegexRefusal('RG-RE-REFUSE-LOOKBEHIND', `a line at byte ${start} starts with a continuation byte`);
@@ -1029,20 +1062,41 @@ function verifyLine(buf, start, end, compiled) {
   if (prog.lit) {
     const line = buf.subarray(start, end), lit = prog.lit;
     for (let i = line.indexOf(lit); i !== -1; i = line.indexOf(lit, i + lit.length)) out.push({ start: start + i, end: start + i + lit.length });
-    return out;
+    return { run: () => out };
   }
-  let lastEnd = start, lastMatch = -1;
-  while (lastEnd <= end) {
-    if (!search(prog, buf, start, end, lastEnd)) break;
-    const m = { start: prog.mStart, end: prog.mEnd };
-    if (m.start === m.end) {
-      lastEnd = m.end + 1;
-      if (m.end === lastMatch) continue;
-    } else lastEnd = m.end;
-    lastMatch = m.end;
-    out.push(m);
-  }
-  return out;
+  let lastEnd = start, lastMatch = -1, searching = false, spent = 0, done = false;
+  const run = (maxSteps) => {
+    if (done) return out;
+    let left = maxSteps;
+    for (;;) {
+      if (!searching) {
+        if (lastEnd > end) { done = true; return out; }
+        searchStart(prog, buf, start, end, lastEnd);
+        searching = true;
+      }
+      const r = searchRun(prog, Math.min(left, LINE_STEP_BUDGET - spent + 1));
+      spent += r.used; left -= r.used;
+      if (spent > LINE_STEP_BUDGET) {
+        prog.cur = null;
+        throw new RgRegexRefusal('RG-RE-REFUSE-COST', `a line at byte ${start} (${end - start} bytes) needs more than ${LINE_STEP_BUDGET} steps`);
+      }
+      if (r.state === -1) return null;                          // paused, run again
+      searching = false;
+      if (r.state === 0) { done = true; return out; }
+      const m = { start: prog.mStart, end: prog.mEnd };
+      if (m.start === m.end) {
+        lastEnd = m.end + 1;
+        if (m.end === lastMatch) continue;
+      } else lastEnd = m.end;
+      lastMatch = m.end;
+      out.push(m);
+      if (left <= 0) return null;
+    }
+  };
+  return { run };
+}
+function verifyLine(buf, start, end, compiled) {
+  return lineVerifier(buf, start, end, compiled).run(Infinity);
 }
 
 // ---- the prefilter: ugrep's default dialect, a superset by construction --------------------------
@@ -1113,5 +1167,5 @@ function translateRgRegex(pattern, opts = {}) {
   }
 }
 
-module.exports = { translateRgRegex, verifyLine, REFUSALS, RgRegexRefusal, refusalReason, RG_REGEX_DATA_HEADER: RG_REGEX_DATA.header,
+module.exports = { translateRgRegex, verifyLine, lineVerifier, LINE_STEP_BUDGET, REFUSALS, RgRegexRefusal, refusalReason, RG_REGEX_DATA_HEADER: RG_REGEX_DATA.header,
   _internal: { decode, decodeLast, foldClass, negate, union, has, data } };

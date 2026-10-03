@@ -371,6 +371,46 @@ test('ugrepMatchesAsync answers an aborted signal with a UgrepError, never a par
   } finally { fs.rmSync(base, { recursive: true, force: true }); }
 });
 
+// RG-RE-REFUSE-COST through ugrepMatches: a line past the step budget is a UgrepError naming the rule.
+test('RG-RE-REFUSE-COST: a line past the step budget refuses through ugrepMatches (sync and async)', needUgrep, async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-native-cost-'));
+  try {
+    // the `@` at its end makes ugrep propose the line; deciding it is the costly part
+    fs.writeFileSync(path.join(dir, 'min.js'), 'abcdefgh'.repeat(25000) + '@\n');
+    const cost = (e) => e.name === 'UgrepError' && e.refused === 'RG-RE-REFUSE-COST';
+    assert.throws(() => rgn.ugrepMatches(['min.js'], '[a-z]{1,64}@', { ugrep: UGREP, cwd: dir }), cost);
+    await assert.rejects(rgn.ugrepMatchesAsync(['min.js'], '[a-z]{1,64}@', { ugrep: UGREP, cwd: dir }), cost);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+// The async twin decides in SLICES of steps, so an abort lands DURING one long line, not after it
+// (review I2: it used to yield only between files). Under tjs, where one such line takes seconds.
+test('ugrepMatchesAsync under tjs: an abort lands within a bound during one long line', {
+  skip: needUgrep.skip || (!tjsPath() ? 'no tjs engine' : false),
+}, () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-native-abort-tjs-'));
+  try {
+    fs.writeFileSync(path.join(base, 'min.js'), 'x'.repeat(200000) + 'needle\n');
+    const prog = path.join(base, 'probe.cjs');
+    fs.writeFileSync(prog, `
+      const rgn = require(${JSON.stringify(path.join(__dirname, '..', 'libexec', 'rg-native.cjs'))});
+      const ac = new AbortController();
+      let abortedAt = 0;
+      const t0 = Date.now();
+      setTimeout(() => { abortedAt = Date.now(); ac.abort(); }, 300);
+      rgn.ugrepMatchesAsync(['min.js'], '.{0,100}needle', { ugrep: ${JSON.stringify(UGREP)}, cwd: ${JSON.stringify(base)}, signal: ac.signal })
+        .then(() => ({ outcome: 'answered' }), (e) => ({ outcome: e.refused || e.message }))
+        .then((r) => process.stdout.write('PROBE:' + JSON.stringify({ ...r, abortedAt: abortedAt && abortedAt - t0, done: Date.now() - t0 }) + '\\n'));
+    `);
+    const res = runLoader(prog, [], { timeout: 120000 });
+    const line = (res.stdout || '').split('\n').find((l) => l.startsWith('PROBE:'));
+    assert.ok(line, `the tjs probe printed nothing (exit ${res.status}): ${(res.stderr || '').slice(0, 1500)}`);
+    const got = JSON.parse(line.slice('PROBE:'.length));
+    assert.match(got.outcome, /aborted/, JSON.stringify(got));
+    assert.ok(got.abortedAt > 0 && got.done - got.abortedAt < 1000, `the abort landed ${got.done - got.abortedAt} ms after it fired: ${JSON.stringify(got)}`);
+  } finally { fs.rmSync(base, { recursive: true, force: true }); }
+});
+
 // ---- the async twin, and the same plumbing under tjs -----------------------------------------
 test('ugrepMatchesAsync answers what ugrepMatches does, and rejects as it throws', needUgrep, async () => {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-native-'));

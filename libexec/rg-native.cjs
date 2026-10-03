@@ -404,26 +404,48 @@ function candidateLines(text, proposed, all) {
   return out;
 }
 
-// One file: its matches, as rg's matcher finds them on the lines ugrep proposed.
-function decideFile(file, proposed, t, opts, all) {
+// One file's text and the lines of it to decide.
+function fileLines(file, proposed, opts, all) {
   const fs = require('fs'), path = require('path');
   let bytes;
   try { bytes = fs.readFileSync(path.resolve(opts.cwd || process.cwd(), file)); } catch (e) {
     throw new UgrepError(`rg-native: ${file} could not be read after ugrep searched it (${e.code || e.message})`);
   }
   const text = rgText(bytes);
-  const lines = candidateLines(text, proposed, all);
+  return { text, lines: candidateLines(text, proposed, all) };
+}
+// rg-regex's refusals, as the one failure type this plumbing throws.
+function asUgrepError(e) {
+  return e && e.name === 'RgRegexRefusal' ? new UgrepError(rgRegexModule().refusalReason(e), { refused: e.rule }) : e;
+}
+// One file: its matches, as rg's matcher finds them on the lines ugrep proposed.
+function decideFile(file, proposed, t, opts, all) {
+  const { text, lines } = fileLines(file, proposed, opts, all);
   const out = [];
-  for (let i = 0; i < lines.length; i += 2) {
-    for (const m of verify(text, lines[i], lines[i + 1], t)) out.push(m);
-  }
+  try {
+    for (let i = 0; i < lines.length; i += 2) {
+      for (const m of rgRegexModule().verifyLine(text, lines[i], lines[i + 1], t)) out.push(m);
+    }
+  } catch (e) { throw asUgrepError(e); }
   return out;
 }
-function verify(text, ls, le, t) {
-  try { return rgRegexModule().verifyLine(text, ls, le, t); } catch (e) {
-    if (e.name === 'RgRegexRefusal') throw new UgrepError(rgRegexModule().refusalReason(e), { refused: e.rule });
-    throw e;
+// The same, for the asynchronous twin: each line is decided in slices of DECIDE_SLICE_STEPS, and
+// `between()` runs after every slice (it yields to the event loop and throws on an abort), so a
+// long line no longer holds the loop for its whole search (review I2).
+const DECIDE_SLICE_STEPS = 1 << 16;
+async function decideFileAsync(file, proposed, t, opts, all, between) {
+  const { text, lines } = fileLines(file, proposed, opts, all);
+  const out = [];
+  for (let i = 0; i < lines.length; i += 2) {
+    let r;
+    try {
+      const v = rgRegexModule().lineVerifier(text, lines[i], lines[i + 1], t);
+      while ((r = v.run(DECIDE_SLICE_STEPS)) === null) await between();
+    } catch (e) { throw asUgrepError(e); }
+    for (const m of r) out.push(m);
+    await between();
   }
+  return out;
 }
 // The pattern, as rg-regex reads it; a refusal is a UgrepError naming its rule, before any ugrep.
 function translated(pattern, opts) {
@@ -505,8 +527,10 @@ function ugrepMatches(files, pattern, opts = {}) {
 // The asynchronous twin: a Promise of the same Map, the chunks run one after another as real
 // children. opts.spawn is the UNWRAPPED spawn; opts.onChild(child) is told of each child, so the
 // caller can end the search (kill) when its own bounds fire. Deciding the proposed lines is JS
-// work, so the twin hands the event loop back every DECIDE_SLICE_MS of it (the caller's timers
-// and kill() keep turning), and opts.signal, once aborted, ends the search with a UgrepError.
+// work, done in slices of steps (decideFileAsync), and the twin hands the event loop back once
+// DECIDE_SLICE_MS of it have passed, inside a line as between lines and files (the caller's timers
+// and kill() keep turning); opts.signal, once aborted, ends the search with a UgrepError at the
+// next slice.
 const DECIDE_SLICE_MS = 20;
 function ugrepMatchesAsync(files, pattern, opts = {}) {
   if (!files.length) return Promise.resolve(new Map());
@@ -559,12 +583,15 @@ function ugrepMatchesAsync(files, pattern, opts = {}) {
     const proposed = inOrder(ranges);
     const out = new Map(), seen = new Set();
     let slice = Date.now();
+    const between = async () => {
+      if (Date.now() - slice > DECIDE_SLICE_MS) { await yieldLoop(); slice = Date.now(); }
+      if (aborted()) throw abortError();
+    };
     for (const f of files) {
       if (seen.has(f) || (!proposed.has(f) && !bom.has(f))) continue;
       seen.add(f);
-      if (Date.now() - slice > DECIDE_SLICE_MS) { await yieldLoop(); slice = Date.now(); }
-      if (aborted()) throw abortError();
-      const m = decideFile(f, proposed.get(f), t, opts, bom.has(f));
+      await between();
+      const m = await decideFileAsync(f, proposed.get(f), t, opts, bom.has(f), between);
       if (m.length) out.set(f, m);
     }
     return out;

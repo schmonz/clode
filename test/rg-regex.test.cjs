@@ -501,6 +501,43 @@ guardTests(defineGuard({
   control: () => ({ ugrep: UGREP || 'ugrep', cases: [['needle', 0]], prefilterFor: () => 'zzzz-proposes-nothing' }),
 }));
 
+// RG-RE-REFUSE-COST (review I2): a search is linear, but its constant is states x line length, and
+// rg's find_iter over one line can be quadratic; a minified bundle makes a 200 KB line ordinary.
+// So one line's matching has a step budget (LINE_STEP_BUDGET), and a line past it refuses by name
+// rather than stalling the caller (measured under tjs on this Mac: about 5 million steps a second).
+test('RG-RE-REFUSE-COST: a line past the step budget refuses by name; ordinary patterns on the same line do not', () => {
+  assert.strictEqual(R.LINE_STEP_BUDGET, 2 ** 24);
+  const line = Buffer.from('abcdefgh'.repeat(25000));                 // 200 KB, one line, no newline
+  const heavy = R.translateRgRegex('[a-z]{1,64}@', {});              // about 39 million steps (review)
+  assert.throws(() => R.verifyLine(line, 0, line.length, heavy), (e) => e.name === 'RgRegexRefusal' && e.rule === 'RG-RE-REFUSE-COST');
+  for (const p of ['\\w+', 'abc', '(?i)DEF', 'h\\b', 'a.c|zz', '[a-z]+@?']) {
+    const t = R.translateRgRegex(p, {});
+    assert.doesNotThrow(() => R.verifyLine(line, 0, line.length, t), p);
+  }
+});
+
+// The same search, run in SLICES (what the async twin does between turns of the event loop), finds
+// exactly what one uninterrupted run finds: over every oracle pattern, slices of 37 steps.
+test('lineVerifier: a search run in slices finds what one run finds (the oracle, 37-step slices)', () => {
+  for (const [pattern, ic] of ORACLE.cases) {
+    const t = R.translateRgRegex(pattern, { ignoreCase: !!ic });
+    if (t.refuse) continue;
+    for (let ls = 0; ls < CORPUS.length;) {
+      const le = CORPUS.indexOf(0x0a, ls);
+      let whole, sliced;
+      try { whole = R.verifyLine(CORPUS, ls, le, t); } catch (e) { whole = e.rule; }
+      try {
+        const v = R.lineVerifier(CORPUS, ls, le, t);
+        let r;
+        while ((r = v.run(37)) === null) { /* paused */ }
+        sliced = r;
+      } catch (e) { sliced = e.rule; }
+      assert.deepStrictEqual(sliced, whole, `${JSON.stringify(pattern)} at ${ls}`);
+      ls = le + 1;
+    }
+  }
+});
+
 test('RG-RE-PREFILTER-SUPERSET: the widening rules, stated', () => {
   const pre = (p, o) => R.translateRgRegex(p, o || {}).prefilter;
   assert.strictEqual(pre('needle'), 'needle');
