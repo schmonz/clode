@@ -61,10 +61,22 @@ function leafOf(file) {
 // rejected the pattern, glob, or file type without searching:" plus this stderr; `oX` and its
 // usage-error regex `TQ` in 2.1.283's chunk-9yjanq6m.js). Every other rc 2 with no output,
 // that consumer reads as "no results", which is exactly the silent wrong answer ("No files
-// found") this replaces. test/rg-spawn.test.cjs pins the spelling against that regex.
+// found") this replaces. test/build-gates/rg-probe-gates.test.cjs reads that regex from the
+// pinned carve, by structure, and requires this spelling to pass it.
+//
+// REFUSAL_LINE is this spelling, stated ONCE: rgRefusal writes it and parseRgRefusal reads it
+// back (the tests and the differential's tally read refusals only through it).
+const REFUSAL_LINE = /^rg: error parsing flag(?: (\S+))?: (.*)$/m;
 function rgRefusal(reason, { flag } = {}) {
   const line = `rg: error parsing flag${flag ? ' ' + flag : ''}: ${reason}\n`;
   return { stdout: Buffer.alloc(0), stderr: Buffer.from(line, 'utf8'), status: 2, signal: null, refused: reason };
+}
+// A refusal of quaude's rg in some text (its stderr, or a tool_result quoting it):
+// { flag, reason }, flag null when the refusal names none; null when the text holds none.
+// Only quaude's own reasons count: native's real usage errors share the prefix.
+function parseRgRefusal(text) {
+  const m = REFUSAL_LINE.exec(String(text == null ? '' : text));
+  return m && /quaude answers rg/.test(m[2]) ? { flag: m[1] || null, reason: m[2] } : null;
 }
 
 // Output a synthesized child may hold. rg's own output has no limit; this bounds what a sync
@@ -325,4 +337,4 @@ function rgExecFileSync(r, opts, file, args) {
   return s.stdout;
 }
 
-module.exports = { isRgExe, rgRefusal, runRg, rgSpawn, rgExecFile, rgSpawnSync, rgExecFileSync, RG_MAX_BUFFER };
+module.exports = { isRgExe, rgRefusal, parseRgRefusal, runRg, rgSpawn, rgExecFile, rgSpawnSync, rgExecFileSync, RG_MAX_BUFFER };

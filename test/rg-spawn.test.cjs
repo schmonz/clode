@@ -272,23 +272,17 @@ guardTests(defineGuard({
 // failed child: rc 2, the flag and the reason on stderr, no output. It never falls
 // through to a host rg, and it never tells anyone to install ripgrep.
 //
-// WHY THE SPELLING `rg: error parsing flag ...`. It is native rg's own spelling of a
-// usage error (measured, 2.1.283's embedded ripgrep 14.1.1: `rg: error parsing flag
-// --max-columns: value is not a valid number: ...`), and it is one of the five spellings
-// upstream's Grep and Glob consumer shows the model as an error. That consumer (`oX`,
-// 2.1.283 chunk-9yjanq6m.js) rejects with "Search failed ... ripgrep rejected the
-// pattern, glob, or file type without searching:" plus stderr ONLY when the call passed
-// rejectOnInputError (both tools do), rc is 2, no line was printed, and stderr matches
-// USAGE_ERROR below; any other rc 2 with no output it reads as "no results". So a refusal
-// spelled any other way would reach the model as "No files found": the silent wrong
-// answer this replaces.
-const USAGE_ERROR = /^rg: (?:regex parse error|error parsing glob|unrecognized file type|error parsing flag|compiled regex exceeds size limit)/m;
+// The spelling is rg-native.cjs's (REFUSAL_LINE), read back here only through its
+// parseRgRefusal. That the bundle's consumer shows it to the model as an error, and not as
+// "no results", is judged against the consumer's own regex, read from the pinned carve:
+// test/build-gates/rg-probe-gates.test.cjs. No copy of that regex lives in a test.
+const { parseRgRefusal } = require('../libexec/rg-native.cjs');
 
 function assertRefused(a, what, flagOrApplet) {
   assert.doesNotMatch(a.out + a.err, /HOST-RG-CALLED/, `${what} ran the HOST rg`);
   assert.strictEqual(a.status, 2, `${what}: not rc 2: ${JSON.stringify(a)}`);
   assert.strictEqual(a.out, '', `${what}: a refusal prints nothing on stdout`);
-  assert.match(a.err, USAGE_ERROR, `${what}: the model would read this refusal as "no results": ${JSON.stringify(a.err)}`);
+  assert.ok(parseRgRefusal(a.err), `${what}: not quaude's refusal: ${JSON.stringify(a.err)}`);
   assert.ok(a.err.includes(flagOrApplet), `${what}: the refusal does not name ${flagOrApplet}: ${JSON.stringify(a.err)}`);
   assert.doesNotMatch(a.err, /ripgrep/i, `${what}: a refusal never points at ripgrep`);
   assert.doesNotMatch(a.err, /install (it|rg)\b/i, `${what}: a refusal never says to install rg`);
@@ -332,16 +326,16 @@ test('ugrep rejecting the translation reaches the caller as a refusal naming wha
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test('rgRefusal: rc 2, nothing on stdout, the flag and reason on stderr in the spelling the Grep tool surfaces', () => {
+test('rgRefusal: rc 2, nothing on stdout, the flag and reason on stderr; parseRgRefusal reads it back', () => {
   const { rgRefusal } = require('../libexec/rg-native.cjs');
-  const r = rgRefusal('the reason', { flag: '--json' });
+  const r = rgRefusal('quaude answers rg with x', { flag: '--json' });
   assert.strictEqual(r.status, 2);
   assert.strictEqual(r.stdout.length, 0);
-  assert.strictEqual(r.stderr.toString('utf8'), 'rg: error parsing flag --json: the reason\n');
-  assert.match(r.stderr.toString('utf8'), USAGE_ERROR);
-  const noFlag = rgRefusal('why');
-  assert.match(noFlag.stderr.toString('utf8'), USAGE_ERROR);
-  assert.match(noFlag.stderr.toString('utf8'), /why\n$/);
+  assert.strictEqual(r.stderr.toString('utf8'), 'rg: error parsing flag --json: quaude answers rg with x\n');
+  assert.deepStrictEqual(parseRgRefusal(r.stderr), { flag: '--json', reason: 'quaude answers rg with x' });
+  assert.deepStrictEqual(parseRgRefusal(rgRefusal('quaude answers rg: why').stderr), { flag: null, reason: 'quaude answers rg: why' });
+  // native's own usage error shares the prefix and is not quaude's refusal
+  assert.strictEqual(parseRgRefusal('rg: error parsing flag --max-columns: value is not a valid number'), null);
 });
 
 // ---------------------------------------------------------------------------

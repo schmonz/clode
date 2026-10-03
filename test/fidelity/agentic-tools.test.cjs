@@ -88,7 +88,8 @@ test('agentic Write round-trip under tjs: the tool creates the file on disk', as
 // exactly that refusal IN THE TOOL_RESULT, and on nothing else: "not found" or any other
 // answer without the matched line fails (BACKLOG.md, "The Grep tool in quaude"). The
 // grep-native plan's later tasks answer --json; its Task 11 removes the skip.
-const GREP_JSON_REFUSED = /rg: error parsing flag --json: quaude answers rg/;
+const { parseRgRefusal } = require('../../libexec/rg-native.cjs');
+const grepJsonRefused = (result) => { const r = parseRgRefusal(result); return !!r && r.flag === '--json'; };
 test('agentic Grep round-trip under tjs: search-applet path returns the match', async (t) => {
   if (skipUnlessTjs(t)) return;
   const bin = providerBin(); if (!bin) { t.skip('no CLODE_PROVIDER_BIN'); return; }
@@ -111,7 +112,7 @@ test('agentic Grep round-trip under tjs: search-applet path returns the match', 
     assert.strictEqual(r.status, 0, `stderr:\n${r.stderr}`);
     const result = toolResultText(mock, GREP.id);
     assert.ok(result, 'no follow-up POST carrying the Grep tool_result');
-    if (GREP_JSON_REFUSED.test(result)) {
+    if (grepJsonRefused(result)) {
       t.skip('the Grep tool runs `rg --json`, which quaude\'s rg refuses honestly until the grep-native plan '
         + 'answers it; the tool_result carries that refusal (BACKLOG.md: The Grep tool in quaude)');
       return;

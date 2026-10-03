@@ -192,6 +192,47 @@ function matrixDrift(text) {
   return findings;
 }
 
+// THE CONSUMER'S USAGE-ERROR TEST, read from a carve BY STRUCTURE. The Grep/Glob consumer
+// (`oX` in 2.1.283) shows the model an rc-2 run as an error ONLY when its stderr passes one
+// regex (`TQ`), and then throws the class whose message begins "Search failed — ripgrep rejected
+// the pattern, glob, or file type without searching" (`CD`); any other rc 2 with no output it
+// reads as "no results". quaude's refusal (rg-native.cjs rgRefusal) must pass THAT regex, read
+// from the carve, never a copy of it. Found by structure, never by those names:
+//   1. the class whose constructor's super() message is that "Search failed ..." text;
+//   2. the `<re>.test(<stderr>)){<reject>(new <that class>(` call that throws it;
+//   3. `<re>=/.../<flags>`, the regex literal bound to that name.
+// Returns { regex } or { missing: why }.
+const ID = '[\\w$]+';
+function consumerUsageErrorRegex(text) {
+  const t = String(text);
+  const all = (re) => [...t.matchAll(re)];
+  const cls = all(new RegExp(`class (${ID}) extends ${ID}\\{constructor\\(${ID}\\)\\{super\\(\`Search failed[^\`]*?ripgrep rejected the pattern`, 'g'));
+  if (cls.length !== 1) return { missing: `the "Search failed ... ripgrep rejected the pattern" class is in the carve ${cls.length} times, not once` };
+  const esc = (n) => n.replace(/\$/g, '\\$');
+  const use = all(new RegExp(`(${ID})\\.test\\(${ID}\\)\\)\\{${ID}\\(new ${esc(cls[0][1])}\\(`, 'g'));
+  if (use.length !== 1) return { missing: `the test that throws ${cls[0][1]} is in the carve ${use.length} times, not once` };
+  const def = all(new RegExp(`(?:^|[^\\w$])${esc(use[0][1])}=\\/((?:[^/\\\\\\n]|\\\\.)+)\\/([a-z]*)`, 'g'));
+  if (def.length !== 1) return { missing: `the regex ${use[0][1]} is bound in the carve ${def.length} times, not once` };
+  return { regex: new RegExp(def[0][1], def[0][2]) };
+}
+
+// What differs between quaude's refusal and the consumer's test: [] when every refusal shape
+// (with a flag, and without one) passes it, else one finding per shape that does not.
+function refusalDrift(text) {
+  const { rgRefusal } = require('../../libexec/rg-native.cjs');
+  const c = consumerUsageErrorRegex(text);
+  if (c.missing) return [`usage-error regex: ${c.missing}`];
+  const findings = [];
+  for (const r of [rgRefusal('a reason', { flag: '--json' }), rgRefusal('a reason')]) {
+    const line = r.stderr.toString('utf8');
+    if (!c.regex.test(line)) {
+      findings.push(`usage-error regex: the carve's ${c.regex} does not pass quaude's refusal ${JSON.stringify(line)}, `
+        + 'so the model would read it as "no results"');
+    }
+  }
+  return findings;
+}
+
 // The variants report-grep measured, and the content-only flags. Patterns come from the regex
 // dialect Rust regex and ugrep read the same way (the written divergence).
 const GREP_VARIANTS = [
@@ -355,4 +396,5 @@ function compareRg(a, b) {
 }
 
 module.exports = { RG_TREE_KINDS, makeRgTree, treeEntries, RG_MATRIX, cellArgv, grepArgv, globArgv, VCS_DIRS, flagLiterals, builderFlagLiterals, matrixDrift,
+  consumerUsageErrorRegex, refusalDrift,
   runNativeRg, nativeRgVersion, runOursRg, runOursRgBatch, compareRg, normalizeRg };

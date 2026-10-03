@@ -42,6 +42,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { defineGuard, guardTests, checkGate, BROKEN } = require('../guard.cjs');
 const P = require('../../scripts/lib/rg-probe.cjs');
+const { parseRgRefusal } = require('../../libexec/rg-native.cjs');
 const { providerBin } = require('../provider-resolve.cjs');
 const { tjsPath, resolveBin } = require('../node-shim-helper.cjs');
 
@@ -148,10 +149,10 @@ function readCells() {
 function refusalTally(cells) {
   const t = new Map();
   for (const c of cells) {
-    const m = /^rg: error parsing flag( \S+)?: (.*)$/m.exec(c.ours.stderr.toString('utf8'));
+    const m = parseRgRefusal(c.ours.stderr);
     if (!m) continue;
-    const said = /rejected this search \((?:\w+: )?([^,)]*)/.exec(m[2]);
-    const key = m[1] ? m[1].trim() : said ? `rejected: ${said[1].trim()}` : m[2].replace(/[;(].*$/, '').trim();
+    const said = /rejected this search \((?:\w+: )?([^,)]*)/.exec(m.reason);
+    const key = m.flag ? m.flag : said ? `rejected: ${said[1].trim()}` : m.reason.replace(/[;(].*$/, '').trim();
     t.set(key, (t.get(key) || 0) + 1);
   }
   return [...t].sort((a, b) => b[1] - a[1]).map(([k, n]) => `${k} x${n}`).join(', ') || 'none';

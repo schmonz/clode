@@ -314,7 +314,8 @@ test('a host rg is never called, even when present, if the applet is missing', (
     // A refusal: rc 2, nothing printed, the missing applet named (rg-native.cjs rgRefusal).
     assert.strictEqual(a.status, 2, `${what}: ${JSON.stringify(a)}`);
     assert.strictEqual(a.out, '');
-    assert.match(a.err, /^rg: error parsing flag: quaude answers rg with ugrep/);
+    const refused = require('../libexec/rg-native.cjs').parseRgRefusal(a.err);
+    assert.ok(refused && refused.flag === null && /^quaude answers rg with ugrep/.test(refused.reason), a.err);
   }
   // The operator's trace has to say so too, and name the remedy — silence here would read
   // as "rg is missing" when rg is in fact right there and deliberately declined.
