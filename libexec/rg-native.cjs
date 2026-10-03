@@ -9,19 +9,21 @@
 // it, and the goal is native's answer byte for byte (test/fidelity/rg-differential.test.cjs
 // judges exactly that, against native's embedded rg).
 //
-// SHAPE. runRg(argv, opts) -> { stdout: Buffer, stderr: Buffer, status, signal } is the one
-// entry point. bun-shim.cjs routes every spawn surface the bundle can reach rg through to it
+// SHAPE. bun-shim.cjs routes every spawn surface the bundle can reach rg through here
 // (child_process execFile/execFileSync/spawn/spawnSync — node-shim's under quaude, node's
 // under naude — and Bun.spawn/Bun.spawnSync), matching the executable by BASENAME (isRgExe),
 // so `/opt/pkg/bin/rg` (what Bun.which answers when an rg is installed) and a bare `rg` are
-// the same call. The surfaces then hand the caller a SYNTHESIZED child carrying runRg's
-// result (rgSpawn, rgExecFile, rgSpawnSync, rgExecFileSync): no rg process ever starts.
+// the same call. No rg process ever starts. The ASYNC surfaces get rgSpawn/rgExecFile: the
+// applet quaude answers rg with runs as a real asynchronous child behind a child of node's
+// shape, so the event loop keeps turning, the caller's stdin reaches it, and the caller's
+// signal, kill(), timeout and maxBuffer end it. The SYNC surfaces get runRg (blocking, as
+// theirs do in node) through rgSpawnSync/rgExecFileSync. A refusal is a child that started
+// no process at all.
 //
-// FOR NOW (the plan's Task 4) runRg delegates to today's rg -> ugrep translation, which
-// bun-shim owns and passes in (`opts.translate`), and runs the applet it names. The
-// emulation proper (walk and match over ugrep, rg's printers, JSON Lines, binary rules,
-// ignore rules, globs, types) replaces that delegation rule by rule, each rule measured from
-// native.
+// FOR NOW (the plan's Task 4) both delegate to today's rg -> ugrep translation, which
+// bun-shim owns and passes in (`translate`), and run the applet it names. The emulation
+// proper (walk and match over ugrep, rg's printers, JSON Lines, binary rules, ignore rules,
+// globs, types) replaces that delegation rule by rule, each rule measured from native.
 //
 // Loaded by bun-shim.cjs as `require(__dirname + '/rg-native.cjs')`, so it travels beside
 // bun-shim.cjs in every packaging (test/shim-companions.test.cjs). CommonJS under tjs and
@@ -71,48 +73,64 @@ const RG_MAX_BUFFER = 256 * 1024 * 1024;
 const toBuf = (b) => (b == null ? Buffer.alloc(0) : Buffer.isBuffer(b) ? b : Buffer.from(b));
 const firstLine = (buf) => toBuf(buf).toString('utf8').split('\n').map((l) => l.trim()).find(Boolean) || '';
 
+// What an applet run comes to when the applet could not be run at all (ENOENT, EACCES, ...):
+// a refusal naming the applet, never a fall-through to anything else.
+function couldNotRun(bin, e) {
+  return rgRefusal(`${leafOf(bin)}, which quaude answers rg with on purpose, could not be run `
+    + `(${(e && (e.code || e.message)) || 'unknown error'}); nothing was searched`);
+}
+
+// What an applet that exited >= 2 having printed NOTHING comes to: it rejected the translated
+// search, so quaude's rg refuses, naming what the applet said. `onRejected(argv, status)` lets
+// the caller surface it to the operator as well.
+function appletRejected(bin, status, stderr) {
+  const said = firstLine(stderr);
+  return rgRefusal(`${leafOf(bin)}, which quaude answers rg with on purpose, rejected this search`
+    + `${said ? ` (${said})` : ` (exit ${status})`}; nothing was found`);
+}
+
+// THE SYNCHRONOUS RUN, for the synchronous surfaces only (spawnSync, execFileSync): they block
+// their caller by contract, as node's do. Every other surface runs the applet asynchronously
+// (rgSpawn below), so the event loop keeps turning and the caller's bounds can end the search.
+//
 // argv: rg's arguments (no argv[0]). opts:
 //   cwd, env              where and with what the search runs (env defaults to process.env)
-//   timeout, maxBuffer    the caller's own bounds, when it named them
+//   input                 what the caller hands the child's stdin (rg reads it for target `-`)
+//   timeout, maxBuffer,   the caller's own bounds, when it named them
+//   killSignal
 //   translate(argv)       -> { argv: [applet, ...] } or { refuse, flag } — today's translation
 //   spawnSync             the UNWRAPPED spawnSync to run the applet with
-// Returns { stdout, stderr, status, signal }. A refusal additionally carries `refused`; a
-// result whose applet rejected the translation carries `appletRejected: { argv, status }`
-// so the caller can surface that to the operator as well.
+//   onRejected(argv, st)  told when the applet rejected the translation
+// Returns { stdout, stderr, status, signal }, plus `refused` for a refusal and `errorCode` when
+// a bound fired (node's spawnSync reports ETIMEDOUT / ENOBUFS; node-shim's ETIMEDOUT for both).
 function runRg(argv, opts = {}) {
   const t = opts.translate(argv);
   if (t.refuse) return rgRefusal(t.refuse, { flag: t.flag });
   const [bin, ...rest] = t.argv;
   const r = opts.spawnSync(bin, rest, {
     cwd: opts.cwd, env: opts.env || process.env, encoding: 'buffer',
+    // Bytes, always: the run itself is encoding 'buffer', which node will not decode a string with.
+    input: typeof opts.input === 'string' ? Buffer.from(opts.input, 'utf8') : opts.input,
+    killSignal: opts.killSignal,
     timeout: typeof opts.timeout === 'number' && opts.timeout > 0 ? opts.timeout : undefined,
     maxBuffer: typeof opts.maxBuffer === 'number' ? opts.maxBuffer : RG_MAX_BUFFER,
   });
   const stdout = toBuf(r.stdout), stderr = toBuf(r.stderr);
   const code = r.error && r.error.code;
-  // Killed for running too long or printing too much: the caller's own bound fired, which is
-  // what it would see from rg too. node reports ETIMEDOUT/ENOBUFS with the kill signal;
-  // node-shim's spawnSync reports both as ETIMEDOUT with SIGKILL.
-  if (code === 'ETIMEDOUT' || code === 'ENOBUFS') return { stdout, stderr, status: null, signal: r.signal || 'SIGKILL' };
-  if (r.error) {
-    return rgRefusal(`${leafOf(bin)}, which quaude answers rg with on purpose, could not be run `
-      + `(${code || r.error.message}); nothing was searched`);
+  // A bound fired: the caller's own timeout or maxBuffer killed the run, which is what it would
+  // see from rg too, so it is reported the way node reports it, not as a refusal.
+  if (code === 'ETIMEDOUT' || code === 'ENOBUFS') {
+    return { stdout, stderr, status: null, signal: r.signal || opts.killSignal || 'SIGTERM', errorCode: code };
   }
+  if (r.error) return couldNotRun(bin, r.error);
   if (r.status >= 2 && stdout.length === 0) {
-    const said = firstLine(stderr);
-    return { ...rgRefusal(`${leafOf(bin)}, which quaude answers rg with on purpose, rejected this search`
-      + `${said ? ` (${said})` : ` (exit ${r.status})`}; nothing was found`),
-    appletRejected: { argv: t.argv, status: r.status } };
+    if (opts.onRejected) opts.onRejected(t.argv, r.status);
+    return appletRejected(bin, r.status, stderr);
   }
   return { stdout, stderr, status: r.status, signal: r.signal || null };
 }
 
-// ---- the synthesized children --------------------------------------------------------------
-// Each surface's result shape, as node gives it, carrying runRg's answer. `run` is a thunk
-// (() => result) so the async surfaces can run it AFTER returning the child: a caller attaches
-// its listeners to what spawn()/execFile() returned before anything is emitted, as with a real
-// child. The run itself is synchronous.
-
+// ---- the children the async surfaces get ----------------------------------------------------
 // node's stdio slots: 'pipe' (the default) gets a stream; anything else does not.
 function stdioSlots(opts) {
   const s = opts && opts.stdio;
@@ -138,68 +156,140 @@ function endedWritable() {
   w.cork = () => {}; w.uncork = () => {}; w.setDefaultEncoding = () => w;
   return w;
 }
+const toFd = (fd, buf) => { if (buf.length) { try { (fd === 1 ? process.stdout : process.stderr).write(buf); } catch { /* closed */ } } };
 
-// The async child (child_process.spawn). Emits 'spawn', then the output, then 'exit' and,
-// once the output has been delivered, 'close' — the order a real child's listeners rely on.
-function rgSpawn(run, opts = {}) {
-  const [inSlot, outSlot, errSlot] = stdioSlots(opts);
+// The child shape both kinds share: streams per slot, kill, and the bounds node's spawn honours
+// (`signal`: an 'error' carrying an AbortError, then the kill; `timeout`: the kill). `kill(sig)`
+// is how each kind ends its run. finish({ status, signal, stderr }) ends the child: the
+// streams end, then 'exit', then 'close' — the order a real child's listeners rely on.
+function childShell(opts, kill) {
+  const [, outSlot, errSlot] = stdioSlots(opts);
   const child = new EventEmitter();
-  child.pid = undefined;                    // no process was started
-  child.stdin = inSlot === 'pipe' ? endedWritable() : null;
   child.stdout = outSlot === 'pipe' ? new Readable({ read() {} }) : null;
   child.stderr = errSlot === 'pipe' ? new Readable({ read() {} }) : null;
   child.exitCode = null; child.signalCode = null; child.killed = false;
-  let done = false, killedWith = null;
-  child.kill = (sig) => { if (done) return false; child.killed = true; killedWith = sig || 'SIGTERM'; return true; };
+  let done = false, timer = null;
+  child.kill = (sig) => { if (done) return false; child.killed = true; return kill(sig || 'SIGTERM'); };
   child.ref = () => child; child.unref = () => child;
-  const finish = (r) => {
+  const out = (buf) => { if (child.stdout) { if (buf.length) child.stdout.push(buf); } else if (outSlot === 'inherit') toFd(1, buf); };
+  const finish = ({ status, signal, stderr }) => {
+    if (done) return;
     done = true;
-    const deliver = (stream, slot, buf, fd) => {
-      if (stream) { if (buf.length) stream.push(buf); stream.push(null); }
-      else if (slot === 'inherit' && buf.length) { try { (fd === 1 ? process.stdout : process.stderr).write(buf); } catch { /* closed */ } }
-    };
-    deliver(child.stdout, outSlot, toBuf(r.stdout), 1);
-    deliver(child.stderr, errSlot, toBuf(r.stderr), 2);
-    child.exitCode = r.status; child.signalCode = r.signal || null;
-    child.emit('exit', r.status, r.signal || null);
-    setTimeout(() => child.emit('close', r.status, r.signal || null), 0);
+    clearTimeout(timer);
+    if (child.stdout) child.stdout.push(null);
+    const err = toBuf(stderr);
+    if (child.stderr) { if (err.length) child.stderr.push(err); child.stderr.push(null); } else if (errSlot === 'inherit') toFd(2, err);
+    child.exitCode = status; child.signalCode = signal || null;
+    child.emit('exit', status, signal || null);
+    setTimeout(() => child.emit('close', status, signal || null), 0);
   };
+  const killSignal = opts.killSignal || 'SIGTERM';
+  if (typeof opts.timeout === 'number' && opts.timeout > 0) timer = setTimeout(() => child.kill(killSignal), opts.timeout);
+  const signal = opts.signal;
+  if (signal) {
+    const onAbort = () => { if (done) return; child.kill(killSignal); child.emit('error', abortError(signal)); };
+    if (signal.aborted) process.nextTick(onAbort);
+    else signal.addEventListener('abort', onAbort, { once: true });
+  }
+  return { child, out, finish, isDone: () => done };
+}
+
+// A child that never started a process: a refusal, answered on the next turn of the loop (the
+// caller attaches its listeners first, as with a real child). Killed or aborted first, it ends
+// with that signal instead.
+function refusedChild(r, opts) {
+  let killedWith = null, sh = null;
+  sh = childShell(opts, (sig) => { killedWith = sig; setTimeout(() => sh.finish({ status: null, signal: sig, stderr: null }), 0); return true; });
+  const { child } = sh;
+  child.pid = undefined;                    // no process was started
+  child.stdin = stdioSlots(opts)[0] === 'pipe' ? endedWritable() : null;
   setTimeout(() => {
-    const signal = opts.signal;
-    if (signal && signal.aborted) {
-      done = true;
-      child.emit('error', abortError(signal));
-      finish({ stdout: null, stderr: null, status: null, signal: 'SIGTERM' });
-      return;
-    }
+    if (sh.isDone()) return;
     child.emit('spawn');
-    if (killedWith) { finish({ stdout: null, stderr: null, status: null, signal: killedWith }); return; }
-    let r;
-    try { r = run(); } catch (e) { r = rgRefusal(`quaude's rg failed: ${e && e.message ? e.message : e}`); }
-    finish(r);
+    if (killedWith) return;
+    sh.out(toBuf(r.stdout));
+    sh.finish(r);
   }, 0);
   return child;
 }
 
-// child_process.execFile: the child, plus (err, stdout, stderr) once it closes. err carries
-// node's fields: code (the exit code) or killed+signal, and cmd.
-function rgExecFile(run, opts, cb, file, args) {
+// child_process.spawn (and Bun.spawn, which bun-shim builds on it): the applet runs as a REAL
+// asynchronous child, with the caller's stdin wired straight to it (the bundle pipes a
+// task-output file into rg's stdin for target `-`). Its stdout streams through as it arrives; its
+// stderr is held until it exits, because an applet that exits >= 2 having printed nothing has
+// rejected the translation and its stderr becomes quaude's refusal. ctx:
+//   translate(argv)       today's translation (see runRg)
+//   spawn                 the UNWRAPPED asynchronous spawn
+//   onRejected(argv, st)  told when the applet rejected the translation
+function rgSpawn(argv, opts = {}, ctx) {
+  const t = ctx.translate(argv);
+  if (t.refuse) return refusedChild(rgRefusal(t.refuse, { flag: t.flag }), opts);
+  const [bin, ...rest] = t.argv;
+  const inSlot = stdioSlots(opts)[0];
+  let applet;
+  try {
+    applet = ctx.spawn(bin, rest, { cwd: opts.cwd, env: opts.env || process.env, windowsHide: opts.windowsHide,
+      stdio: [inSlot === 'pipe' ? 'pipe' : inSlot, 'pipe', 'pipe'] });
+  } catch (e) { return refusedChild(couldNotRun(bin, e), opts); }
+  const sh = childShell(opts, (sig) => { try { return applet.kill(sig); } catch { return false; } });
+  const { child } = sh;
+  child.pid = applet.pid;
+  child.stdin = applet.stdin || null;
+  if (child.stdin) child.stdin.on('error', () => {});   // a search that ends early closes its stdin
+  let printed = 0;
+  const errs = [];
+  applet.stdout.on('data', (d) => { printed += d.length; sh.out(toBuf(d)); });
+  applet.stderr.on('data', (d) => { errs.push(toBuf(d)); });
+  applet.on('spawn', () => { child.pid = applet.pid; child.emit('spawn'); });
+  applet.on('error', (e) => { if (!sh.isDone() && !child.killed) { const r = couldNotRun(bin, e); sh.finish(r); } });
+  applet.on('close', (code, signal) => {
+    const stderr = Buffer.concat(errs);
+    if (code >= 2 && printed === 0 && !child.killed) {
+      if (ctx.onRejected) ctx.onRejected(t.argv, code);
+      sh.finish(appletRejected(bin, code, stderr));
+      return;
+    }
+    sh.finish({ status: code, signal, stderr });
+  });
+  return child;
+}
+
+// child_process.execFile: the child, plus (err, stdout, stderr) once it closes, with node's
+// fields: an AbortError for an abort; for the maxBuffer bound (node's default 1 MiB), the child
+// killed and ERR_CHILD_PROCESS_STDIO_MAXBUFFER, which the 2.1.283 Grep/Glob consumer reads as
+// "output passed the limit" (a plain kill it reads as "timed out"); otherwise code, or
+// killed + signal, and cmd.
+function rgExecFile(argv, opts, cb, file, ctx) {
   const o = opts || {};
   const enc = o.encoding === undefined ? 'utf8' : o.encoding;
-  const conv = (b) => (enc === 'buffer' || enc === null ? toBuf(b) : toBuf(b).toString(enc));
-  let result = null;
-  const child = rgSpawn(() => (result = run()), { ...o, stdio: 'pipe' });
-  let aborted = null;
+  const conv = (b) => (enc === 'buffer' || enc === null ? b : b.toString(enc));
+  const maxBuffer = typeof o.maxBuffer === 'number' ? o.maxBuffer : 1024 * 1024;
+  const child = rgSpawn(argv, { ...o, stdio: 'pipe' }, ctx);
+  const outs = [], errs = [];
+  let outLen = 0, errLen = 0, overflow = null, aborted = null;
+  child.stdout.on('data', (d) => {
+    outLen += d.length; outs.push(d);
+    if (outLen > maxBuffer && !overflow) { overflow = 'stdout'; child.kill(o.killSignal || 'SIGTERM'); }
+  });
+  child.stderr.on('data', (d) => {
+    errLen += d.length; errs.push(d);
+    if (errLen > maxBuffer && !overflow) { overflow = 'stderr'; child.kill(o.killSignal || 'SIGTERM'); }
+  });
   child.on('error', (e) => { aborted = e; });
   child.on('close', (code, signal) => {
     if (typeof cb !== 'function') return;
-    const r = result || { stdout: null, stderr: null };
-    const stdout = conv(r.stdout), stderr = conv(r.stderr);
+    const so = Buffer.concat(outs).subarray(0, maxBuffer), se = Buffer.concat(errs).subarray(0, maxBuffer);
+    const stdout = conv(so), stderr = conv(se);
     if (aborted) { cb(aborted, stdout, stderr); return; }
+    const cmd = [file, ...argv].join(' ');
+    if (overflow) {
+      const e = new RangeError(`${overflow} maxBuffer length exceeded`);
+      e.code = 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER'; e.cmd = cmd;
+      cb(e, stdout, stderr); return;
+    }
     if (code === 0) { cb(null, stdout, stderr); return; }
-    const cmd = [file, ...(args || [])].join(' ');
-    const err = new Error(`Command failed: ${cmd}\n${toBuf(r.stderr).toString('utf8')}`);
-    err.code = code; err.killed = signal != null; err.signal = signal; err.cmd = cmd;
+    const err = new Error(`Command failed: ${cmd}\n${se.toString('utf8')}`);
+    err.code = code; err.killed = child.killed && signal != null; err.signal = signal; err.cmd = cmd;
     cb(err, stdout, stderr);
   });
   return child;
@@ -212,12 +302,12 @@ function rgSpawnSync(r, opts = {}) {
   const [, outSlot, errSlot] = stdioSlots(opts);
   const slot = (s, b, fd) => {
     if (s === 'pipe') return conv(b);
-    if (s === 'inherit' && toBuf(b).length) { try { (fd === 1 ? process.stdout : process.stderr).write(toBuf(b)); } catch { /* closed */ } }
+    if (s === 'inherit') toFd(fd, toBuf(b));
     return null;
   };
   const stdout = slot(outSlot, r.stdout, 1), stderr = slot(errSlot, r.stderr, 2);
   const out = { pid: 0, output: [null, stdout, stderr], stdout, stderr, status: r.status, signal: r.signal || null };
-  if (r.status === null && r.signal) out.error = Object.assign(new Error('spawnSync rg ETIMEDOUT'), { code: 'ETIMEDOUT', errno: 'ETIMEDOUT' });
+  if (r.errorCode) out.error = Object.assign(new Error(`spawnSync rg ${r.errorCode}`), { code: r.errorCode, errno: r.errorCode, syscall: 'spawnSync rg' });
   return out;
 }
 

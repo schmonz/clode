@@ -343,3 +343,111 @@ test('rgRefusal: rc 2, nothing on stdout, the flag and reason on stderr in the s
   assert.match(noFlag.stderr.toString('utf8'), USAGE_ERROR);
   assert.match(noFlag.stderr.toString('utf8'), /why\n$/);
 });
+
+// ---------------------------------------------------------------------------
+// THE ASYNC SURFACES STAY ASYNC. execFile, spawn and Bun.spawn run quaude's rg WITHOUT
+// blocking the event loop, and the caller's bounds still end it: an AbortSignal, kill(), a
+// timeout, a maxBuffer. The 2.1.283 bundle relies on each: the startup file-count prewarm
+// passes AbortSignal.timeout(3000), Esc aborts a Grep, the file-suggestion spawn (dTo) aborts
+// after 5 s, and the Grep/Glob consumer (oX) reads ERR_CHILD_PROCESS_STDIO_MAXBUFFER as
+// "output passed the limit" (any kill it reads as "timed out after 20 seconds"). A search run
+// synchronously inside the shim (as quaude's rg first did) honours none of them.
+//
+// The stand-in ugrep is SLOW (it sleeps); each bound must end it in well under the sleep,
+// and a 20 ms interval must keep ticking meanwhile. A second stand-in echoes its stdin, for
+// the target `-` the bundle uses for a task-output file (it pipes the file into the child's
+// stdin), and a third prints more than a small maxBuffer.
+const SLOW_S = 6;
+function asyncProbe() {
+  return `
+    const Bun = require(${JSON.stringify(SHIM)});
+    const cp = require('child_process');
+    const txt = (b) => (b == null ? '' : Buffer.isBuffer(b) ? b.toString('utf8') : String(b));
+    const out = {};
+    let ticks = 0; const iv = setInterval(() => { ticks++; }, 20);
+    const timed = async (name, f) => { const t0 = Date.now(), k0 = ticks; const r = await f(); out[name] = { ...r, ms: Date.now() - t0, ticks: ticks - k0 }; };
+    // The translation picks its applet from THIS process's CLODE_UGREP when the call is made.
+    const env = (u) => { process.env.CLODE_UGREP = u; return process.env; };
+    (async () => {
+      await timed('execFile+AbortSignal', () => new Promise((res) => {
+        const ac = new AbortController(); setTimeout(() => ac.abort(), 300);
+        cp.execFile('rg', ['needle', '.'], { env: env(process.env.SLOW), signal: ac.signal },
+          (err) => res({ name: err && err.name, code: err && err.code }));
+      }));
+      await timed('execFile+timeout', () => new Promise((res) => {
+        cp.execFile('rg', ['needle', '.'], { env: env(process.env.SLOW), timeout: 300, killSignal: 'SIGKILL' },
+          (err) => res({ killed: err && err.killed, signal: err && err.signal }));
+      }));
+      await timed('spawn+kill', () => new Promise((res) => {
+        const c = cp.spawn('rg', ['needle', '.'], { env: env(process.env.SLOW) });
+        setTimeout(() => c.kill('SIGKILL'), 300);
+        c.on('close', (code, signal) => res({ code, signal }));
+      }));
+      await timed('Bun.spawn+kill', async () => {
+        env(process.env.SLOW);
+        const b = Bun.spawn(['rg', 'needle', '.']);
+        setTimeout(() => b.kill('SIGKILL'), 300);
+        return { exited: await b.exited };
+      });
+      await timed('execFile stdin', () => new Promise((res) => {
+        const c = cp.execFile('rg', ['-n', 'needle', '-'], { env: env(process.env.CAT) },
+          (err, so) => res({ err: err && err.message, out: txt(so) }));
+        c.stdin.end('piped needle\\n');
+      }));
+      const s = cp.spawnSync('rg', ['-n', 'needle', '-'], { env: env(process.env.CAT), input: 'sync needle\\n' });
+      out['spawnSync input'] = { out: txt(s.stdout) };
+      await timed('execFile maxBuffer', () => new Promise((res) => {
+        cp.execFile('rg', ['needle', '.'], { env: env(process.env.BIG), maxBuffer: 1000 },
+          (err, so) => res({ code: err && err.code, message: err && err.message, len: txt(so).length }));
+      }));
+      clearInterval(iv);
+      process.stdout.write('PROBE:' + JSON.stringify(out) + '\\n');
+    })();
+  `;
+}
+
+function asyncStubs() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-async-'));
+  const w = (n, body) => { const p = path.join(dir, n); fs.writeFileSync(p, `#!/bin/sh\n${body}\n`, { mode: 0o755 }); return p; };
+  return { dir, env: { ...process.env, SLOW: w('slow-ugrep', `exec sleep ${SLOW_S}`),
+    CAT: w('cat-ugrep', 'printf "STDIN:"; exec cat'), BIG: w('big-ugrep', 'i=0; while [ $i -lt 2000 ]; do echo "aaaaaaaaaaaaaaaaaaaa needle"; i=$((i+1)); done') } };
+}
+
+function assertAsyncSurfaces(got) {
+  const quick = SLOW_S * 1000 / 2;
+  for (const k of ['execFile+AbortSignal', 'execFile+timeout', 'spawn+kill', 'Bun.spawn+kill']) {
+    const a = got[k];
+    assert.ok(a, `${k}: no answer`);
+    assert.ok(a.ms < quick, `${k}: the bound did not end the search (${a.ms} ms; the stand-in sleeps ${SLOW_S} s): ${JSON.stringify(a)}`);
+    assert.ok(a.ticks >= 5, `${k}: the event loop did not turn while rg ran (${a.ticks} ticks in ${a.ms} ms)`);
+  }
+  assert.strictEqual(got['execFile+AbortSignal'].name, 'AbortError');
+  assert.strictEqual(got['execFile+timeout'].killed, true);
+  assert.strictEqual(got['execFile+timeout'].signal, 'SIGKILL');
+  assert.strictEqual(got['spawn+kill'].signal, 'SIGKILL');
+  assert.strictEqual(got['execFile stdin'].out, 'STDIN:piped needle\n', 'what the caller wrote to stdin must reach the search');
+  assert.strictEqual(got['spawnSync input'].out, 'STDIN:sync needle\n', 'spawnSync input must reach the search');
+  assert.strictEqual(got['execFile maxBuffer'].code, 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER', JSON.stringify(got['execFile maxBuffer']));
+}
+
+test('the async rg surfaces do not block the loop, and abort/kill/timeout/maxBuffer/stdin behave as node (node)', posixExec, () => {
+  const s = asyncStubs();
+  try {
+    const prog = path.join(s.dir, 'probe.cjs');
+    fs.writeFileSync(prog, asyncProbe());
+    const r = cp.spawnSync(process.execPath, [prog], { encoding: 'utf8', env: s.env, cwd: s.dir, timeout: 120000 });
+    assertAsyncSurfaces(parseProbe(r));
+  } finally { fs.rmSync(s.dir, { recursive: true, force: true }); }
+});
+
+test('the async rg surfaces do not block the loop, and abort/kill/timeout/maxBuffer/stdin behave as node (tjs)', {
+  skip: process.platform === 'win32' ? 'needs an executable /bin/sh ugrep stub' : !tjsPath() ? 'no tjs engine (set CLODE_TJS)' : false,
+}, () => {
+  const s = asyncStubs();
+  try {
+    const prog = path.join(s.dir, 'probe.cjs');
+    fs.writeFileSync(prog, asyncProbe());
+    const r = runLoader(prog, [], { timeout: 120000, env: { ...s.env, NODE_PATH: path.join(REPO, 'deps', 'claude', 'node_modules') } });
+    assertAsyncSurfaces(parseProbe(r));
+  } finally { fs.rmSync(s.dir, { recursive: true, force: true }); }
+});

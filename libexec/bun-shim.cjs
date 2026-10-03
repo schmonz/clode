@@ -201,8 +201,8 @@ const _rawSpawnSync = cp.spawnSync;
 // rg lands here as the FILE, not inside the args array, so the snapshot rewrite above
 // never saw it. The bundle reaches rg through child_process (execFile for the Grep and
 // Glob tools, spawn for the file count and file suggestions) AND through Bun.spawn, so
-// every one of those surfaces routes to the same place: rg-native.cjs's runRg, whose
-// answer comes back as a SYNTHESIZED child (no rg process ever starts).
+// every one of those surfaces routes to the same place: rg-native.cjs, whose answer comes
+// back as a child of the shape that surface returns (no rg process ever starts).
 //
 // BY BASENAME (isRgExe). The bundle finds rg as `Bun.which('rg') ?? 'rg'`, an ABSOLUTE
 // path whenever the host has ripgrep installed; this used to match only `file === 'rg'`,
@@ -214,30 +214,34 @@ const _rawSpawnSync = cp.spawnSync;
 // naude did not — inventing the divergence this project exists to remove.
 const _rgNative = require(__dirname + '/rg-native.cjs');
 
-// One rg call: runRg with today's translation (_rgTranslate, below) and the UNWRAPPED
-// spawnSync, then the operator-side surfacing the translation has always had.
-function _rgRun(args, opts) {
-  const o = opts || {};
-  const r = _rgNative.runRg(args, {
-    cwd: o.cwd, env: o.env || process.env, timeout: o.timeout, maxBuffer: o.maxBuffer,
-    translate: _rgTranslate, spawnSync: _rawSpawnSync,
-  });
-  if (r.appletRejected) _surfaceRgSkew(r.appletRejected.argv, r.appletRejected.status);
-  return r;
-}
+// The UNWRAPPED asynchronous spawn the async rg surfaces run their applet with, taken before
+// the wrapping below (as _rawSpawnSync is for the synchronous ones).
+const _rawSpawn = cp.spawn;
 
-// A child_process call whose file is rg, in the shape that surface returns.
+// How quaude's rg reaches today's translation (_rgTranslate, below) and the applets, plus the
+// operator-side surfacing the translation has always had when an applet rejects it.
+const _rgCtx = { translate: (a) => _rgTranslate(a), spawn: _rawSpawn, onRejected: (argv, st) => _surfaceRgSkew(argv, st) };
+
+// A child_process call whose file is rg, in the shape that surface returns. execFile and spawn
+// (and Bun.spawn, built on spawn) run the applet ASYNCHRONOUSLY: the event loop keeps turning
+// and the caller's signal, kill(), timeout and maxBuffer end the search, as they would end rg.
+// Only the synchronous surfaces block, as theirs do in node.
 function _rgCall(method, file, args, rest) {
   if (!Array.isArray(args)) { if (args !== undefined) rest.unshift(args); args = []; }
   if (method === 'execFile') {
     const cb = rest.find((x) => typeof x === 'function');
     const opts = rest.find((x) => x && typeof x === 'object') || {};
-    return _rgNative.rgExecFile(() => _rgRun(args, opts), opts, cb, file, args);
+    return _rgNative.rgExecFile(args, opts, cb, file, _rgCtx);
   }
   const opts = (rest[0] && typeof rest[0] === 'object') ? rest[0] : {};
-  if (method === 'spawn') return _rgNative.rgSpawn(() => _rgRun(args, opts), opts);
-  if (method === 'spawnSync') return _rgNative.rgSpawnSync(_rgRun(args, opts), opts);
-  return _rgNative.rgExecFileSync(_rgRun(args, opts), opts, file, args);
+  if (method === 'spawn') return _rgNative.rgSpawn(args, opts, _rgCtx);
+  const r = _rgNative.runRg(args, {
+    cwd: opts.cwd, env: opts.env || process.env, input: opts.input, timeout: opts.timeout,
+    maxBuffer: opts.maxBuffer, killSignal: opts.killSignal,
+    translate: _rgCtx.translate, spawnSync: _rawSpawnSync, onRejected: _rgCtx.onRejected,
+  });
+  if (method === 'spawnSync') return _rgNative.rgSpawnSync(r, opts);
+  return _rgNative.rgExecFileSync(r, opts, file, args);
 }
 
 for (const m of ['execFile', 'execFileSync', 'spawn', 'spawnSync']) {
