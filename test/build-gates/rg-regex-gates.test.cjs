@@ -13,9 +13,10 @@
 //   rg-regex-oracle-fresh  scripts/gen-rg-regex-oracle.cjs's --check verdict over
 //                          test/fixtures/rg-regex-oracle.json (the property test's oracle).
 //     Both: an upstream bump whose embedded rg reads a class, a fold or a match differently
-//     fails HERE, naming what moved. Each runs only against the SAME rg it was generated from
-//     (another rg is another oracle: skipped, naming both). Controls: a planted difference, run
-//     through the generator's OWN staleness(), which must name it.
+//     fails HERE, naming what moved. The provider is pin-exact, so a native whose embedded rg is
+//     not the one an artifact was generated from IS such a bump: a finding saying to regenerate
+//     (review I1), never a skip. Controls: a planted difference, run through the generator's OWN
+//     staleness(), which must name it.
 //
 // The literal relative requires below are load-bearing for the production-gate population sweep
 // (test/guards-population.cjs), which derives "which guard controls this production gate" from them.
@@ -107,6 +108,12 @@ function oracleHeader(text) {
     return typeof o.rg === 'string' && o.rg && Array.isArray(o.cases) ? { rg: o.rg } : { problem: 'test/fixtures/rg-regex-oracle.json names no rg version or no cases' };
   } catch (e) { return { problem: `test/fixtures/rg-regex-oracle.json does not parse: ${e.message}` }; }
 }
+// null when the pinned native's rg is the one the artifact was generated from, else the finding.
+function versionProblem(artifact, generatedFrom, nativeVersionText) {
+  const pinned = String(nativeVersionText).split('\n')[0];
+  return pinned === generatedFrom ? null
+    : `regenerate: ${artifact} was generated from ${generatedFrom}, the pinned native's rg is ${pinned}`;
+}
 // read(): the artifact as committed, and the generator's regeneration of it from native (--emit).
 function readFresh(artifact, header, generator) {
   const current = fs.readFileSync(path.join(REPO, artifact), 'utf8');
@@ -116,7 +123,8 @@ function readFresh(artifact, header, generator) {
   if (!bin) return { skip: `no native provider (CLODE_PROVIDER_BIN or the pinned version): ${artifact} was generated from ${rg}` };
   const v = nativeRgVersion(bin);
   if (!v) return { skip: `the provider ${bin} did not answer as rg here` };
-  if (v.split('\n')[0] !== rg) return { skip: `native's rg is ${JSON.stringify(v.split('\n')[0])} but ${artifact} was generated from ${JSON.stringify(rg)}` };
+  const moved = versionProblem(artifact, rg, v);
+  if (moved) return { problem: moved };
   const r = spawnSync(process.execPath, [path.join(REPO, 'scripts', generator), '--native', bin, '--emit'],
     { encoding: 'utf8', timeout: 600000, maxBuffer: 64 * 1024 * 1024 });
   if (r.status !== 0) return { problem: `${generator} --emit failed (exit ${r.status}): ${(r.stderr || '').slice(-1500)}` };
@@ -155,6 +163,14 @@ test('a missing or garbled generated header is a finding, not a skip', () => {
   assert.match(oracleHeader('{"rg":"x"}').problem, /no cases/);
   assert.match(dataHeader(fs.readFileSync(path.join(REPO, 'libexec', 'rg-regex.cjs'), 'utf8')).rg, /^ripgrep \d+\.\d+\.\d+/);
   assert.match(oracleHeader(fs.readFileSync(path.join(REPO, 'test', 'fixtures', 'rg-regex-oracle.json'), 'utf8')).rg, /^ripgrep \d+\.\d+\.\d+/);
+});
+
+// The provider is pin-exact, so a native whose embedded rg is not the one an artifact was generated
+// from IS an upstream bump: a finding naming both and the remedy, never a skip (review I1).
+test('a pinned native whose rg differs from the generated one is a finding, not a skip', () => {
+  assert.deepStrictEqual(versionProblem('libexec/rg-regex.cjs', 'ripgrep 14.1.1 (rev a)', 'ripgrep 14.1.1 (rev a)\nfeatures'), null);
+  assert.match(versionProblem('libexec/rg-regex.cjs', 'ripgrep 14.1.1 (rev a)', 'ripgrep 15.0.0 (rev b)\nfeatures'),
+    /regenerate: libexec\/rg-regex\.cjs was generated from ripgrep 14\.1\.1 \(rev a\), the pinned native's rg is ripgrep 15\.0\.0 \(rev b\)/);
 });
 
 test('the generators\' staleness names what moved', () => {
