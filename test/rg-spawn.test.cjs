@@ -451,3 +451,15 @@ test('the async rg surfaces do not block the loop, and abort/kill/timeout/maxBuf
     assertAsyncSurfaces(parseProbe(r));
   } finally { fs.rmSync(s.dir, { recursive: true, force: true }); }
 });
+
+// isRgExe: every spelling a host's rg may take, on every OS (a pure check: no Windows box needed).
+test('isRgExe: rg by basename, with any PATHEXT extension, either separator, a drive prefix; nothing else', () => {
+  const { isRgExe } = require('../libexec/rg-native.cjs');
+  for (const f of ['rg', '/opt/pkg/bin/rg', 'C:\\tools\\rg.exe', 'C:\\tools\\RG.EXE', 'C:rg', 'rg.cmd', 'D:\\x\\rg.bat',
+    'C:/ProgramData/chocolatey/bin/rg.COM', 'a\\rg', '..\\bin\\rg.Cmd']) {
+    assert.strictEqual(isRgExe(f), true, f);
+  }
+  for (const f of ['', 'rgx', 'xrg', '/a/rg/x', 'rg.sh', 'rg.exe.bak', 'C:\\rg\\ugrep.exe', 'rg.', null, undefined, 7]) {
+    assert.strictEqual(isRgExe(f), false, String(f));
+  }
+});

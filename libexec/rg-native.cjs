@@ -34,11 +34,12 @@ const { Readable } = require('stream');
 // Is this executable rg? By BASENAME, never by the exact string `rg`: the bundle resolves
 // rg as `Bun.which('rg') ?? 'rg'`, which is an absolute path whenever the host has an rg
 // installed, and matching only `rg` let that host rg answer every Grep and Glob call
-// (measured 2026-09-27, report-grep.md). `rg.exe` is how Bun.which spells it on Windows.
+// (measured 2026-09-27, report-grep.md). On Windows Bun.which answers whichever PATHEXT
+// spelling it found (`rg.exe`, or a `rg.cmd`/`rg.bat` shim a package manager installed), so
+// every one of those is rg too, in any case.
 function isRgExe(file) {
   if (typeof file !== 'string' || file === '') return false;
-  const leaf = leafOf(file);
-  return leaf === 'rg' || leaf.toLowerCase() === 'rg.exe';
+  return /^rg(?:\.(?:exe|com|bat|cmd))?$/i.test(leafOf(file));
 }
 
 // An executable's leaf name. ONE rule on every platform (test/windows-path-ratchet.test.cjs's
