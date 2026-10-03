@@ -177,6 +177,27 @@ Bash tool instead".
   test/fidelity/agentic-tools.test.cjs's Grep row checked the whole body and passed on its
   own `pattern:`. Since f4d763d it reads the tool_result, and a `--json` refusal on stderr
   never counts as a pass. The fix is the next task.
+- **`rg --version` is answered by ugrep's own version, so /doctor reports rg not working.**
+  The 2.1.283 bundle's first-use probe (`DQ`) runs `rg --version` and reads `ripgrep ` at the
+  start of stdout as "works"; quaude's rg hands that call to ugrep, which prints `ugrep 7.8.2
+  aarch64-apple-darwin25 +neon...`, so the probe sets working=false. Native's embedded rg prints
+  `ripgrep 14.1.1 (rev 7c1d0ed28a)`, a blank line, then `features:+pcre2`, `simd(compile):+NEON`,
+  `simd(runtime):+NEON`, a blank line, and `PCRE2 10.45 is available (JIT is available)` (134
+  bytes, darwin-arm64). Not fixed in grep-native Task 4's fix round on purpose: there is no
+  clean one-rule answer. Byte equality needs native's per-platform feature lines (the simd
+  lines differ per CPU), and answering `ripgrep 14.1.1` at all is quaude claiming to be a
+  ripgrep it is not. That needs a decision (the version rg-native.cjs emulates, the feature
+  lines per platform). Measured by test/fidelity/rg-differential.test.cjs's `root rg --version`
+  cell.
+- **Deferred from the grep-native Task 4 review (2026-10-03):**
+  - an applet's LEGITIMATE rc 2 (an rg-compatible error, with nothing printed) becomes
+    quaude's refusal today; when the emulation owns the printers, rc 2 must be native's own
+    (plan Task 6);
+  - one carve reader shared by test/build-gates (see "readCarve has seven copies"), and one list
+    of bun-shim's companions shared by the build sites (test/shim-companions.test.cjs derives
+    COMPANIONS from bun-shim.cjs; the staging sites still each name them);
+  - a tjs probe that hangs (scripts/lib/text-probe.cjs runProbeOurs) is reported as "our probe
+    failed under tjs (exit null)", which names neither the hang nor the timeout.
 - **Upstream's rg shadow is guarded by `if ! (unalias rg; command -v rg)`**, so with a host rg
   on PATH the snapshot defines no rg function, and Bash `rg` runs the host rg. That is the
   shell-path exception to "a host rg is never called" (rg-divergence), and it is not changed
