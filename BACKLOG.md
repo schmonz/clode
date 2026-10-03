@@ -201,6 +201,18 @@ Bash tool instead".
   - quaude's rg child (libexec/rg-native.cjs rgSpawn) holds the applet's stderr until exit (so a
     stderr maxBuffer fires late) and pushes stdout without backpressure; no 2.1.283 consumer is
     affected (review N3).
+- **ugrep's match ranges differ from rg's in three measured places (grep-native Task 5, 2026-10-03),
+  none fixed by the plumbing.** Native 2.1.283's embedded rg vs ugrep 7.8.2 (the `.` row also on
+  5.0.0 and 3.11.2):
+  - a pattern whose only match on a line is an anchor: `^` gives rg `0-0` at each line start and
+    `$` the line end, but ugrep (with or without -Y, -o) the WHOLE line (`0-16`). Lines selected
+    agree, so -l/-c are unaffected; JSON submatches and -o are not (Tasks 7/10: refuse or emulate);
+  - `.` matches an invalid UTF-8 byte in ugrep (`caf.` on `caf\xE9` gives 0-4) and not in rg (no
+    match): a regex-dialect divergence for the written list (plan Task 11);
+  - a UTF-16 file with a BOM: both transcode, and both give offsets into the TRANSCODED text
+    (`ab needle` gives 3-9), so the printers must transcode before slicing lines (Task 7).
+  CI's apt ugrep (noble 5.0.0) meets the plumbing's floor (rg-native.cjs UGREP_MIN), so Task 11
+  needs no newer pin for it unless a later task raises the floor with evidence.
 - **Upstream's rg shadow is guarded by `if ! (unalias rg; command -v rg)`**, so with a host rg
   on PATH the snapshot defines no rg function, and Bash `rg` runs the host rg. That is the
   shell-path exception to "a host rg is never called" (rg-divergence), and it is not changed
