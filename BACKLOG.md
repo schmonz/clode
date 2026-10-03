@@ -209,14 +209,29 @@ Bash tool instead".
   table). What remains, each by name:
   - REFUSED, by rule (rg-regex.cjs REFUSALS): `\p`/`\P` classes (no tables carried); `\A`, `\z`,
     `(?-m)` (measured: rg's line selection and its matches disagree for them, `\A` selects a line
-    and reports no submatch); `(?-u)`; `(?x)`; `(?R)`; nested classes and `&&`/`--`/`~~`; a class
-    that matches nothing; non-ASCII group names; more than 50,000 NFA states or 100 levels of
-    nesting; and every pattern rg itself rejects (rc 2: syntax, a `\n` without -U, a lone NUL).
+    and reports no submatch); `(?-u)`; `(?x)`; `(?R)`; nested classes and `&&`/`--`/`~~`; non-ASCII
+    group names; 100 levels of nesting; and every pattern rg itself rejects (rc 2: syntax, a `\n`
+    without -U, a lone NUL, judged after single-character branches merge as rg merges them).
     Our refusal's text is not rg's own `regex parse error:` text; both reach the model as errors;
+  - REFUSED WHERE NATIVE ANSWERS, conservatively: RG-RE-REFUSE-SIZE-LIMIT bounds regex-automata's
+    NFA memory from ABOVE (no UTF-8 suffix sharing), so it refuses before rg's 100 MiB limit does
+    for Unicode classes. First refusals, ours / rg's: `\w{752}` / `{2099}`, `\W{816}` / `{2251}`,
+    `\d{10457}` / `{20465}`, `.{85668}` / `{104858}`, `(?:ab|cd){161817}` / `{416101}` (a literal
+    and an ASCII class are exact). Exact would mean porting the UTF-8 compilers' caches and every HIR
+    simplification. And the 50,000-state cap (RG-RE-REFUSE-SIZE) refuses `a{50001}`,
+    `x{1,50000}`, `a{1000}{1000}`, which native answers;
   - RG-RE-REFUSE-LOOKBEHIND, at run time: `\B` and `\b{start-half}` one byte into a line that
     starts with a UTF-8 continuation byte, where native answers by where the line sits in its
     buffer (`\b{start-half}` on `\x80 x`: offset 1 reported when the line starts at byte 4, not at
     byte 2) and its line selection reads the line alone;
+  - RG-RE-REFUSE-COST, at run time: one line may take 2^24 matcher steps. One search is linear
+    (2 x states x positions), but the constant is the NFA's state count (`.{0,1000}needle`: 2,009)
+    and rg's find_iter can search a line once per match, so a line is O(states x length^2) at worst.
+    Measured on single lines (review, 2026-10-03): `[a-z]{1,64}@` over 200 KB 39 million steps,
+    `.{0,100}needle` 61 million, `.{0,1000}needle` 600 million, `a.*z|a` over 5 KB 63 million;
+    ordinary patterns over the same lines about one million. tjs runs about 5 million steps a second
+    on this Mac, so such a line refuses in about 3.2 s instead of running 3 s to 2 minutes; native
+    answers all of them in milliseconds;
   - FOR THE PRINTERS (Tasks 6/7): ugrepMatches returns the MATCHER's matches, including the one at
     the end of an unterminated last line (RG-RE-MATCH-AT-UNTERMINATED-END: `$` on `abc\nxyz`, native
     selects line 2 and prints submatches []); rg's printers do not print that match. And
@@ -224,12 +239,14 @@ Bash tool instead".
     transcoded the WHATWG way, `rgText`); the printers must slice lines from that same text;
   - FOR BINARY RULES (Task 8): the matcher splits lines at `\n` only, so a file rg reads in convert
     mode (a NUL as a line break) has its lines from Task 8;
-  - SPEED under tjs (this Mac, 2026-10-03): a 4.5 MB file whose 100,000 lines all match takes 1.0 s
-    for a literal, 1.7 s for `(?i)NEEDLE`, 3.8 s for `a.*s` and 4.9 s for `\w+` (1,000,000 matches);
-    native takes milliseconds. A search is linear (at most 2 x states x positions steps, so
-    `(a+)+$` on 20,000 bytes takes 25 ms); an rg find_iter over one line can still be quadratic
-    where rg's is (`a*b|x*` on a long run of `a`), at tjs speed (2,000 bytes: 1.9 s). The async
-    twin hands the event loop back every 20 ms of deciding.
+  - SPEED under tjs (this Mac, 2026-10-03), over this repo's 816 files, against native's counts:
+    `function` 100 ms (native 57), `const` 118 ms (54), `require\(` 63 ms (29), `(?i)error` 148 ms
+    (107), `a` (446,198 matches) 1.3 s (289 ms), `\w+` (1,538,276 matches) 11.5 s (658 ms). A plain
+    literal takes ugrep's ranges as they are (RG-RE-LITERAL-RANGES); everything else is the Pike VM,
+    about 1 microsecond a byte here, which is where `\w+`'s time goes. The async twin decides in
+    slices of 65,536 steps and hands the event loop back every 20 ms, inside a line too, so the
+    caller's abort lands within a slice (measured under tjs, mid-line on a 200 KB line: a 300 ms
+    timer fired 13-15 ms late, and the search ended in the same turn).
 - quaude's rg plumbing, deferred from the Task 5 review (2026-10-03): the sync ugrepMatches
   reports a run that hit its maxBuffer (ENOBUFS) as "could not be run", and the async twin
   buffers without any cap (M4); ARGV_BUDGET counts only the file names, not the pattern, against
