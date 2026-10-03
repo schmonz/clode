@@ -63,6 +63,7 @@ const MUST_REFUSE = [
   ['[[a]]', 'RG-RE-REFUSE-CLASS-SET'],
   ['[ab]|\\n', 'RG-RE-REFUSE-NEWLINE'],         // a class and a character do not merge: the literal '\n' is not allowed
   ['a{40000}b{40000}', 'RG-RE-REFUSE-SIZE'],
+  ['\\w{2500}', 'RG-RE-REFUSE-SIZE-LIMIT'],         // compiled regex exceeds size limit of 104857600
 ];
 function scanRefusals({ cases }) {
   const findings = [];

@@ -386,6 +386,30 @@ test('RG-RE-LINEAR-TIME: catastrophic patterns are linear, and answer as native 
   }
 });
 
+// RG-RE-REFUSE-SIZE-LIMIT (review I3): rg refuses a regex whose compiled NFA passes 100 MiB
+// (`compiled regex exceeds size limit of 104857600`, rc 2). Native's first refusing count for each
+// family below was measured by bisection (2026-10-03); at that count ours must refuse too, never
+// answer. Ours is an UPPER BOUND of regex-automata 0.4.7's NFA memory (rg-regex.cjs sizeBound), so it
+// refuses earlier than native for some families: conservative, by name.
+const NATIVE_SIZE_LIMIT = [
+  // [family, pattern at native's first refusing count]  (the count below it native answers)
+  ['\\w{n}', '\\w{2099}'], ['(\\w){n}', '(\\w){2099}'], ['\\w{1,n}', '\\w{1,2097}'], ['\\W{n}', '\\W{2251}'],
+  ['\\d{n}', '\\d{20465}'], ['.{n}', '.{104858}'], ['(?i)k{n}', '(?i)k{444312}'], ['(?:ab|cd){n}', '(?:ab|cd){416101}'],
+  ['[a-z]{n}', '[a-z]{1456353}'], ['a{n}', 'a{3276794}'],
+  ['reviewer', '\\w{2500}'], ['reviewer', '\\w{20000}'], ['reviewer', '\\w{100}{100}'],
+];
+test('RG-RE-REFUSE-SIZE-LIMIT: where rg refuses a regex as too large, ours refuses too (native)', () => {
+  for (const [family, pattern] of NATIVE_SIZE_LIMIT) {
+    const t = R.translateRgRegex(pattern, {});
+    assert.ok(t.refuse, `${family}: ${pattern} is answered, but native refuses it (compiled regex exceeds size limit)`);
+    assert.ok(t.rule === 'RG-RE-REFUSE-SIZE-LIMIT' || t.rule === 'RG-RE-REFUSE-SIZE', `${pattern}: ${t.rule}`);
+  }
+  assert.strictEqual(R.translateRgRegex('\\w{2500}', {}).rule, 'RG-RE-REFUSE-SIZE-LIMIT');
+  assert.match(R.translateRgRegex('\\w{2500}', {}).refuse, /104857600/);
+  // and well under the limit, the same families are answered
+  for (const p of ['\\w{50}', '.{1000}', '(?:ab|cd){1000}', '\\d{100}']) assert.ok(!R.translateRgRegex(p, {}).refuse, p);
+});
+
 // ---- the property test: native's oracle --------------------------------------------------------
 const ORACLE = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'rg-regex-oracle.json'), 'utf8'));
 const CORPUS = Buffer.from(ORACLE.corpus, 'base64');

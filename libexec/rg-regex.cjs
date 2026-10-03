@@ -153,6 +153,8 @@ function withoutNewline(set) {
 const count = (a) => { let n = 0; for (let i = 0; i < a.length; i += 2) n += a[i + 1] - a[i] + 1; return n; };
 
 // ---- refusals -----------------------------------------------------------------------------------
+// rg's NFA size limit (grep-regex config.rs: 100 MiB); RG-RE-REFUSE-SIZE-LIMIT, below.
+const NFA_SIZE_LIMIT = 100 * (1 << 20);
 // Each is ONE named rule. `rgRejects` marks the patterns rg ITSELF refuses (rc 2, its own
 // message): quaude refuses those too, naming the construct, never answering where rg errors.
 const REFUSALS = {
@@ -166,6 +168,7 @@ const REFUSALS = {
   'RG-RE-REFUSE-NEWLINE': { rgRejects: true, what: 'can match a line terminator, which rg refuses without -U' },
   'RG-RE-REFUSE-NUL': { rgRejects: true, what: 'matches only NUL, which rg refuses while it detects binary files' },
   'RG-RE-REFUSE-SIZE': { what: 'is larger or deeper than quaude\'s rg compiles' },
+  'RG-RE-REFUSE-SIZE-LIMIT': { what: `may compile past the size rg allows a regex (${NFA_SIZE_LIMIT} bytes of NFA, rg's limit; quaude's rg bounds that size from above and refuses when the bound passes it)` },
   'RG-RE-REFUSE-CAPTURE-NAME': { what: 'names a group with non-ASCII characters' },
   'RG-RE-REFUSE-LOOKBEHIND': { what: 'looks behind a line that starts inside a character (\\B or \\b{start-half} on a line whose first byte is a UTF-8 continuation byte), where rg\'s answer depends on the bytes before the line (measured)' },
 };
@@ -633,6 +636,91 @@ function checkHir(n) {
   }
 }
 
+// ---- RG-RE-REFUSE-SIZE-LIMIT: an upper bound of the NFA rg would build --------------------------
+// rg builds its regex with a 100 MiB NFA size limit (grep-regex config.rs size_limit) and refuses
+// one past it: `compiled regex exceeds size limit of 104857600`, rc 2 (measured: `\w{2099}`,
+// `.{104858}`, `a{3276794}` are its first refusals; `\w{2098}` it answers). The limit is on
+// regex-automata 0.4.7's builder memory (builder.rs memory_usage): 32 bytes a state, 8 a byte-range
+// transition, 4 a union alternate, for the forward NFA and the reverse one each. sizeBound() bounds
+// that from ABOVE, construct by construct (a class by Utf8Sequences with no suffix sharing, which
+// regex-automata's compilers only ever reduce; an all-literal alternation by its literal trie), so
+// ours refuses wherever rg does, and earlier where sharing makes rg's NFA smaller. First refusals,
+// ours / rg's (measured 2026-10-03): \w{752} / {2099}, \W{816} / {2251}, \d{10457} / {20465},
+// .{85668} / {104858}, (?i)k{379917} / {444312}, (?:ab|cd){161817} / {416101}, [a-z]{1456349} /
+// {1456353}, a{3276785} / {3276794} (a literal and an ASCII class cost what rg counts, 32 and 72
+// bytes a copy; past 50,000 states RG-RE-REFUSE-SIZE refuses first anyway).
+const ST = 32, TR = 8, AL = 4, UNION2 = ST + 2 * AL;
+// Utf8Sequences (regex-syntax utf8.rs) over a class: how many sequences, and their bytes in all.
+function utf8Shape(set) {
+  let seqs = 0, bytes = 0;
+  for (let i = 0; i < set.length; i += 2) {
+    const stack = [[set[i], set[i + 1]]];
+    while (stack.length) {
+      let [s, e] = stack.pop();
+      for (;;) {
+        if (s < 0xe000 && e > 0xd7ff) { stack.push([0xe000, e]); e = 0xd7ff; continue; }
+        if (s > e) break;
+        let split = false;
+        for (const max of [0x7f, 0x7ff, 0xffff]) if (s <= max && max < e) { stack.push([max + 1, e]); e = max; split = true; break; }
+        if (split) continue;
+        if (e <= 0x7f) { seqs++; bytes += 1; break; }
+        for (let k = 1; k < 4 && !split; k++) {
+          const m = (1 << (6 * k)) - 1;
+          if ((s & ~m) !== (e & ~m)) {
+            if ((s & m) !== 0) { stack.push([(s | m) + 1, e]); e = s | m; split = true; }
+            else if ((e & m) !== m) { stack.push([e & ~m, e]); e = (e & ~m) - 1; split = true; }
+          }
+        }
+        if (split) continue;
+        seqs++; bytes += utf8Len(s);
+        break;
+      }
+    }
+  }
+  return { seqs, bytes };
+}
+// The UTF-8 bytes of a parsed branch that is one case-sensitive literal string, else -1.
+function literalBytes(n) {
+  if (n.k === 'cls') return count(n.set) === 1 ? utf8Len(n.set[0]) : -1;
+  if (n.k === 'group' && !n.cap) return literalBytes(n.sub);
+  if (n.k !== 'cat') return -1;
+  let b = 0;
+  for (const x of n.subs) { const y = literalBytes(x); if (y < 0) return -1; b += y; }
+  return b;
+}
+function sizeBound(n) {
+  switch (n.k) {
+    case 'empty': case 'look': return ST;
+    case 'cls': {
+      const c = count(n.set);
+      if (c === 0) return 2 * ST;
+      if (c === 1) return ST * utf8Len(n.set[0]);        // a one-character class is a literal: a state a byte
+      if (n.set[n.set.length - 1] <= 0x7f) return 2 * ST + TR * (n.set.length / 2);
+      const { seqs, bytes } = utf8Shape(n.set);
+      return 2 * ST + (ST + TR) * bytes + AL * seqs;
+    }
+    case 'group': return (n.cap ? 2 * ST : 0) + sizeBound(n.sub);
+    case 'cat': return n.subs.length ? n.subs.reduce((a, x) => a + sizeBound(x), 0) : ST;
+    case 'alt': {
+      let sum = 2 * ST + AL * n.subs.length, lit = 0, allLit = true;
+      for (const x of n.subs) { sum += sizeBound(x); const b = literalBytes(x); if (b < 0) allLit = false; else lit += b; }
+      // an all-literal alternation compiles as a literal trie (literal_trie.rs): per trie node at
+      // most a range or sparse state, a union and their transitions and alternates
+      return allLit ? Math.max(sum, 4 * ST + 4 * ST * lit + AL * n.subs.length) : sum;
+    }
+    case 'rep': {
+      const e = sizeBound(n.sub), { min, max } = n;
+      if (min === 0 && max === 1) return UNION2 + ST + e;
+      if (max === null) return min === 0 ? e + 2 * UNION2 + ST : min === 1 ? e + UNION2 : min * e + UNION2;
+      if (min === max) return min === 0 ? ST : min * e;
+      return min * e + (max - min) * (e + UNION2) + ST;
+    }
+    default: throw new Error(`rg-regex: no size bound for ${n.k}`);
+  }
+}
+// What every regex adds: group 0's capture states, the match state, the unanchored prefix.
+const SIZE_OVERHEAD = 512;
+
 // ---- the Thompson NFA, compiled as regex-automata's compiler.rs compiles it ----------------------
 const EMPTY = 0, CLS = 1, LOOK = 2, SPLIT = 3, MATCH = 4;
 const MAX_STATES = 50000;
@@ -1014,6 +1102,8 @@ function translateRgRegex(pattern, opts = {}) {
     const ps = new Parser(`(?:${pattern})`, opts.ignoreCase);
     const ast = ps.parseGroupBody();
     if (!ps.eof()) ps.syntax('unopened group');
+    const bound = sizeBound(ast) + SIZE_OVERHEAD;
+    if (bound > NFA_SIZE_LIMIT) refuse('RG-RE-REFUSE-SIZE-LIMIT', `an NFA of up to ${bound > 1e15 ? 'more than 1e15' : Math.ceil(bound)} bytes`);
     const node = hir(ast);
     checkHir(node);
     return { prog: program(node), prefilter: pre(node), hir: node };
