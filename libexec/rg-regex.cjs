@@ -46,6 +46,8 @@
 //   RG-RE-GREED            lazy and greedy repetition, counted repetition and (?U), compiled as
 //                          compiler.rs compiles them (x* over a sub that can match empty is (x+)?)
 //   RG-RE-SYNTAX           regex-syntax 0.8.4's grammar, the pattern wrapped as `(?:PATTERN)`
+//   RG-RE-ALT-MERGE        branches that are all single characters, or all classes, are one class
+//                          before rg strips \n and bans NUL (`\n|a` is [a]; `[ab]|\n` is refused)
 //   RG-RE-LITERAL          a plain literal matches its bytes, leftmost, without overlap
 //   RG-RE-MATCH-AT-UNTERMINATED-END  the matcher's match at the end of an unterminated last line
 //                          is reported (rg selects the line by it; its printers do not print it)
@@ -163,7 +165,6 @@ const REFUSALS = {
   'RG-RE-REFUSE-CLASS-SET': { what: 'nests a class, or uses class set operations (&&, --, ~~)' },
   'RG-RE-REFUSE-NEWLINE': { rgRejects: true, what: 'can match a line terminator, which rg refuses without -U' },
   'RG-RE-REFUSE-NUL': { rgRejects: true, what: 'matches only NUL, which rg refuses while it detects binary files' },
-  'RG-RE-REFUSE-EMPTY-CLASS': { what: 'has a class that matches nothing' },
   'RG-RE-REFUSE-SIZE': { what: 'is larger or deeper than quaude\'s rg compiles' },
   'RG-RE-REFUSE-CAPTURE-NAME': { what: 'names a group with non-ASCII characters' },
   'RG-RE-REFUSE-LOOKBEHIND': { what: 'looks behind a line that starts inside a character (\\B or \\b{start-half} on a line whose first byte is a UTF-8 continuation byte), where rg\'s answer depends on the bytes before the line (measured)' },
@@ -264,7 +265,11 @@ class Parser {
     this.flags = saved;
     if (this.eof() || !this.is(')')) this.syntax('unclosed group');
     this.i++;
-    items.push(body.k === 'cat' && body.subs.length === 0 ? { k: 'empty', group: true } : { k: 'group', sub: body });
+    // A capture group stays one (regex-syntax's Hir::capture): it is never a literal or a class,
+    // so it keeps its branch out of RG-RE-ALT-MERGE.
+    const capture = !scoped;
+    if (!capture && body.k === 'cat' && body.subs.length === 0) items.push({ k: 'empty', group: true });
+    else items.push({ k: 'group', sub: body, cap: capture });
   }
 
   parseCaptureName() {
@@ -379,12 +384,10 @@ class Parser {
     items.push({ k: 'rep', sub, min, max, greedy: this.greedy(lazy) });
   }
 
-  // A literal code point as the translator makes it: folded under (?i).
+  // A literal code point as the translator makes it: folded under (?i). A \n or a NUL is
+  // judged after the HIR is built (checkHir), as rg judges it (RG-RE-ALT-MERGE).
   literal(c) {
-    if (c === 0x0a) refuse('RG-RE-REFUSE-NEWLINE', 'a literal \\n');
-    const set = this.flags.i ? foldClass(single(c)) : single(c);
-    if (set.length === 2 && set[0] === 0 && set[1] === 0) refuse('RG-RE-REFUSE-NUL', 'a literal NUL');
-    return { k: 'cls', set };
+    return { k: 'cls', set: this.flags.i ? foldClass(single(c)) : single(c) };
   }
 
   parsePrimitive() {
@@ -505,15 +508,6 @@ class Parser {
     let set = norm(acc);
     if (this.flags.i) set = foldClass(set);
     if (negated) set = negate(set);
-    return this.checkClass(set);
-  }
-  checkClass(set) {
-    // rg strips \n from every class (grep-regex strip.rs): a class of \n alone is its error,
-    // a class of NUL alone its binary-detection ban (ban.rs); one that matches nothing, ours.
-    const without = withoutNewline(set);
-    if (!set.length) refuse('RG-RE-REFUSE-EMPTY-CLASS', 'a class that matches nothing');
-    if (!without.length) refuse('RG-RE-REFUSE-NEWLINE', 'a class of \\n alone');
-    if (set.length === 2 && set[0] === 0 && set[1] === 0) refuse('RG-RE-REFUSE-NUL', 'a class of NUL alone');
     return set;
   }
   // [:name:] / [:^name:] inside a class, or null (regex-syntax's maybe_parse_ascii_class).
@@ -560,6 +554,7 @@ function lens(n) {
   let r;
   switch (n.k) {
     case 'empty': case 'look': r = [0, 0]; break;
+    case 'cap': r = lens(n.sub); break;
     case 'cls': r = n.set.length ? [utf8Len(n.set[0]), utf8Len(n.set[n.set.length - 1])] : [null, null]; break;
     case 'rep': {
       const [a, b] = lens(n.sub);
@@ -592,7 +587,8 @@ function lens(n) {
 // most once (min and max clamped to 1); x{0} is empty, x{1} is x.
 function hir(n) {
   switch (n.k) {
-    case 'group': return hir(n.sub);
+    case 'group': return n.cap ? { k: 'cap', sub: hir(n.sub) } : hir(n.sub);
+    case 'cap': return n;
     case 'cat': {
       const subs = [];
       for (const s of n.subs.map(hir)) { if (s.k === 'cat') subs.push(...s.subs); else if (s.k !== 'empty') subs.push(s); }
@@ -601,7 +597,14 @@ function hir(n) {
     case 'alt': {
       const subs = [];
       for (const s of n.subs.map(hir)) { if (s.k === 'alt') subs.push(...s.subs); else subs.push(s); }
-      return subs.length === 1 ? subs[0] : { k: 'alt', subs };
+      if (subs.length === 1) return subs[0];
+      // RG-RE-ALT-MERGE (Hir::alternation's singleton_chars / class_chars): branches that are ALL
+      // single characters (a one-character class is a literal there), or ALL classes of any other
+      // size, become one class. A mix, or anything else, stays an alternation.
+      const one = (s) => s.k === 'cls' && count(s.set) === 1;
+      const many = (s) => s.k === 'cls' && count(s.set) !== 1;
+      if (subs.every(one) || subs.every(many)) return { k: 'cls', set: subs.reduce((a, s) => union(a, s.set), []) };
+      return { k: 'alt', subs };
     }
     case 'rep': {
       const sub = hir(n.sub);
@@ -612,6 +615,21 @@ function hir(n) {
       return { k: 'rep', sub, min, max, greedy: n.greedy };
     }
     default: return n;
+  }
+}
+
+// rg's two refusals of a translated pattern, applied to the HIR as rg applies them, after
+// RG-RE-ALT-MERGE: ban.rs first (a literal NUL, or a class of NUL alone: binary detection is on),
+// then strip.rs (a literal \n, or a class of \n alone: no -U). A one-character class is a literal.
+function checkHir(n) {
+  switch (n.k) {
+    case 'cls':
+      if (n.set.length === 2 && n.set[0] === 0 && n.set[1] === 0) refuse('RG-RE-REFUSE-NUL', 'a NUL');
+      if (n.set.length && !withoutNewline(n.set).length) refuse('RG-RE-REFUSE-NEWLINE', 'a \\n');
+      return;
+    case 'cat': case 'alt': for (const s of n.subs) checkHir(s); return;
+    case 'rep': case 'cap': checkHir(n.sub); return;
+    default: return;
   }
 }
 
@@ -647,6 +665,7 @@ function compile(node, b, classes) {
       return { start: u, end: e };
     }
     case 'rep': return compileRep(node, b, c);
+    case 'cap': return c(node.sub);
     default: throw new Error(`rg-regex: cannot compile ${node.k}`);
   }
 }
@@ -953,6 +972,7 @@ function pre(n) {
     case 'empty': case 'look': return '';
     case 'cls': {
       const set = withoutNewline(n.set);
+      if (count(set) === 0) return '.';                 // matches nothing: any widening will do
       if (count(set) === 1) return ugrepLit(set[0]);
       if (isAlnumRanges(set)) {
         let s = '[';
@@ -966,6 +986,7 @@ function pre(n) {
       }
       return '.';
     }
+    case 'cap': return pre(n.sub);
     case 'cat': return n.subs.map(pre).join('');
     case 'alt': {
       const parts = n.subs.map(pre);
@@ -994,6 +1015,7 @@ function translateRgRegex(pattern, opts = {}) {
     const ast = ps.parseGroupBody();
     if (!ps.eof()) ps.syntax('unopened group');
     const node = hir(ast);
+    checkHir(node);
     return { prog: program(node), prefilter: pre(node), hir: node };
   } catch (e) {
     if (e instanceof RgRegexRefusal) return { refuse: refusalReason(e), rule: e.rule };

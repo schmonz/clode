@@ -61,7 +61,7 @@ const MUST_REFUSE = [
   ['(?x) a', 'RG-RE-REFUSE-VERBOSE'],
   ['(?R)$', 'RG-RE-REFUSE-CRLF'],
   ['[[a]]', 'RG-RE-REFUSE-CLASS-SET'],
-  ['[^\\x00-\\x{10FFFF}]', 'RG-RE-REFUSE-EMPTY-CLASS'],
+  ['[ab]|\\n', 'RG-RE-REFUSE-NEWLINE'],         // a class and a character do not merge: the literal '\n' is not allowed
   ['a{40000}b{40000}', 'RG-RE-REFUSE-SIZE'],
 ];
 function scanRefusals({ cases }) {

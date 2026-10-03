@@ -245,6 +245,25 @@ for (const [rule, file, pattern, flags, want] of SYNTAX) {
   });
 }
 
+// RG-RE-ALT-MERGE (review M1): regex-syntax's Hir::alternation merges branches that are all
+// single characters, or all multi-character classes, into ONE class, and rg strips \n and bans
+// NUL only afterwards. So `\n|a` is the class [\na], stripped to [a]: native ANSWERS it. A capture
+// group, or a mix of a class and a character, is not merged, and rg rejects it (literals below).
+test('RG-RE-ALT-MERGE: single-character branches merge before rg strips \\n and bans NUL (native)', () => {
+  const alt = FIX['alt.txt'];
+  const A = [[1, [[0, 1], [7, 8], [11, 12]]], [2, [[18, 19], [21, 22]]]];
+  for (const p of ['\\n|a', 'a|\\n', '\\x00|a', 'a|\\x00', '(?:\\n)|a', 'a|(?i)\\n', '[^\\x00-\\x{10FFFF}]|a']) {
+    assert.deepStrictEqual(allLines(alt, p), A, p);        // native: rc 0, a's matches
+  }
+  assert.deepStrictEqual(allLines(alt, '[\\n]|b'), [[1, [[1, 2], [6, 7]]], [2, [[19, 20], [22, 23]]]]);
+  assert.deepStrictEqual(allLines(alt, '\\n|\\x00'), []);        // native: rc 1 (merged [\0\n] is two characters, so not banned; stripped to [\0])
+  assert.deepStrictEqual(allLines(alt, '[^\\x00-\\x{10FFFF}]'), []); // native: rc 1, a class that matches nothing
+  // native: rc 2, `the literal "\n" is not allowed in a regex`
+  for (const p of ['(\\n)|a', '[ab]|\\n', '[ab]|[\\n]', '(?:[ab]|[cd])|\\n']) {
+    assert.deepStrictEqual(allLines(alt, p), { refused: 'RG-RE-REFUSE-NEWLINE' }, p);
+  }
+});
+
 // RG-RE-MATCH-AT-UNTERMINATED-END. The MATCHER finds a match at the end of a last line that has
 // no terminator; rg's PRINTERS do not print it (grep-printer's find_iter_at_in_context stops at a
 // match starting at the line's end, and --json drops an empty match there). Native shows both
@@ -301,7 +320,7 @@ const REFUSE = [
   ['[a&&b]', 'RG-RE-REFUSE-CLASS-SET'],
   ['[a~~b]', 'RG-RE-REFUSE-CLASS-SET'],
   ['[[:foo:]]', 'RG-RE-REFUSE-CLASS-SET'],       // rg: a nested class of the characters : f o
-  ['[^\\x00-\\x{10FFFF}]', 'RG-RE-REFUSE-EMPTY-CLASS'],
+  ['(\\n)|a', 'RG-RE-REFUSE-NEWLINE'],
   ['(?P<' + cp(0xe9) + '>a)', 'RG-RE-REFUSE-CAPTURE-NAME'],
   ['a{60000}', 'RG-RE-REFUSE-SIZE'],
   ['('.repeat(120) + 'a' + ')'.repeat(120), 'RG-RE-REFUSE-SIZE'],
