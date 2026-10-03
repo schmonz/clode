@@ -170,6 +170,10 @@ function asciiJson(v) {
 // test/node-shim-esm.test.cjs and ~8 other call sites in this repo), a thrown Error naming a
 // non-zero exit, and cleanup. `source` is one BATCH's worth already-shaped `input`; `tmpPrefix`
 // names the caller so a stuck run is identifiable in `mktemp -d` listings.
+//
+// A probe may return a PROMISE (scripts/lib/rg-probe.cjs's does: its answers come back through
+// child_process callbacks, the way the bundle's do); the result is written once it settles, and a
+// rejection is the same failure as a throw. A synchronous result is written exactly as before.
 function runProbeOurs(source, input, tmpPrefix) {
   const { runLoader } = require(path.join(REPO, 'test', 'node-shim-helper.cjs'));
   const shim = path.join(REPO, 'libexec', 'bun-shim.cjs');
@@ -180,7 +184,8 @@ function runProbeOurs(source, input, tmpPrefix) {
     fs.writeFileSync(prog, `require(${JSON.stringify(shim)});\nconst fs = require('fs');\n`
       + `const input = JSON.parse(fs.readFileSync(${JSON.stringify(inf)}, 'utf8'));\n`
       + `const r = (function (input) {${source}\n})(input);\n`
-      + `fs.writeFileSync(${JSON.stringify(outf)}, JSON.stringify(r));\n`);
+      + `Promise.resolve(r).then((v) => fs.writeFileSync(${JSON.stringify(outf)}, JSON.stringify(v)),\n`
+      + `  (e) => { process.stderr.write('probe rejected: ' + String(e && e.stack || e) + '\\n'); process.exit(1); });\n`);
     const r = runLoader(prog, [], { timeout: 600000, env: { NODE_PATH: path.join(REPO, 'deps', 'claude', 'node_modules') } });
     if (r.status !== 0) throw new Error(`our probe failed under tjs (exit ${r.status}): ${r.stderr.slice(0, 800)}`);
     return JSON.parse(fs.readFileSync(outf, 'utf8'));

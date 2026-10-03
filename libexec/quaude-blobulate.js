@@ -501,6 +501,15 @@ await collect(path.join(shimDir, 'internal'), 'node-shim/internal', members);
 // (see test/shim-companions.test.cjs).
 members.push({ name: 'unicode-text.cjs', data: await mustRead(path.join(libexecDir, 'unicode-text.cjs'), 'unicode-text.cjs member') });
 
+// rg-native.cjs, quaude's rg (every rg the bundle spawns is answered by it, never a host
+// ripgrep), at the archive ROOT in BOTH roles for the same reasons as unicode-text.cjs just
+// above: bun-shim.cjs (quaude role) requires it as its own sibling,
+// `require(__dirname + '/rg-native.cjs')` from '/quaude/', and a self-blobulated builder
+// needs it on disk at libexec/rg-native.cjs to stage it into the quaudes it builds
+// (clode-blobulate.cjs's materialization puts it there). Read from libexecDir: clode's own
+// code, not version-locked to the bundle (test/shim-companions.test.cjs).
+members.push({ name: 'rg-native.cjs', data: await mustRead(path.join(libexecDir, 'rg-native.cjs'), 'rg-native.cjs member') });
+
 // ext-dep closure (DEPS = extras.deps, derived node-side — see above). The
 // node side already fails the build if a listed package is missing from
 // node_modules, so this guard is the belt to that braces: it catches a package

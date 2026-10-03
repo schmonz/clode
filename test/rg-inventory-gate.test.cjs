@@ -125,8 +125,8 @@ test('gate: a failure prints the child stderr it judged', { skip: NO_FAKE }, () 
 test('shim: a refused rg call prints the same parseable rg-debug shape', () => {
   const src = `
     const shim = require(${JSON.stringify(path.join(ROOT, 'libexec', 'bun-shim.cjs'))});
-    shim._rewriteRgSpawn(['rg', '--files', '--hidden', '--no-ignore', '/tmp/x']);
-    shim._rewriteRgSpawn(['rg', '--version']);
+    shim._rgTranslate(['--files', '--hidden', '--no-ignore', '/tmp/x']);
+    shim._rgTranslate(['--version']);
   `;
   // Force the applets absent regardless of what this host has installed. The
   // PATH key is dropped case-insensitively because Windows spells it `Path`, and

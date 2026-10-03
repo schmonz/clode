@@ -48,6 +48,8 @@ function seedProvider(dir) {
   // mirror extractIfNeeded.
   fs.copyFileSync(path.join(LIBEXEC, 'bun-shim.cjs'), path.join(stageDir, 'bun-shim.cjs'));
   fs.copyFileSync(path.join(LIBEXEC, 'unicode-text.cjs'), path.join(stageDir, 'unicode-text.cjs'));
+  // ...and its rg-native.cjs companion (grep-native Task 4), for the same reason.
+  fs.copyFileSync(path.join(LIBEXEC, 'rg-native.cjs'), path.join(stageDir, 'rg-native.cjs'));
   fs.writeFileSync(path.join(stageDir, '.extractor-sig'),
     // The stored sig is the extractor's signature COMPOSED WITH the provider's platform:
     // a version alone never determined the carve (see test/extract-cache-key.test.cjs).

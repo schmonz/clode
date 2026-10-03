@@ -297,11 +297,11 @@ test('a host rg is never called, even when present, if the applet is missing', (
 
   const probe = path.join(dir, 'p.cjs');
   fs.writeFileSync(probe, `
-    const s = require(${JSON.stringify(path.join(__dirname, '..', 'libexec/bun-shim.cjs'))});
-    console.log(JSON.stringify({
-      search: s._rewriteRgSpawn(['rg', '-n', 'x', '.']),
-      files: s._rewriteRgSpawn(['rg', '--files', '/r']),
-    }));
+    require(${JSON.stringify(path.join(__dirname, '..', 'libexec/bun-shim.cjs'))});
+    const cp = require('node:child_process');
+    const one = (args) => { const r = cp.spawnSync('rg', args, { encoding: 'utf8' });
+      return { status: r.status, out: r.stdout, err: r.stderr }; };
+    console.log(JSON.stringify({ search: one(['-n', 'x', '.']), files: one(['--files', '/r']) }));
   `);
   const r = require('node:child_process').spawnSync(process.execPath, [probe], {
     encoding: 'utf8',
@@ -309,12 +309,15 @@ test('a host rg is never called, even when present, if the applet is missing', (
     env: { ...process.env, PATH: dir, CLODE_UGREP: '', CLODE_BFS: '' },
   });
   const got = JSON.parse(r.stdout.trim());
-  assert.strictEqual(got.search[0], 'clode-rg-unavailable',
-    'a present host rg must NOT be used for searches');
-  assert.strictEqual(got.files[0], 'clode-rg-unavailable',
-    'a present host rg must NOT be used for --files');
-  // The refusal has to say so, and name the remedy — silence here would read as
-  // "rg is missing" when rg is in fact right there and deliberately declined.
+  for (const [what, a] of Object.entries(got)) {
+    assert.doesNotMatch(a.out + a.err, /REAL-RG-CALLED/, `a present host rg must NOT be used for the ${what} call`);
+    // A refusal: rc 2, nothing printed, the missing applet named (rg-native.cjs rgRefusal).
+    assert.strictEqual(a.status, 2, `${what}: ${JSON.stringify(a)}`);
+    assert.strictEqual(a.out, '');
+    assert.match(a.err, /^rg: error parsing flag: quaude answers rg with ugrep/);
+  }
+  // The operator's trace has to say so too, and name the remedy — silence here would read
+  // as "rg is missing" when rg is in fact right there and deliberately declined.
   assert.match(r.stderr, /not falling back to a host rg/);
   assert.match(r.stderr, /rg needs 'ugrep'/);
   fs.rmSync(dir, { recursive: true, force: true });

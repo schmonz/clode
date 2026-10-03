@@ -47,6 +47,13 @@ const SITES = [
   'test/graph-runner.test.cjs',
 ];
 
+// bun-shim.cjs's companions: every module it requires from its own directory
+// (`require(__dirname + '/<name>')`). unicode-text.cjs (CellSegmenter phase 3, task 5);
+// rg-native.cjs (grep-native plan, task 4: quaude's rg, which answers every rg call the
+// bundle makes). A test below derives this list from bun-shim.cjs's own source, so a new
+// companion cannot be required there without being named here.
+const COMPANIONS = ['unicode-text.cjs', 'rg-native.cjs'];
+
 // read() — the only I/O: this repo's own site sources. Nothing this guard could
 // write to; it never touches ~/.local/share/clode or any build output.
 function readSites() {
@@ -57,8 +64,8 @@ function readSites() {
 //   - a site that no longer names 'bun-shim.cjs' at all — the gate itself would be
 //     reading the wrong file (the site was renamed/rewritten out from under this list),
 //     which is worth saying loudly rather than silently reporting "fine, nothing to see".
-//   - a site that names 'bun-shim.cjs' but never 'unicode-text.cjs' — exactly the defect
-//     this guard exists to catch: bun-shim staged somewhere unicode-text is not.
+//   - a site that names 'bun-shim.cjs' but never one of its COMPANIONS — exactly the
+//     defect this guard exists to catch: bun-shim staged somewhere a companion is not.
 // `examined` is the site count, matching `floor` below one-for-one — a shrinking SITES
 // list (someone deleted an entry without meaning to) trips the floor directly.
 function scanCompanions({ sites }) {
@@ -69,8 +76,8 @@ function scanCompanions({ sites }) {
       findings.push(`${rel}: no longer names 'bun-shim.cjs' — this gate is reading the wrong file`);
       continue;
     }
-    if (!/['"]unicode-text\.cjs['"]/.test(src)) {
-      findings.push(`${rel}: stages bun-shim.cjs but never unicode-text.cjs`);
+    for (const c of COMPANIONS) {
+      if (!src.includes(`'${c}'`) && !src.includes(`"${c}"`)) findings.push(`${rel}: stages bun-shim.cjs but never ${c}`);
     }
   }
   return { findings, examined: sites.length };
@@ -104,12 +111,31 @@ test('a site that no longer names bun-shim.cjs at all is its own finding', () =>
 // A site naming both is clean — the guard does not flag the real sites once
 // they have been fixed (proven again for real below, but this pins the shape with a
 // synthetic input independent of the real tree).
-test('a site naming both bun-shim.cjs and unicode-text.cjs is clean', () => {
+test('a site naming bun-shim.cjs and every companion is clean', () => {
   const r = scanCompanions({
-    sites: [{ rel: 'synthetic/clean.cjs', src: "const a = 'bun-shim.cjs'; const b = 'unicode-text.cjs';\n" }],
+    sites: [{ rel: 'synthetic/clean.cjs', src: "const a = 'bun-shim.cjs'; const b = 'unicode-text.cjs'; const c = 'rg-native.cjs';\n" }],
   });
   assert.deepStrictEqual(r.findings, []);
   assert.strictEqual(r.examined, 1);
+});
+
+// One companion staged and the other forgotten is the realistic regression (the day a second
+// companion arrives, every site already names the first): it is a finding naming the one missed.
+test('a site that stages one companion but not another is a finding naming the one it missed', () => {
+  const r = scanCompanions({
+    sites: [{ rel: 'synthetic/half.cjs', src: "const a = 'bun-shim.cjs'; const b = 'unicode-text.cjs';\n" }],
+  });
+  assert.deepStrictEqual(r.findings, ['synthetic/half.cjs: stages bun-shim.cjs but never rg-native.cjs']);
+});
+
+// COMPANIONS is derived-checked, not trusted: every `require(__dirname + '/<x>')` in bun-shim.cjs
+// is a companion, and every companion is required there. A companion added to bun-shim without
+// being listed here would otherwise be staged nowhere, and nothing would say so until a packaging
+// died at load.
+test('COMPANIONS is exactly what bun-shim.cjs requires from its own directory', () => {
+  const src = fs.readFileSync(path.join(REPO, 'libexec', 'bun-shim.cjs'), 'utf8');
+  const required = [...src.matchAll(/require\(\s*__dirname\s*\+\s*['"]\/([^'"]+)['"]\s*\)/g)].map((m) => m[1]);
+  assert.deepStrictEqual([...new Set(required)].sort(), [...COMPANIONS].sort());
 });
 
 test('floor fires: shim-companions goes BROKEN if fewer than 8 sites are examined', () => {
@@ -121,4 +147,4 @@ test('floor fires: shim-companions goes BROKEN if fewer than 8 sites are examine
   assert.strictEqual(r.verdict, BROKEN, r.message);
 });
 
-module.exports = { SITES, readSites, scanCompanions, controlInputs, guard };
+module.exports = { SITES, COMPANIONS, readSites, scanCompanions, controlInputs, guard };

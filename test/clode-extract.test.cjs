@@ -52,6 +52,7 @@ test('first call: cache miss extracts cli.cjs + shim + sig, and boots the fixtur
     const logs = run(s);
     assert.ok(fs.existsSync(path.join(s.cacheDir, 'cli.cjs')), 'cli.cjs written');
     assert.ok(fs.existsSync(path.join(s.cacheDir, 'bun-shim.cjs')), 'shim copied');
+    for (const c of ['unicode-text.cjs', 'rg-native.cjs']) assert.ok(fs.existsSync(path.join(s.cacheDir, c)), `${c} copied`);
     assert.ok(fs.existsSync(path.join(s.cacheDir, '.extractor-sig')), 'sig written');
     assert.ok(logs.some((l) => l.includes('extracting JS')), 'logged extract');
     assert.ok(!logs.some((l) => l.includes('re-extracting')), 'not a re-extract');
@@ -145,27 +146,44 @@ test('changed shim: cache hit but the cached bun-shim is refreshed from source',
 // mirrors the "changed shim" case just above, but changes the OTHER companion alone,
 // leaving the shim untouched, so it can only pass if each companion is refreshed
 // independently.
-test('changed unicode-text.cjs ALONE: cache hit but the cached companion is refreshed from source, shim untouched', () => {
+// Each companion (test/shim-companions.test.cjs: unicode-text.cjs, rg-native.cjs), alone.
+for (const companion of ['unicode-text.cjs', 'rg-native.cjs']) {
+  const stem = companion.replace(/\.cjs$/, '');
+  test(`changed ${companion} ALONE: cache hit but the cached companion is refreshed from source, shim untouched`, () => {
+    const s = setup('v1');
+    try {
+      run(s); // warm
+      const cli = path.join(s.cacheDir, 'cli.cjs');
+      const cliMtime = fs.statSync(cli).mtimeMs;
+      const cachedShim = path.join(s.cacheDir, 'bun-shim.cjs');
+      const shimBytesBefore = fs.readFileSync(cachedShim);
+      // Simulate a stale cached companion — the shim is left EXACTLY as the cache-hit
+      // path last wrote it, so filesEqual(srcShim, cacheShim) stays true.
+      const cached = path.join(s.cacheDir, companion);
+      fs.writeFileSync(cached, `STALE-${stem}\n`);
+      const logs = run(s);
+      assert.ok(logs.some((l) => l.includes(`refreshed cached ${stem}`)), `${stem} refreshed`);
+      assert.ok(!logs.some((l) => l.includes('extracting JS')), 'not re-extracted');
+      // The cached companion matches source again, cli.cjs was left alone, and the
+      // shim — never touched by this scenario — is byte-identical to what it was.
+      const src = fs.readFileSync(path.join(s.libexec, companion));
+      assert.ok(fs.readFileSync(cached).equals(src), `cached ${stem} == source`);
+      assert.strictEqual(fs.statSync(cli).mtimeMs, cliMtime, 'cli.cjs untouched');
+      assert.ok(fs.readFileSync(cachedShim).equals(shimBytesBefore), 'shim untouched');
+    } finally { cleanup(s); }
+  });
+}
+
+// A cache warmed before a companion existed (no rg-native.cjs beside the shim) is not a hit:
+// the shim it would serve requires a file that is not there.
+test('a cache missing a companion is not a hit: the companion is staged', () => {
   const s = setup('v1');
   try {
     run(s); // warm
-    const cli = path.join(s.cacheDir, 'cli.cjs');
-    const cliMtime = fs.statSync(cli).mtimeMs;
-    const cachedShim = path.join(s.cacheDir, 'bun-shim.cjs');
-    const shimBytesBefore = fs.readFileSync(cachedShim);
-    // Simulate a stale cached unicode-text.cjs — the shim is left EXACTLY as the
-    // cache-hit path last wrote it, so filesEqual(srcShim, cacheShim) stays true.
-    const cachedUnicode = path.join(s.cacheDir, 'unicode-text.cjs');
-    fs.writeFileSync(cachedUnicode, 'STALE-UNICODE-TEXT\n');
-    const logs = run(s);
-    assert.ok(logs.some((l) => l.includes('refreshed cached unicode-text')), 'unicode-text refreshed');
-    assert.ok(!logs.some((l) => l.includes('extracting JS')), 'not re-extracted');
-    // The cached companion matches source again, cli.cjs was left alone, and the
-    // shim — never touched by this scenario — is byte-identical to what it was.
-    const src = fs.readFileSync(path.join(s.libexec, 'unicode-text.cjs'));
-    assert.ok(fs.readFileSync(cachedUnicode).equals(src), 'cached unicode-text == source');
-    assert.strictEqual(fs.statSync(cli).mtimeMs, cliMtime, 'cli.cjs untouched');
-    assert.ok(fs.readFileSync(cachedShim).equals(shimBytesBefore), 'shim untouched');
+    fs.rmSync(path.join(s.cacheDir, 'rg-native.cjs'));
+    run(s);
+    const src = fs.readFileSync(path.join(s.libexec, 'rg-native.cjs'));
+    assert.ok(fs.readFileSync(path.join(s.cacheDir, 'rg-native.cjs')).equals(src), 'rg-native.cjs staged');
   } finally { cleanup(s); }
 });
 

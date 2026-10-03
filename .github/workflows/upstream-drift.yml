@@ -115,6 +115,22 @@ jobs:
           CLODE_PROVIDER_BIN="$PROV" node --test --test-concurrency=1 \
             test/build-gates/shadow-writer-gates.test.cjs
 
+      # THE rg DIFFERENTIAL'S ARGV MATRIX, against the same `next` bundle (the "grep and glob =
+      # native" plan's task 4). test/fidelity/rg-differential.test.cjs judges quaude's rg against
+      # native's embedded rg on the argv scripts/lib/rg-probe.cjs builds; this reads the Grep and
+      # Glob tools' own argv builders from `next` (test/build-gates/rg-probe-gates.test.cjs) and
+      # fails the day upstream adds, drops, reorders or re-values a flag (as 2.1.251 did when
+      # content mode became --json), before the differential goes on judging an argv the tools
+      # no longer build.
+      - name: The rg differential's argv matrix still matches the newest bundle's Grep and Glob builders
+        if: ${{ !cancelled() && steps.anchors.outputs.provider != '' }}
+        env:
+          PROV: ${{ steps.anchors.outputs.provider }}
+        run: |
+          set -euo pipefail
+          CLODE_PROVIDER_BIN="$PROV" node --test --test-concurrency=1 \
+            test/build-gates/rg-probe-gates.test.cjs
+
       # THE CAPTURE-GROUP HEADROOM, against the same `next` bundle. QuickJS refuses a RegExp with
       # more than 254 capture groups, and the bundle BUILDS some with one group per letter of a
       # word list: at 2.1.283 the artifact-lead scrub pattern had 559 (no subagent could finish

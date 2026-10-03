@@ -140,8 +140,14 @@ Bash tool instead".
     --glob P --sort=modified`, `--sort=modified` in every carve) answers the same.
   - With an rg on PATH, the bundle resolves rg through Bun.which to an ABSOLUTE path, and the
     spawn wrappers translate only a bare `rg`: the HOST rg answers every Grep and Glob call.
+    FIXED (grep-native Task 4): every spawn surface matches rg by BASENAME and answers it with
+    libexec/rg-native.cjs; no rg process ever starts (test/rg-spawn.test.cjs, every surface,
+    node and tjs).
   - With no rg on PATH, a Grep path outside the working directory refuses: "ripgrep was found
-    only by name on PATH ... Install ripgrep at an absolute path".
+    only by name on PATH ... Install ripgrep at an absolute path". NOT fixed by grep-native
+    Task 4, and no task of that plan names it: the bundle's own `djn` refuses whenever its
+    rgPath (`Bun.which('rg') ?? 'rg'`) is not absolute, before anything is spawned, so the
+    model is still told to install ripgrep on a host without one.
   - With `--max-columns` dropped, 44 of the 60 files/count argv x tree cells still differ from
     native (the other 16 are empty on both sides): `--glob '!.git'` excludes no directory in
     ugrep (.git/HEAD is searched); ugrep -I drops invalid-UTF-8 files; `-c` prints zero counts;
@@ -165,7 +171,9 @@ Bash tool instead".
     files_with_matches and count modes fail too (measured above).
   - **On a refusal, `_rewriteRgSpawn` hands back the UNTRANSLATED argv.** With no rg, the
     model is told "Install ripgrep". With an rg on PATH, the host rg runs, contradicting
-    the rg-divergence rule.
+    the rg-divergence rule. FIXED (grep-native Task 4): a refusal is a synthesized failed
+    child (rg-native.cjs rgRefusal: rc 2, `rg: error parsing flag <flag>: <reason>` on stderr,
+    the spelling the tool's consumer shows the model as an error instead of "no results").
   test/fidelity/agentic-tools.test.cjs's Grep row checked the whole body and passed on its
   own `pattern:`. Since f4d763d it reads the tool_result, and a `--json` refusal on stderr
   never counts as a pass. The fix is the next task.
@@ -733,13 +741,14 @@ them.
 - **refreshGenerations' reset branch never fires live.** No session moves the style or chalk
   generation, so under the patched quaude it fired 0 times; only `test/reset-patch.test.cjs`
   runs it (it calls the same resetNative() every other reset takes).
-- **`readCarve` has six copies** in test/build-gates (shadow-writer-gates.test.cjs added a
-  fifth, 2026-09-28, task 0b, and tool-coverage-gates.test.cjs a sixth the same day, task 0c —
-  same convention, not a fix), and their consumer tests have drifted (`sgrCloseKeys` in one,
-  `/\bCellSegmenter\b/` in another): one shared carve reader.
+- **`readCarve` has seven copies** in test/build-gates (shadow-writer-gates.test.cjs added a
+  fifth, 2026-09-28, task 0b, tool-coverage-gates.test.cjs a sixth the same day, task 0c, and
+  rg-probe-gates.test.cjs a seventh, grep-native task 4 — same convention, not a fix), and
+  their consumer tests have drifted (`sgrCloseKeys` in one, `/\bCellSegmenter\b/` in
+  another): one shared carve reader.
   One is unnamed: bun-ant-surface-gate.test.cjs's carve reader is an inline `read()`
   on its `defineGuard({...})` call, not a standalone `function readCarve`, so `grep -rn
-  'function readCarve' test/build-gates` finds only the other five — check for this shape
+  'function readCarve' test/build-gates` finds only the other six — check for this shape
   too before trusting that grep's count.
 - **The naude deps fix (ccc2a04) is partial.** It detects a purge by each package's
   `package.json` only, so a lazily required file inside a used package that the $TMPDIR cleaner

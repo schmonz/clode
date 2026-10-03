@@ -197,33 +197,54 @@ const _rewriteArgsArray = (a) => Array.isArray(a) ? a.map(_rewriteSnapshotArg) :
 // recurse back through the snapshot-rewrite wrapper installed just below.
 const _rawSpawnSync = cp.spawnSync;
 
-// rg lands here as the FILE, not inside the args array, so the snapshot rewrite
-// above never saw it. Bun.spawn HAS routed rg->ugrep since the routing spec, but
-// the bundle reaches ripgrep both ways — and the startup calls go through node's
-// child_process. The result was one binary with two spawn routes disagreeing about
-// the same command: `Bun.spawn(['rg',...])` translated, `spawn('rg',[...])` did not
-// and simply failed ENOENT. Route both through the same function.
+// --- rg: every call answered by quaude's rg (rg-native.cjs), never a host rg ---------
+// rg lands here as the FILE, not inside the args array, so the snapshot rewrite above
+// never saw it. The bundle reaches rg through child_process (execFile for the Grep and
+// Glob tools, spawn for the file count and file suggestions) AND through Bun.spawn, so
+// every one of those surfaces routes to the same place: rg-native.cjs's runRg, whose
+// answer comes back as a SYNTHESIZED child (no rg process ever starts).
 //
-// Applies to quaude AND naude, which is the point: bun-shim is baked into both,
-// whereas node-shim is quaude-only. Wiring this into node-shim would have made
-// quaude translate while naude did not — inventing the divergence this project
-// exists to remove.
-const _rewriteRgFileArgs = (file, args) => {
-  if (file !== 'rg' || !Array.isArray(args)) return null;
-  const rewritten = _rewriteRgSpawn([file, ...args]);
-  // Untranslatable (e.g. --files) or no ugrep: _rewriteRgSpawn returns the argv
-  // unchanged, and we leave the call alone so the app's own not-found fallback
-  // still engages, exactly as before.
-  if (!Array.isArray(rewritten) || rewritten[0] === file) return null;
-  return { file: rewritten[0], args: rewritten.slice(1) };
-};
+// BY BASENAME (isRgExe). The bundle finds rg as `Bun.which('rg') ?? 'rg'`, an ABSOLUTE
+// path whenever the host has ripgrep installed; this used to match only `file === 'rg'`,
+// so on such a host every Grep and Glob call ran the HOST's rg (measured 2026-09-27).
+//
+// Applies to quaude AND naude, which is the point: bun-shim is baked into both, and it
+// wraps whichever object `require('child_process')` is (node-shim's module under quaude,
+// node's under naude). Wiring this into node-shim would have made quaude answer rg while
+// naude did not — inventing the divergence this project exists to remove.
+const _rgNative = require(__dirname + '/rg-native.cjs');
+
+// One rg call: runRg with today's translation (_rgTranslate, below) and the UNWRAPPED
+// spawnSync, then the operator-side surfacing the translation has always had.
+function _rgRun(args, opts) {
+  const o = opts || {};
+  const r = _rgNative.runRg(args, {
+    cwd: o.cwd, env: o.env || process.env, timeout: o.timeout, maxBuffer: o.maxBuffer,
+    translate: _rgTranslate, spawnSync: _rawSpawnSync,
+  });
+  if (r.appletRejected) _surfaceRgSkew(r.appletRejected.argv, r.appletRejected.status);
+  return r;
+}
+
+// A child_process call whose file is rg, in the shape that surface returns.
+function _rgCall(method, file, args, rest) {
+  if (!Array.isArray(args)) { if (args !== undefined) rest.unshift(args); args = []; }
+  if (method === 'execFile') {
+    const cb = rest.find((x) => typeof x === 'function');
+    const opts = rest.find((x) => x && typeof x === 'object') || {};
+    return _rgNative.rgExecFile(() => _rgRun(args, opts), opts, cb, file, args);
+  }
+  const opts = (rest[0] && typeof rest[0] === 'object') ? rest[0] : {};
+  if (method === 'spawn') return _rgNative.rgSpawn(() => _rgRun(args, opts), opts);
+  if (method === 'spawnSync') return _rgNative.rgSpawnSync(_rgRun(args, opts), opts);
+  return _rgNative.rgExecFileSync(_rgRun(args, opts), opts, file, args);
+}
 
 for (const m of ['execFile', 'execFileSync', 'spawn', 'spawnSync']) {
   const orig = cp[m];
   if (typeof orig !== 'function') continue;
   cp[m] = function (file, args, ...rest) {
-    const rg = _rewriteRgFileArgs(file, args);
-    if (rg) return orig.call(this, rg.file, _rewriteArgsArray(rg.args), ...rest);
+    if (_rgNative.isRgExe(file)) return _rgCall(m, file, args, rest);
     return orig.call(this, file, _rewriteArgsArray(args), ...rest);
   };
 }
@@ -774,15 +795,26 @@ hash.wyhash = hash; hash.crc32 = (b)=>{ const z=require('zlib'); return z.crc32 
 // path agree, which is the same two-routes-disagreeing bug fixed in e356a20,
 // one level up.
 //
-// Returning an argv that cannot resolve keeps the app's own not-found fallback
-// working exactly as it does when rg is genuinely absent — deterministically,
-// whether or not this host has rg.
+// It is a REFUSAL (rg-native.cjs rgRefusal: rc 2, the reason on stderr), not an argv
+// that cannot resolve. The unresolvable argv this used to return made the bundle's own
+// not-found fallback tell the MODEL "ripgrep not found on PATH. Install it ...", which is
+// the one remedy quaude refuses on purpose.
 function _rgAppletMissing(cmd, applet) {
   process.stderr.write(
     `clode: rg needs '${applet}' (set CLODE_${applet.toUpperCase()} or install it); `
     + 'not falling back to a host rg — quaude translates rg to portable applets on purpose\n');
   _rgDebug(cmd, `!! needs ${applet}`);
-  return ['clode-rg-unavailable', ...cmd.slice(1)];
+  return { refuse: `quaude answers rg with ${applet}, on purpose, and this host has no ${applet} `
+    + `(set CLODE_${applet.toUpperCase()} or install ${applet}); nothing was searched` };
+}
+
+// An rg-only flag the translation cannot give native's answer for: refused, naming it.
+function _rgUntranslatable(cmd, e) {
+  process.stderr.write(e.message + '\n');
+  _rgDebug(cmd, `!! untranslatable ${e.flag}`);
+  return { flag: e.flag, refuse: `quaude answers rg with its own emulation over ugrep, on purpose, `
+    + `and it cannot yet give ${e.flag} the answer native's rg gives, so it refuses rather than `
+    + 'answer differently; nothing was searched' };
 }
 
 // ONE parseable line per rg call the shim sees, whatever the outcome:
@@ -885,39 +917,30 @@ function rgFilesToListing(args) {
   return out;
 }
 
-// If cmd[0] is bare `rg`, rewrite to ugrep with translated argv (spec: rg-to-ugrep).
-// ugrep-absent → cmd untouched, so the app's not-found fallback path is preserved.
-function _rewriteRgSpawn(cmd) {
-  if (!Array.isArray(cmd) || cmd.length === 0) return cmd;
-  const exe = cmd[0];
-  if (exe !== 'rg') return cmd;
+// Today's translation of one rg call (its arguments, no argv[0]) — what rg-native.cjs's
+// runRg delegates to until the emulation replaces it: { argv: [applet, ...] } to run, or
+// { refuse, flag } when it cannot give native's answer. NEVER the untouched rg argv: that
+// is what used to let a host rg answer (spec: rg-to-ugrep; memory rg-divergence).
+function _rgTranslate(args) {
+  const cmd = ['rg', ...args];
   // --files is a listing, not a search: different tool, handled before rgToUgrep.
-  if (cmd.includes('--files')) {
-    try {
-      const listing = rgFilesToListing(cmd.slice(1));
-      if (!listing) return _rgAppletMissing(cmd, cmd.includes('--no-ignore') ? 'bfs' : 'ugrep');
-      _rgDebug(cmd, `=> ${listing.join(' ')}`);
-      return listing;
-    } catch (e) {
-      if (e instanceof RgTranslateError) {
-        process.stderr.write(e.message + '\n');
-        _rgDebug(cmd, `!! untranslatable ${e.flag}`);
-      }
-      return cmd;
-    }
+  if (args.includes('--files')) {
+    let listing;
+    try { listing = rgFilesToListing(args); }
+    catch (e) { if (e instanceof RgTranslateError) return _rgUntranslatable(cmd, e); throw e; }
+    if (!listing) return _rgAppletMissing(cmd, args.includes('--no-ignore') ? 'bfs' : 'ugrep');
+    _rgDebug(cmd, `=> ${listing.join(' ')}`);
+    return { argv: listing };
   }
   const ugrep = process.env.CLODE_UGREP || which('ugrep');
   if (!ugrep) return _rgAppletMissing(cmd, 'ugrep');
   try {
-    const rewritten = [ugrep, ...rgToUgrep(cmd.slice(1))];
-    _rgDebug(cmd, `=> ${rewritten.join(' ')}`);
-    return rewritten;
+    const argv = [ugrep, ...rgToUgrep(args)];
+    _rgDebug(cmd, `=> ${argv.join(' ')}`);
+    return { argv };
   } catch (e) {
-    if (e instanceof RgTranslateError) {
-      process.stderr.write(e.message + '\n');
-      _rgDebug(cmd, `!! untranslatable ${e.flag}`);
-    }
-    return cmd;
+    if (e instanceof RgTranslateError) return _rgUntranslatable(cmd, e);
+    throw e;
   }
 }
 
@@ -926,9 +949,10 @@ function spawn(cmdOrOpts, maybeOpts){
   let cmd, opts;
   if (Array.isArray(cmdOrOpts)) { cmd = cmdOrOpts; opts = maybeOpts||{}; }
   else { opts = cmdOrOpts||{}; cmd = opts.cmd; }
-  const _origCmd = cmd;
-  cmd = _rewriteRgSpawn(cmd);
   const exe = cmd[0];
+  // rg is never looked up: cp.spawn (wrapped above) answers it with quaude's rg, whether
+  // or not the host has one.
+  const isRg = _rgNative.isRgExe(exe);
   const env = opts.env || process.env;
   // Bun resolves the executable synchronously and THROWS if it isn't found, so
   // the cli's try/catch fallbacks engage. Node's cp.spawn instead emits an async
@@ -942,7 +966,9 @@ function spawn(cmdOrOpts, maybeOpts){
   // pathed name was X_OK'd, which on Windows answers nothing useful. So: pathedness
   // is decided the way node decides it, and a pathed win32 name is accepted if the
   // name or any PATHEXT spelling of it is a file — the set libuv would go on to try.
-  if (exe && !_exeIsPathed(exe, process.platform === 'win32')) {
+  if (isRg) {
+    // answered by quaude's rg, below; nothing to find
+  } else if (exe && !_exeIsPathed(exe, process.platform === 'win32')) {
     if (!which(exe, { PATH: env.PATH, PATHEXT: env.PATHEXT })) throw new Error(`Executable not found in $PATH: "${exe}"`);
   } else if (exe) {
     if (process.platform === 'win32') {
@@ -961,9 +987,7 @@ function spawn(cmdOrOpts, maybeOpts){
   // Resolve exited on BOTH 'exit' and 'error' so a late spawn failure can never
   // hang an awaiter or crash via an unhandled 'error' event.
   const exited = new Promise((res)=>{
-    let done = false; const fin = (c)=>{ if(!done){ done=true;
-      if (cmd !== _origCmd && _origCmd[0] === 'rg') _surfaceRgSkew(cmd, c);
-      res(c); } };
+    let done = false; const fin = (c)=>{ if(!done){ done=true; res(c); } };
     child.on('exit', (code)=>fin(code??0));
     child.on('error', ()=>fin(1));
   });
@@ -973,11 +997,10 @@ function spawn(cmdOrOpts, maybeOpts){
     ref(){}, unref(){ child.unref(); },
   };
 }
+// rg needs nothing here: cp.spawnSync (wrapped above) answers it with quaude's rg.
 spawn.sync = function(cmdOrOpts){
-  const cmd0 = Array.isArray(cmdOrOpts)?cmdOrOpts:(cmdOrOpts.cmd);
-  const cmd = _rewriteRgSpawn(cmd0);
+  const cmd = Array.isArray(cmdOrOpts)?cmdOrOpts:(cmdOrOpts.cmd);
   const r = cp.spawnSync(cmd[0], cmd.slice(1), {encoding:'buffer'});
-  if (cmd !== cmd0 && cmd0[0] === 'rg') _surfaceRgSkew(cmd, r.status);
   return { exitCode: r.status??0, stdout: r.stdout||Buffer.alloc(0), stderr: r.stderr||Buffer.alloc(0), success: (r.status===0) };
 };
 
@@ -1055,7 +1078,7 @@ function _exeIsPathed(exe, isWin){
 // WINDOWS. An executable on PATH is `ugrep.exe`, never `ugrep`, so the bare-name
 // walk this used to do matched NOTHING — and the callers read that as "the applet
 // is not installed": every rg-derived file search on a Windows quaude took the
-// `clode-rg-unavailable` path (see _rgAppletMissing) even with ugrep sitting right
+// missing-applet path (see _rgAppletMissing) even with ugrep sitting right
 // there on PATH, unless the user had set CLODE_UGREP to a path spelled out to the
 // extension. So, win32-only: probe PATHEXT, strip the quotes cmd.exe tolerates
 // around a PATH element (libuv's search_path does the same — deps/libuv/src/win/
@@ -2038,7 +2061,7 @@ module.exports.CLODE_SHADOWS = CLODE_SHADOWS;
 module.exports.rgToUgrep = rgToUgrep;
 module.exports.RgTranslateError = RgTranslateError;
 module.exports.rgShadowBody = rgShadowBody;
-module.exports._rewriteRgSpawn = _rewriteRgSpawn;
+module.exports._rgTranslate = _rgTranslate;         // today's rg translation (rg-native.cjs runRg's delegate)
 module.exports._whichLeaves = _whichLeaves;     // exported for test/bun-shim-which.test.cjs
 module.exports._exeIsPathed = _exeIsPathed;     //   (the win32 seams, driven from a Mac)
 module.exports.rgFilesToListing = rgFilesToListing;

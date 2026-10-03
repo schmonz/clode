@@ -636,6 +636,15 @@ test('the controlled set is EXACTLY the modules a guard was deliberately written
   // the PINNED carve's own shadow writer BY STRUCTURE and runs what it writes through the
   // real parseShadow/collectShadows/rewriteSnapshot, which pushed uncontrolled from 28 to 27
   // — the baseline MOVED for this one (test/guards-population.cjs).
+  //
+  // scripts/lib/rg-probe.cjs ADDED 2026-10-03 (grep-native plan, task 4), the mechanism a tenth
+  // time, gate-shaped on the day it was written: the rg differential's instrument, which judges
+  // quaude's rg against native's embedded rg (compareRg, a `.test(` over the argv) and REFUSES
+  // (throws) when native does not run or the probe answers short, so a missing side can never
+  // read as "both found nothing". Test-only, like tool-result.cjs. It landed with its guard,
+  // test/build-gates/rg-probe-gates.test.cjs (rg-matrix-from-carve: its argv matrix against
+  // the pinned carve's own Grep and Glob builders), so uncontrolled stayed at 27; without that
+  // guard it reads 28. The baseline did not move.
   assert.deepStrictEqual([...controlledProductionModules().keys()].sort(), [
     'libexec/bun-shim.cjs',
     'libexec/clode-build.cjs',
@@ -648,6 +657,7 @@ test('the controlled set is EXACTLY the modules a guard was deliberately written
     'scripts/carve-probe.mjs',
     'scripts/lib/paint-probe.cjs',
     'scripts/lib/reset-patch.cjs',
+    'scripts/lib/rg-probe.cjs',
     'scripts/lib/text-probe.cjs',
     'scripts/lib/tool-result.cjs',
     'scripts/oracle-native-version.cjs',

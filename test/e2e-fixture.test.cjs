@@ -24,8 +24,9 @@ test('extractor carves fixture and Node boots it to the label', (t) => {
 
   // cp libexec/bun-shim.cjs "$TMP/bun-shim.cjs"
   fs.copyFileSync(BUN_SHIM, path.join(sbx.dir, 'bun-shim.cjs'));
-  // ...and its companion, which bun-shim.cjs requires from its own directory.
+  // ...and its companions, which bun-shim.cjs requires from its own directory.
   fs.copyFileSync(path.join(REPO, 'libexec', 'unicode-text.cjs'), path.join(sbx.dir, 'unicode-text.cjs'));
+  fs.copyFileSync(path.join(REPO, 'libexec', 'rg-native.cjs'), path.join(sbx.dir, 'rg-native.cjs'));
 
   // run "$CLODE_NODE" "$TMP/cli.cjs"
   const r = spawnSync(NODE, [cli], { encoding: 'utf8', env: sbx.env });

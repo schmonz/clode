@@ -208,7 +208,7 @@ export function stageDeps(nmdir) {
 // The old `builder` asset (the path of the clode building this naude, once fed to
 // the retired spawn-a-rebuild callback) is GONE: auto-update is notify-only now,
 // so nothing reads a builder path and nothing writes one.
-export function naudeSeaConfig({ mainBundle, cliCjs, bunShim, tar, sig, out, targetUpdateCheck, unicodeText, manifest, manifestSig }) {
+export function naudeSeaConfig({ mainBundle, cliCjs, bunShim, tar, sig, out, targetUpdateCheck, unicodeText, rgNative, manifest, manifestSig }) {
   const assets = {
     'deps.tar': tar,
     'deps.sig': sig,
@@ -221,6 +221,9 @@ export function naudeSeaConfig({ mainBundle, cliCjs, bunShim, tar, sig, out, tar
     // the require resolves. Resolved the same way as targetUpdateCheck just above —
     // clode's own code, version-independent, not staged per-bundle.
     'unicode-text.cjs': unicodeText,
+    // bun-shim.cjs's other companion, quaude's rg (require(__dirname + '/rg-native.cjs')),
+    // materialized beside it the same way (test/shim-companions.test.cjs).
+    'rg-native.cjs': rgNative,
   };
   // manifest.json: what this naude knows about itself — which clode built it, which
   // upstream bundle it bakes, which platform that bundle was CARVED for, and the sha256
@@ -320,6 +323,9 @@ export function writeSeaConfig({
   // test/shim-companions.test.cjs): same reasoning as targetUpdateCheck just above —
   // clode's own code, version-independent, not staged per-bundle.
   unicodeText = path.join(REPO, 'libexec', 'unicode-text.cjs'),
+  // rgNative (grep-native Task 4 — bun-shim.cjs's rg-native.cjs companion, quaude's rg): same
+  // reasoning again — clode's own code, version-independent, not staged per-bundle.
+  rgNative = path.join(REPO, 'libexec', 'rg-native.cjs'),
   extras = {}, template = null,
 }) {
   // Ensure the artifact dir exists before writing into it (sea-config.json here).
@@ -352,6 +358,12 @@ export function writeSeaConfig({
     console.error(`build-naude: unicode-text.cjs not found at: ${unicodeText}`);
     process.exit(1);
   }
+  if (!fs.existsSync(rgNative)) {
+    // Fail loud, same reason: bun-shim.cjs's own `require(__dirname + '/rg-native.cjs')`
+    // 404s at load without this asset.
+    console.error(`build-naude: rg-native.cjs not found at: ${rgNative}`);
+    process.exit(1);
+  }
   // -- the manifest + its sig, written HERE (not by main) so the shas recorded are the
   // shas of the very files the SEA config is about to name as assets: no window in which
   // an asset could be re-staged between being hashed and being embedded.
@@ -362,6 +374,7 @@ export function writeSeaConfig({
     'cli.cjs': cliCjs,
     'target-update-check.cjs': targetUpdateCheck,
     'unicode-text.cjs': unicodeText,
+    'rg-native.cjs': rgNative,
   };
   const members = {};
   for (const [name, file] of Object.entries(assetFiles)) {
@@ -399,6 +412,7 @@ export function writeSeaConfig({
     out: outDir,
     targetUpdateCheck,
     unicodeText,
+    rgNative,
     manifest: manifestPath,
     manifestSig: manifestSigPath,
   });
