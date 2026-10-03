@@ -197,7 +197,10 @@ Bash tool instead".
     of bun-shim's companions shared by the build sites (test/shim-companions.test.cjs derives
     COMPANIONS from bun-shim.cjs; the staging sites still each name them);
   - a tjs probe that hangs (scripts/lib/text-probe.cjs runProbeOurs) is reported as "our probe
-    failed under tjs (exit null)", which names neither the hang nor the timeout.
+    failed under tjs (exit null)", which names neither the hang nor the timeout;
+  - quaude's rg child (libexec/rg-native.cjs rgSpawn) holds the applet's stderr until exit (so a
+    stderr maxBuffer fires late) and pushes stdout without backpressure; no 2.1.283 consumer is
+    affected (review N3).
 - **Upstream's rg shadow is guarded by `if ! (unalias rg; command -v rg)`**, so with a host rg
   on PATH the snapshot defines no rg function, and Bash `rg` runs the host rg. That is the
   shell-path exception to "a host rg is never called" (rg-divergence), and it is not changed
