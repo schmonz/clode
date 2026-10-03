@@ -314,9 +314,11 @@ function ugrepMatches(files, pattern, opts = {}) {
   for (const argv of chunks) {
     const r = spawnSync(opts.ugrep, argv, { cwd: opts.cwd, env: opts.env || process.env, encoding: 'buffer', maxBuffer: RG_MAX_BUFFER });
     if (r.error) throw new UgrepError(`${leafOf(opts.ugrep)} could not be run (${r.error.code || r.error.message})`, { matches: inOrder(ranges) });
+    // Killed: the bytes may stop anywhere, so they are not read; the kill is the answer.
+    if (r.status === null || r.signal) { failed = { r, stderr: r.stderr }; break; }
     parseUgrepRanges(toBuf(r.stdout), ranges);
     // A failed chunk ends the search: the answer is already an error, so no later chunk runs.
-    if (r.status === null || r.status >= 2) { failed = { r, stderr: r.stderr }; break; }
+    if (r.status >= 2) { failed = { r, stderr: r.stderr }; break; }
   }
   const out = inOrder(ranges);
   if (failed) throw ugrepFailed(opts.ugrep, failed.r, failed.stderr, out);
@@ -350,7 +352,10 @@ function ugrepMatchesAsync(files, pattern, opts = {}) {
     child.on('close', (status, signal) => {
       if (settled) return;
       settled = true;
-      try { parseUgrepRanges(Buffer.concat(outs), ranges); } catch (e) { reject(e); return; }
+      // Killed: the bytes may stop anywhere, so they are not read; the kill is the answer.
+      if (status !== null && !signal) {
+        try { parseUgrepRanges(Buffer.concat(outs), ranges); } catch (e) { reject(e); return; }
+      }
       resolve({ status, signal: signal || null, stderr: Buffer.concat(errs) });
     });
   });

@@ -219,6 +219,17 @@ test('a failed chunk ends the search: killed, or exit >= 2, no later chunk start
     assert.strictEqual(runs(syncLog), 1, 'an exit >= 2 must end the sync search');
   }));
 
+// A ugrep killed mid-record is reported as KILLED, not as malformed output (review M1): the
+// status is read before the bytes, which a killed run may have cut off anywhere.
+test('a ugrep killed mid-record is reported as killed, never as malformed output (sync and async)', posixStub, () =>
+  withStubs({ trunc: `${STUB_VERSION}; printf 'a.txt\\0006 1'; kill -9 $$` }, async (st, dir) => {
+    const killed = (e) => e.name === 'UgrepError' && e.signal === 'SIGKILL' && /signal SIGKILL/.test(e.message)
+      && !/--format output/.test(e.message);
+    const env = { ...process.env, STUB_LOG: path.join(dir, 'log') };
+    assert.throws(() => rgn.ugrepMatches(['a.txt'], 'x', { ugrep: st.trunc, cwd: dir, env }), killed);
+    await assert.rejects(rgn.ugrepMatchesAsync(['a.txt'], 'x', { ugrep: st.trunc, cwd: dir, env }), killed);
+  }));
+
 // ---- the async twin, and the same plumbing under tjs -----------------------------------------
 test('ugrepMatchesAsync answers what ugrepMatches does, and rejects as it throws', needUgrep, async () => {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-native-'));
