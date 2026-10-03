@@ -276,9 +276,25 @@ function parseUgrepRanges(buf, into = new Map()) {
 // The plan both twins share: each distinct file once, spelled for ugrep, in chunks; and how to
 // read the ranges back in the caller's order (a file without a match has no entry).
 function matchPlan(files, pattern, opts) {
+  // A directory is searched as NOTHING (ugrep exits 0 on one without -r): the walk lists files,
+  // so a directory here is the caller's mistake, refused rather than answered "no matches".
+  const fs = require('fs'), path = require('path');
+  for (const f of files) {
+    let st = null;
+    try { st = fs.statSync(path.resolve(opts.cwd || process.cwd(), f)); } catch { /* a missing file is ugrep's to report */ }
+    if (st && st.isDirectory()) throw new UgrepError(`rg-native: ${f} is a directory; ugrepMatches searches files only`);
+  }
   const spelled = [...new Set(files.map(spellForUgrep))];
+  const asked = new Set(spelled);
   const argv = ugrepMatchArgv(pattern, opts);
   const chunks = chunkFiles(spelled, opts.argvBudget || ARGV_BUDGET).map((c) => [...argv, ...c]);
+  // Every path ugrep reported must be one it was asked about; a match it places anywhere else
+  // cannot be answered for, so it is refused, never dropped.
+  const onlyAsked = (ranges) => {
+    for (const k of ranges.keys()) {
+      if (!asked.has(k)) throw new UgrepError(`rg-native: ugrep reported a match in ${JSON.stringify(k)}, which it was not asked for`);
+    }
+  };
   const inOrder = (ranges) => {
     const out = new Map();
     for (const f of files) {
@@ -287,7 +303,7 @@ function matchPlan(files, pattern, opts) {
     }
     return out;
   };
-  return { chunks, inOrder };
+  return { chunks, inOrder, onlyAsked };
 }
 // The floor, ENFORCED: a ugrep below UGREP_MIN (or no ugrep at all) is refused before it runs,
 // never asked: 3.11.2 answers a missing file with exit 0 and nothing printed, "no matches".
@@ -308,7 +324,7 @@ function ugrepMatches(files, pattern, opts = {}) {
   if (!files.length) return new Map();
   assertUsableUgrep(opts);
   const spawnSync = opts.spawnSync || require('child_process').spawnSync;
-  const { chunks, inOrder } = matchPlan(files, pattern, opts);
+  const { chunks, inOrder, onlyAsked } = matchPlan(files, pattern, opts);
   const ranges = new Map();
   let failed = null;
   for (const argv of chunks) {
@@ -322,6 +338,7 @@ function ugrepMatches(files, pattern, opts = {}) {
   }
   const out = inOrder(ranges);
   if (failed) throw ugrepFailed(opts.ugrep, failed.r, failed.stderr, out);
+  onlyAsked(ranges);
   return out;
 }
 
@@ -331,9 +348,10 @@ function ugrepMatches(files, pattern, opts = {}) {
 function ugrepMatchesAsync(files, pattern, opts = {}) {
   if (!files.length) return Promise.resolve(new Map());
   // The floor check runs ugrep --version synchronously, ONCE per binary per process (cached).
-  try { assertUsableUgrep(opts); } catch (e) { return Promise.reject(e); }
+  let plan;
+  try { assertUsableUgrep(opts); plan = matchPlan(files, pattern, opts); } catch (e) { return Promise.reject(e); }
   const spawn = opts.spawn || require('child_process').spawn;
-  const { chunks, inOrder } = matchPlan(files, pattern, opts);
+  const { chunks, inOrder, onlyAsked } = plan;
   const ranges = new Map();
   const runOne = (argv) => new Promise((resolve, reject) => {
     let child;
@@ -368,6 +386,7 @@ function ugrepMatchesAsync(files, pattern, opts = {}) {
     }
     const out = inOrder(ranges);
     if (failed) throw ugrepFailed(opts.ugrep, failed, failed.stderr, out);
+    onlyAsked(ranges);
     return out;
   })();
 }

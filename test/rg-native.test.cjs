@@ -230,6 +230,22 @@ test('a ugrep killed mid-record is reported as killed, never as malformed output
     await assert.rejects(rgn.ugrepMatchesAsync(['a.txt'], 'x', { ugrep: st.trunc, cwd: dir }), killed);
   }));
 
+// Every reported path is one that was asked for, and every listed name is a file (review M2):
+// a match ugrep places in some OTHER path cannot be answered for, and a directory in the list
+// was searched as nothing at all (ugrep exits 0 on one). Both are refusals, never dropped.
+test('a match in a path not asked for, or a directory in the list, is refused (sync and async)', posixStub, () =>
+  withStubs({ stray: `${STUB_VERSION}; printf 'other.txt\\0001 2\\n'; exit 0` }, async (st, dir) => {
+    fs.writeFileSync(path.join(dir, 'a.txt'), 'x\n');
+    fs.mkdirSync(path.join(dir, 'sub'));
+    const env = process.env;
+    const stray = (e) => e.name === 'UgrepError' && /other\.txt/.test(e.message) && /not asked for/.test(e.message);
+    assert.throws(() => rgn.ugrepMatches(['a.txt'], 'x', { ugrep: st.stray, cwd: dir, env }), stray);
+    await assert.rejects(rgn.ugrepMatchesAsync(['a.txt'], 'x', { ugrep: st.stray, cwd: dir, env }), stray);
+    const isDir = (e) => e.name === 'UgrepError' && /sub is a directory/.test(e.message);
+    assert.throws(() => rgn.ugrepMatches(['a.txt', 'sub'], 'x', { ugrep: st.stray, cwd: dir, env }), isDir);
+    await assert.rejects(rgn.ugrepMatchesAsync(['a.txt', 'sub'], 'x', { ugrep: st.stray, cwd: dir, env }), isDir);
+  }));
+
 // ---- the async twin, and the same plumbing under tjs -----------------------------------------
 test('ugrepMatchesAsync answers what ugrepMatches does, and rejects as it throws', needUgrep, async () => {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-native-'));
