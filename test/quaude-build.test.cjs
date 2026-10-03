@@ -146,7 +146,7 @@ test('attest golden: stable manifest fields + full member verification', async (
   // check keeps meaning the same thing as upstream's packaging changes under us.
   // unicode-text.cjs rides at the archive root beside bun-shim.cjs (the one clustering/width/
   // SGR implementation both bun-shim and the Intl polyfill require).
-  for (const m of [manifest.entry, 'bun-shim.cjs', 'unicode-text.cjs', 'rg-native.cjs', 'node-shim/loader.cjs', 'node-shim/modules/process.cjs', 'target-env.cjs', 'target-update-check.cjs']) {
+  for (const m of [manifest.entry, 'bun-shim.cjs', 'unicode-text.cjs', 'rg-native.cjs', 'rg-regex.cjs', 'node-shim/loader.cjs', 'node-shim/modules/process.cjs', 'target-env.cjs', 'target-update-check.cjs']) {
     assert.ok(manifest.members[m], `manifest missing member ${m}`);
   }
   // The shipped loader member must be byte-identical to the committed loader, and the text
@@ -158,6 +158,9 @@ test('attest golden: stable manifest fields + full member verification', async (
   // quaude's rg (bun-shim.cjs's other companion), the same way.
   assert.strictEqual(manifest.members['rg-native.cjs'].sha256,
     sha256File(path.join(REPO, 'libexec/rg-native.cjs')));
+  // ...and rg-native.cjs's own companion, rg's regex dialect.
+  assert.strictEqual(manifest.members['rg-regex.cjs'].sha256,
+    sha256File(path.join(REPO, 'libexec/rg-regex.cjs')));
 
   // BOM (Task a): the declared closure as name@version — states what this
   // quaude embeds without cross-referencing package.json + node_modules.

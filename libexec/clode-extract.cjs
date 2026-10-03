@@ -277,10 +277,10 @@ function extractIfNeeded(opts) {
   const cacheShim = path.join(cacheDir, 'bun-shim.cjs');
   const srcShim = path.join(libexec, 'bun-shim.cjs');
   // bun-shim.cjs's own `require(__dirname + '/<name>')` companions — unicode-text.cjs
-  // (Task 5) and rg-native.cjs (quaude's rg; grep-native Task 4), see
-  // test/shim-companions.test.cjs: staged beside the shim everywhere the shim is staged,
-  // never on its own.
-  const companions = ['unicode-text.cjs', 'rg-native.cjs']
+  // (Task 5), rg-native.cjs (quaude's rg; grep-native Task 4) and ITS companion rg-regex.cjs
+  // (rg's regex dialect; grep-native Task 5b), see test/shim-companions.test.cjs: staged
+  // beside the shim everywhere the shim is staged, never on its own.
+  const companions = ['unicode-text.cjs', 'rg-native.cjs', 'rg-regex.cjs']
     .map((name) => ({ name, src: path.join(libexec, name), cache: path.join(cacheDir, name) }));
   const sigPath = path.join(cacheDir, '.extractor-sig');
 

@@ -509,6 +509,9 @@ members.push({ name: 'unicode-text.cjs', data: await mustRead(path.join(libexecD
 // (clode-blobulate.cjs's materialization puts it there). Read from libexecDir: clode's own
 // code, not version-locked to the bundle (test/shim-companions.test.cjs).
 members.push({ name: 'rg-native.cjs', data: await mustRead(path.join(libexecDir, 'rg-native.cjs'), 'rg-native.cjs member') });
+// rg-regex.cjs, rg's regex dialect, which rg-native.cjs requires as ITS sibling
+// (`require(__dirname + '/rg-regex.cjs')`): at the archive ROOT beside it, for the same reasons.
+members.push({ name: 'rg-regex.cjs', data: await mustRead(path.join(libexecDir, 'rg-regex.cjs'), 'rg-regex.cjs member') });
 
 // ext-dep closure (DEPS = extras.deps, derived node-side — see above). The
 // node side already fails the build if a listed package is missing from

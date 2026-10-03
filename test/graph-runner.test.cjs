@@ -55,6 +55,7 @@ function writeRunner(doc) {
   fs.copyFileSync(path.join(REPO, 'libexec', 'bun-shim.cjs'), path.join(dir, 'bun-shim.cjs'));
   fs.copyFileSync(path.join(REPO, 'libexec', 'unicode-text.cjs'), path.join(dir, 'unicode-text.cjs'));   // its companions
   fs.copyFileSync(path.join(REPO, 'libexec', 'rg-native.cjs'), path.join(dir, 'rg-native.cjs'));
+  fs.copyFileSync(path.join(REPO, 'libexec', 'rg-regex.cjs'), path.join(dir, 'rg-regex.cjs'));
   return { dir, f };
 }
 

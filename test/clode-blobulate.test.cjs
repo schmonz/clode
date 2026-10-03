@@ -335,6 +335,7 @@ test('materializeBlobPayload: each member name lands at its documented on-disk h
     put('target-env.cjs');
     put('unicode-text.cjs');
     put('rg-native.cjs');
+    put('rg-regex.cjs');
     put('deps/claude/package-lock.json');
     put('scripts/build-naude.mjs');
     put('naude-entry.bundle.cjs');
@@ -355,6 +356,8 @@ test('materializeBlobPayload: each member name lands at its documented on-disk h
     assert.strictEqual(at(path.join('libexec', 'unicode-text.cjs')), 'unicode-text.cjs', 'beside node-shim/, for intl.cjs\'s ../../ climb');
     // rg-native.cjs (bun-shim.cjs's other companion, quaude's rg) beside bun-shim's on-disk home.
     assert.strictEqual(at(path.join('libexec', 'rg-native.cjs')), 'rg-native.cjs', 'beside unicode-text.cjs, where the builder stages companions from');
+    // rg-regex.cjs (rg-native.cjs's own companion) beside it.
+    assert.strictEqual(at(path.join('libexec', 'rg-regex.cjs')), 'rg-regex.cjs', 'beside rg-native.cjs, which requires it');
     assert.strictEqual(at(path.join('libexec', 'quaude-blobulate.js')), 'libexec/quaude-blobulate.js');
     assert.strictEqual(at(path.join('node_modules', 'yaml', 'package.json')), 'node_modules/yaml/package.json');
     assert.strictEqual(at(path.join('deps', 'claude', 'package-lock.json')), 'deps/claude/package-lock.json');

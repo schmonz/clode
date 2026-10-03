@@ -645,16 +645,31 @@ test('the controlled set is EXACTLY the modules a guard was deliberately written
   // test/build-gates/rg-probe-gates.test.cjs (rg-matrix-from-carve: its argv matrix against
   // the pinned carve's own Grep and Glob builders), so uncontrolled stayed at 27; without that
   // guard it reads 28. The baseline did not move.
+  //
+  // libexec/rg-regex.cjs and scripts/gen-rg-regex-data.cjs ADDED 2026-10-03 (grep-native plan,
+  // task 5b), the mechanism an eleventh and twelfth time, both gate-shaped on the day they were
+  // written. rg-regex.cjs is quaude's rg regex dialect: it reads a pattern and REFUSES, by named
+  // rule, what it cannot answer exactly and what rg itself rejects (its verdict half also matches
+  // its parser's character tests). gen-rg-regex-data.cjs generates that file's character data
+  // from native's embedded rg, and its --check derives staleness from the generated region
+  // (`.exec(`) and exits 1. They landed with their guards, test/build-gates/rg-regex-gates.test.cjs
+  // (rg-regex-refuses; rg-regex-data-fresh, whose control runs the generator's own staleness()),
+  // so uncontrolled stayed at 27; without them it reads 29. Its sibling gen-rg-regex-oracle.cjs
+  // has the same --check gate (rg-regex-oracle-fresh) but derives it with JSON.parse and string
+  // equality, which the classifier does not read as a verdict, so it is named, not counted. The
+  // baseline did not move.
   assert.deepStrictEqual([...controlledProductionModules().keys()].sort(), [
     'libexec/bun-shim.cjs',
     'libexec/clode-build.cjs',
     'libexec/host-provision.cjs',
     'libexec/inspect-claude-bundle.cjs',
+    'libexec/rg-regex.cjs',
     'libexec/scc-merge.cjs',
     'libexec/target-update-check.cjs',
     'scripts/build-graph.cjs',
     'scripts/build-runner.cjs',
     'scripts/carve-probe.mjs',
+    'scripts/gen-rg-regex-data.cjs',
     'scripts/lib/paint-probe.cjs',
     'scripts/lib/reset-patch.cjs',
     'scripts/lib/rg-probe.cjs',

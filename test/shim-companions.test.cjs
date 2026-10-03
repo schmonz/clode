@@ -48,11 +48,12 @@ const SITES = [
 ];
 
 // bun-shim.cjs's companions: every module it requires from its own directory
-// (`require(__dirname + '/<name>')`). unicode-text.cjs (CellSegmenter phase 3, task 5);
-// rg-native.cjs (grep-native plan, task 4: quaude's rg, which answers every rg call the
-// bundle makes). A test below derives this list from bun-shim.cjs's own source, so a new
-// companion cannot be required there without being named here.
-const COMPANIONS = ['unicode-text.cjs', 'rg-native.cjs'];
+// (`require(__dirname + '/<name>')`), and every module THOSE require the same way.
+// unicode-text.cjs (CellSegmenter phase 3, task 5); rg-native.cjs (grep-native plan, task 4:
+// quaude's rg, which answers every rg call the bundle makes); rg-regex.cjs (grep-native task
+// 5b: rg's regex dialect, which rg-native.cjs requires). A test below derives this list from
+// the sources, transitively, so a new companion cannot be required there without being named here.
+const COMPANIONS = ['unicode-text.cjs', 'rg-native.cjs', 'rg-regex.cjs'];
 
 // read() — the only I/O: this repo's own site sources. Nothing this guard could
 // write to; it never touches ~/.local/share/clode or any build output.
@@ -113,7 +114,7 @@ test('a site that no longer names bun-shim.cjs at all is its own finding', () =>
 // synthetic input independent of the real tree).
 test('a site naming bun-shim.cjs and every companion is clean', () => {
   const r = scanCompanions({
-    sites: [{ rel: 'synthetic/clean.cjs', src: "const a = 'bun-shim.cjs'; const b = 'unicode-text.cjs'; const c = 'rg-native.cjs';\n" }],
+    sites: [{ rel: 'synthetic/clean.cjs', src: "const a = 'bun-shim.cjs'; const b = 'unicode-text.cjs'; const c = 'rg-native.cjs'; const d = 'rg-regex.cjs';\n" }],
   });
   assert.deepStrictEqual(r.findings, []);
   assert.strictEqual(r.examined, 1);
@@ -123,19 +124,23 @@ test('a site naming bun-shim.cjs and every companion is clean', () => {
 // companion arrives, every site already names the first): it is a finding naming the one missed.
 test('a site that stages one companion but not another is a finding naming the one it missed', () => {
   const r = scanCompanions({
-    sites: [{ rel: 'synthetic/half.cjs', src: "const a = 'bun-shim.cjs'; const b = 'unicode-text.cjs';\n" }],
+    sites: [{ rel: 'synthetic/half.cjs', src: "const a = 'bun-shim.cjs'; const b = 'unicode-text.cjs'; const c = 'rg-native.cjs';\n" }],
   });
-  assert.deepStrictEqual(r.findings, ['synthetic/half.cjs: stages bun-shim.cjs but never rg-native.cjs']);
+  assert.deepStrictEqual(r.findings, ['synthetic/half.cjs: stages bun-shim.cjs but never rg-regex.cjs']);
 });
 
 // COMPANIONS is derived-checked, not trusted: every `require(__dirname + '/<x>')` in bun-shim.cjs
 // is a companion, and every companion is required there. A companion added to bun-shim without
 // being listed here would otherwise be staged nowhere, and nothing would say so until a packaging
 // died at load.
-test('COMPANIONS is exactly what bun-shim.cjs requires from its own directory', () => {
-  const src = fs.readFileSync(path.join(REPO, 'libexec', 'bun-shim.cjs'), 'utf8');
-  const required = [...src.matchAll(/require\(\s*__dirname\s*\+\s*['"]\/([^'"]+)['"]\s*\)/g)].map((m) => m[1]);
-  assert.deepStrictEqual([...new Set(required)].sort(), [...COMPANIONS].sort());
+// Transitive: a companion's own companion (rg-native.cjs requires rg-regex.cjs) travels too.
+test('COMPANIONS is exactly what bun-shim.cjs requires from its own directory, transitively', () => {
+  const requires = (name) => [...fs.readFileSync(path.join(REPO, 'libexec', name), 'utf8')
+    .matchAll(/require\(\s*__dirname\s*\+\s*['"]\/([^'"]+)['"]\s*\)/g)].map((m) => m[1]);
+  const seen = new Set();
+  const todo = requires('bun-shim.cjs');
+  while (todo.length) { const c = todo.shift(); if (!seen.has(c)) { seen.add(c); todo.push(...requires(c)); } }
+  assert.deepStrictEqual([...seen].sort(), [...COMPANIONS].sort());
 });
 
 test('floor fires: shim-companions goes BROKEN if fewer than 8 sites are examined', () => {

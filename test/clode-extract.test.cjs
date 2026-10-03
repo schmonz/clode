@@ -52,7 +52,7 @@ test('first call: cache miss extracts cli.cjs + shim + sig, and boots the fixtur
     const logs = run(s);
     assert.ok(fs.existsSync(path.join(s.cacheDir, 'cli.cjs')), 'cli.cjs written');
     assert.ok(fs.existsSync(path.join(s.cacheDir, 'bun-shim.cjs')), 'shim copied');
-    for (const c of ['unicode-text.cjs', 'rg-native.cjs']) assert.ok(fs.existsSync(path.join(s.cacheDir, c)), `${c} copied`);
+    for (const c of ['unicode-text.cjs', 'rg-native.cjs', 'rg-regex.cjs']) assert.ok(fs.existsSync(path.join(s.cacheDir, c)), `${c} copied`);
     assert.ok(fs.existsSync(path.join(s.cacheDir, '.extractor-sig')), 'sig written');
     assert.ok(logs.some((l) => l.includes('extracting JS')), 'logged extract');
     assert.ok(!logs.some((l) => l.includes('re-extracting')), 'not a re-extract');
@@ -146,8 +146,8 @@ test('changed shim: cache hit but the cached bun-shim is refreshed from source',
 // mirrors the "changed shim" case just above, but changes the OTHER companion alone,
 // leaving the shim untouched, so it can only pass if each companion is refreshed
 // independently.
-// Each companion (test/shim-companions.test.cjs: unicode-text.cjs, rg-native.cjs), alone.
-for (const companion of ['unicode-text.cjs', 'rg-native.cjs']) {
+// Each companion (test/shim-companions.test.cjs: unicode-text.cjs, rg-native.cjs, rg-regex.cjs), alone.
+for (const companion of ['unicode-text.cjs', 'rg-native.cjs', 'rg-regex.cjs']) {
   const stem = companion.replace(/\.cjs$/, '');
   test(`changed ${companion} ALONE: cache hit but the cached companion is refreshed from source, shim untouched`, () => {
     const s = setup('v1');

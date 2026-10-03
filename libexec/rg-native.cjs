@@ -24,14 +24,21 @@
 // (`translate`), and run the applet it names. The emulation proper replaces that delegation
 // rule by rule, each rule measured from native. Its plumbing is here (ugrepMatches and
 // ugrepMatchesAsync: an explicit file list in, rg's match byte ranges out, over a ugrep at or
-// above UGREP_MIN); the walk, rg's printers, JSON Lines, binary rules, ignore rules, globs and
-// types come next.
+// above UGREP_MIN, UGREP PROPOSING candidate lines and rg-regex.cjs's matcher DECIDING them);
+// the walk, rg's printers, JSON Lines, binary rules, ignore rules, globs and types come next.
 //
 // Loaded by bun-shim.cjs as `require(__dirname + '/rg-native.cjs')`, so it travels beside
-// bun-shim.cjs in every packaging (test/shim-companions.test.cjs). CommonJS under tjs and
-// under node alike; it requires only node builtins.
+// bun-shim.cjs in every packaging (test/shim-companions.test.cjs), with its own companion
+// rg-regex.cjs. CommonJS under tjs and under node alike; beyond that companion it requires only
+// node builtins.
 const { EventEmitter } = require('events');
 const { Readable } = require('stream');
+// rg's regex dialect, decided in JS (grep-native Task 5b): this module's own companion, required
+// the same way bun-shim.cjs requires this one, so it travels beside it (test/shim-companions
+// .test.cjs). Loaded on the first search, not at startup: every quaude loads this module, and
+// most sessions search nothing.
+let _rgRegex = null;
+const rgRegexModule = () => _rgRegex || (_rgRegex = require(__dirname + '/rg-regex.cjs'));
 
 // Is this executable rg? By BASENAME, never by the exact string `rg`: the bundle resolves
 // rg as `Bun.which('rg') ?? 'rg'`, which is an absolute path whenever the host has an rg
@@ -160,15 +167,17 @@ function runRg(argv, opts = {}) {
 //                       -a changed nothing on any version or file measured, so it is not
 //                       passed. rg's binary quit and convert rules are the printers' (Task 8)
 //   -Y                  empty matches are reported (without it ugrep drops them, and a pattern
-//                       like `e*` matches every line in rg but only some in ugrep)
+//                       like `e*` matches every line in rg but only some in ugrep), so a
+//                       prefilter that can match empty proposes every line
 //   -H --null %F        `path\0`, so ANY path is unambiguous (a newline in a name included)
 //   %b %e %~            the match's byte offsets from the start of the file, then a newline
 //                       (LF here; ugrep's help says "LF or CRLF", unmeasured on Windows, so
 //                       the parser takes either)
 // On the plumbing's probes (literals, several matches per line, CRLF, NUL, invalid UTF-8, empty
 // matches) all three versions give byte-identical output. Their REGEX DIALECTS differ (from rg's
-// and from each other: alternation, \b on UTF-8, [[:alpha:]]; BACKLOG), which is a matter for the
-// pattern, not for this plumbing. The FLOOR is 5.0.0: 3.11.2
+// and from each other: alternation, \b on UTF-8, [[:alpha:]]), so ugrep's matches are only
+// PROPOSALS: ugrep is given rg-regex.cjs's prefilter (a superset of rg's lines) and rg-regex.cjs
+// decides every proposed line (grep-native Task 5b). The FLOOR is 5.0.0: 3.11.2
 // exits 0 on an unreadable file (5.0.0 and 7.8.2 exit 2), so a failed search could pass for a
 // clean one. ugrep 7's `--from=FILE` and `%[0]U` are absent before it, so the file list is argv
 // (in chunks) and the NUL comes from --null: one way, every version at or above the floor.
@@ -207,9 +216,11 @@ function ugrepCapabilities(bin, opts = {}) {
   return caps;
 }
 
-// ugrep's argv for a match-range search, before the files.
-function ugrepMatchArgv(pattern, opts = {}) {
-  return ['-Y', '-H', '--null', UGREP_RANGE_FORMAT, ...(opts.ignoreCase ? ['-i'] : []), '-e', pattern, '--'];
+// ugrep's argv for a candidate search, before the files. `prefilter` is rg-regex.cjs's: a pattern
+// in ugrep's own dialect whose lines are a SUPERSET of rg's, case folding already spelled into
+// it (rg's folding, not ugrep's -i, which is never passed).
+function ugrepMatchArgv(prefilter) {
+  return ['-Y', '-H', '--null', UGREP_RANGE_FORMAT, '-e', prefilter, '--'];
 }
 
 // A name ugrep could read as an option or as stdin (`-`, `-x`) goes in as `./-`, `./-x`: every
@@ -235,11 +246,13 @@ function chunkFiles(files, budget = ARGV_BUDGET) {
 // something that is not the records asked for. Never "no matches". It carries what ugrep said
 // and the matches it found before failing; ONE type, so a caller handles every way the search
 // can fail the same way.
+// `refused` is set (the RG-RE-* rule) when the PATTERN is one quaude's rg cannot answer exactly
+// (rg-regex.cjs REFUSALS); the message is then the refusal's reason, for rgRefusal.
 class UgrepError extends Error {
-  constructor(message, { status = null, signal = null, stderr = '', matches = new Map() } = {}) {
+  constructor(message, { status = null, signal = null, stderr = '', matches = new Map(), refused = null } = {}) {
     super(message);
     this.name = 'UgrepError';
-    Object.assign(this, { status, signal, stderr, matches });
+    Object.assign(this, { status, signal, stderr, matches, refused });
   }
 }
 
@@ -258,10 +271,18 @@ function parseUgrepRanges(buf, into = new Map()) {
     return j === from ? bad(from) : [v, j];
   };
   let i = 0;
+  // ugrep names the file in every record; the name is decoded once per run of the same bytes.
+  let lastName = null, lastAt = 0, lastLen = -1;
+  const sameName = (at, len) => {
+    if (len !== lastLen) return false;
+    for (let k = 0; k < len; k++) if (buf[at + k] !== buf[lastAt + k]) return false;
+    return true;
+  };
   while (i < buf.length) {
     const z = buf.indexOf(0, i);
     if (z === -1) bad(i);
-    const file = buf.toString('utf8', i, z);
+    const file = sameName(i, z - i) ? lastName : (lastName = buf.toString('utf8', i, z));
+    lastAt = i; lastLen = z - i;
     let [start, j] = num(z + 1);
     if (buf[j] !== 0x20) bad(j);
     let end;
@@ -280,18 +301,23 @@ function parseUgrepRanges(buf, into = new Map()) {
 
 // The plan both twins share: each distinct file once, spelled for ugrep, in chunks; and how to
 // read the ranges back in the caller's order (a file without a match has no entry).
-function matchPlan(files, pattern, opts) {
+function matchPlan(files, prefilter, opts) {
   // A directory is searched as NOTHING (ugrep exits 0 on one without -r): the walk lists files,
   // so a directory here is the caller's mistake, refused rather than answered "no matches".
+  // RG-TEXT-BOM: each file's first bytes, read here once, say whether its text is rg's decoding
+  // of a byte order mark (every line then decided, whatever ugrep proposed).
   const fs = require('fs'), path = require('path');
+  const bom = new Set();
   for (const f of files) {
     let st = null;
-    try { st = fs.statSync(path.resolve(opts.cwd || process.cwd(), f)); } catch { /* a missing file is ugrep's to report */ }
+    const p = path.resolve(opts.cwd || process.cwd(), f);
+    try { st = fs.statSync(p); } catch { /* a missing file is ugrep's to report */ }
     if (st && st.isDirectory()) throw new UgrepError(`rg-native: ${f} is a directory; ugrepMatches searches files only`);
+    if (st && st.isFile() && st.size >= 2 && hasBom(readHead(p))) bom.add(f);
   }
   const spelled = [...new Set(files.map(spellForUgrep))];
   const asked = new Set(spelled);
-  const argv = ugrepMatchArgv(pattern, opts);
+  const argv = ugrepMatchArgv(prefilter);
   const chunks = chunkFiles(spelled, opts.argvBudget || ARGV_BUDGET).map((c) => [...argv, ...c]);
   // Every path ugrep reported must be one it was asked about; a match it places anywhere else
   // cannot be answered for, so it is refused, never dropped.
@@ -308,8 +334,126 @@ function matchPlan(files, pattern, opts) {
     }
     return out;
   };
-  return { chunks, inOrder, onlyAsked };
+  return { chunks, inOrder, onlyAsked, bom };
 }
+// ---- rg's text, and rg's matcher over the lines ugrep proposed -----------------------------------
+// RG-TEXT-BOM (measured against native 2.1.283): rg searches what its decoder makes of a byte
+// order mark. A UTF-8 BOM (EF BB BF) is stripped; UTF-16 (FF FE little-endian, FE FF big-endian)
+// is transcoded to UTF-8 the WHATWG way (encoding_rs: an unpaired surrogate, and an odd last byte,
+// each one U+FFFD); offsets are into that text (`ab needle` after either BOM: 3-9). A UTF-32 BOM
+// is not rg's: FF FE 00 00 reads as UTF-16LE, 00 00 FE FF as plain bytes. ugrep reads all four
+// its own way, so a file with ANY of them has every line decided here (`all`), and ugrep's
+// proposals for it are not used.
+const BOMS = [[0xef, 0xbb, 0xbf], [0xff, 0xfe], [0xfe, 0xff], [0x00, 0x00, 0xfe, 0xff]];
+const hasBom = (head) => BOMS.some((m) => m.every((b, i) => head[i] === b));
+function readHead(p) {
+  const fs = require('fs');
+  let fd = null;
+  try {
+    fd = fs.openSync(p, 'r');
+    const b = Buffer.alloc(4);
+    return b.subarray(0, fs.readSync(fd, b, 0, 4, 0));
+  } catch { return Buffer.alloc(0); } finally { if (fd !== null) try { fs.closeSync(fd); } catch { /* closed */ } }
+}
+function rgText(bytes) {
+  if (bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) return bytes.subarray(3);
+  if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xfe) return utf16ToUtf8(bytes.subarray(2), true);
+  if (bytes.length >= 2 && bytes[0] === 0xfe && bytes[1] === 0xff) return utf16ToUtf8(bytes.subarray(2), false);
+  return bytes;
+}
+// The WHATWG UTF-16 decoder (what encoding_rs implements), straight to UTF-8 bytes.
+function utf16ToUtf8(b, le) {
+  const out = Buffer.alloc(b.length * 2 + 4);
+  let o = 0;
+  const put = (c) => {
+    if (c < 0x80) out[o++] = c;
+    else if (c < 0x800) { out[o++] = 0xc0 | (c >> 6); out[o++] = 0x80 | (c & 0x3f); }
+    else if (c < 0x10000) { out[o++] = 0xe0 | (c >> 12); out[o++] = 0x80 | ((c >> 6) & 0x3f); out[o++] = 0x80 | (c & 0x3f); }
+    else { out[o++] = 0xf0 | (c >> 18); out[o++] = 0x80 | ((c >> 12) & 0x3f); out[o++] = 0x80 | ((c >> 6) & 0x3f); out[o++] = 0x80 | (c & 0x3f); }
+  };
+  let lead = -1;
+  const n = b.length >> 1;
+  for (let i = 0; i < n; i++) {
+    const u = le ? b[2 * i] | (b[2 * i + 1] << 8) : (b[2 * i] << 8) | b[2 * i + 1];
+    if (lead !== -1) {
+      const l = lead;
+      lead = -1;
+      if (u >= 0xdc00 && u <= 0xdfff) { put(0x10000 + ((l - 0xd800) << 10) + (u - 0xdc00)); continue; }
+      put(0xfffd);                       // an unpaired lead; this unit is read afresh
+    }
+    if (u >= 0xd800 && u <= 0xdbff) lead = u;
+    else if (u >= 0xdc00 && u <= 0xdfff) put(0xfffd);
+    else put(u);
+  }
+  if (lead !== -1 || (b.length & 1)) put(0xfffd); // one, for whatever was left over
+  return out.subarray(0, o);
+}
+
+// The lines of `text` to decide: those holding a proposed offset, or (`all`) every line.
+// [lineStart, lineEnd) pairs, the terminator excluded, ascending.
+function candidateLines(text, proposed, all) {
+  const out = [];
+  const lineAt = (ls) => { let le = text.indexOf(0x0a, ls); if (le === -1) le = text.length; out.push(ls, le); return le + 1; };
+  if (all) { for (let ls = 0; ls < text.length;) ls = lineAt(ls); return out; }
+  const starts = new Set();
+  for (const { start } of proposed || []) {
+    if (start > text.length || (start === text.length && (text.length === 0 || text[text.length - 1] === 0x0a))) continue;
+    starts.add(start === 0 ? 0 : text.lastIndexOf(0x0a, start - 1) + 1);
+  }
+  for (const ls of [...starts].sort((a, b) => a - b)) lineAt(ls);
+  return out;
+}
+
+// One file: its matches, as rg's matcher finds them on the lines ugrep proposed.
+function decideFile(file, proposed, t, opts, all) {
+  const fs = require('fs'), path = require('path');
+  let bytes;
+  try { bytes = fs.readFileSync(path.resolve(opts.cwd || process.cwd(), file)); } catch (e) {
+    throw new UgrepError(`rg-native: ${file} could not be read after ugrep searched it (${e.code || e.message})`);
+  }
+  const text = rgText(bytes);
+  const lines = candidateLines(text, proposed, all);
+  const out = [];
+  for (let i = 0; i < lines.length; i += 2) {
+    for (const m of verify(text, lines[i], lines[i + 1], t)) out.push(m);
+  }
+  return out;
+}
+function verify(text, ls, le, t) {
+  try { return rgRegexModule().verifyLine(text, ls, le, t); } catch (e) {
+    if (e.name === 'RgRegexRefusal') throw new UgrepError(rgRegexModule().refusalReason(e), { refused: e.rule });
+    throw e;
+  }
+}
+// The pattern, as rg-regex reads it; a refusal is a UgrepError naming its rule, before any ugrep.
+function translated(pattern, opts) {
+  const t = rgRegexModule().translateRgRegex(pattern, { ignoreCase: !!opts.ignoreCase });
+  if (t.refuse) throw new UgrepError(t.refuse, { refused: t.rule });
+  return t;
+}
+// Every file ugrep proposed a line in, and every file with a BOM, decided: the caller's order.
+function decideAll(files, proposed, bom, t, opts) {
+  const out = new Map(), seen = new Set();
+  for (const f of files) {
+    if (seen.has(f) || (!proposed.has(f) && !bom.has(f))) continue;
+    seen.add(f);
+    const m = decideFile(f, proposed.get(f), t, opts, bom.has(f));
+    if (m.length) out.set(f, m);
+  }
+  return out;
+}
+
+// What a failed search found before it failed, decided as any other: the error's `matches`.
+// Best effort: the search has already failed, so a file that cannot be decided adds nothing.
+function partialMatches(files, proposed, t, opts) {
+  const out = new Map();
+  for (const f of files) {
+    if (out.has(f) || !proposed.has(f)) continue;
+    try { const m = decideFile(f, proposed.get(f), t, opts, false); if (m.length) out.set(f, m); } catch { /* already failed */ }
+  }
+  return out;
+}
+
 // The floor, ENFORCED: a ugrep below UGREP_MIN (or no ugrep at all) is refused before it runs,
 // never asked: 3.11.2 answers a missing file with exit 0 and nothing printed, "no matches".
 function assertUsableUgrep(opts) {
@@ -325,50 +469,59 @@ const ugrepFailed = (bin, r, stderr, matches) => new UgrepError(
   `${leafOf(bin)} failed (${r.signal ? `signal ${r.signal}` : `exit ${r.status}`})${firstLine(stderr) ? `: ${firstLine(stderr)}` : ''}`,
   { status: r.status, signal: r.signal || null, stderr: toBuf(stderr).toString('utf8'), matches });
 
-// ugrepMatches(files, pattern, opts) -> Map<file, [{start, end}]>: where `pattern` matches in
-// each of `files` (relative to opts.cwd, or absolute), as rg's submatches would place them.
-// opts: ugrep (the binary), cwd, env, ignoreCase, spawnSync (the UNWRAPPED one, under
-// bun-shim), argvBudget. Throws UgrepError when ugrep fails or is below UGREP_MIN. Synchronous: for the synchronous
-// rg surfaces; ugrepMatchesAsync is the same search for the asynchronous ones.
+// ugrepMatches(files, pattern, opts) -> Map<file, [{start, end}]>: where rg's `pattern` matches
+// in each of `files` (relative to opts.cwd, or absolute), as rg's MATCHER finds them (its
+// printers then decide what to print: RG-RE-MATCH-AT-UNTERMINATED-END, rg-regex.cjs). ugrep,
+// given rg-regex's prefilter, PROPOSES candidate lines; rg-regex's matcher DECIDES each one
+// (grep-native Task 5b). opts: ugrep (the binary), cwd, env, ignoreCase (rg's -i), spawnSync (the
+// UNWRAPPED one, under bun-shim), argvBudget. Throws UgrepError when ugrep fails or is below
+// UGREP_MIN, and (with `refused`) when the pattern is one quaude's rg cannot answer exactly.
+// Synchronous: for the synchronous rg surfaces; ugrepMatchesAsync is the same search for the
+// asynchronous ones.
 function ugrepMatches(files, pattern, opts = {}) {
   if (!files.length) return new Map();
+  const t = translated(pattern, opts);
   assertUsableUgrep(opts);
   const spawnSync = opts.spawnSync || require('child_process').spawnSync;
-  const { chunks, inOrder, onlyAsked } = matchPlan(files, pattern, opts);
+  const { chunks, inOrder, onlyAsked, bom } = matchPlan(files, t.prefilter, opts);
   const ranges = new Map();
   let failed = null;
   for (const argv of chunks) {
     const r = spawnSync(opts.ugrep, argv, { cwd: opts.cwd, env: opts.env || process.env, encoding: 'buffer', maxBuffer: RG_MAX_BUFFER });
-    if (r.error) throw new UgrepError(`${leafOf(opts.ugrep)} could not be run (${r.error.code || r.error.message})`, { matches: inOrder(ranges) });
+    if (r.error) throw new UgrepError(`${leafOf(opts.ugrep)} could not be run (${r.error.code || r.error.message})`);
     // Killed: the bytes may stop anywhere, so they are not read; the kill is the answer.
     if (r.status === null || r.signal) { failed = { r, stderr: r.stderr }; break; }
     // A failed chunk ends the search: the answer is already an error, so no later chunk runs.
-    // Its status comes first: what it printed is read only for the matches it found before
-    // failing, and a bad tail there says nothing the failure does not (re-review N-1).
+    // Its status comes first (re-review N-1): what it printed is read only for the matches it
+    // found before failing.
     if (r.status >= 2) { readFailedChunk(toBuf(r.stdout), ranges); failed = { r, stderr: r.stderr }; break; }
     parseUgrepRanges(toBuf(r.stdout), ranges);
   }
-  const out = inOrder(ranges);
-  if (failed) throw ugrepFailed(opts.ugrep, failed.r, failed.stderr, out);
+  if (failed) throw ugrepFailed(opts.ugrep, failed.r, failed.stderr, partialMatches(files, inOrder(ranges), t, opts));
   onlyAsked(ranges);
-  return out;
+  return decideAll(files, inOrder(ranges), bom, t, opts);
 }
 
 // The asynchronous twin: a Promise of the same Map, the chunks run one after another as real
 // children. opts.spawn is the UNWRAPPED spawn; opts.onChild(child) is told of each child, so the
-// caller can end the search (kill) when its own bounds fire.
+// caller can end the search (kill) when its own bounds fire. Deciding the proposed lines is JS
+// work, so the twin hands the event loop back every DECIDE_SLICE_MS of it (the caller's timers
+// and kill() keep turning), and opts.signal, once aborted, ends the search with a UgrepError.
+const DECIDE_SLICE_MS = 20;
 function ugrepMatchesAsync(files, pattern, opts = {}) {
   if (!files.length) return Promise.resolve(new Map());
   // The floor check runs ugrep --version synchronously, ONCE per binary per process (cached).
-  let plan;
-  try { assertUsableUgrep(opts); plan = matchPlan(files, pattern, opts); } catch (e) { return Promise.reject(e); }
+  let plan, t;
+  try { t = translated(pattern, opts); assertUsableUgrep(opts); plan = matchPlan(files, t.prefilter, opts); } catch (e) { return Promise.reject(e); }
   const spawn = opts.spawn || require('child_process').spawn;
-  const { chunks, inOrder, onlyAsked } = plan;
+  const { chunks, inOrder, onlyAsked, bom } = plan;
+  const aborted = () => opts.signal && opts.signal.aborted;
+  const abortError = () => new UgrepError('rg-native: the search was aborted');
   const ranges = new Map();
   const runOne = (argv) => new Promise((resolve, reject) => {
     let child;
     try { child = spawn(opts.ugrep, argv, { cwd: opts.cwd, env: opts.env || process.env, stdio: ['ignore', 'pipe', 'pipe'] }); }
-    catch (e) { reject(new UgrepError(`${leafOf(opts.ugrep)} could not be run (${e.code || e.message})`, { matches: inOrder(ranges) })); return; }
+    catch (e) { reject(new UgrepError(`${leafOf(opts.ugrep)} could not be run (${e.code || e.message})`)); return; }
     if (opts.onChild) opts.onChild(child);
     const outs = [], errs = [];
     let settled = false;
@@ -377,13 +530,13 @@ function ugrepMatchesAsync(files, pattern, opts = {}) {
     child.on('error', (e) => {
       if (settled) return;
       settled = true;
-      reject(new UgrepError(`${leafOf(opts.ugrep)} could not be run (${e.code || e.message})`, { matches: inOrder(ranges) }));
+      reject(new UgrepError(`${leafOf(opts.ugrep)} could not be run (${e.code || e.message})`));
     });
     child.on('close', (status, signal) => {
       if (settled) return;
       settled = true;
       // Killed: the bytes may stop anywhere, so they are not read; the kill is the answer.
-      // Exit >= 2: the failure is the answer, and the bytes only add the matches found first.
+      // Exit >= 2: the failure is the answer (re-review N-1), the bytes only add the matches found first.
       if (status !== null && !signal) {
         if (status >= 2) readFailedChunk(Buffer.concat(outs), ranges);
         else { try { parseUgrepRanges(Buffer.concat(outs), ranges); } catch (e) { reject(e); return; } }
@@ -391,16 +544,29 @@ function ugrepMatchesAsync(files, pattern, opts = {}) {
       resolve({ status, signal: signal || null, stderr: Buffer.concat(errs) });
     });
   });
+  const yieldLoop = () => new Promise((r) => setTimeout(r, 0));
   return (async () => {
+    if (aborted()) throw abortError();
     let failed = null;
     for (const argv of chunks) {
       const r = await runOne(argv);
       // A failed chunk (killed by the caller, or exit >= 2) ends the search: no later chunk runs.
       if (r.status === null || r.status >= 2) { failed = r; break; }
+      if (aborted()) throw abortError();
     }
-    const out = inOrder(ranges);
-    if (failed) throw ugrepFailed(opts.ugrep, failed, failed.stderr, out);
+    if (failed) throw ugrepFailed(opts.ugrep, failed, failed.stderr, partialMatches(files, inOrder(ranges), t, opts));
     onlyAsked(ranges);
+    const proposed = inOrder(ranges);
+    const out = new Map(), seen = new Set();
+    let slice = Date.now();
+    for (const f of files) {
+      if (seen.has(f) || (!proposed.has(f) && !bom.has(f))) continue;
+      seen.add(f);
+      if (Date.now() - slice > DECIDE_SLICE_MS) { await yieldLoop(); slice = Date.now(); }
+      if (aborted()) throw abortError();
+      const m = decideFile(f, proposed.get(f), t, opts, bom.has(f));
+      if (m.length) out.set(f, m);
+    }
     return out;
   })();
 }
@@ -615,4 +781,4 @@ function rgExecFileSync(r, opts, file, args) {
 
 module.exports = { isRgExe, rgRefusal, parseRgRefusal, runRg, rgSpawn, rgExecFile, rgSpawnSync, rgExecFileSync, RG_MAX_BUFFER,
   UGREP_MIN, parseUgrepVersion, versionAtLeast, ugrepCapabilities, ugrepMatchArgv, chunkFiles, parseUgrepRanges,
-  ugrepMatches, ugrepMatchesAsync, UgrepError };
+  ugrepMatches, ugrepMatchesAsync, UgrepError, rgText };

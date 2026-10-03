@@ -153,6 +153,7 @@ function stageCli(bin, opts = {}) {
   // them beside it (libexec/clode-extract.cjs, test/shim-companions.test.cjs).
   fs.copyFileSync(path.join(cacheDir, 'unicode-text.cjs'), path.join(dir, 'unicode-text.cjs'));
   fs.copyFileSync(path.join(cacheDir, 'rg-native.cjs'), path.join(dir, 'rg-native.cjs'));
+  fs.copyFileSync(path.join(cacheDir, 'rg-regex.cjs'), path.join(dir, 'rg-regex.cjs'));
   return { dir, cli, cacheDir };
 }
 
