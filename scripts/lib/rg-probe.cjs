@@ -75,8 +75,29 @@ function treeEntries(kind) {
 // --sort=modified has one right answer and it is not the alphabetical one.
 const MTIME_BASE = 1700000000;
 
+// rg reads ignore rules from a tree's ANCESTORS as well as the tree: a `.git` above it makes it
+// part of a repo (so .gitignore applies, which a `nogit` tree exists to show it does not), and
+// a `.ignore`/`.rgignore` above it applies to every file. A fixture under one (an os.tmpdir()
+// inside a checkout) would quietly measure something else, so it is refused, naming the file.
+const ANCESTOR_RULES = ['.git', '.ignore', '.rgignore'];
+function assertNoAncestorRules(dir) {
+  let d = path.dirname(path.resolve(dir));
+  for (;;) {
+    for (const m of ANCESTOR_RULES) {
+      if (fs.existsSync(path.join(d, m))) {
+        throw new Error(`makeRgTree: ${path.join(d, m)} is above ${dir}; rg would read it, so this fixture would not `
+          + 'measure what it is for. Put the fixture somewhere with no repo or ignore file above it.');
+      }
+    }
+    const up = path.dirname(d);
+    if (up === d) return;
+    d = up;
+  }
+}
+
 function makeRgTree(dir, kind) {
   const entries = treeEntries(kind);
+  assertNoAncestorRules(dir);
   fs.mkdirSync(dir, { recursive: true });
   entries.forEach(([rel, data], i) => {
     const p = path.join(dir, ...rel.split('/'));
@@ -250,6 +271,13 @@ const GLOB_PATTERNS = ['**/*.txt', '**/*.{ts,tsx}', '*'];
 // early.dat is named in every Grep cell too. The Glob tool's path is always a directory.
 const TARGETS = ['.', 'ABS'];
 const FILE_TARGETS = { bin2: 'early.dat' };
+// THE STDIN BRANCH (`STDIN`). For a task-output file (`zOt`) 2.1.283's builder opens the file,
+// searches target `-` and pipes the file into rg's stdin, after splicing EVERY --glob out of the
+// argv (the VCS excludes and the glob parameter alike); a glob or type parameter that would
+// exclude the file makes it skip the search, so only the variants without one reach rg. The
+// root tree's a.txt stands in for the task output.
+const STDIN_FILE = { root: 'a.txt' };
+const STDIN_VARIANTS = new Set(['plain', '-i', 'multiline', '-o', '-C 1', '-B 1 -A 2']);
 
 const RG_MATRIX = [];
 for (const kind of RG_TREE_KINDS) {
@@ -262,24 +290,48 @@ for (const kind of RG_TREE_KINDS) {
       }
     }
   }
+  if (STDIN_FILE[kind]) {
+    for (const mode of GREP_MODES) {
+      for (const [name, v] of [...GREP_VARIANTS, ...(mode === 'content' ? CONTENT_VARIANTS : [])]) {
+        if (!STDIN_VARIANTS.has(name)) continue;
+        RG_MATRIX.push({ id: `${kind} Grep ${mode} ${name} - (stdin: ${STDIN_FILE[kind]})`, kind, tool: 'Grep', target: 'STDIN',
+          spec: { pattern: 'needle', ...v, mode } });
+      }
+    }
+  }
   for (const pattern of GLOB_PATTERNS) {
     for (const target of TARGETS) RG_MATRIX.push({ id: `${kind} Glob ${pattern} ${target}`, kind, tool: 'Glob', target, spec: { pattern } });
   }
 }
+// rg --version: the bundle's first-use probe (`DQ` in 2.1.283) runs it and reads `ripgrep ` at
+// the start of its stdout as "rg works" (what /doctor reports).
+RG_MATRIX.push({ id: 'root rg --version', kind: 'root', tool: 'Version', target: '.', spec: {} });
 
 // One cell's argv against the tree it runs in (`treeDir`: absolute, as the target for ABS).
 function cellArgv(cell, treeDir) {
+  if (cell.tool === 'Version') return ['--version'];
+  if (cell.target === 'STDIN') {
+    const a = grepArgv(cell.spec, '-');
+    for (let i = a.length - 2; i >= 0; i--) if (a[i] === '--glob') a.splice(i, 2);   // the builder's splice
+    return a;
+  }
   const target = cell.target === 'ABS' ? treeDir
     : cell.target === 'FILE' ? path.join(treeDir, FILE_TARGETS[cell.kind]) : '.';
   return cell.tool === 'Glob' ? globArgv(cell.spec.pattern, target) : grepArgv(cell.spec, target);
+}
+// What a cell pipes into rg's stdin: the stdin branch's file, as bytes; nothing otherwise.
+function cellInput(cell) {
+  if (cell.target !== 'STDIN') return null;
+  const entry = treeEntries(cell.kind).find(([rel]) => rel === STDIN_FILE[cell.kind]);
+  return Buffer.from(entry[1]);
 }
 
 // ---- the runners ----------------------------------------------------------------------------------
 // NATIVE: the claude binary with argv[0] `rg` and `--no-config`, exactly how upstream's embedded
 // mode spawns it (`{ command: process.execPath, args: ['--no-config'], argv0: 'rg' }`; zsh's
 // `ARGV0=rg <claude>` and bash's `exec -a rg <claude>` are the same thing). Never a host ripgrep.
-function runNativeRg(bin, argv, cwd, { env } = {}) {
-  const r = spawnSync(bin, ['--no-config', ...argv], { cwd, argv0: 'rg', env, encoding: 'buffer',
+function runNativeRg(bin, argv, cwd, { env, input } = {}) {
+  const r = spawnSync(bin, ['--no-config', ...argv], { cwd, argv0: 'rg', env, input: input || undefined, encoding: 'buffer',
     maxBuffer: 256 * 1024 * 1024, timeout: 120000 });
   if (r.error) throw new Error(`native rg (${bin}) did not run for ${JSON.stringify(argv)}: ${r.error.message}`);
   return { argv, status: r.status, signal: r.signal || null, stdout: r.stdout, stderr: r.stderr };
@@ -302,16 +354,19 @@ function nativeRgVersion(bin) {
 // One tjs process runs a whole batch, one call after another.
 const OURS_SOURCE = String.raw`
   const cp = require('child_process');
-  const rgPath = Bun.which('rg') || 'rg';
+  // the bundle's resolution, over the PATH ours runs with (the tripwire's, in the gate)
+  const rgPath = Bun.which('rg', input.env && input.env.PATH ? { PATH: input.env.PATH } : undefined) || 'rg';
   const b64 = (b) => Buffer.from(b == null ? '' : b).toString('base64');
   const run = (c) => new Promise((resolve) => {
-    cp.execFile(rgPath, c.argv, { cwd: c.cwd, env: input.env, encoding: 'buffer', maxBuffer: 20000000,
+    const child = cp.execFile(rgPath, c.argv, { cwd: c.cwd, env: input.env, encoding: 'buffer', maxBuffer: 20000000,
       timeout: 20000, killSignal: 'SIGKILL' }, (err, stdout, stderr) => {
       const status = err ? (typeof err.code === 'number' ? err.code : null) : 0;
       resolve({ status, signal: (err && err.signal) || null,
         error: err && status === null && !err.signal ? String(err.code || err.message) : null,
         stdout: b64(stdout), stderr: b64(stderr) });
     });
+    // the stdin branch: the file goes in through the child's stdin, as the bundle pipes it
+    if (c.input != null && child.stdin) child.stdin.end(Buffer.from(c.input, 'base64'));
   });
   return (async () => {
     const results = [];
@@ -322,7 +377,8 @@ const OURS_SOURCE = String.raw`
 
 function runOursRgBatch(cells, { env } = {}) {
   if (cells.length === 0) return [];
-  const got = runProbeOurs(OURS_SOURCE, { cells, env: env || null }, 'rg-probe-');
+  const wire = cells.map((c) => ({ argv: c.argv, cwd: c.cwd, input: c.input ? Buffer.from(c.input).toString('base64') : null }));
+  const got = runProbeOurs(OURS_SOURCE, { cells: wire, env: env || null }, 'rg-probe-');
   if (!got || !Array.isArray(got.results) || got.results.length !== cells.length) {
     throw new Error(`our rg probe answered ${got && got.results ? got.results.length : 'nothing'} of ${cells.length} cells`);
   }
@@ -397,4 +453,4 @@ function compareRg(a, b) {
 
 module.exports = { RG_TREE_KINDS, makeRgTree, treeEntries, RG_MATRIX, cellArgv, grepArgv, globArgv, VCS_DIRS, flagLiterals, builderFlagLiterals, matrixDrift,
   consumerUsageErrorRegex, refusalDrift,
-  runNativeRg, nativeRgVersion, runOursRg, runOursRgBatch, compareRg, normalizeRg };
+  runNativeRg, nativeRgVersion, runOursRg, cellInput, assertNoAncestorRules, runOursRgBatch, compareRg, normalizeRg };
