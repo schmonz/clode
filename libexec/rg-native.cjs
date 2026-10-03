@@ -165,7 +165,10 @@ function runRg(argv, opts = {}) {
 //   %b %e %~            the match's byte offsets from the start of the file, then a newline
 //                       (LF here; ugrep's help says "LF or CRLF", unmeasured on Windows, so
 //                       the parser takes either)
-// The same flags give byte-identical output on all three versions. The FLOOR is 5.0.0: 3.11.2
+// On the plumbing's probes (literals, several matches per line, CRLF, NUL, invalid UTF-8, empty
+// matches) all three versions give byte-identical output. Their REGEX DIALECTS differ (from rg's
+// and from each other: alternation, \b on UTF-8, [[:alpha:]]; BACKLOG), which is a matter for the
+// pattern, not for this plumbing. The FLOOR is 5.0.0: 3.11.2
 // exits 0 on an unreadable file (5.0.0 and 7.8.2 exit 2), so a failed search could pass for a
 // clean one. ugrep 7's `--from=FILE` and `%[0]U` are absent before it, so the file list is argv
 // (in chunks) and the NUL comes from --null: one way, every version at or above the floor.
