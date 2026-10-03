@@ -446,6 +446,96 @@ test('the async rg surfaces do not block the loop, and abort/kill/timeout/maxBuf
   } finally { fs.rmSync(s.dir, { recursive: true, force: true }); }
 });
 
+// THE CHILD'S BOOKKEEPING, AS NODE KEEPS IT (Task 4 review, N1 + N2).
+// N1: node's spawn removes its 'abort' listener when the child exits. The 2.1.283 Grep tool
+// passes the tool context's ONE AbortSignal to every rg it runs, so a listener left behind per
+// call (each closure holding its child and its buffered stdout, up to the 20 MB maxBuffer) is
+// a leak that grows with every search of a session. N searches on one signal must leave none.
+// N2: node sets child.killed only when kill() actually delivered the signal. A kill() after
+// the applet exited (before 'close') delivers nothing, so the child must not read as killed,
+// and the applet's rc-2 rejection must still become quaude's refusal.
+const N_CALLS = 15;
+function bookkeepingProbe() {
+  return `
+    const Bun = require(${JSON.stringify(SHIM)});
+    const cp = require('child_process');
+    const { rgSpawn, parseRgRefusal } = require(${JSON.stringify(path.join(REPO, 'libexec', 'rg-native.cjs'))});
+    const { EventEmitter } = require('events');
+    const { Readable } = require('stream');
+    const out = {};
+    const tick = () => new Promise((r) => setTimeout(r, 5));
+    (async () => {
+      // N1: count the abort listeners on ONE signal, by watching add/remove on it.
+      process.env.CLODE_UGREP = process.env.FAST;
+      const ac = new AbortController(), sig = ac.signal, held = new Set();
+      const add = sig.addEventListener.bind(sig), rm = sig.removeEventListener.bind(sig);
+      sig.addEventListener = (t, f, o) => { if (t === 'abort') held.add(f); return add(t, f, o); };
+      sig.removeEventListener = (t, f, o) => { if (t === 'abort') held.delete(f); return rm(t, f, o); };
+      const run = (args) => new Promise((res) => cp.execFile('rg', args, { signal: sig, maxBuffer: 20000000 }, (err, so) => res({ err: err && err.code, so })));
+      const answers = [];
+      for (let i = 0; i < ${N_CALLS}; i++) answers.push(await run(['needle', '.']));
+      for (let i = 0; i < 3; i++) answers.push(await run(['--json', 'needle', '.']));   // refused: no process
+      await tick();
+      out.n1 = { calls: answers.length, listeners: held.size, answered: answers.filter((a) => /needle/.test(String(a.so))).length };
+      // N2: a fake applet that has EXITED (rc 2, nothing printed) when kill() arrives.
+      const applet = new EventEmitter();
+      applet.stdout = new Readable({ read() {} }); applet.stderr = new Readable({ read() {} });
+      applet.stdin = null; applet.pid = 4242;
+      let gone = false; applet.kill = () => !gone;   // a process that is gone cannot be killed
+      const child = rgSpawn(['needle', '.'], {}, { translate: () => ({ argv: ['ugrep', 'needle', '.'] }), spawn: () => applet });
+      let err = '';
+      child.stderr.on('data', (d) => { err += d; });
+      const closed = new Promise((res) => child.on('close', (code, signal) => res({ code, signal })));
+      applet.stderr.push('ugrep: rejected\\n'); applet.stderr.push(null); applet.stdout.push(null);
+      await tick();
+      gone = true; applet.emit('exit', 2, null);
+      const killRet = child.kill('SIGTERM');          // after exit, before close: delivers nothing
+      applet.emit('close', 2, null);
+      const c = await closed;
+      out.n2 = { killRet, killed: child.killed, code: c.code, refusal: parseRgRefusal(err) };
+      // ...and a kill that IS delivered marks the child killed, as node's does.
+      const live = new EventEmitter();
+      live.stdout = new Readable({ read() {} }); live.stderr = new Readable({ read() {} }); live.stdin = null; live.pid = 4243;
+      live.kill = (s) => { setTimeout(() => { live.stdout.push(null); live.stderr.push(null); live.emit('exit', null, s); live.emit('close', null, s); }, 0); return true; };
+      const c2 = rgSpawn(['needle', '.'], {}, { translate: () => ({ argv: ['ugrep', 'needle', '.'] }), spawn: () => live });
+      c2.stdout.resume(); c2.stderr.resume();
+      const closed2 = new Promise((res) => c2.on('close', (code, signal) => res({ code, signal })));
+      const killRet2 = c2.kill('SIGKILL');
+      out.n2live = { killRet: killRet2, killed: c2.killed, ...(await closed2) };
+      process.stdout.write('PROBE:' + JSON.stringify(out) + '\\n');
+    })();
+  `;
+}
+function bookkeepingStubs() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-book-'));
+  const fast = path.join(dir, 'fast-ugrep');
+  fs.writeFileSync(fast, '#!/bin/sh\necho "a.txt:1:needle"\n', { mode: 0o755 });
+  const prog = path.join(dir, 'probe.cjs');
+  fs.writeFileSync(prog, bookkeepingProbe());
+  return { dir, prog, env: { ...process.env, FAST: fast } };
+}
+function assertNoListenerLeft(got) {
+  assert.strictEqual(got.n1.calls, N_CALLS + 3);
+  assert.strictEqual(got.n1.answered, N_CALLS, `every search ran: ${JSON.stringify(got.n1)}`);
+  assert.strictEqual(got.n1.listeners, 0, `${got.n1.calls} rg calls on one AbortSignal left ${got.n1.listeners} 'abort' listener(s) behind (node's spawn leaves none)`);
+}
+function runBookkeeping(engine) {
+  const s = bookkeepingStubs();
+  try {
+    const r = engine === 'node'
+      ? cp.spawnSync(process.execPath, [s.prog], { encoding: 'utf8', env: s.env, cwd: s.dir, timeout: 60000 })
+      : runLoader(s.prog, [], { timeout: 60000, env: { ...s.env, NODE_PATH: path.join(REPO, 'deps', 'claude', 'node_modules') } });
+    return parseProbe(r);
+  } finally { fs.rmSync(s.dir, { recursive: true, force: true }); }
+}
+const tjsSkip = { skip: process.platform === 'win32' ? 'needs an executable /bin/sh ugrep stub' : !tjsPath() ? 'no tjs engine (set CLODE_TJS)' : false };
+
+test('rg child: no abort listener outlives its search, N calls on one signal leave 0 (node)', posixExec, () => {
+  assertNoListenerLeft(runBookkeeping('node'));
+});
+test('rg child: no abort listener outlives its search, N calls on one signal leave 0 (tjs)', tjsSkip, () => {
+  assertNoListenerLeft(runBookkeeping('tjs'));
+});
 // isRgExe: every spelling a host's rg may take, on every OS (a pure check: no Windows box needed).
 test('isRgExe: rg by basename, with any PATHEXT extension, either separator, a drive prefix; nothing else', () => {
   const { isRgExe } = require('../libexec/rg-native.cjs');

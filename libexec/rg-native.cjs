@@ -181,7 +181,7 @@ function childShell(opts, kill) {
   child.stdout = outSlot === 'pipe' ? new Readable({ read() {} }) : null;
   child.stderr = errSlot === 'pipe' ? new Readable({ read() {} }) : null;
   child.exitCode = null; child.signalCode = null; child.killed = false;
-  let done = false, timer = null;
+  let done = false, timer = null, unlisten = null;
   child.kill = (sig) => { if (done) return false; child.killed = true; return kill(sig || 'SIGTERM'); };
   child.ref = () => child; child.unref = () => child;
   const out = (buf) => { if (child.stdout) { if (buf.length) child.stdout.push(buf); } else if (outSlot === 'inherit') toFd(1, buf); };
@@ -189,6 +189,10 @@ function childShell(opts, kill) {
     if (done) return;
     done = true;
     clearTimeout(timer);
+    // node's spawn takes its 'abort' listener off when the child ends. The 2.1.283 Grep tool
+    // hands every rg the SAME tool-context signal, so one left behind per search (holding its
+    // child and the stdout it buffered) would grow with every search of a session.
+    if (unlisten) { unlisten(); unlisten = null; }
     if (child.stdout) child.stdout.push(null);
     const err = toBuf(stderr);
     if (child.stderr) { if (err.length) child.stderr.push(err); child.stderr.push(null); } else if (errSlot === 'inherit') toFd(2, err);
@@ -202,7 +206,10 @@ function childShell(opts, kill) {
   if (signal) {
     const onAbort = () => { if (done) return; child.kill(killSignal); child.emit('error', abortError(signal)); };
     if (signal.aborted) process.nextTick(onAbort);
-    else signal.addEventListener('abort', onAbort, { once: true });
+    else {
+      signal.addEventListener('abort', onAbort, { once: true });
+      unlisten = () => signal.removeEventListener('abort', onAbort);
+    }
   }
   return { child, out, finish, isDone: () => done };
 }
