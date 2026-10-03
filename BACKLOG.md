@@ -224,14 +224,23 @@ Bash tool instead".
     starts with a UTF-8 continuation byte, where native answers by where the line sits in its
     buffer (`\b{start-half}` on `\x80 x`: offset 1 reported when the line starts at byte 4, not at
     byte 2) and its line selection reads the line alone;
-  - RG-RE-REFUSE-COST, at run time: one line may take 2^24 matcher steps. One search is linear
-    (2 x states x positions), but the constant is the NFA's state count (`.{0,1000}needle`: 2,009)
-    and rg's find_iter can search a line once per match, so a line is O(states x length^2) at worst.
-    Measured on single lines (review, 2026-10-03): `[a-z]{1,64}@` over 200 KB 39 million steps,
-    `.{0,100}needle` 61 million, `.{0,1000}needle` 600 million, `a.*z|a` over 5 KB 63 million;
-    ordinary patterns over the same lines about one million. tjs runs about 5 million steps a second
-    on this Mac, so such a line refuses in about 3.2 s instead of running 3 s to 2 minutes; native
-    answers all of them in milliseconds;
+  - RG-RE-REFUSE-COST, at run time: one line may take 64 matcher steps a byte, plus 2^20. One search
+    is linear (2 x states x positions), but the constant is the NFA's state count and rg's find_iter
+    can search a line once per match, so a line is O(states x length^2) at worst. Steps a byte,
+    measured 2026-10-03: ordinary patterns over a 5 MB slice of the pinned carve's one-line cli.cjs
+    at most 12 (`\w+` 3.4, `"[^"]*"` 3.8, `[a-zA-Z_]\w*\(` 4.4, `import.*from` 5.0, `x|` 7.0,
+    `[^,;]{20,}` 12.0); the pathological lines 194 (`[a-z]{1,64}@` over letters), 303
+    (`.{0,100}needle`), 2,000 (`\w{2000}`), 12,500 (`a.*z|a`). Native answers every one in
+    milliseconds. The budget scales with the line (a flat 2^24 refused ordinary patterns past about
+    3 MB, review N1), so ordinary patterns on that 5 MB line answer under tjs in 3.7-4.7 s (`x|`,
+    with 5 million matches, 11.8 s), and a pathological one refuses only after 64 steps a byte:
+    `.{0,100}function` over the same 5 MB line refuses after 62 s under tjs (the async twin can be
+    aborted meanwhile; the sync twin cannot);
+  - ugrep, the proposer, stalls on an unbounded repetition over a long line (7.8.2, a 5 MB line
+    with no match: `needle` 46 ms, `(?:.)*needle` over 20 minutes, `x(?:.)*needle` and
+    `(?:.)+needle` past 20 s), so a prefilter never holds one (rg-regex.cjs, THE PIECES RULE): it
+    is the best piece every match must contain (`.{0,100}needle` proposes by `needle`). Seen while
+    fixing N1; the round-1 prefilter (`(?:.)*needle`) hung there;
   - FOR THE PRINTERS (Tasks 6/7): ugrepMatches returns the MATCHER's matches, including the one at
     the end of an unterminated last line (RG-RE-MATCH-AT-UNTERMINATED-END: `$` on `abc\nxyz`, native
     selects line 2 and prints submatches []); rg's printers do not print that match. And
