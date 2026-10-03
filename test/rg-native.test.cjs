@@ -383,6 +383,59 @@ test('RG-RE-REFUSE-COST: a line past the step budget refuses through ugrepMatche
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
+// A minified bundle's one line, synthesized (seeded code-like tokens; 5,000,000 bytes, then \n):
+// the size of slice where a flat per-line budget refused ordinary patterns (review N1; the pinned
+// carve's own extracted bundle is one 59 MB line).
+function bundleLine(n = 5000000) {
+  const T = ['var ', 'let ', 'const ', 'function ', 'return ', 'import ', ' from ', 'new ', 'TypeError', 'RangeError', 'this.', '=>', '{', '}', '(', ')',
+    '[', ']', ';', ',', '.', '=', '+', '"use strict"', '"a,b"', "'x'", '0', '42', '0x1f', 'foo', 'bar_baz', 'qux9', '$el', 'require', ' ', 'if(', 'else'];
+  let seed = 7, len = 0;
+  const parts = [];
+  while (len < n) { seed = (seed * 1103515245 + 12345) & 0x7fffffff; const t = T[seed % T.length]; parts.push(t); len += t.length; }
+  return Buffer.from(parts.join('').slice(0, n) + '\n');
+}
+// native 2.1.283's --json over that line: [pattern, submatches, sha256(JSON [[start,end]...]) prefix]
+const NATIVE_BUNDLE_LINE = [
+  ['\\w+Error', 65540, 'a50ea27fa90868559c95'], ['import.*from', 1, 'bdd8d8f252488be5494a'], ['"[^"]*"', 64571, '8de2358ecca044105996'],
+  ['[a-zA-Z_]\\w*\\(', 45207, 'bb36da42a7c22f556f00'], ['\\w+', 699136, 'f247023a8e8b3b6572de'], ['x|', 4905778, 'b2e43515fac8075f4eb6'],
+];
+test('RG-RE-REFUSE-COST scales with the line: a 5 MB minified line answers ordinary patterns through both twins (native)', needUgrep, async () => {
+  const crypto = require('node:crypto');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-native-bundle-'));
+  try {
+    fs.writeFileSync(path.join(dir, 'bundle.js'), bundleLine());
+    fs.writeFileSync(path.join(dir, 'q.txt'), 'quiet\n');
+    const dig = (m) => crypto.createHash('sha256').update(JSON.stringify((m.get('bundle.js') || []).map((x) => [x.start, x.end]))).digest('hex').slice(0, 20);
+    for (const [pattern, , digest] of NATIVE_BUNDLE_LINE.filter(([p]) => p === '\\w+Error' || p === 'x|')) {
+      assert.strictEqual(dig(rgn.ugrepMatches(['bundle.js', 'q.txt'], pattern, { ugrep: UGREP, cwd: dir })), digest, pattern);
+      assert.strictEqual(dig(await rgn.ugrepMatchesAsync(['bundle.js', 'q.txt'], pattern, { ugrep: UGREP, cwd: dir })), digest, pattern);
+    }
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+// The PREFILTER must not make ugrep itself slow on a long line: ugrep 7.8.2 takes over 20 minutes
+// on `(?:.)*needle` (the old widening of `.{0,100}needle`) over a 5 MB line with no `needle`, and
+// `x(?:.)*needle` stalls likewise (each `x` scans to the line's end), where it takes 40 ms on
+// `needle`. A prefilter therefore holds no unbounded repetition (RG-RE-PREFILTER-SUPERSET's
+// pieces rule); the search below must end, whichever way, inside 15 s.
+test('a prefilter never stalls ugrep on a 5 MB line: `.{0,100}needle` and `x.*needle` end in seconds', needUgrep, async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-native-stall-'));
+  try {
+    fs.writeFileSync(path.join(dir, 'bundle.js'), bundleLine());
+    for (const pattern of ['.{0,100}needle', 'x.*needle', '[a-z]+.*Zebra']) {
+      let child = null, timer = null;
+      const t0 = Date.now();
+      const run = rgn.ugrepMatchesAsync(['bundle.js'], pattern, { ugrep: UGREP, cwd: dir, onChild: (c) => { child = c; } })
+        .then((m) => `answered ${m.size}`, (e) => `refused ${e.refused || e.message}`);
+      const out = await Promise.race([run, new Promise((r) => { timer = setTimeout(() => r('TIMEOUT'), 15000); })]);
+      clearTimeout(timer);
+      if (out === 'TIMEOUT' && child) child.kill('SIGKILL');
+      assert.notStrictEqual(out, 'TIMEOUT', `${pattern}: still searching after ${Date.now() - t0} ms`);
+      assert.strictEqual(out, 'answered 0', pattern);
+    }
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 // The async twin decides in SLICES of steps, so an abort lands DURING one long line, not after it
 // (review I2: it used to yield only between files). Under tjs, where one such line takes seconds.
 test('ugrepMatchesAsync under tjs: an abort lands within a bound during one long line', {

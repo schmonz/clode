@@ -520,16 +520,43 @@ test('rg-regex-prefilter-superset\'s control fails on a missed line, with no ugr
 
 // RG-RE-REFUSE-COST (review I2): a search is linear, but its constant is states x line length, and
 // rg's find_iter over one line can be quadratic; a minified bundle makes a 200 KB line ordinary.
-// So one line's matching has a step budget (LINE_STEP_BUDGET), and a line past it refuses by name
+// So one line's matching has a step budget (lineStepBudget: 64 a byte, plus 2^20), and a line past it refuses by name
 // rather than stalling the caller (measured under tjs on this Mac: about 5 million steps a second).
 test('RG-RE-REFUSE-COST: a line past the step budget refuses by name; ordinary patterns on the same line do not', () => {
-  assert.strictEqual(R.LINE_STEP_BUDGET, 2 ** 24);
+  assert.strictEqual(R.lineStepBudget(200000), 64 * 200001 + 2 ** 20);
   const line = Buffer.from('abcdefgh'.repeat(25000));                 // 200 KB, one line, no newline
   const heavy = R.translateRgRegex('[a-z]{1,64}@', {});              // about 39 million steps (review)
   assert.throws(() => R.verifyLine(line, 0, line.length, heavy), (e) => e.name === 'RgRegexRefusal' && e.rule === 'RG-RE-REFUSE-COST');
   for (const p of ['\\w+', 'abc', '(?i)DEF', 'h\\b', 'a.c|zz', '[a-z]+@?']) {
     const t = R.translateRgRegex(p, {});
     assert.doesNotThrow(() => R.verifyLine(line, 0, line.length, t), p);
+  }
+});
+
+// A minified bundle's one line, synthesized (seeded code-like tokens; 5,000,000 bytes, then \n):
+// the size of slice where a flat per-line budget refused ordinary patterns (review N1; the pinned
+// carve's own extracted bundle is one 59 MB line).
+function bundleLine(n = 5000000) {
+  const T = ['var ', 'let ', 'const ', 'function ', 'return ', 'import ', ' from ', 'new ', 'TypeError', 'RangeError', 'this.', '=>', '{', '}', '(', ')',
+    '[', ']', ';', ',', '.', '=', '+', '"use strict"', '"a,b"', "'x'", '0', '42', '0x1f', 'foo', 'bar_baz', 'qux9', '$el', 'require', ' ', 'if(', 'else'];
+  let seed = 7, len = 0;
+  const parts = [];
+  while (len < n) { seed = (seed * 1103515245 + 12345) & 0x7fffffff; const t = T[seed % T.length]; parts.push(t); len += t.length; }
+  return Buffer.from(parts.join('').slice(0, n) + '\n');
+}
+// native 2.1.283's --json over that line: [pattern, submatches, sha256(JSON [[start,end]...]) prefix]
+const NATIVE_BUNDLE_LINE = [
+  ['\\w+Error', 65540, 'a50ea27fa90868559c95'], ['import.*from', 1, 'bdd8d8f252488be5494a'], ['"[^"]*"', 64571, '8de2358ecca044105996'],
+  ['[a-zA-Z_]\\w*\\(', 45207, 'bb36da42a7c22f556f00'], ['\\w+', 699136, 'f247023a8e8b3b6572de'], ['x|', 4905778, 'b2e43515fac8075f4eb6'],
+];
+test('RG-RE-REFUSE-COST scales with the line: ordinary patterns on a 5 MB minified line are answered as native (native)', () => {
+  const line = bundleLine();
+  const end = line.length - 1;
+  for (const [pattern, n, digest] of NATIVE_BUNDLE_LINE) {
+    const t = R.translateRgRegex(pattern, {});
+    const m = R.verifyLine(line, 0, end, t).map((x) => [x.start, x.end]);
+    assert.strictEqual(m.length, n, pattern);
+    assert.strictEqual(crypto.createHash('sha256').update(JSON.stringify(m)).digest('hex').slice(0, 20), digest, pattern);
   }
 });
 
@@ -560,11 +587,18 @@ test('RG-RE-PREFILTER-SUPERSET: the widening rules, stated', () => {
   assert.strictEqual(pre('needle'), 'needle');
   assert.strictEqual(pre('\\bneedle\\b'), 'needle');                        // assertions widen to nothing
   assert.strictEqual(pre('^$'), '');                                          // '' proposes every line
-  assert.strictEqual(pre('[[:alpha:]]+'), '(?:[A-Za-z])+');                   // ASCII letter ranges stay
-  assert.strictEqual(pre('\\w+'), '(?:.)+');                                  // a Unicode class widens to .
+  assert.strictEqual(pre('[[:alpha:]]+'), '[A-Za-z]');                         // ASCII letter ranges stay; one copy
+  assert.strictEqual(pre('\\w+'), '.');                                        // a Unicode class widens to .
   assert.strictEqual(pre('k', { ignoreCase: true }), '(?:K|k|\\x{212a})');    // rg's folding, spelled out
   assert.strictEqual(pre('a|'), '(?:a)?');                                    // an empty branch: optional
-  assert.strictEqual(pre('a{3,5}?'), '(?:a)+');                               // counts and laziness widen
+  assert.strictEqual(pre('a{3,5}?'), '(?:a){3,5}');                           // a short count stays; laziness widens
+  // THE PIECES RULE: never an unbounded repetition; the best piece every match contains
+  assert.strictEqual(pre('.{0,100}needle'), 'needle');
+  assert.strictEqual(pre('x.*needle'), 'needle');
+  assert.strictEqual(pre('import.*from'), 'import');
+  assert.strictEqual(pre('a(?:b|.*c)d'), '(?:b|c)d');
+  assert.strictEqual(pre('(foo|bar)+baz'), '(?:foo|bar)baz');
+  assert.strictEqual(pre('[a-zA-Z_]\\w*\\('), '\\x28');
   assert.strictEqual(pre('a.b'), 'a.b');
   assert.strictEqual(pre('x\\.y'), 'x\\x2ey');                                // punctuation as \xHH
 });

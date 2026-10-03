@@ -18,7 +18,7 @@
 // no backtracking to explode. But the constant is the NFA's state count (`.{0,1000}needle` has
 // 2,009 states), and rg's find_iter searches a line once per match, so ONE LINE costs up to
 // O(states x length^2) (`a.*z|a`), as rg's own does. RG-RE-REFUSE-COST bounds a line's steps
-// (LINE_STEP_BUDGET), the async twin decides in slices of steps, and the NFA's size is bounded
+// (lineStepBudget, 64 a byte), the async twin decides in slices of steps, and the NFA's size is bounded
 // (MAX_STATES, and rg's own limit, RG-RE-REFUSE-SIZE-LIMIT): each refuses by name.
 //
 // THE BYTES (stated once). The matcher reads a line's BYTES as rg does. A valid UTF-8 sequence
@@ -65,10 +65,11 @@
 // bracket of ASCII letters/digits/underscore when it is exactly such ranges, its members
 // spelled out when it has at most PREFILTER_SMALL of them, and `.` otherwise (ugrep's `.`
 // matches every character and every invalid byte, measured); a literal under case
-// insensitivity becomes its whole simple-case-folding class; a repetition keeps only "zero or
-// more" / "one or more"; a lazy repetition becomes greedy; a branch that can only match the
-// empty string makes its alternation optional. ugrep never sees -i: case folding is spelled
-// into the pattern, rg's folding, not ugrep's.
+// insensitivity becomes its whole simple-case-folding class; a repetition of at most SMALL_REP
+// stays counted (greedy); a longer or unbounded one is never written at all (THE PIECES RULE, at
+// summary() below: ugrep stalls on one over a long line), so the prefilter is the best piece every
+// match contains; a branch that can only match the empty string makes its alternation optional.
+// ugrep never sees -i: case folding is spelled into the pattern, rg's folding, not ugrep's.
 //
 // WHAT REFUSES (translateRgRegex -> { refuse }), each by name: everything quaude's rg cannot
 // answer exactly, and everything rg itself rejects (its message is rg's own; ours names the
@@ -173,7 +174,7 @@ const REFUSALS = {
   'RG-RE-REFUSE-NEWLINE': { rgRejects: true, what: 'can match a line terminator, which rg refuses without -U' },
   'RG-RE-REFUSE-NUL': { rgRejects: true, what: 'matches only NUL, which rg refuses while it detects binary files' },
   'RG-RE-REFUSE-SIZE': { what: 'is larger or deeper than quaude\'s rg compiles' },
-  'RG-RE-REFUSE-COST': { what: 'needs more matching on one line than quaude\'s rg allows a line (LINE_STEP_BUDGET steps), where rg would take far less time' },
+  'RG-RE-REFUSE-COST': { what: 'needs more matching on one line than quaude\'s rg allows a line (64 steps a byte, lineStepBudget), where rg would take far less time' },
   'RG-RE-REFUSE-SIZE-LIMIT': { what: `may compile past the size rg allows a regex (${NFA_SIZE_LIMIT} bytes of NFA, rg's limit; quaude's rg bounds that size from above and refuses when the bound passes it)` },
   'RG-RE-REFUSE-CAPTURE-NAME': { what: 'names a group with non-ASCII characters' },
   'RG-RE-REFUSE-LOOKBEHIND': { what: 'looks behind a line that starts inside a character (\\B or \\b{start-half} on a line whose first byte is a UTF-8 continuation byte), where rg\'s answer depends on the bytes before the line (measured)' },
@@ -1039,16 +1040,22 @@ function searchRun(prog, limit) {
 // BEFORE the line: `\b{start-half}` on `\x80 x` reports offset 1 when the line starts at byte 4
 // or later and not when it starts at 2 or 3, while its line selection sees the line alone. On
 // every other line the look-behind stops inside the line, and both readings agree.
-// RG-RE-REFUSE-COST: one line's matching may take at most LINE_STEP_BUDGET steps. RG-RE-LINEAR-TIME
-// bounds ONE search by 2 x states x positions, so a line costs states x length per search, and rg's
-// find_iter can search a line once per match, which makes a line O(states x length^2) at worst
-// (`a.*z|a`). Measured (review, 2026-10-03) on single lines: `[a-z]{1,64}@` over 200 KB takes 39
-// million steps, `.{0,100}needle` 61 million, `.{0,1000}needle` 600 million, `\w{2000}` over 20 KB
-// 40 million, `a.*z|a` over 5 KB 63 million; ordinary patterns over the same 200 KB lines take about
-// one million (`\w+`, `(?i)[a-z]+ing\b`, `import.*from`). tjs here runs about 5 million steps a
-// second, so 2^24 leaves sixteen times that headroom and refuses within about 3 s on this Mac: a
-// line past it is refused by name, as rg's refusal, rather than stalling its caller for minutes.
-const LINE_STEP_BUDGET = 2 ** 24;
+// RG-RE-REFUSE-COST: one line's matching may take at most lineStepBudget(its length) steps:
+// STEPS_PER_BYTE x (length + 1) + STEP_BUDGET_FLOOR. RG-RE-LINEAR-TIME bounds ONE search by
+// 2 x states x positions, so a line costs states x length per search, and rg's find_iter can search
+// a line once per match, which makes a line O(states x length^2) at worst (`a.*z|a`). So the budget
+// scales with the line (review N1: a flat 2^24 refused ORDINARY patterns on minified lines past
+// about 3 MB, and one refused line fails the whole search; the pinned carve's cli.cjs is one 59 MB
+// line). Measured in steps per byte (2026-10-03): ordinary patterns over a 5 MB slice of that line
+// take at most 12 (`\w+` 3.4, `"[^"]*"` 3.8, `[a-zA-Z_]\w*\(` 4.4, `import.*from` 5.0, `x|` 7.0,
+// `[^,;]{20,}` 12.0), and the same over a synthetic 5 MB bundle line; the pathological lines take 194
+// (`[a-z]{1,64}@` over 200 KB of letters), 303 (`.{0,100}needle`), 2,000 (`\w{2000}`) and 12,500
+// (`a.*z|a` over 5 KB). 64 sits between: five times the costliest ordinary pattern, a third of the
+// cheapest pathological one. The floor (2^20) is for short lines, where a pattern's own size
+// dominates. tjs runs about 5 million steps a second here, so a refused line has cost at most
+// 13 microseconds a byte; an ordinary one is answered whatever its length.
+const STEPS_PER_BYTE = 64, STEP_BUDGET_FLOOR = 2 ** 20;
+const lineStepBudget = (len) => STEPS_PER_BYTE * (len + 1) + STEP_BUDGET_FLOOR;
 function lineVerifier(buf, start, end, compiled) {
   const prog = compiled.prog || compiled;
   if (prog.lookbehind && start < end && (buf[start] & 0xc0) === 0x80) {
@@ -1065,6 +1072,7 @@ function lineVerifier(buf, start, end, compiled) {
     return { run: () => out };
   }
   let lastEnd = start, lastMatch = -1, searching = false, spent = 0, done = false;
+  const budget = lineStepBudget(end - start);
   const run = (maxSteps) => {
     if (done) return out;
     let left = maxSteps;
@@ -1074,11 +1082,11 @@ function lineVerifier(buf, start, end, compiled) {
         searchStart(prog, buf, start, end, lastEnd);
         searching = true;
       }
-      const r = searchRun(prog, Math.min(left, LINE_STEP_BUDGET - spent + 1));
+      const r = searchRun(prog, Math.min(left, budget - spent + 1));
       spent += r.used; left -= r.used;
-      if (spent > LINE_STEP_BUDGET) {
+      if (spent > budget) {
         prog.cur = null;
-        throw new RgRegexRefusal('RG-RE-REFUSE-COST', `a line at byte ${start} (${end - start} bytes) needs more than ${LINE_STEP_BUDGET} steps`);
+        throw new RgRegexRefusal('RG-RE-REFUSE-COST', `a line at byte ${start} (${end - start} bytes) needs more than ${budget} steps`);
       }
       if (r.state === -1) return null;                          // paused, run again
       searching = false;
@@ -1108,42 +1116,94 @@ function isAlnumRanges(set) {
   for (let i = 0; i < set.length; i += 2) if (!ok.some(([lo, hi]) => set[i] >= lo && set[i + 1] <= hi)) return false;
   return true;
 }
-// -> a ugrep pattern string, or '' for "matches only the empty string" (EMPTY).
-function pre(n) {
+// One class, widened for ugrep (the class rules in the header).
+function clsPre(fullSet) {
+  const set = withoutNewline(fullSet);
+  if (count(set) === 0) return '.';                   // matches nothing: any widening will do
+  if (count(set) === 1) return ugrepLit(set[0]);
+  if (isAlnumRanges(set)) {
+    let s = '[';
+    for (let i = 0; i < set.length; i += 2) s += set[i] === set[i + 1] ? String.fromCodePoint(set[i]) : `${String.fromCodePoint(set[i])}-${String.fromCodePoint(set[i + 1])}`;
+    return s + ']';
+  }
+  if (count(set) <= PREFILTER_SMALL) {
+    const m = [];
+    for (let i = 0; i < set.length; i += 2) for (let c = set[i]; c <= set[i + 1]; c++) m.push(ugrepLit(c));
+    return `(?:${m.join('|')})`;
+  }
+  return '.';
+}
+// THE PIECES RULE: no prefilter holds an unbounded repetition, because ugrep is slow on one over a
+// long line (measured, ugrep 7.8.2, a 5 MB line with no match: `needle` 46 ms, `(?:.)*needle` over
+// 20 minutes, `x(?:.)*needle` and `(?:.)+needle` past 20 s, `(?:.){0,100}needle` 1.8 s). A node is
+// summarised as EXACT (a pattern, repetition-bounded, matching every string the node matches), or
+// else as HEAD / TAIL (what every match of it starts / ends with) and BEST (a piece every match of
+// it contains). A concatenation joins exact parts into pieces and breaks a piece at a part that is
+// not exact, keeping that part's head on the left and its tail on the right; an unbounded (or more
+// than SMALL_REP) repetition is not exact, and its head, tail and best are one copy of its sub, or
+// nothing when it may repeat zero times. Every match of the whole contains every piece, so the
+// highest-scoring piece (literal characters 2, other classes 1, `.` 0) is a superset filter.
+const SMALL_REP = 16;
+const NOTHING = { pat: '', score: 0 };
+const pieceOf = (parts) => ({ pat: parts.map((x) => x.pat).join(''), score: parts.reduce((a, x) => a + x.score, 0) });
+const better = (a, b) => (b.score > a.score || (b.score === a.score && b.pat.length > a.pat.length) ? b : a);
+// An alternation of required pieces: nothing is required when one branch requires nothing.
+function altPiece(list) {
+  if (list.some((x) => x.pat === '')) return NOTHING;
+  return { pat: list.length === 1 ? list[0].pat : `(?:${list.map((x) => x.pat).join('|')})`, score: Math.min(...list.map((x) => x.score)) };
+}
+// An alternation of exact branches: one that matches only the empty string makes it optional.
+function altExact(list) {
+  const real = list.filter((x) => x.pat !== '');
+  if (!real.length) return NOTHING;
+  const g = `(?:${real.map((x) => x.pat).join('|')})`;
+  return real.length < list.length ? { pat: `${g}?`, score: 0 } : { pat: g, score: Math.min(...real.map((x) => x.score)) };
+}
+function summary(n) {
   switch (n.k) {
-    case 'empty': case 'look': return '';
-    case 'cls': {
-      const set = withoutNewline(n.set);
-      if (count(set) === 0) return '.';                 // matches nothing: any widening will do
-      if (count(set) === 1) return ugrepLit(set[0]);
-      if (isAlnumRanges(set)) {
-        let s = '[';
-        for (let i = 0; i < set.length; i += 2) s += set[i] === set[i + 1] ? String.fromCodePoint(set[i]) : `${String.fromCodePoint(set[i])}-${String.fromCodePoint(set[i + 1])}`;
-        return s + ']';
+    case 'empty': case 'look': return { exact: NOTHING };
+    // a literal character narrows most, a class less, `.` not at all
+    case 'cls': { const p = clsPre(n.set); return { exact: { pat: p, score: p === '.' ? 0 : count(withoutNewline(n.set)) === 1 ? 2 : 1 } }; }
+    case 'cap': return summary(n.sub);
+    case 'cat': {
+      const pieces = [], cands = [];
+      let cur = [], exact = true;
+      for (const c of n.subs) {
+        const sc = summary(c);
+        if (sc.exact) { cur.push(sc.exact); continue; }
+        exact = false;
+        cur.push(sc.head);
+        pieces.push(pieceOf(cur));
+        cands.push(sc.best);
+        cur = [sc.tail];
       }
-      if (count(set) <= PREFILTER_SMALL) {
-        const m = [];
-        for (let i = 0; i < set.length; i += 2) for (let c = set[i]; c <= set[i + 1]; c++) m.push(ugrepLit(c));
-        return `(?:${m.join('|')})`;
-      }
-      return '.';
+      pieces.push(pieceOf(cur));
+      if (exact) return { exact: pieces[0] };
+      return { head: pieces[0], tail: pieces[pieces.length - 1], best: [...pieces, ...cands].reduce(better, NOTHING) };
     }
-    case 'cap': return pre(n.sub);
-    case 'cat': return n.subs.map(pre).join('');
     case 'alt': {
-      const parts = n.subs.map(pre);
-      const real = parts.filter((p) => p !== '');
-      if (!real.length) return '';
-      const g = real.length === 1 ? `(?:${real[0]})` : `(?:${real.join('|')})`;
-      return real.length < parts.length ? `${g}?` : g;
+      const ss = n.subs.map(summary);
+      if (ss.every((x) => x.exact)) return { exact: altExact(ss.map((x) => x.exact)) };
+      return { head: altPiece(ss.map((x) => x.exact || x.head)), tail: altPiece(ss.map((x) => x.exact || x.tail)),
+        best: altPiece(ss.map((x) => x.exact || x.best)) };
     }
     case 'rep': {
-      const s = pre(n.sub);
-      if (s === '') return '';
-      return `(?:${s})${n.min === 0 ? '*' : '+'}`;
+      const sc = summary(n.sub), { min, max } = n;
+      if (sc.exact && max !== null && max <= SMALL_REP) {
+        if (sc.exact.pat === '') return { exact: NOTHING };
+        const q = min === 0 && max === 1 ? '?' : min === max ? `{${min}}` : `{${min},${max}}`;
+        return { exact: { pat: `(?:${sc.exact.pat})${q}`, score: min > 0 ? sc.exact.score * min : 0 } };
+      }
+      if (min === 0) return { head: NOTHING, tail: NOTHING, best: NOTHING };
+      return { head: sc.exact || sc.head, tail: sc.exact || sc.tail, best: sc.exact || sc.best };
     }
     default: throw new Error(`rg-regex: no prefilter for ${n.k}`);
   }
+}
+// -> a ugrep pattern string, '' for "every line".
+function pre(n) {
+  const sm = summary(n);
+  return (sm.exact || sm.best).pat;
 }
 
 // ---- the entry point ------------------------------------------------------------------------------
@@ -1167,4 +1227,4 @@ function translateRgRegex(pattern, opts = {}) {
   }
 }
 
-module.exports = { translateRgRegex, verifyLine, lineVerifier, LINE_STEP_BUDGET, REFUSALS, RgRegexRefusal, refusalReason };
+module.exports = { translateRgRegex, verifyLine, lineVerifier, lineStepBudget, REFUSALS, RgRegexRefusal, refusalReason };
