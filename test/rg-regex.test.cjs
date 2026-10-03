@@ -458,7 +458,8 @@ guardTests(defineGuard({
 
 // RG-RE-PREFILTER-SUPERSET (rg-regex-prefilter-superset): ugrep, given the prefilter, proposes
 // every line ours (= native) selects, over the same corpus, on this host's ugrep (and on every
-// ugrep at or above the floor, by the Task 5b runs). Control: a prefilter that proposes nothing.
+// ugrep at or above the floor, by the Task 5b runs). Control: a proposer that proposes nothing,
+// which the superset check must catch, with no ugrep involved (review M4).
 function hostUgrep() {
   if (process.env.CLODE_UGREP) return process.env.CLODE_UGREP;
   for (const d of (process.env.PATH || '').split(path.delimiter)) {
@@ -467,7 +468,19 @@ function hostUgrep() {
   }
   return null;
 }
-function scanSuperset({ ugrep, cases, prefilterFor }) {
+// The lines (their start offsets) ugrep proposes for `prefilter` over the corpus in `dir`.
+function ugrepProposes(ugrep, dir, prefilter) {
+  const r = spawnSync(ugrep, ['-Y', '--format=%b%~', '-e', prefilter, '--', 'corpus.txt'], { cwd: dir, encoding: 'utf8' });
+  if (r.status >= 2 || r.error) return { failed: r.stderr || String(r.error) };
+  const proposed = new Set();
+  for (const s of r.stdout.split(/\r?\n/)) {
+    if (!s) continue;
+    const b = Number(s);
+    if (b < CORPUS.length) proposed.add(b === 0 ? 0 : CORPUS.lastIndexOf(0x0a, b - 1) + 1);
+  }
+  return { proposed };
+}
+function scanSuperset({ ugrep, cases, propose }) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-regex-pre-'));
   try {
     fs.writeFileSync(path.join(dir, 'corpus.txt'), CORPUS);
@@ -476,15 +489,10 @@ function scanSuperset({ ugrep, cases, prefilterFor }) {
     for (const [pattern, ic] of cases) {
       const o = corpusLines(pattern, !!ic);
       if (o.refused) continue;
-      const prefilter = prefilterFor ? prefilterFor(o.t) : o.t.prefilter;
-      const r = spawnSync(ugrep, ['-Y', '--format=%b%~', '-e', prefilter, '--', 'corpus.txt'], { cwd: dir, encoding: 'utf8' });
-      if (r.status >= 2 || r.error) { findings.push(`${JSON.stringify(pattern)}: ugrep failed on ${JSON.stringify(prefilter)}: ${r.stderr}`); continue; }
-      const proposed = new Set();
-      for (const s of r.stdout.split(/\r?\n/)) {
-        if (!s) continue;
-        const b = Number(s);
-        if (b < CORPUS.length) proposed.add(b === 0 ? 0 : CORPUS.lastIndexOf(0x0a, b - 1) + 1);
-      }
+      const prefilter = o.t.prefilter;
+      const r = (propose || ugrepProposes)(ugrep, dir, prefilter);
+      if (r.failed) { findings.push(`${JSON.stringify(pattern)}: ugrep failed on ${JSON.stringify(prefilter)}: ${r.failed}`); continue; }
+      const { proposed } = r;
       const missing = o.lines.filter(([ls]) => !proposed.has(ls)).map(([ls]) => ls);
       if (missing.length) findings.push(`${JSON.stringify(pattern)}: prefilter ${JSON.stringify(prefilter)} misses lines at ${missing}`);
       checked++;
@@ -498,8 +506,17 @@ guardTests(defineGuard({
   floor: ANSWERED_FLOOR,
   read: () => (UGREP ? { ugrep: UGREP, cases: ORACLE.cases } : { skip: 'no ugrep on this host (CLODE_UGREP or PATH)' }),
   scan: scanSuperset,
-  control: () => ({ ugrep: UGREP || 'ugrep', cases: [['needle', 0]], prefilterFor: () => 'zzzz-proposes-nothing' }),
+  control: supersetControl,
 }));
+function supersetControl() { return { ugrep: UGREP, cases: [['needle', 0], ['\\w+', 0]], propose: () => ({ proposed: new Set() }) }; }
+
+// The control exercises the superset CHECK itself, on any host (review M4): no ugrep runs, the
+// proposer proposes nothing, and the finding is a missed line, not a spawn failure.
+test('rg-regex-prefilter-superset\'s control fails on a missed line, with no ugrep at all', () => {
+  const r = scanSuperset({ ...supersetControl(), ugrep: '/nonexistent/ugrep' });
+  assert.ok(r.findings.length >= 1);
+  assert.ok(r.findings.every((f) => /misses lines at/.test(f)), r.findings.join('\n'));
+});
 
 // RG-RE-REFUSE-COST (review I2): a search is linear, but its constant is states x line length, and
 // rg's find_iter over one line can be quadratic; a minified bundle makes a 200 KB line ordinary.

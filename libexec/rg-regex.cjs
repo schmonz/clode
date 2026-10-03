@@ -1160,12 +1160,11 @@ function translateRgRegex(pattern, opts = {}) {
     if (bound > NFA_SIZE_LIMIT) refuse('RG-RE-REFUSE-SIZE-LIMIT', `an NFA of up to ${bound > 1e15 ? 'more than 1e15' : Math.ceil(bound)} bytes`);
     const node = hir(ast);
     checkHir(node);
-    return { prog: program(node), prefilter: pre(node), hir: node };
+    return { prog: program(node), prefilter: pre(node) };
   } catch (e) {
     if (e instanceof RgRegexRefusal) return { refuse: refusalReason(e), rule: e.rule };
     throw e;
   }
 }
 
-module.exports = { translateRgRegex, verifyLine, lineVerifier, LINE_STEP_BUDGET, REFUSALS, RgRegexRefusal, refusalReason, RG_REGEX_DATA_HEADER: RG_REGEX_DATA.header,
-  _internal: { decode, decodeLast, foldClass, negate, union, has, data } };
+module.exports = { translateRgRegex, verifyLine, lineVerifier, LINE_STEP_BUDGET, REFUSALS, RgRegexRefusal, refusalReason };
