@@ -13,6 +13,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const cp = require('node:child_process');
 const rgn = require('../libexec/rg-native.cjs');
 const { makeRgTree } = require('../scripts/lib/rg-probe.cjs');
 const { tjsPath, runLoader } = require('./node-shim-helper.cjs');
@@ -199,24 +200,24 @@ test('ugrepMatches / ugrepMatchesAsync refuse a ugrep below the floor, never ans
 
 // A failed chunk ends the search: later chunks never start (review I3: killing the first child
 // still spawned all five). Each stand-in logs its run, then fails its own way.
-const STUB_VERSION = 'if [ "$1" = --version ]; then echo "ugrep 7.8.2 stand-in"; exit 0; fi; echo run >> "$STUB_LOG"';
+const STUB_VERSION = 'if [ "$1" = --version ]; then echo "ugrep 7.8.2 stand-in"; exit 0; fi';
 test('a failed chunk ends the search: killed, or exit >= 2, no later chunk starts (sync and async)', posixStub, () =>
   withStubs({ slow: `${STUB_VERSION}; exec sleep 5`, fails: `${STUB_VERSION}; echo "ugrep: boom" >&2; exit 2` }, async (st, dir) => {
     const files = ['a', 'b', 'c', 'd', 'e'];
-    const runs = (log) => (fs.existsSync(log) ? fs.readFileSync(log, 'utf8').split('\n').filter(Boolean).length : 0);
-    const env = (log) => ({ ...process.env, STUB_LOG: log });
+    // count the searches each twin starts (the --version probe is not one)
     let spawned = 0;
-    await assert.rejects(rgn.ugrepMatchesAsync(files, 'x', { ugrep: st.slow, cwd: dir, env: env(path.join(dir, 'killed.log')),
-      argvBudget: 1, onChild: (c) => { spawned++; c.kill('SIGKILL'); } }), (e) => e.name === 'UgrepError' && e.signal === 'SIGKILL');
+    await assert.rejects(rgn.ugrepMatchesAsync(files, 'x', { ugrep: st.slow, cwd: dir, argvBudget: 1,
+      onChild: (c) => { spawned++; c.kill('SIGKILL'); } }), (e) => e.name === 'UgrepError' && e.signal === 'SIGKILL');
     assert.strictEqual(spawned, 1, 'a killed chunk must end the search');
-    const asyncLog = path.join(dir, 'async.log');
-    await assert.rejects(rgn.ugrepMatchesAsync(files, 'x', { ugrep: st.fails, cwd: dir, env: env(asyncLog), argvBudget: 1 }),
+    spawned = 0;
+    await assert.rejects(rgn.ugrepMatchesAsync(files, 'x', { ugrep: st.fails, cwd: dir, argvBudget: 1, onChild: () => { spawned++; } }),
       (e) => e.name === 'UgrepError' && e.status === 2);
-    assert.strictEqual(runs(asyncLog), 1, 'an exit >= 2 must end the async search');
-    const syncLog = path.join(dir, 'sync.log');
-    assert.throws(() => rgn.ugrepMatches(files, 'x', { ugrep: st.fails, cwd: dir, env: env(syncLog), argvBudget: 1 }),
+    assert.strictEqual(spawned, 1, 'an exit >= 2 must end the async search');
+    let searches = 0;
+    const counting = (bin, args, o) => { if (args[0] !== '--version') searches++; return cp.spawnSync(bin, args, o); };
+    assert.throws(() => rgn.ugrepMatches(files, 'x', { ugrep: st.fails, cwd: dir, argvBudget: 1, spawnSync: counting }),
       (e) => e.name === 'UgrepError' && e.status === 2);
-    assert.strictEqual(runs(syncLog), 1, 'an exit >= 2 must end the sync search');
+    assert.strictEqual(searches, 1, 'an exit >= 2 must end the sync search');
   }));
 
 // A ugrep killed mid-record is reported as KILLED, not as malformed output (review M1): the
@@ -225,9 +226,8 @@ test('a ugrep killed mid-record is reported as killed, never as malformed output
   withStubs({ trunc: `${STUB_VERSION}; printf 'a.txt\\0006 1'; kill -9 $$` }, async (st, dir) => {
     const killed = (e) => e.name === 'UgrepError' && e.signal === 'SIGKILL' && /signal SIGKILL/.test(e.message)
       && !/--format output/.test(e.message);
-    const env = { ...process.env, STUB_LOG: path.join(dir, 'log') };
-    assert.throws(() => rgn.ugrepMatches(['a.txt'], 'x', { ugrep: st.trunc, cwd: dir, env }), killed);
-    await assert.rejects(rgn.ugrepMatchesAsync(['a.txt'], 'x', { ugrep: st.trunc, cwd: dir, env }), killed);
+    assert.throws(() => rgn.ugrepMatches(['a.txt'], 'x', { ugrep: st.trunc, cwd: dir }), killed);
+    await assert.rejects(rgn.ugrepMatchesAsync(['a.txt'], 'x', { ugrep: st.trunc, cwd: dir }), killed);
   }));
 
 // ---- the async twin, and the same plumbing under tjs -----------------------------------------
