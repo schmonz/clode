@@ -316,6 +316,11 @@ function assertUsableUgrep(opts) {
   const caps = ugrepCapabilities(opts.ugrep, { spawnSync: opts.spawnSync });
   if (!caps.format) throw new UgrepError(caps.reason);
 }
+// What a chunk that exited >= 2 printed: the records before any bad byte are its partial
+// matches; a bad tail is dropped, because the failure (status, stderr) is already the answer.
+function readFailedChunk(buf, ranges) {
+  try { parseUgrepRanges(buf, ranges); } catch (e) { if (!(e instanceof UgrepError)) throw e; }
+}
 const ugrepFailed = (bin, r, stderr, matches) => new UgrepError(
   `${leafOf(bin)} failed (${r.signal ? `signal ${r.signal}` : `exit ${r.status}`})${firstLine(stderr) ? `: ${firstLine(stderr)}` : ''}`,
   { status: r.status, signal: r.signal || null, stderr: toBuf(stderr).toString('utf8'), matches });
@@ -337,9 +342,11 @@ function ugrepMatches(files, pattern, opts = {}) {
     if (r.error) throw new UgrepError(`${leafOf(opts.ugrep)} could not be run (${r.error.code || r.error.message})`, { matches: inOrder(ranges) });
     // Killed: the bytes may stop anywhere, so they are not read; the kill is the answer.
     if (r.status === null || r.signal) { failed = { r, stderr: r.stderr }; break; }
-    parseUgrepRanges(toBuf(r.stdout), ranges);
     // A failed chunk ends the search: the answer is already an error, so no later chunk runs.
-    if (r.status >= 2) { failed = { r, stderr: r.stderr }; break; }
+    // Its status comes first: what it printed is read only for the matches it found before
+    // failing, and a bad tail there says nothing the failure does not (re-review N-1).
+    if (r.status >= 2) { readFailedChunk(toBuf(r.stdout), ranges); failed = { r, stderr: r.stderr }; break; }
+    parseUgrepRanges(toBuf(r.stdout), ranges);
   }
   const out = inOrder(ranges);
   if (failed) throw ugrepFailed(opts.ugrep, failed.r, failed.stderr, out);
@@ -376,8 +383,10 @@ function ugrepMatchesAsync(files, pattern, opts = {}) {
       if (settled) return;
       settled = true;
       // Killed: the bytes may stop anywhere, so they are not read; the kill is the answer.
+      // Exit >= 2: the failure is the answer, and the bytes only add the matches found first.
       if (status !== null && !signal) {
-        try { parseUgrepRanges(Buffer.concat(outs), ranges); } catch (e) { reject(e); return; }
+        if (status >= 2) readFailedChunk(Buffer.concat(outs), ranges);
+        else { try { parseUgrepRanges(Buffer.concat(outs), ranges); } catch (e) { reject(e); return; } }
       }
       resolve({ status, signal: signal || null, stderr: Buffer.concat(errs) });
     });

@@ -238,6 +238,17 @@ test('a ugrep killed mid-record is reported as killed, never as malformed output
     await assert.rejects(rgn.ugrepMatchesAsync(['a.txt'], 'x', { ugrep: st.trunc, cwd: dir }), killed);
   }));
 
+// A ugrep that EXITS >= 2 having printed a partial record is reported as the failure it is (its
+// status and stderr), never as malformed output (Task 5 re-review N-1): the status is read before
+// the bytes, and a bad tail after a failure says nothing more than the failure already does.
+test('a ugrep that exits >= 2 mid-record is reported as its failure, never as malformed output (sync and async)', posixStub, () =>
+  withStubs({ bad2: `${STUB_VERSION}; printf 'a.txt\\0006 1'; echo "ugrep: boom" >&2; exit 2` }, async (st, dir) => {
+    const failed = (e) => e.name === 'UgrepError' && e.status === 2 && /exit 2/.test(e.message) && /boom/.test(e.message)
+      && /boom/.test(e.stderr) && !/--format output/.test(e.message);
+    assert.throws(() => rgn.ugrepMatches(['a.txt'], 'x', { ugrep: st.bad2, cwd: dir }), failed);
+    await assert.rejects(rgn.ugrepMatchesAsync(['a.txt'], 'x', { ugrep: st.bad2, cwd: dir }), failed);
+  }));
+
 // Every reported path is one that was asked for, and every listed name is a file (review M2):
 // a match ugrep places in some OTHER path cannot be answered for, and a directory in the list
 // was searched as nothing at all (ugrep exits 0 on one). Both are refusals, never dropped.
