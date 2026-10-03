@@ -195,48 +195,41 @@ Bash tool instead".
     (plan Task 6);
   - one carve reader shared by test/build-gates (see "readCarve has seven copies"), and one list
     of bun-shim's companions shared by the build sites (test/shim-companions.test.cjs derives
-    COMPANIONS from bun-shim.cjs; the staging sites still each name them);
+    COMPANIONS from bun-shim.cjs, transitively since rg-native.cjs gained rg-regex.cjs; the
+    staging sites still each name all three);
   - a tjs probe that hangs (scripts/lib/text-probe.cjs runProbeOurs) is reported as "our probe
     failed under tjs (exit null)", which names neither the hang nor the timeout;
   - quaude's rg child (libexec/rg-native.cjs rgSpawn) holds the applet's stderr until exit (so a
     stderr maxBuffer fires late) and pushes stdout without backpressure; no 2.1.283 consumer is
     affected (review N3).
-- **ugrep's match ranges differ from rg's, and differ between ugrep versions (grep-native Task 5,
-  measured 2026-10-03; none fixed by the plumbing).** Native 2.1.283's embedded rg (ripgrep 14.1.1)
-  vs ugrep's default dialect, over the makeRgTree root fixture plus `alt.txt` = `ab foobar
-  samwise\nab ab\n` (ranges are absolute byte offsets):
-  - ALTERNATION. rg is leftmost-first and ugrep leftmost-longest, so ranges AND where the next match
-    starts differ: on alt.txt `a|ab` gives rg 0-1 7-8 11-12 18-19 21-22, ugrep 0-2 7-8 11-12 18-20
-    21-23; `foo|foobar` rg 3-6 vs 3-9; `sam|samwise` rg 10-13 vs 10-17 (7.8.2 and 5.0.0 alike);
-  - `\b` ON UTF-8. On uni.txt (`caf<e9> needle <CJK x2> needle\n<U+1F600> NEEDLE wide\nplain\n`)
-    rg gives 0 5 6 12 13 19 20 26 32 38 39 43 44 49. ugrep 7.8.2 adds 3, 15, 16, 18 (15 and 16 inside
-    the CJK characters); 5.0.0 adds 3 and drops 5, 13, 19. So `f\b` SELECTS the line `caf<e9> ...`
-    in ugrep (2-3) and not in rg: line selection differs, so -l and -c differ too;
-  - `[[:alpha:]]+` is ASCII in rg (uni.txt 0-3) and Unicode in ugrep 7.8.2 (0-5); 5.0.0 agrees
-    with rg. The two ugrep versions CI and a dev box run therefore disagree with each other;
-  - a pattern whose only match on a line is an anchor: `^` gives rg `0-0` at each line start and
-    `$` the line end, but ugrep 7.8.2 (with or without -Y, -o) the WHOLE line (`0-16`). Lines
-    selected agree, so -l/-c are unaffected; JSON submatches and -o are not;
-  - `.` matches an invalid UTF-8 byte in ugrep (`caf.` on `caf\xE9` gives 0-4; 7.8.2, 5.0.0 and
-    3.11.2) and not in rg (no match);
-  - a UTF-16 file with a BOM: both transcode, and both give offsets into the TRANSCODED text
-    (`ab needle` gives 3-9), so the printers must transcode before slicing lines (Task 7).
-  Agreeing with native on all three ugreps: `needle`, `e*`, `x*`, `needle|` (with RG-EMPTY-AFTER-
-  MATCH), `\w+`, `(?i)NEEDLE`, `ne+`, `\d+`, `n(ee|e)d`.
-  `ugrep -P` (PCRE2; every build measured has it: 7.8.2 with pcre2 10.49 on macOS and 10.47 on
-  NetBSD, 5.0.0 with pcre2 10.42 + JIT on noble) is NOT a drop-in either: it fixes alternation
-  (leftmost-first, all three cases equal native) but breaks empty matches inside multibyte UTF-8
-  and on invalid UTF-8 (`e*`, `x*`, `needle|` differ on uni.txt and latin1.txt), drops the
-  invalid-UTF-8 line's matches on 7.8.2 (`\w+` on latin1.txt: rg 0-3 5-11, ugrep 5-11), makes
-  `[[:alpha:]]` Unicode on both versions (uni.txt 13-19 too), and differs between versions on `\b`
-  (5.0.0 equals native, 7.8.2 does not). ugrep prepends `(?m)`, so a PCRE2 verb such as `(*UCP)`
-  is rejected ("error at position 9"), and the inline `(?aP)` (ASCII POSIX classes) is rejected by
-  ugrep's -P ("error at position 6") although pcre2grep with the same PCRE2 10.49 takes it. Which
-  engine (and per-pattern refusals) is a design decision; the measurement table is in the
-  grep-native task-5 report. Plan Tasks 7/10/11 own the outcome; the written regex-dialect
-  divergence must name every row above.
-  CI's apt ugrep (noble 5.0.0) meets the plumbing's floor (rg-native.cjs UGREP_MIN), so Task 11
-  needs no newer pin for it unless a later task raises the floor with evidence.
+- **quaude's rg regex dialect: what ugrep-proposes / rg-regex-decides leaves open (grep-native
+  Task 5b, 2026-10-03).** ugrepMatches now decides every line ugrep proposes with
+  libexec/rg-regex.cjs (rg's own matcher semantics over character data generated from native), so
+  Task 5's dialect rows are native's on ugrep 7.8.2 and 5.0.0 alike (the task-5b report has the
+  table). What remains, each by name:
+  - REFUSED, by rule (rg-regex.cjs REFUSALS): `\p`/`\P` classes (no tables carried); `\A`, `\z`,
+    `(?-m)` (measured: rg's line selection and its matches disagree for them, `\A` selects a line
+    and reports no submatch); `(?-u)`; `(?x)`; `(?R)`; nested classes and `&&`/`--`/`~~`; a class
+    that matches nothing; non-ASCII group names; more than 50,000 NFA states or 100 levels of
+    nesting; and every pattern rg itself rejects (rc 2: syntax, a `\n` without -U, a lone NUL).
+    Our refusal's text is not rg's own `regex parse error:` text; both reach the model as errors;
+  - RG-RE-REFUSE-LOOKBEHIND, at run time: `\B` and `\b{start-half}` one byte into a line that
+    starts with a UTF-8 continuation byte, where native answers by where the line sits in its
+    buffer (`\b{start-half}` on `\x80 x`: offset 1 reported when the line starts at byte 4, not at
+    byte 2) and its line selection reads the line alone;
+  - FOR THE PRINTERS (Tasks 6/7): ugrepMatches returns the MATCHER's matches, including the one at
+    the end of an unterminated last line (RG-RE-MATCH-AT-UNTERMINATED-END: `$` on `abc\nxyz`, native
+    selects line 2 and prints submatches []); rg's printers do not print that match. And
+    RG-TEXT-BOM: offsets are into rg's decoding of a file with a BOM (UTF-8 stripped, UTF-16
+    transcoded the WHATWG way, `rgText`); the printers must slice lines from that same text;
+  - FOR BINARY RULES (Task 8): the matcher splits lines at `\n` only, so a file rg reads in convert
+    mode (a NUL as a line break) has its lines from Task 8;
+  - SPEED under tjs (this Mac, 2026-10-03): a 4.5 MB file whose 100,000 lines all match takes 1.0 s
+    for a literal, 1.7 s for `(?i)NEEDLE`, 3.8 s for `a.*s` and 4.9 s for `\w+` (1,000,000 matches);
+    native takes milliseconds. A search is linear (at most 2 x states x positions steps, so
+    `(a+)+$` on 20,000 bytes takes 25 ms); an rg find_iter over one line can still be quadratic
+    where rg's is (`a*b|x*` on a long run of `a`), at tjs speed (2,000 bytes: 1.9 s). The async
+    twin hands the event loop back every 20 ms of deciding.
 - quaude's rg plumbing, deferred from the Task 5 review (2026-10-03): the sync ugrepMatches
   reports a run that hit its maxBuffer (ENOBUFS) as "could not be run", and the async twin
   buffers without any cap (M4); ARGV_BUDGET counts only the file names, not the pattern, against
