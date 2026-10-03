@@ -289,6 +289,12 @@ function matchPlan(files, pattern, opts) {
   };
   return { chunks, inOrder };
 }
+// The floor, ENFORCED: a ugrep below UGREP_MIN (or no ugrep at all) is refused before it runs,
+// never asked: 3.11.2 answers a missing file with exit 0 and nothing printed, "no matches".
+function assertUsableUgrep(opts) {
+  const caps = ugrepCapabilities(opts.ugrep, { spawnSync: opts.spawnSync });
+  if (!caps.format) throw new UgrepError(caps.reason);
+}
 const ugrepFailed = (bin, r, stderr, matches) => new UgrepError(
   `${leafOf(bin)} failed (${r.signal ? `signal ${r.signal}` : `exit ${r.status}`})${firstLine(stderr) ? `: ${firstLine(stderr)}` : ''}`,
   { status: r.status, signal: r.signal || null, stderr: toBuf(stderr).toString('utf8'), matches });
@@ -296,10 +302,11 @@ const ugrepFailed = (bin, r, stderr, matches) => new UgrepError(
 // ugrepMatches(files, pattern, opts) -> Map<file, [{start, end}]>: where `pattern` matches in
 // each of `files` (relative to opts.cwd, or absolute), as rg's submatches would place them.
 // opts: ugrep (the binary), cwd, env, ignoreCase, spawnSync (the UNWRAPPED one, under
-// bun-shim), argvBudget. Throws UgrepError when ugrep fails. Synchronous: for the synchronous
+// bun-shim), argvBudget. Throws UgrepError when ugrep fails or is below UGREP_MIN. Synchronous: for the synchronous
 // rg surfaces; ugrepMatchesAsync is the same search for the asynchronous ones.
 function ugrepMatches(files, pattern, opts = {}) {
   if (!files.length) return new Map();
+  assertUsableUgrep(opts);
   const spawnSync = opts.spawnSync || require('child_process').spawnSync;
   const { chunks, inOrder } = matchPlan(files, pattern, opts);
   const ranges = new Map();
@@ -320,6 +327,8 @@ function ugrepMatches(files, pattern, opts = {}) {
 // caller can end the search (kill) when its own bounds fire.
 function ugrepMatchesAsync(files, pattern, opts = {}) {
   if (!files.length) return Promise.resolve(new Map());
+  // The floor check runs ugrep --version synchronously, ONCE per binary per process (cached).
+  try { assertUsableUgrep(opts); } catch (e) { return Promise.reject(e); }
   const spawn = opts.spawn || require('child_process').spawn;
   const { chunks, inOrder } = matchPlan(files, pattern, opts);
   const ranges = new Map();

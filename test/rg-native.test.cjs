@@ -176,6 +176,27 @@ test('ugrepCapabilities: this host\'s ugrep', needUgrep, () => {
   assert.strictEqual(CAPS.reason, null);
 });
 
+// Stand-in ugreps, written to a scratch dir: { name: '/bin/sh body' } -> { name: path }.
+const posixStub = { skip: process.platform === 'win32' ? 'needs a /bin/sh stand-in' : false };
+function withStubs(bodies, fn) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-native-stub-'));
+  const paths = {};
+  for (const [n, body] of Object.entries(bodies)) {
+    paths[n] = path.join(dir, n);
+    fs.writeFileSync(paths[n], `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+  }
+  return Promise.resolve().then(() => fn(paths, dir)).finally(() => fs.rmSync(dir, { recursive: true, force: true }));
+}
+
+// The floor is ENFORCED, not just reported: a ugrep below it answers a missing file with exit 0
+// and nothing printed, which reads as "no matches" (review I1: ugrepMatches returned an empty Map).
+test('ugrepMatches / ugrepMatchesAsync refuse a ugrep below the floor, never answer "no matches"', posixStub, () =>
+  withStubs({ ugrep: 'if [ "$1" = --version ]; then echo "ugrep 3.11.2 x86_64-pc-linux-gnu"; fi; exit 0' }, async ({ ugrep }, dir) => {
+    const floor = (e) => e.name === 'UgrepError' && /ugrep 3\.11\.2 is older than 5\.0\.0/.test(e.message);
+    assert.throws(() => rgn.ugrepMatches(['no-such.txt'], 'needle', { ugrep, cwd: dir }), floor);
+    await assert.rejects(rgn.ugrepMatchesAsync(['no-such.txt'], 'needle', { ugrep, cwd: dir }), floor);
+  }));
+
 // ---- the async twin, and the same plumbing under tjs -----------------------------------------
 test('ugrepMatchesAsync answers what ugrepMatches does, and rejects as it throws', needUgrep, async () => {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-native-'));
