@@ -411,6 +411,59 @@ test('ugrepMatchesAsync under tjs: an abort lands within a bound during one long
   } finally { fs.rmSync(base, { recursive: true, force: true }); }
 });
 
+// P1 (review): the matcher decides every proposed LINE and recomputes its ranges, so ugrep reports
+// one record per line (`%u`: measured alike on 7.8.2 macOS, 7.8.2 NetBSD and 5.0.0 noble, -Y empty
+// matches included). P2 (RG-RE-LITERAL-RANGES): a case-sensitive plain literal over a file with no
+// BOM takes ugrep's own ranges, every one, no read and no decide; a stand-in ugrep proves which path
+// ran, and the property below proves the two paths agree.
+test('ugrep reports one record per line, except for a plain literal, whose ranges it gives', () => {
+  assert.deepStrictEqual(rgn.ugrepMatchArgv('x', { perLine: true }), ['-Y', '-H', '--null', '--format=%u%F%b %e%~', '-e', 'x', '--']);
+  assert.deepStrictEqual(rgn.ugrepMatchArgv('x'), ['-Y', '-H', '--null', '--format=%F%b %e%~', '-e', 'x', '--']);
+});
+test('RG-RE-LITERAL-RANGES: a plain literal takes ugrep\'s ranges as they are; anything else is decided', posixStub, () =>
+  withStubs({ says: `${STUB_VERSION}; printf 'a.txt\\0000 6\\n'; exit 0` }, async ({ says }, dir) => {
+    fs.writeFileSync(path.join(dir, 'a.txt'), 'no such word here\n');
+    // the stand-in claims 0-6; a literal believes it (nothing was read), a regex decides (nothing)
+    assert.deepStrictEqual(asObj(rgn.ugrepMatches(['a.txt'], 'needle', { ugrep: says, cwd: dir })), { 'a.txt': [[0, 6]] });
+    assert.deepStrictEqual(asObj(await rgn.ugrepMatchesAsync(['a.txt'], 'needle', { ugrep: says, cwd: dir })), { 'a.txt': [[0, 6]] });
+    assert.deepStrictEqual(asObj(rgn.ugrepMatches(['a.txt'], 'needle\\b', { ugrep: says, cwd: dir })), {});
+    assert.deepStrictEqual(asObj(rgn.ugrepMatches(['a.txt'], '(?i)needle', { ugrep: says, cwd: dir })), {});
+  }));
+test('RG-RE-LITERAL-RANGES: ugrep\'s ranges for a plain literal are the matcher\'s, over a hostile corpus', needUgrep, () => {
+  const R = require('../libexec/rg-regex.cjs');
+  const cpt = (...c) => String.fromCodePoint(...c);
+  // the oracle generator's pieces (scripts/gen-rg-regex-oracle.cjs), 200 seeded lines of them
+  const PIECES = ['a', 'b', 'ab', 'k', 'K', 's', 'S', '_', '1', '9', ' ', '  ', '.', '-', 'x', 'needle', 'foo', 'bar', '\t', '\r',
+    cpt(0xe9), cpt(0x65, 0x301), cpt(0x4e2d), cpt(0x4e2d, 0x6587), cpt(0x1f600), cpt(0x212a), cpt(0x17f), cpt(0xdf), cpt(0x3c3), cpt(0x3c2),
+    cpt(0x661), cpt(0xa0), cpt(0x200d), [0xff], [0x80], [0xe4, 0xb8], [0xc3], [0xed, 0xa0, 0x80], [0xf0, 0x9f]];
+  let seed = 20261003;
+  const rnd = (n) => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed % n; };
+  const parts = [];
+  for (let i = 0; i < 200; i++) { for (let j = rnd(9); j > 0; j--) parts.push(Buffer.from(PIECES[rnd(PIECES.length)])); parts.push(Buffer.from('\n')); }
+  const corpus = Buffer.concat([...parts, Buffer.from('aaaa aaa ababab abab\n'),
+    Buffer.from([0xe4]), Buffer.from(`${cpt(0xe9)}${cpt(0xe9)}${cpt(0xe9)} x${cpt(0x4e2d)}${cpt(0x4e2d)}\n`), Buffer.from([0xc3, 0xa9, 0xa9, 0x80]),
+    Buffer.from('needleneedle\r\n'), Buffer.from([0xf0, 0x9f, 0x98]), Buffer.from(`${cpt(0x1f600)}aa\n`)]);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-native-lit-'));
+  try {
+    fs.writeFileSync(path.join(dir, 'c.txt'), corpus);
+    const lits = ['a', 'b', 'ab', 'aa', 'aba', 'k', 'K', 's', '_', '1', ' ', '  ', '.', '-', 'x', 'needle', 'needleneedle', 'foo', 'bar', '\t', '\r',
+      cpt(0xe9), cpt(0xe9, 0xe9), cpt(0x65, 0x301), cpt(0x4e2d), cpt(0x4e2d, 0x6587), cpt(0x1f600), cpt(0x212a), cpt(0x17f), cpt(0xdf), cpt(0x3c3),
+      cpt(0x661), cpt(0xa0), cpt(0x200d), `x${cpt(0x4e2d)}`];
+    let checked = 0;
+    for (const lit of lits) {
+      const pattern = lit.replace(/[\\.+*?()|[\]{}^$#&~-]/g, '\\$&');
+      const t = R.translateRgRegex(pattern, {});
+      assert.ok(t.prog && t.prog.lit, `${JSON.stringify(pattern)} is a plain literal`);
+      const want = [];
+      for (let ls = 0; ls < corpus.length;) { const le = corpus.indexOf(0x0a, ls); want.push(...R.verifyLine(corpus, ls, le, t)); ls = le + 1; }
+      const got = rgn.ugrepMatches(['c.txt'], pattern, { ugrep: UGREP, cwd: dir }).get('c.txt') || [];
+      assert.deepStrictEqual(got, want, JSON.stringify(pattern));
+      checked++;
+    }
+    assert.ok(checked >= 30);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 // ---- the async twin, and the same plumbing under tjs -----------------------------------------
 test('ugrepMatchesAsync answers what ugrepMatches does, and rejects as it throws', needUgrep, async () => {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-native-'));

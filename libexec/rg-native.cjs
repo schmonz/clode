@@ -183,6 +183,10 @@ function runRg(argv, opts = {}) {
 // (in chunks) and the NUL comes from --null: one way, every version at or above the floor.
 const UGREP_MIN = '5.0.0';
 const UGREP_RANGE_FORMAT = '--format=%F%b %e%~';
+// `%u` first: one record per matching LINE (its first match), which is all the matcher needs to
+// decide that line (review P1). Measured alike on 7.8.2 (macOS, NetBSD 11) and 5.0.0 (noble),
+// empty matches under -Y included, so it needs no capability gate.
+const UGREP_LINE_FORMAT = '--format=%u%F%b %e%~';
 // A command line's worth of file names. Windows caps the WHOLE command line at 32,767
 // characters; half of that leaves room for quoting and the fixed arguments.
 const ARGV_BUDGET = 16 * 1024;
@@ -218,9 +222,10 @@ function ugrepCapabilities(bin, opts = {}) {
 
 // ugrep's argv for a candidate search, before the files. `prefilter` is rg-regex.cjs's: a pattern
 // in ugrep's own dialect whose lines are a SUPERSET of rg's, case folding already spelled into
-// it (rg's folding, not ugrep's -i, which is never passed).
-function ugrepMatchArgv(prefilter) {
-  return ['-Y', '-H', '--null', UGREP_RANGE_FORMAT, '-e', prefilter, '--'];
+// it (rg's folding, not ugrep's -i, which is never passed). `perLine`: one record per line (`%u`),
+// for lines the matcher decides; without it, every match (RG-RE-LITERAL-RANGES).
+function ugrepMatchArgv(prefilter, { perLine = false } = {}) {
+  return ['-Y', '-H', '--null', perLine ? UGREP_LINE_FORMAT : UGREP_RANGE_FORMAT, '-e', prefilter, '--'];
 }
 
 // A name ugrep could read as an option or as stdin (`-`, `-x`) goes in as `./-`, `./-x`: every
@@ -301,7 +306,7 @@ function parseUgrepRanges(buf, into = new Map()) {
 
 // The plan both twins share: each distinct file once, spelled for ugrep, in chunks; and how to
 // read the ranges back in the caller's order (a file without a match has no entry).
-function matchPlan(files, prefilter, opts) {
+function matchPlan(files, prefilter, opts, perLine) {
   // A directory is searched as NOTHING (ugrep exits 0 on one without -r): the walk lists files,
   // so a directory here is the caller's mistake, refused rather than answered "no matches".
   // RG-TEXT-BOM: each file's first bytes, read here once, say whether its text is rg's decoding
@@ -317,7 +322,7 @@ function matchPlan(files, prefilter, opts) {
   }
   const spelled = [...new Set(files.map(spellForUgrep))];
   const asked = new Set(spelled);
-  const argv = ugrepMatchArgv(prefilter);
+  const argv = ugrepMatchArgv(prefilter, { perLine });
   const chunks = chunkFiles(spelled, opts.argvBudget || ARGV_BUDGET).map((c) => [...argv, ...c]);
   // Every path ugrep reported must be one it was asked about; a match it places anywhere else
   // cannot be answered for, so it is refused, never dropped.
@@ -453,13 +458,19 @@ function translated(pattern, opts) {
   if (t.refuse) throw new UgrepError(t.refuse, { refused: t.rule });
   return t;
 }
+// RG-RE-LITERAL-RANGES (review P2): for a case-sensitive plain literal (rg-regex's RG-RE-LITERAL),
+// ugrep's own ranges ARE rg's in a file with no BOM: a literal is its UTF-8 bytes, found leftmost
+// and without overlap by both, and no dialect question arises (no class, no assertion, no case).
+// So those files are neither read nor decided. test/rg-native.test.cjs proves the two paths equal
+// over a hostile corpus (invalid UTF-8 beside the literal, overlapping occurrences, CJK, emoji).
+const takesUgrepRanges = (t) => !!t.prog.lit;
 // Every file ugrep proposed a line in, and every file with a BOM, decided: the caller's order.
 function decideAll(files, proposed, bom, t, opts) {
   const out = new Map(), seen = new Set();
   for (const f of files) {
     if (seen.has(f) || (!proposed.has(f) && !bom.has(f))) continue;
     seen.add(f);
-    const m = decideFile(f, proposed.get(f), t, opts, bom.has(f));
+    const m = takesUgrepRanges(t) && !bom.has(f) ? proposed.get(f) : decideFile(f, proposed.get(f), t, opts, bom.has(f));
     if (m.length) out.set(f, m);
   }
   return out;
@@ -505,7 +516,7 @@ function ugrepMatches(files, pattern, opts = {}) {
   const t = translated(pattern, opts);
   assertUsableUgrep(opts);
   const spawnSync = opts.spawnSync || require('child_process').spawnSync;
-  const { chunks, inOrder, onlyAsked, bom } = matchPlan(files, t.prefilter, opts);
+  const { chunks, inOrder, onlyAsked, bom } = matchPlan(files, t.prefilter, opts, !takesUgrepRanges(t));
   const ranges = new Map();
   let failed = null;
   for (const argv of chunks) {
@@ -536,7 +547,7 @@ function ugrepMatchesAsync(files, pattern, opts = {}) {
   if (!files.length) return Promise.resolve(new Map());
   // The floor check runs ugrep --version synchronously, ONCE per binary per process (cached).
   let plan, t;
-  try { t = translated(pattern, opts); assertUsableUgrep(opts); plan = matchPlan(files, t.prefilter, opts); } catch (e) { return Promise.reject(e); }
+  try { t = translated(pattern, opts); assertUsableUgrep(opts); plan = matchPlan(files, t.prefilter, opts, !takesUgrepRanges(t)); } catch (e) { return Promise.reject(e); }
   const spawn = opts.spawn || require('child_process').spawn;
   const { chunks, inOrder, onlyAsked, bom } = plan;
   const aborted = () => opts.signal && opts.signal.aborted;
@@ -591,7 +602,7 @@ function ugrepMatchesAsync(files, pattern, opts = {}) {
       if (seen.has(f) || (!proposed.has(f) && !bom.has(f))) continue;
       seen.add(f);
       await between();
-      const m = await decideFileAsync(f, proposed.get(f), t, opts, bom.has(f), between);
+      const m = takesUgrepRanges(t) && !bom.has(f) ? proposed.get(f) : await decideFileAsync(f, proposed.get(f), t, opts, bom.has(f), between);
       if (m.length) out.set(f, m);
     }
     return out;
