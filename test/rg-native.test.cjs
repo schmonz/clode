@@ -147,6 +147,9 @@ test('parseUgrepRanges: path NUL start SP end LF records, linear, any bytes in t
   const buf = Buffer.concat([rec('a', 1, 2), rec('x\ny', 0, 0), rec('a', 5, 9), rec('a', 9, 9), rec('a', 12, 12)]);
   const got = rgn.parseUgrepRanges(buf);
   assert.deepStrictEqual(asObj(got), { a: [[1, 2], [5, 9], [12, 12]], 'x\ny': [[0, 0]] });
+  // `%~` is "newline (LF or CRLF)" in ugrep's help: a CRLF-terminated record reads the same
+  const crlf = Buffer.concat([Buffer.from('w'), Buffer.from([0]), Buffer.from('3 4\r\n'), Buffer.from('w'), Buffer.from([0]), Buffer.from('7 9\r\n')]);
+  assert.deepStrictEqual(asObj(rgn.parseUgrepRanges(crlf)), { w: [[3, 4], [7, 9]] });
   assert.throws(() => rgn.parseUgrepRanges(Buffer.concat([Buffer.from('a'), Buffer.from([0]), Buffer.from('x y\n')])), (e) => e.name === 'UgrepError' && /ugrep's --format output/.test(e.message));
 });
 
