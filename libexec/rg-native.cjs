@@ -182,7 +182,14 @@ function childShell(opts, kill) {
   child.stderr = errSlot === 'pipe' ? new Readable({ read() {} }) : null;
   child.exitCode = null; child.signalCode = null; child.killed = false;
   let done = false, timer = null, unlisten = null;
-  child.kill = (sig) => { if (done) return false; child.killed = true; return kill(sig || 'SIGTERM'); };
+  // killed only when the signal was delivered, as node sets it: a kill() after the applet
+  // exited (before its 'close') delivers nothing, and must not suppress the rc-2 refusal.
+  child.kill = (sig) => {
+    if (done) return false;
+    const delivered = !!kill(sig || 'SIGTERM');
+    if (delivered) child.killed = true;
+    return delivered;
+  };
   child.ref = () => child; child.unref = () => child;
   const out = (buf) => { if (child.stdout) { if (buf.length) child.stdout.push(buf); } else if (outSlot === 'inherit') toFd(1, buf); };
   const finish = ({ status, signal, stderr }) => {

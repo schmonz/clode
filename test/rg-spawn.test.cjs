@@ -519,6 +519,13 @@ function assertNoListenerLeft(got) {
   assert.strictEqual(got.n1.answered, N_CALLS, `every search ran: ${JSON.stringify(got.n1)}`);
   assert.strictEqual(got.n1.listeners, 0, `${got.n1.calls} rg calls on one AbortSignal left ${got.n1.listeners} 'abort' listener(s) behind (node's spawn leaves none)`);
 }
+function assertKilledOnlyWhenDelivered(got) {
+  assert.strictEqual(got.n2.killRet, false, 'kill() after the applet exited delivered nothing, so it must answer false');
+  assert.strictEqual(got.n2.killed, false, 'a kill that delivered nothing must not mark the child killed (node sets killed only on success)');
+  assert.strictEqual(got.n2.code, 2);
+  assert.ok(got.n2.refusal, `the applet's rc-2 rejection must still become quaude's refusal: ${JSON.stringify(got.n2)}`);
+  assert.deepStrictEqual(got.n2live, { killRet: true, killed: true, code: null, signal: 'SIGKILL' });
+}
 function runBookkeeping(engine) {
   const s = bookkeepingStubs();
   try {
@@ -536,6 +543,13 @@ test('rg child: no abort listener outlives its search, N calls on one signal lea
 test('rg child: no abort listener outlives its search, N calls on one signal leave 0 (tjs)', tjsSkip, () => {
   assertNoListenerLeft(runBookkeeping('tjs'));
 });
+test('rg child: killed only when kill() delivered, so a late kill keeps the rc-2 refusal (node)', posixExec, () => {
+  assertKilledOnlyWhenDelivered(runBookkeeping('node'));
+});
+test('rg child: killed only when kill() delivered, so a late kill keeps the rc-2 refusal (tjs)', tjsSkip, () => {
+  assertKilledOnlyWhenDelivered(runBookkeeping('tjs'));
+});
+
 // isRgExe: every spelling a host's rg may take, on every OS (a pure check: no Windows box needed).
 test('isRgExe: rg by basename, with any PATHEXT extension, either separator, a drive prefix; nothing else', () => {
   const { isRgExe } = require('../libexec/rg-native.cjs');
