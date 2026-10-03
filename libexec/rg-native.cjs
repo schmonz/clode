@@ -315,7 +315,8 @@ function ugrepMatches(files, pattern, opts = {}) {
     const r = spawnSync(opts.ugrep, argv, { cwd: opts.cwd, env: opts.env || process.env, encoding: 'buffer', maxBuffer: RG_MAX_BUFFER });
     if (r.error) throw new UgrepError(`${leafOf(opts.ugrep)} could not be run (${r.error.code || r.error.message})`, { matches: inOrder(ranges) });
     parseUgrepRanges(toBuf(r.stdout), ranges);
-    if (!failed && (r.status === null || r.status >= 2)) failed = { r, stderr: r.stderr };
+    // A failed chunk ends the search: the answer is already an error, so no later chunk runs.
+    if (r.status === null || r.status >= 2) { failed = { r, stderr: r.stderr }; break; }
   }
   const out = inOrder(ranges);
   if (failed) throw ugrepFailed(opts.ugrep, failed.r, failed.stderr, out);
@@ -357,7 +358,8 @@ function ugrepMatchesAsync(files, pattern, opts = {}) {
     let failed = null;
     for (const argv of chunks) {
       const r = await runOne(argv);
-      if (!failed && (r.status === null || r.status >= 2)) failed = r;
+      // A failed chunk (killed by the caller, or exit >= 2) ends the search: no later chunk runs.
+      if (r.status === null || r.status >= 2) { failed = r; break; }
     }
     const out = inOrder(ranges);
     if (failed) throw ugrepFailed(opts.ugrep, failed, failed.stderr, out);

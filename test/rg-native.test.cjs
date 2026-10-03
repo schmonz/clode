@@ -197,6 +197,28 @@ test('ugrepMatches / ugrepMatchesAsync refuse a ugrep below the floor, never ans
     await assert.rejects(rgn.ugrepMatchesAsync(['no-such.txt'], 'needle', { ugrep, cwd: dir }), floor);
   }));
 
+// A failed chunk ends the search: later chunks never start (review I3: killing the first child
+// still spawned all five). Each stand-in logs its run, then fails its own way.
+const STUB_VERSION = 'if [ "$1" = --version ]; then echo "ugrep 7.8.2 stand-in"; exit 0; fi; echo run >> "$STUB_LOG"';
+test('a failed chunk ends the search: killed, or exit >= 2, no later chunk starts (sync and async)', posixStub, () =>
+  withStubs({ slow: `${STUB_VERSION}; exec sleep 5`, fails: `${STUB_VERSION}; echo "ugrep: boom" >&2; exit 2` }, async (st, dir) => {
+    const files = ['a', 'b', 'c', 'd', 'e'];
+    const runs = (log) => (fs.existsSync(log) ? fs.readFileSync(log, 'utf8').split('\n').filter(Boolean).length : 0);
+    const env = (log) => ({ ...process.env, STUB_LOG: log });
+    let spawned = 0;
+    await assert.rejects(rgn.ugrepMatchesAsync(files, 'x', { ugrep: st.slow, cwd: dir, env: env(path.join(dir, 'killed.log')),
+      argvBudget: 1, onChild: (c) => { spawned++; c.kill('SIGKILL'); } }), (e) => e.name === 'UgrepError' && e.signal === 'SIGKILL');
+    assert.strictEqual(spawned, 1, 'a killed chunk must end the search');
+    const asyncLog = path.join(dir, 'async.log');
+    await assert.rejects(rgn.ugrepMatchesAsync(files, 'x', { ugrep: st.fails, cwd: dir, env: env(asyncLog), argvBudget: 1 }),
+      (e) => e.name === 'UgrepError' && e.status === 2);
+    assert.strictEqual(runs(asyncLog), 1, 'an exit >= 2 must end the async search');
+    const syncLog = path.join(dir, 'sync.log');
+    assert.throws(() => rgn.ugrepMatches(files, 'x', { ugrep: st.fails, cwd: dir, env: env(syncLog), argvBudget: 1 }),
+      (e) => e.name === 'UgrepError' && e.status === 2);
+    assert.strictEqual(runs(syncLog), 1, 'an exit >= 2 must end the sync search');
+  }));
+
 // ---- the async twin, and the same plumbing under tjs -----------------------------------------
 test('ugrepMatchesAsync answers what ugrepMatches does, and rejects as it throws', needUgrep, async () => {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-native-'));
