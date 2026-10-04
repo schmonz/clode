@@ -344,25 +344,43 @@ Bash tool instead".
     over 200,000 lines blocked 20.3 s (the 20 s timeout could not fire). Still slow beside native
     (~100 ms each): that case takes 12.9 s with a 138 ms longest gap; every match of a 5 MB line
     3.4 s (32 ms); `--json -n e .` over this repo 7.0 s (77 ms); `-o -n e .` 9.4 s (44 ms).
-- **node-shim's sync stat has no dev, ino or rdev: an engine gap** (found by the grep-native Task 7
-  review, I3). fs.statSync/lstatSync/fstatSync (and Stats from fs.promises, which uses the same
-  binding) report dev, ino and rdev as 0 because the engine's sync binding (txiki.js
-  src/mod_fs_sync.c `stat_to_js`) carries only size, mode, uid, gid, mtimeMs and kind. The engine
-  HAS them: its async `tjs.stat('/dev/null')` answers dev 27896451, ino 339, rdev 50331650, the
-  same as host node's statSync (this Mac, 2026-10-04). The fix is in the engine's sync binding, not
-  in invented values. (The type methods, isFIFO() and the rest, read the mode bits since eba6c57.)
-  ALSO `{ bigint: true }` is ignored under tjs (numbers come back, ctimeNs is undefined), so the
-  2.1.283 bundle's zero-inode guards (`ino !== 0n`) never see the zero and treat 0 as an identity.
-  What that defeats (Task 7 re-review, Important 2; the engine fix is scheduled as its own task):
-  - git worktree `commondir` identity: any directory is accepted as the repo's;
-  - openReadBoundToApproval and the et() "gone" check, and the approval-bound reopen they guard;
-  - the staging-dir identity checks (and Yin's);
-  - since eba6c57 (isCharacterDevice() is now true for every character device), Qp in the
-    credentials reader (Ip) and M8 (dirSync's null-device stamp) compare rdev with /dev/null's, and
-    every rdev is 0: EVERY character device counts as /dev/null. AWS_SHARED_CREDENTIALS_FILE=/dev/zero
-    or /dev/tty reads as silently empty where native says it is a device.
+- **node-shim's sync stat has no dev, ino or rdev: an engine gap. FIXED** (6d43ee6 engine, 3008358
+  bigint; ruling G18, 2026-10-04). The sync stat/lstat/fstat (txiki-sync-stat-identity.patch) now
+  answer from libuv's uv_stat_t, as the async tjs.stat and node's statSync do, and hand JS every
+  field exactly (64-bit fields as BigInt, times as sec + nsec); node-shim builds Stats and, for
+  `{ bigint: true }`, BigIntStats with node's arithmetic. test/node-shim-fs-stat-identity.test.cjs
+  judges every field of a file, a hard link, another file, a directory, a symlink, a FIFO, a
+  socket, /dev/null and /dev/zero through every stat call, both ways, against host node: red
+  2466 of 3450 answers, now 0 (darwin-arm64). The engine-api-floor refuses an engine without it,
+  and node-shim refuses one at its first stat (ERR_CLODE_ENGINE_FLOOR) instead of reporting zeros.
+  Windows: libuv's rules there (deps/libuv/src/win/fs.c) are ino = FileId, dev = the volume
+  serial's low 32 bits, nlink = NumberOfLinks, blksize 4096, uid/gid/rdev 0 for a file, and lstat
+  no longer follows a reparse point (the CRT's stat had stood in for it): node's own rules, since it
+  reads the same struct. NOT MEASURED there: the identity test skips win32 (no FIFOs, sockets or
+  /dev/null), and making it judge the files and directory on Windows was not done in this task.
+  OPEN, each an acceptance to run (the inputs they read are judged field by field above, but no
+  consumer was driven end to end through the bundle in this task):
+  - the credentials reader (Ip, `claude plugin eval` with a case granting Bash): with
+    AWS_SHARED_CREDENTIALS_FILE=/dev/zero quaude must refuse as native does ("it is a device, whose
+    content cannot be inspected"), and with /dev/null read it as empty. Not driven: running native
+    `claude plugin eval` on this Mac may reach the login Keychain, and the auto-mode permission
+    check stopped the bundle inspection this needed;
+  - M8 (dirSync's null-device stamp), the same rdev comparison;
+  - the approval-bound reopen (openReadBoundToApproval, et()'s "gone" check) with the file
+    swapped after approval: refused as native;
+  - git worktree `commondir` identity with a non-matching directory: rejected;
+  - the staging-dir identity checks (and Yin's).
+  NOT RUN either: the rebuild + oracle test on the NetBSD VM and in a Linux container (the
+  permission check refused remote execution in this session); CI's legs build the engine fresh and
+  run the node-shim tests, so the first push is that run.
 - node-shim's `fs.opendirSync` returns a Dir without `readSync` (found by the Task 7 re-review, M3); the
   2.1.283 bundle never calls it.
+- **An unhandled rejection exits 0 under node-shim; node exits 1** (noticed 2026-10-04, ruling G18).
+  libexec/node-shim/loader.cjs's 'unhandledrejection' listener prints the reason and calls
+  preventDefault(), and with no process listener the program then ends with status 0. A test that
+  trusts the exit status alone passes on an empty stdout (node-shim-fs-stat-identity now also
+  checks that stdout is there). Measured: `Promise.reject(new Error('boom'))` under the loader,
+  rc 0; node 24, rc 1.
 - **Acceptance to run: a credential handed over an inherited fd, on Linux.** The 2.1.283 bundle's
   CLAUDE_CODE_{API_KEY,OAUTH_TOKEN,GATEWAY_TOKEN,WEBSOCKET_AUTH}_FILE_DESCRIPTOR reader takes an fd
   that fstat calls a socket directly, and otherwise opens `/dev/fd/N`. Before eba6c57 node-shim's
@@ -372,7 +390,8 @@ Bash tool instead".
   (ENXIO), so the credential would be lost. Driven on macOS only (scratch fdauth.cjs); run the
   same on Linux (and NetBSD) with a canned token, never a real one.
 - **The Grep tool's files_with_matches ORDER differs from native's under quaude: node-shim's stat
-  has whole-second mtimes** (found driving the real 2.1.283 bundle end to end, grep-native Task 6,
+  had whole-second mtimes** (the stat half FIXED by 6d43ee6: mtimeMs now carries the nanoseconds,
+  equal to node's; the Grep tool's order not yet re-driven end to end) (found driving the real 2.1.283 bundle end to end, grep-native Task 6,
   2026-10-03). The tool sorts -l's files in JS, newest mtime first, then by name; node-shim's
   Stats carries `mtimeMs` at second resolution (libexec/node-shim/modules/fs.cjs: FSS.stat exposes
   only st_mtime, a documented divergence), so two files written within one second tie and sort by
