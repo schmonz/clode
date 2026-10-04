@@ -17,7 +17,9 @@
 //                  which is not one small rule, so it is EXEMPTED BY NAME: quaude's rg prints the
 //                  compile line linux-x64 native was measured printing (X64_SIMD below, with its evidence)
 //                  and reports that same set at runtime (quaude's rg uses no SIMD at all), which is
-//                  native's answer on a CPU without AVX2, and differs in `+AVX2` on one with it.
+//                  native's answer on a CPU without AVX2, and differs in `+AVX2` on one with it
+//                  (rg-differential forgives that line on x86_64 only: scripts/lib/rg-probe.cjs, its third
+//                  named normalization).
 // Loaded by rg-native.cjs as `require(__dirname + '/rg-types.cjs')`, so it travels beside it
 // (test/shim-companions.test.cjs). Node builtins only.
 

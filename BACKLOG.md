@@ -193,9 +193,9 @@ Bash tool instead".
   for; on x86_64 the compile line linux-x64 native was measured printing (`+SSE2,+SSSE3,-AVX2`, a Xeon
   E5-1650 v2 container) and, as the NAMED EXEMPTION, that same set for the runtime line, which native reads
   from the CPU (an AVX2 CPU prints `+AVX2`). The bundle's probe reads only `ripgrep ` at the start.
-  Unmeasured: darwin-x64 native's compile line (its default target may differ); the gate's `--version`
-  cell on an x86_64 CI runner with AVX2 will differ in that one word until a named exception is added
-  there (Task 11 runs the gate on linux-x64).
+  rg-differential's comparer forgives that one line on x86_64 hosts only (its third named normalization,
+  scripts/lib/rg-probe.cjs, controller ruling 2026-10-04), so a linux-x64 CI runner with AVX2 is judged on
+  every other byte. Unmeasured: darwin-x64 native's compile line (its default target may differ).
 - **Deferred from the grep-native Task 4 review (2026-10-03):**
   - an applet's LEGITIMATE rc 2 (an rg-compatible error, with nothing printed) becomes
     quaude's refusal today; when the emulation owns the printers, rc 2 must be native's own
@@ -362,13 +362,22 @@ Bash tool instead".
     (`rg: ./.gitignore: line 2: error parsing glob '[z-a]': invalid range; 'z' > 'a'`, several joined
     with newlines), rc unchanged; one in an ancestor's file is an error (rc 2); a line that is not UTF-8
     ends that file silently. All measured and pinned (RG-IGNORE-FILE-ERRORS).
-  - .git/info/exclude through a worktree's `.git` FILE (gitdir + commondir) follows dir.rs; only the
-    `gitdir:` pointing nowhere case is measured (exclude then reads nothing, .gitignore still applies).
-  - SPEED: the walk over this repo takes ~200 ms under tjs (~20 ms under node), `-l --hidden --glob !.git
-    needle .` 483 ms end to end (native 30 ms). node-shim's opendirSync reads each entry's type with an
-    lstat (the engine's sync readdir returns names only): a walk that ignores nothing (`--no-ignore`, and
-    Glob's argv, Task 10) over this checkout on NFS spent 22 s on 11,825 entries. Fix: d_type from the
-    engine's readdir (the libuv readdir already has it).
+  - .git/info/exclude through a worktree's `.git` FILE (gitdir + commondir) follows dir.rs; the review
+    measured real worktrees (absolute and relative gitdir, commondir) byte-equal to native.
+  - FOUND IN REVIEW, FIXED (Task 9 fix round 1): an ignore file's UTF-8 BOM is part of its first line to rg
+    (TextDecoder had dropped it, so `<BOM>*.log` excluded what native lists); several roots share the
+    ancestors' matchers the previous root built (dir.rs's cache), so `-j1 sub docs .` lists docs/a.md as
+    native does. In PARALLEL the roots race to build those ancestors and native's file SET varies (two sets
+    in 30 runs, 12/18 and 14/16): quaude's rg gives -j1's.
+  - SPEED (fix round 1, review I-2): under tjs a walk of 20,000 files in 2,000 directories (local disk,
+    warm) takes ~1.0 s (2.3-2.6 s before an ASCII path skipped the UTF-8 encode); `-l` over it 2.1 s sync;
+    the async twin's longest loop gap 75 ms (700-800 ms before the BOM sniff yielded in slices). Over this
+    repo `-l --hidden --glob !.git needle .` 154 ms warm (283-304 ms before; native 30 ms; the first, cold run
+    of the day took 20 s on this NFS checkout). CORRECTED: the 22 s walk over this
+    checkout that this entry first gave was a COLD NFS cache, not the walk; native's own cold `--files
+    --no-ignore --hidden` over it took 10.7 s, warm 0.36 s (review). Still open: node-shim's opendirSync
+    reads each entry's type with an lstat (the engine's sync readdir returns names only); d_type from the
+    engine's readdir (libuv has it) would drop one syscall an entry.
   - UNMEASURED ON WINDOWS: rg joins walked paths with `\` (Path::join), treats FILE_ATTRIBUTE_HIDDEN as
     hidden, and strips ignore-file roots by path component (not bytes); quaude's rg joins with `/`, hides
     dot names only, and strips by bytes. Real platform facts in rg's source, to be measured on a Windows
