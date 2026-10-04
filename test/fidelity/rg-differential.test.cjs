@@ -14,6 +14,13 @@
 // named normalizations compareRg owns (rg's nondeterministic walk ORDER, and the elapsed
 // times in --json). Nothing else is forgiven.
 //
+// THE ONE WRITTEN PLATFORM DIVERGENCE (RG-MMAP-EVERYWHERE, user ruling 2026-10-04; stated once in
+// scripts/lib/rg-probe.cjs MMAP_EVERYWHERE): quaude's rg answers a named binary as rg searching a memory
+// map does on every host, where native rg on macOS reads it instead (a clause its own source calls a
+// guess). On macOS the few cells where that differs (bin2's early.dat named, content mode) are judged
+// against Linux native's recorded answer, and macOS native must still print its own recorded one; any
+// other difference in them is a finding, as everywhere (the control plants both).
+//
 // THE ONE WRITTEN DIVERGENCE IN SCOPE. Rust regex and ugrep's regex dialect cannot be equal in
 // general, so the matrix's patterns (`needle`, `one.beta`) come from the dialect both read the
 // same way. A pattern the emulation can tell they would read differently is refused honestly
@@ -174,7 +181,8 @@ function readCells() {
     const native = cells.map((c) => P.runNativeRg(bin, c.argv, c.cwd, { env, input: c.input }));
     const ours = P.runOursRgBatch(cells.map((c) => ({ argv: c.argv, cwd: c.cwd, input: c.input })), { env });
     return {
-      cells: cells.map((c, i) => ({ id: c.id, kind: c.kind, native: native[i], ours: ours[i] })),
+      cells: cells.map((c, i) => ({ id: c.id, kind: c.kind, tree: c.cwd, argv: c.argv, native: native[i], ours: ours[i] })),
+      platform: process.platform,
       floors: KIND_FLOORS, answeredFloors: ANSWERED_FLOORS, tripwire: tripRg, rgPath: ours.length ? ours[0].rgPath : null,
       what: `native ${bin} (${version.split('\n')[0]}) vs ours under tjs over ${ugrep}`,
     };
@@ -196,7 +204,7 @@ function refusalTally(cells) {
   return [...t].sort((a, b) => b[1] - a[1]).map(([k, n]) => `${k} x${n}`).join(', ') || 'none';
 }
 
-function scanCells({ cells, floors, answeredFloors, tripwire, rgPath, what }) {
+function scanCells({ cells, floors, answeredFloors, tripwire, rgPath, what, platform }) {
   const per = {}, answered = {};
   for (const c of cells) {
     per[c.kind] = (per[c.kind] || 0) + 1;
@@ -220,27 +228,45 @@ function scanCells({ cells, floors, answeredFloors, tripwire, rgPath, what }) {
       findings.push(`${c.id}: ours ran a HOST rg (the tripwire answered, rc ${c.ours.status}), not quaude's rg`);
       continue;
     }
-    const d = P.compareRg(c.native, c.ours);
-    if (!d.same) findings.push(`${c.id}: ${d.why}`);
+    // RG-MMAP-EVERYWHERE: on macOS, the excepted cells are judged against Linux native's recorded answer.
+    const ex = P.mmapEverywhere(c.id, c.native, c.argv || c.native.argv || [], c.tree, platform);
+    if (ex && ex.stale) findings.push(`${c.id}: ${ex.stale}`);
+    const d = P.compareRg(ex ? ex.expected : c.native, c.ours);
+    if (!d.same) findings.push(`${c.id}: ${d.why}${ex ? ` (${P.MMAP_EVERYWHERE.rule}: judged against Linux native's answer)` : ''}`);
   }
   const kinds = Object.keys(floors).map((k) => `${k} ${per[k]} (native answered ${answered[k] || 0})`).join(', ');
   return { examined: cells.length, findings,
     note: `${what}; ${cells.length} cells (${kinds}); ${findings.length} differ; ours refused: ${refusalTally(cells)}` };
 }
 
-// The full matrix, every pair equal and ours resolved to the tripwire, then two defects: ONE
-// byte of one cell's stdout changed, and one other cell answered by the tripwire (a host rg).
-function controlCells() {
+// The full matrix on macOS, every pair equal (an RG-MMAP-EVERYWHERE cell: native printing its recorded
+// macOS answer, ours Linux native's) and ours resolved to the tripwire; then (`defects`) ONE byte of one
+// cell's stdout changed, one other cell answered by the tripwire (a host rg), and in the excepted cells
+// one byte of ours changed and native printing other than its recorded answer: what the exception must
+// never hide.
+const EXCEPTED = Object.keys(P.MMAP_EVERYWHERE.cells);
+function controlCells({ defects = true } = {}) {
   const cells = P.RG_MATRIX.map((c) => {
-    const r = res(P.cellArgv(c, '/tree'), 'a.txt\0');
-    return { id: c.id, kind: c.kind, native: r, ours: { ...r } };
+    const argv = P.cellArgv(c, '/tree'), rec = P.MMAP_EVERYWHERE.cells[c.id];
+    if (rec) {
+      const at = (r) => ({ argv, status: r.status, signal: null, stdout: Buffer.from(P.inTree(r.stdout, '/tree'), 'latin1'), stderr: Buffer.alloc(0) });
+      return { id: c.id, kind: c.kind, tree: '/tree', argv, native: at(rec.macos), ours: at(rec.linux) };
+    }
+    const r = res(argv, 'a.txt\0');
+    return { id: c.id, kind: c.kind, tree: '/tree', argv, native: r, ours: { ...r } };
   });
-  const k = Math.floor(cells.length / 2);
-  const planted = Buffer.from(cells[k].ours.stdout); planted[0] ^= 1;
-  cells[k].ours = { ...cells[k].ours, stdout: planted };
-  const h = 1;
-  cells[h].ours = { ...cells[h].ours, status: TRIPWIRE_RC, stdout: Buffer.from(`${TRIPWIRE_MARK} --hidden\n`) };
-  return { cells, floors: KIND_FLOORS, answeredFloors: ANSWERED_FLOORS, tripwire: '/trip/rg', rgPath: '/trip/rg', what: 'synthetic control' };
+  const base = { cells, floors: KIND_FLOORS, answeredFloors: ANSWERED_FLOORS, tripwire: '/trip/rg', rgPath: '/trip/rg', what: 'synthetic control', platform: 'darwin' };
+  if (!defects) return base;
+  const plain = cells.filter((x) => !P.MMAP_EVERYWHERE.cells[x.id]);
+  const k = plain[Math.floor(plain.length / 2)];
+  const planted = Buffer.from(k.ours.stdout); planted[0] ^= 1;
+  k.ours = { ...k.ours, stdout: planted };
+  plain[1].ours = { ...plain[1].ours, status: TRIPWIRE_RC, stdout: Buffer.from(`${TRIPWIRE_MARK} --hidden\n`) };
+  const [e1, e2] = EXCEPTED.map((id) => cells.find((x) => x.id === id));
+  const o = Buffer.from(e1.ours.stdout); o[o.length - 2] ^= 1;
+  e1.ours = { ...e1.ours, stdout: o };
+  e2.native = { ...e2.native, stdout: Buffer.concat([e2.native.stdout, Buffer.from('x')]) };
+  return base;
 }
 
 const guard = defineGuard({ name: 'rg-differential', floor: FLOOR, read: readCells, scan: scanCells, control: controlCells });
@@ -267,8 +293,7 @@ test('RG_MATRIX holds every kind at or above its floor, and each cell id once', 
 // and any rg call that escaped quaude's rg would show the mark. A cell where it shows is its own
 // finding, whatever native printed.
 test('a cell where the tripwire rg ran is a finding naming it, even when the bytes happen to agree', () => {
-  const c = controlCells();
-  for (const x of c.cells) x.ours = { ...x.native };
+  const c = controlCells({ defects: false });
   const k = 3;
   c.cells[k].ours = { ...c.cells[k].ours, status: TRIPWIRE_RC, stderr: Buffer.from(`${TRIPWIRE_MARK} --hidden\n`) };
   const r = scanCells(c);
@@ -276,8 +301,7 @@ test('a cell where the tripwire rg ran is a finding naming it, even when the byt
 });
 
 test('ours that did not resolve rg to the tripwire is a finding: the absolute-path route went unexercised', () => {
-  const c = controlCells();
-  for (const x of c.cells) x.ours = { ...x.native };
+  const c = controlCells({ defects: false });
   c.rgPath = 'rg';
   const r = scanCells(c);
   assert.ok(r.findings.some((f) => /Bun\.which\('rg'\) answered "rg", not the tripwire/.test(f)), r.findings.join('\n'));
@@ -285,9 +309,33 @@ test('ours that did not resolve rg to the tripwire is a finding: the absolute-pa
 
 test('the control plants one differing byte AND one tripwire hit, and the gate names both', () => {
   const r = scanCells(controlCells());
-  assert.strictEqual(r.findings.length, 2, r.findings.join('\n'));
+  assert.strictEqual(r.findings.length, 4, r.findings.join('\n'));
   assert.ok(r.findings.some((f) => /stdout differs at byte 0/.test(f)));
   assert.ok(r.findings.some((f) => /ours ran a HOST rg \(the tripwire answered/.test(f)));
+});
+
+// RG-MMAP-EVERYWHERE hides nothing else: with every pair equal the matrix is clean on macOS; one byte of
+// ours off Linux native's answer in an excepted cell is a finding, and so is macOS native drifting from its
+// recorded answer; off macOS nothing is excepted (ours is judged against native as it ran).
+test('RG-MMAP-EVERYWHERE: equal pairs are clean; a byte off in ours, or native off its record, is a finding', () => {
+  assert.deepStrictEqual(scanCells(controlCells({ defects: false })).findings, []);
+  const r = scanCells(controlCells());
+  assert.ok(r.findings.some((f) => f.startsWith(`${EXCEPTED[0]}: stdout differs at byte`) && /RG-MMAP-EVERYWHERE: judged against Linux native/.test(f)), r.findings.join('\n'));
+  assert.ok(r.findings.some((f) => f.startsWith(`${EXCEPTED[1]}: RG-MMAP-EVERYWHERE's record of native macOS no longer holds`)), r.findings.join('\n'));
+  const lin = controlCells({ defects: false });
+  lin.platform = 'linux';
+  assert.deepStrictEqual(scanCells(lin).findings.map((f) => f.split(':')[0]).sort(), EXCEPTED.slice().sort());
+});
+
+test('RG-MMAP-EVERYWHERE excepts only RG_MATRIX cells, only named-binary content cells, and only where macOS and Linux differ', () => {
+  const ids = new Set(P.RG_MATRIX.map((c) => c.id));
+  assert.ok(EXCEPTED.length >= 1);
+  for (const id of EXCEPTED) {
+    assert.ok(ids.has(id), `${id} is not a cell`);
+    assert.match(id, /^bin2 Grep content .* early\.dat$/);
+    const rec = P.MMAP_EVERYWHERE.cells[id];
+    assert.notDeepStrictEqual(rec.macos, rec.linux, `${id}: macOS and Linux agree, so it needs no exception`);
+  }
 });
 
 // ANSWERED FLOORS. A cell where native printed nothing (rc 1) judges only that ours printed

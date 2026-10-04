@@ -422,21 +422,18 @@ function rgText(bytes) { return rgTextRead(bytes).text; }
 //           decodes: one read per 8 KiB, the first one (after the peek's third byte) 4,096 code units,
 //           every later one 4,096 more; a lead surrogate at a read's end waits for the next
 // `stdin`: rg reads its stdin through std's 8 KiB BufReader, which the 3-byte peek fills first: the
-// next read is the rest of those 8 KiB, then what the pipe holds (the UTF-16 decoder's 8 KiB reads then
-// start at byte 8192). What the pipe holds is the OS's: on macOS (`pipe64k`) a caller's one big write
-// arrives 64 KiB at a time (measured: native's fills ended at byte 65536 in 19 of 20 runs), on Linux
-// all of it (40 of 40); assumed so elsewhere. A caller writing in smaller pieces hands over less.
-const STDIN_BUF = 8 * 1024, PIPE_BUF = 64 * 1024;
-function rgTextRead(bytes, { stdin = false, pipe64k = false } = {}) {
-  // stdin's reads: the BufReader's first 8 KiB, then each 64 KiB of the input under pipe64k, `skip`
-  // bytes before them in the text
-  const pipe = (skip, head) => {
-    const b = head.slice();
-    if (pipe64k) for (let p = PIPE_BUF; p - skip < bytes.length; p += PIPE_BUF) b.push(p - skip);
-    return b;
-  };
+// next read is the rest of those 8 KiB, then (RG-STDIN-ALL-THERE) as long as there is room, as when the
+// caller's whole input has already arrived (the UTF-16 decoder's 8 KiB reads then start at byte 8192).
+// RG-STDIN-ALL-THERE is a choice, not rg's rule: a read from a pipe hands over what has arrived, so
+// native's fills follow the WRITER's timing (measured 2026-10-04, `-n -C 1` over 65,547 bytes whose NUL
+// is at 65536, 10 runs per writer: one write on Linux, the whole input every time; on macOS, 64 KiB
+// first in 9-10 of 10; a write of 65,537 bytes then a pause, macOS 8 of 10 one way and 2 the other).
+// A race has no answer to match; this is the answer when nothing races. Only the standard printer's
+// RG-BINARY-CONVERT stop over more than 8 KiB of stdin depends on it.
+const STDIN_BUF = 8 * 1024;
+function rgTextRead(bytes, { stdin = false } = {}) {
   if (bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) {
-    return { text: bytes.subarray(3), read: { kind: 'bom8', bounds: stdin ? pipe(3, [STDIN_BUF - 3]) : [], snap: false } };
+    return { text: bytes.subarray(3), read: { kind: 'bom8', bounds: stdin ? [STDIN_BUF - 3] : [], snap: false } };
   }
   for (const le of [true, false]) {
     if (bytes.length >= 2 && bytes[0] === (le ? 0xff : 0xfe) && bytes[1] === (le ? 0xfe : 0xff)) {
@@ -445,7 +442,7 @@ function rgTextRead(bytes, { stdin = false, pipe64k = false } = {}) {
       return { text, read: { kind: 'utf16', bounds: ends, snap: true } };
     }
   }
-  return { text: bytes, read: { kind: 'plain', bounds: stdin ? pipe(0, [3, STDIN_BUF]) : [3], snap: false } };
+  return { text: bytes, read: { kind: 'plain', bounds: stdin ? [3, STDIN_BUF] : [3], snap: false } };
 }
 // The WHATWG UTF-16 decoder (what encoding_rs implements), straight to UTF-8 bytes. `chunks`: where the
 // output stands after each read of the decoder (code unit `first`, then every `every` more; a pending
@@ -1044,13 +1041,21 @@ function readRgBytes(file, cwd) {
 //                     printer prints what the fills before the NUL's fill held, stops at the first line
 //                     it would print from that fill on, and ends `[path: ]binary file matches (found "\0"
 //                     byte around offset N)` when it saw a match (the one it stopped at included).
-//   RG-BINARY-MMAP    a NAMED file on a host that is not macOS, when every path is a regular file and
-//                     there are at most 10 (rg memory-maps them; macOS never: mmap.rs), and the file has
-//                     no BOM (that one is read as RG-BINARY-CONVERT): a NUL stays inside its line. rg looks
-//                     in the first 64 KiB, then in each line it prints. --json: binary_offset the first NUL
-//                     found so, bytes_searched that offset (else the whole text). The standard printer stops
-//                     at the first line it would print once one is found, with RG-BINARY-CONVERT's last
-//                     line. -l and -c: as for text.
+//   RG-BINARY-MMAP    a NAMED file, when every path is a regular file and there are at most 10 (rg
+//                     memory-maps them), and the file has no BOM (that one is read as RG-BINARY-CONVERT): a
+//                     NUL stays inside its line. rg looks in the first 64 KiB, then in each line it prints.
+//                     --json: binary_offset the first NUL found so, bytes_searched that offset (else the
+//                     whole text). The standard printer stops at the first line it would print once one is
+//                     found, with RG-BINARY-CONVERT's last line. -l and -c: as for text.
+//   RG-MMAP-EVERYWHERE (user ruling 2026-10-04) RG-BINARY-MMAP on EVERY host, macOS included. rg's own
+//                     predicate (hiargs.rs) is the one above plus "and not macOS", and that clause is a
+//                     performance hunch, not behaviour anyone chose: grep-searcher 0.1.14 mmap.rs:73-75,
+//                     "I guess memory maps on macOS aren't great. Should re-evaluate." quaude never maps a
+//                     file; it answers as rg searching a map does, the same on every host. So on macOS a
+//                     named binary's answer is Linux native's, not macOS native's (early.dat: lines 1 and 3,
+//                     bytes_searched 19, where macOS native says 1 and 4, 40): THE ONE WRITTEN PLATFORM
+//                     DIVERGENCE, its macOS literals kept as the record (scripts/lib/rg-probe.cjs
+//                     MMAP_EVERYWHERE, test/rg-native.test.cjs P8_MACOS_DIVERGENCE).
 // A NUL in rg's TEXT counts (a UTF-16 file's decoded U+0000, not the zero bytes of its code units).
 // NOT MODELLED (named, BACKLOG): rg's line buffer is one per searching thread and keeps its grown size
 // for the next file that thread searches; quaude's rg starts every file at 64 KiB (native agrees unless
@@ -1060,18 +1065,18 @@ const RG_BUFFER = 64 * 1024;          // grep-searcher's DEFAULT_BUFFER_CAPACITY
 const MMAP_MAX_PATHS = 10;            // hiargs.rs: memory maps for at most 10 paths, all files
 // How rg searches one target: 'quit' (walked), 'convert' (named or stdin), 'mmap' (named, RG-BINARY-MMAP).
 function binaryHow(e, mmap) { return e.walked ? 'quit' : e.stdin || !mmap ? 'convert' : 'mmap'; }
-// Whether rg memory-maps this search's named files (RG-BINARY-MMAP): not on macOS; every path (`-` too,
-// as a file of that name) a regular file, following symlinks; at most 10.
-function mmapsNamedFiles(spec, cwd, platform) {
-  if (platform === 'darwin' || spec.paths.length > MMAP_MAX_PATHS) return false;
+// Whether rg memory-maps this search's named files (RG-BINARY-MMAP): every path (`-` too, as a file of
+// that name) a regular file, following symlinks; at most 10. On every host (RG-MMAP-EVERYWHERE).
+function mmapsNamedFiles(spec, cwd) {
+  if (spec.paths.length > MMAP_MAX_PATHS) return false;
   const fs = require('fs'), path = require('path');
   return spec.paths.every((P) => { try { return fs.statSync(path.resolve(cwd, P)).isFile(); } catch { return false; } });
 }
 // rg's view of one file: { how, text, read, nul }. text is rg's text (RG-TEXT-BOM) with, for
 // RG-BINARY-CONVERT, every NUL a newline; nul the first NUL's offset (-1: none). A file with a BOM is read,
 // never mapped (grep-searcher's slice_needs_transcoding).
-function rgView(bytes, how, { stdin = false, pipe64k = false } = {}) {
-  const { text, read } = rgTextRead(bytes, { stdin, pipe64k });
+function rgView(bytes, how, { stdin = false } = {}) {
+  const { text, read } = rgTextRead(bytes, { stdin });
   const h = how === 'mmap' && read.kind !== 'plain' ? 'convert' : how;
   const nul = text.indexOf(0);
   if (nul === -1 || h !== 'convert') return { how: h, text, read, nul };
@@ -1716,8 +1721,7 @@ function* searchCore(spec, opts) {
     }
   }
   // RG-BINARY-MMAP: whether rg memory-maps this search's named files (never on macOS).
-  const platform = opts.platform || process.platform;
-  const mmap = mmapsNamedFiles(spec, cwd, platform);
+  const mmap = mmapsNamedFiles(spec, cwd);
   // A literal's matches are the same in a file's bytes and in RG-BINARY-CONVERT's text (it holds no
   // newline or NUL), so ugrep's ranges stand; anything else is decided again over rg's text.
   const literal = takesUgrepRanges(t);
@@ -1726,7 +1730,7 @@ function* searchCore(spec, opts) {
     let v = null, m;
     const how = binaryHow(e, mmap);
     if (e.stdin) {
-      v = rgView(toBuf(yield { op: 'stdin' }), how, { stdin: true, pipe64k: platform === 'darwin' });
+      v = rgView(toBuf(yield { op: 'stdin' }), how, { stdin: true });
       m = yield { op: 'decide', text: v.text, t, first };
       if (m.refusal) return m.refusal;
       m = m.matches;
@@ -1854,7 +1858,7 @@ function searchSync(plan, opts) {
     tick: () => { if (deadline && Date.now() > deadline) throw timedOutError(); return null; },
   };
   let res;
-  try { res = driveSync(searchCore(spec, { cwd: opts.cwd, onRejected: opts.onRejected, ugrepName: ugrep && leafOf(ugrep), deadline, maxBuffer: opts.maxBuffer, platform: opts.platform }), handlers); } catch (e) {
+  try { res = driveSync(searchCore(spec, { cwd: opts.cwd, onRejected: opts.onRejected, ugrepName: ugrep && leafOf(ugrep), deadline, maxBuffer: opts.maxBuffer }), handlers); } catch (e) {
     if (e && e.timedOut) return { stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), status: null, signal: opts.killSignal || 'SIGTERM', errorCode: 'ETIMEDOUT' };
     throw e;
   }
@@ -1950,7 +1954,7 @@ function searchChild(plan, opts, ctx) {
     child.emit('spawn');
     if (stopped) { sh.finish({ status: null, signal: stopped, stderr: null }); return; }
     let res;
-    try { res = await driveAsync(searchCore(spec, { cwd: opts.cwd, onRejected: ctx.onRejected, ugrepName: ugrep && leafOf(ugrep), maxBuffer: ctx.maxBuffer, platform: ctx.platform }), handlers, () => !!stopped); }
+    try { res = await driveAsync(searchCore(spec, { cwd: opts.cwd, onRejected: ctx.onRejected, ugrepName: ugrep && leafOf(ugrep), maxBuffer: ctx.maxBuffer }), handlers, () => !!stopped); }
     catch (e) { res = stopped ? null : rgRefusal(`quaude's rg failed (${(e && e.message) || e}); nothing was found`); }
     if (stopped || !res) { sh.finish({ status: null, signal: stopped, stderr: null }); return; }
     sh.out(toBuf(res.stdout));

@@ -1368,17 +1368,22 @@ test('rg stops printing at the caller\'s maxBuffer and the async twin never hold
 
 // ---- rg's binary detection (grep-native Task 8): native's literals ---------------------------------------
 // RG-BINARY-QUIT (a walked file: the line buffer's fill that meets a NUL ends the search before it is
-// searched), RG-BINARY-CONVERT (a named file or stdin: a NUL is a line break; the standard printer stops at
-// the NUL's fill), RG-BINARY-MMAP (a named file rg memory-maps, every host but macOS: the NUL stays in its
-// line), each stated in libexec/rg-native.cjs's "rg's binary detection". [rule, argv, the file piped to
-// stdin, rc, stdout] as native 2.1.283's embedded rg printed them over P8_FILES in that tree (--json
-// through normalizeRg): P8_NATIVE on this Mac (darwin-arm64), P8_NATIVE_LINUX by the linux-x64 native in
-// a node:24.21.0-bookworm container (measured 2026-10-04; the generator is in the task-8 report). Each
-// walk lists one file, so no row depends on rg's walk order. The files are built here, byte for byte:
-// late.dat (a match at 0, a NUL at 120030, past the first 64 KiB fill), early.dat (a NUL at 19), the
-// 3-byte BOM peek's first read (peek1: a newline inside it; peek3: none; peek0: the NUL inside it), a
+// searched), RG-BINARY-CONVERT (stdin, more than 10 paths or a path that is not a regular file, or a BOM:
+// a NUL is a line break; the standard printer stops at the NUL's fill), RG-BINARY-MMAP (named regular
+// files, at most 10: the NUL stays in its line), RG-MMAP-EVERYWHERE (that, on every host), RG-STDIN-ALL-
+// THERE (stdin read as if all of it had arrived), each stated in libexec/rg-native.cjs's "rg's binary
+// detection". [rule, argv, the file piped to stdin, rc, stdout] as native 2.1.283's embedded rg printed
+// them over P8_FILES in that tree (--json through normalizeRg): P8_NATIVE on this Mac (darwin-arm64) where
+// macOS and Linux native agree, P8_NATIVE_LINUX by the linux-x64 native in a node:24.21.0-bookworm
+// container (measured 2026-10-04; the generator is in the task-8 report), and P8_MACOS_DIVERGENCE, the
+// darwin rows RG-MMAP-EVERYWHERE answers as Linux native does: [rule, argv, input, macOS rc, macOS stdout
+// (the record of the divergence), Linux rc, Linux stdout (the expectation)]. Each walk lists one file, and
+// rows naming several files use -j1, so no row depends on rg's walk order. The files are built here, byte
+// for byte: late.dat (a match at 0, a NUL at 120030, past the first 64 KiB fill), early.dat (a NUL at 19),
+// the 3-byte BOM peek's first read (peek1: a newline inside it; peek3: none; peek0: the NUL inside it), a
 // UTF-8 BOM, UTF-16 whose decoded U+0000 is the 4,096th code unit or the 4,097th (one decoder read later),
-// and a line longer than the buffer (it grows).
+// a line longer than the buffer (it grows), a NUL at exactly 64 KiB (b64k), and m/f0..f10 (late.dat and
+// ten files without a match: 10 named paths are mapped, 11 are not).
 const cat8 = (...p) => Buffer.concat(p.map((x) => Buffer.from(x)));
 const u16le8 = (s) => cat8([0xff, 0xfe], Buffer.from(s, 'utf16le'));
 const NUL8 = String.fromCharCode(0);
@@ -1392,12 +1397,14 @@ const P8_BYTES = {
   u16a: u16le8('needle\n' + 'x'.repeat(4089) + NUL8 + '\nmore needle\n'),
   u16b: u16le8('needle\n' + 'x'.repeat(4088) + NUL8 + '\nmore needle\n'),
   grow: cat8('needle\n' + 'L'.repeat(200000) + '\nneedle 2\n', [0], '\n'),
+  b64k: cat8('needle\n' + 'f'.repeat(65536 - 8) + '\n', [0], '\nneedle 2\n'),
 };
 const P8_FILES = [
   ['late.dat', P8_BYTES.late], ['early.dat', P8_BYTES.early], ['peek1.dat', P8_BYTES.peek1], ['grow.dat', P8_BYTES.grow],
   ['q/late/late.dat', P8_BYTES.late], ['q/early/early.dat', P8_BYTES.early], ['q/peek1/peek1.dat', P8_BYTES.peek1],
   ['q/peek3/peek3.dat', P8_BYTES.peek3], ['q/peek0/peek0.dat', P8_BYTES.peek0], ['q/bom8/bom8.dat', P8_BYTES.bom8],
-  ['q/u16a/u16a.txt', P8_BYTES.u16a], ['q/u16b/u16b.txt', P8_BYTES.u16b], ['q/grow/grow.dat', P8_BYTES.grow],
+  ['q/u16a/u16a.txt', P8_BYTES.u16a], ['q/u16b/u16b.txt', P8_BYTES.u16b], ['q/grow/grow.dat', P8_BYTES.grow], ['b64k.dat', P8_BYTES.b64k],
+  ['m/f0.dat', P8_BYTES.late], ...[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((i) => [`m/f${i}.dat`, 'x\n']),
 ];
 const P8_INPUT = (name) => (name ? Buffer.from(new Map(P8_FILES).get(name)) : undefined);
 const P8_NATIVE = [
@@ -1422,19 +1429,12 @@ const P8_NATIVE = [
   ['RG-BINARY-CONVERT', ["-n","needle","early.dat"], null, 0, 'binary file matches (found "\\0" byte around offset 19)\n'],
   ['RG-BINARY-CONVERT', ["-n","-H","needle","early.dat"], null, 0, 'early.dat: binary file matches (found "\\0" byte around offset 19)\n'],
   ['RG-BINARY-CONVERT', ["-n","-H","--null","needle","early.dat"], null, 0, 'early.dat: binary file matches (found "\\0" byte around offset 19)\n'],
-  ['RG-BINARY-CONVERT', ["--json","needle","early.dat"], null, 0, '{"type":"begin","data":{"path":{"text":"early.dat"}}}\n{"type":"match","data":{"path":{"text":"early.dat"},"lines":{"text":"text needle before\\n"},"line_number":1,"absolute_offset":0,"submatches":[{"match":{"text":"needle"},"start":5,"end":11}]}}\n{"type":"match","data":{"path":{"text":"early.dat"},"lines":{"text":"needle after nul\\n"},"line_number":4,"absolute_offset":23,"submatches":[{"match":{"text":"needle"},"start":0,"end":6}]}}\n{"type":"end","data":{"path":{"text":"early.dat"},"binary_offset":19,"stats":{"elapsed":{},"searches":1,"searches_with_match":1,"bytes_searched":40,"bytes_printed":436,"matched_lines":2,"matches":2}}}\n{"data":{"elapsed_total":{},"stats":{"bytes_printed":436,"bytes_searched":40,"elapsed":{},"matched_lines":2,"matches":2,"searches":1,"searches_with_match":1}},"type":"summary"}\n'],
-  ['RG-BINARY-CONVERT', ["--json","-C","1","needle","early.dat"], null, 0, '{"type":"begin","data":{"path":{"text":"early.dat"}}}\n{"type":"match","data":{"path":{"text":"early.dat"},"lines":{"text":"text needle before\\n"},"line_number":1,"absolute_offset":0,"submatches":[{"match":{"text":"needle"},"start":5,"end":11}]}}\n{"type":"context","data":{"path":{"text":"early.dat"},"lines":{"text":"\\n"},"line_number":2,"absolute_offset":19,"submatches":[]}}\n{"type":"context","data":{"path":{"text":"early.dat"},"lines":{"text":"\\u0001\\u0002\\n"},"line_number":3,"absolute_offset":20,"submatches":[]}}\n{"type":"match","data":{"path":{"text":"early.dat"},"lines":{"text":"needle after nul\\n"},"line_number":4,"absolute_offset":23,"submatches":[{"match":{"text":"needle"},"start":0,"end":6}]}}\n{"type":"end","data":{"path":{"text":"early.dat"},"binary_offset":19,"stats":{"elapsed":{},"searches":1,"searches_with_match":1,"bytes_searched":40,"bytes_printed":710,"matched_lines":2,"matches":2}}}\n{"data":{"elapsed_total":{},"stats":{"bytes_printed":710,"bytes_searched":40,"elapsed":{},"matched_lines":2,"matches":2,"searches":1,"searches_with_match":1}},"type":"summary"}\n'],
   ['RG-BINARY-CONVERT', ["-c","needle","early.dat"], null, 0, '2\n'],
   ['RG-BINARY-CONVERT', ["-l","needle","early.dat"], null, 0, 'early.dat\n'],
   ['RG-BINARY-CONVERT', ["-c","-e","^n","early.dat"], null, 0, '1\n'],
-  ['RG-BINARY-CONVERT', ["-n","needle","late.dat"], null, 0, '1:first needle line\nbinary file matches (found "\\0" byte around offset 120030)\n'],
   ['RG-BINARY-CONVERT', ["-c","needle","late.dat"], null, 0, '3\n'],
-  ['RG-BINARY-CONVERT', ["--json","needle","late.dat"], null, 0, '{"type":"begin","data":{"path":{"text":"late.dat"}}}\n{"type":"match","data":{"path":{"text":"late.dat"},"lines":{"text":"first needle line\\n"},"line_number":1,"absolute_offset":0,"submatches":[{"match":{"text":"needle"},"start":6,"end":12}]}}\n{"type":"match","data":{"path":{"text":"late.dat"},"lines":{"text":"near needle\\n"},"line_number":10002,"absolute_offset":120018,"submatches":[{"match":{"text":"needle"},"start":5,"end":11}]}}\n{"type":"match","data":{"path":{"text":"late.dat"},"lines":{"text":"after needle\\n"},"line_number":10005,"absolute_offset":120032,"submatches":[{"match":{"text":"needle"},"start":6,"end":12}]}}\n{"type":"end","data":{"path":{"text":"late.dat"},"binary_offset":120030,"stats":{"elapsed":{},"searches":1,"searches_with_match":1,"bytes_searched":120045,"bytes_printed":630,"matched_lines":3,"matches":3}}}\n{"data":{"elapsed_total":{},"stats":{"bytes_printed":630,"bytes_searched":120045,"elapsed":{},"matched_lines":3,"matches":3,"searches":1,"searches_with_match":1}},"type":"summary"}\n'],
-  ['RG-BINARY-CONVERT', ["-n","[an]","peek1.dat"], null, 0, '1:a\nbinary file matches (found "\\0" byte around offset 13)\n'],
-  ['RG-BINARY-CONVERT', ["-j1","-n","needle","early.dat","late.dat"], null, 0, 'early.dat: binary file matches (found "\\0" byte around offset 19)\nlate.dat:1:first needle line\nlate.dat: binary file matches (found "\\0" byte around offset 120030)\n'],
   ['RG-BINARY-CONVERT', ["-n","needle","-"], 'early.dat', 0, 'binary file matches (found "\\0" byte around offset 19)\n'],
   ['RG-BINARY-CONVERT', ["--json","needle","-"], 'early.dat', 0, '{"type":"begin","data":{"path":{"text":"<stdin>"}}}\n{"type":"match","data":{"path":{"text":"<stdin>"},"lines":{"text":"text needle before\\n"},"line_number":1,"absolute_offset":0,"submatches":[{"match":{"text":"needle"},"start":5,"end":11}]}}\n{"type":"match","data":{"path":{"text":"<stdin>"},"lines":{"text":"needle after nul\\n"},"line_number":4,"absolute_offset":23,"submatches":[{"match":{"text":"needle"},"start":0,"end":6}]}}\n{"type":"end","data":{"path":{"text":"<stdin>"},"binary_offset":19,"stats":{"elapsed":{},"searches":1,"searches_with_match":1,"bytes_searched":40,"bytes_printed":430,"matched_lines":2,"matches":2}}}\n{"data":{"elapsed_total":{},"stats":{"bytes_printed":430,"bytes_searched":40,"elapsed":{},"matched_lines":2,"matches":2,"searches":1,"searches_with_match":1}},"type":"summary"}\n'],
-  ['RG-BINARY-CONVERT', ["-n","needle","grow.dat"], null, 0, '1:needle\nbinary file matches (found "\\0" byte around offset 200017)\n'],
 ];
 const P8_NATIVE_LINUX = [
   ['RG-BINARY-MMAP', ["-n","needle","early.dat"], null, 0, 'binary file matches (found "\\0" byte around offset 19)\n'],
@@ -1458,9 +1458,23 @@ const P8_NATIVE_LINUX = [
   ['RG-BINARY-QUIT', ["--json","-C","1","needle","q/late"], null, 0, '{"type":"begin","data":{"path":{"text":"q/late/late.dat"}}}\n{"type":"match","data":{"path":{"text":"q/late/late.dat"},"lines":{"text":"first needle line\\n"},"line_number":1,"absolute_offset":0,"submatches":[{"match":{"text":"needle"},"start":6,"end":12}]}}\n{"type":"context","data":{"path":{"text":"q/late/late.dat"},"lines":{"text":"filler line\\n"},"line_number":2,"absolute_offset":18,"submatches":[]}}\n{"type":"end","data":{"path":{"text":"q/late/late.dat"},"binary_offset":120030,"stats":{"elapsed":{},"searches":1,"searches_with_match":1,"bytes_searched":65502,"bytes_printed":405,"matched_lines":1,"matches":1}}}\n{"data":{"elapsed_total":{},"stats":{"bytes_printed":405,"bytes_searched":65502,"elapsed":{},"matched_lines":1,"matches":1,"searches":1,"searches_with_match":1}},"type":"summary"}\n'],
   ['RG-BINARY-QUIT', ["-n","[an]","q/peek1"], null, 0, 'q/peek1/peek1.dat:1:a\nq/peek1/peek1.dat: WARNING: stopped searching binary file after match (found "\\0" byte around offset 13)\n'],
   ['RG-BINARY-QUIT', ["-n","needle","q/u16a"], null, 0, 'q/u16a/u16a.txt:1:needle\nq/u16a/u16a.txt: WARNING: stopped searching binary file after match (found "\\0" byte around offset 4096)\n'],
+  ['RG-BINARY-MMAP', ["-j1","-n","needle","m/f0.dat","m/f1.dat","m/f2.dat","m/f3.dat","m/f4.dat","m/f5.dat","m/f6.dat","m/f7.dat","m/f8.dat","m/f9.dat"], null, 0, 'm/f0.dat:1:first needle line\nm/f0.dat:10002:near needle\nm/f0.dat:10004:after needle\n'],
+  ['RG-BINARY-CONVERT', ["-j1","-n","needle","m/f0.dat","m/f1.dat","m/f2.dat","m/f3.dat","m/f4.dat","m/f5.dat","m/f6.dat","m/f7.dat","m/f8.dat","m/f9.dat","m/f10.dat"], null, 0, 'm/f0.dat:1:first needle line\nm/f0.dat: binary file matches (found "\\0" byte around offset 120030)\n'],
+  ['RG-BINARY-CONVERT', ["-j1","-n","needle","late.dat","-"], null, 0, 'late.dat:1:first needle line\nlate.dat: binary file matches (found "\\0" byte around offset 120030)\n'],
+  ['RG-STDIN-ALL-THERE', ["-n","-C","1","needle","-"], 'b64k.dat', 0, '1:needle\nbinary file matches (found "\\0" byte around offset 65536)\n'],
 ];
-// Every row with the platform its native ran on (RG-BINARY-MMAP is rg's choice by platform).
-const P8_ROWS = [...P8_NATIVE.map((r) => [r, 'darwin']), ...P8_NATIVE_LINUX.map((r) => [r, 'linux'])];
+const P8_MACOS_DIVERGENCE = [
+  ['RG-MMAP-EVERYWHERE', ["--json","needle","early.dat"], null, 0, '{"type":"begin","data":{"path":{"text":"early.dat"}}}\n{"type":"match","data":{"path":{"text":"early.dat"},"lines":{"text":"text needle before\\n"},"line_number":1,"absolute_offset":0,"submatches":[{"match":{"text":"needle"},"start":5,"end":11}]}}\n{"type":"match","data":{"path":{"text":"early.dat"},"lines":{"text":"needle after nul\\n"},"line_number":4,"absolute_offset":23,"submatches":[{"match":{"text":"needle"},"start":0,"end":6}]}}\n{"type":"end","data":{"path":{"text":"early.dat"},"binary_offset":19,"stats":{"elapsed":{},"searches":1,"searches_with_match":1,"bytes_searched":40,"bytes_printed":436,"matched_lines":2,"matches":2}}}\n{"data":{"elapsed_total":{},"stats":{"bytes_printed":436,"bytes_searched":40,"elapsed":{},"matched_lines":2,"matches":2,"searches":1,"searches_with_match":1}},"type":"summary"}\n', 0, '{"type":"begin","data":{"path":{"text":"early.dat"}}}\n{"type":"match","data":{"path":{"text":"early.dat"},"lines":{"text":"text needle before\\n"},"line_number":1,"absolute_offset":0,"submatches":[{"match":{"text":"needle"},"start":5,"end":11}]}}\n{"type":"match","data":{"path":{"text":"early.dat"},"lines":{"text":"needle after nul\\n"},"line_number":3,"absolute_offset":23,"submatches":[{"match":{"text":"needle"},"start":0,"end":6}]}}\n{"type":"end","data":{"path":{"text":"early.dat"},"binary_offset":19,"stats":{"elapsed":{},"searches":1,"searches_with_match":1,"bytes_searched":19,"bytes_printed":436,"matched_lines":2,"matches":2}}}\n{"data":{"elapsed_total":{},"stats":{"bytes_printed":436,"bytes_searched":19,"elapsed":{},"matched_lines":2,"matches":2,"searches":1,"searches_with_match":1}},"type":"summary"}\n'],
+  ['RG-MMAP-EVERYWHERE', ["--json","-C","1","needle","early.dat"], null, 0, '{"type":"begin","data":{"path":{"text":"early.dat"}}}\n{"type":"match","data":{"path":{"text":"early.dat"},"lines":{"text":"text needle before\\n"},"line_number":1,"absolute_offset":0,"submatches":[{"match":{"text":"needle"},"start":5,"end":11}]}}\n{"type":"context","data":{"path":{"text":"early.dat"},"lines":{"text":"\\n"},"line_number":2,"absolute_offset":19,"submatches":[]}}\n{"type":"context","data":{"path":{"text":"early.dat"},"lines":{"text":"\\u0001\\u0002\\n"},"line_number":3,"absolute_offset":20,"submatches":[]}}\n{"type":"match","data":{"path":{"text":"early.dat"},"lines":{"text":"needle after nul\\n"},"line_number":4,"absolute_offset":23,"submatches":[{"match":{"text":"needle"},"start":0,"end":6}]}}\n{"type":"end","data":{"path":{"text":"early.dat"},"binary_offset":19,"stats":{"elapsed":{},"searches":1,"searches_with_match":1,"bytes_searched":40,"bytes_printed":710,"matched_lines":2,"matches":2}}}\n{"data":{"elapsed_total":{},"stats":{"bytes_printed":710,"bytes_searched":40,"elapsed":{},"matched_lines":2,"matches":2,"searches":1,"searches_with_match":1}},"type":"summary"}\n', 0, '{"type":"begin","data":{"path":{"text":"early.dat"}}}\n{"type":"match","data":{"path":{"text":"early.dat"},"lines":{"text":"text needle before\\n"},"line_number":1,"absolute_offset":0,"submatches":[{"match":{"text":"needle"},"start":5,"end":11}]}}\n{"type":"context","data":{"path":{"text":"early.dat"},"lines":{"text":"\\u0000\\u0001\\u0002\\n"},"line_number":2,"absolute_offset":19,"submatches":[]}}\n{"type":"match","data":{"path":{"text":"early.dat"},"lines":{"text":"needle after nul\\n"},"line_number":3,"absolute_offset":23,"submatches":[{"match":{"text":"needle"},"start":0,"end":6}]}}\n{"type":"end","data":{"path":{"text":"early.dat"},"binary_offset":19,"stats":{"elapsed":{},"searches":1,"searches_with_match":1,"bytes_searched":19,"bytes_printed":585,"matched_lines":2,"matches":2}}}\n{"data":{"elapsed_total":{},"stats":{"bytes_printed":585,"bytes_searched":19,"elapsed":{},"matched_lines":2,"matches":2,"searches":1,"searches_with_match":1}},"type":"summary"}\n'],
+  ['RG-MMAP-EVERYWHERE', ["-n","needle","late.dat"], null, 0, '1:first needle line\nbinary file matches (found "\\0" byte around offset 120030)\n', 0, '1:first needle line\n10002:near needle\n10004:after needle\n'],
+  ['RG-MMAP-EVERYWHERE', ["--json","needle","late.dat"], null, 0, '{"type":"begin","data":{"path":{"text":"late.dat"}}}\n{"type":"match","data":{"path":{"text":"late.dat"},"lines":{"text":"first needle line\\n"},"line_number":1,"absolute_offset":0,"submatches":[{"match":{"text":"needle"},"start":6,"end":12}]}}\n{"type":"match","data":{"path":{"text":"late.dat"},"lines":{"text":"near needle\\n"},"line_number":10002,"absolute_offset":120018,"submatches":[{"match":{"text":"needle"},"start":5,"end":11}]}}\n{"type":"match","data":{"path":{"text":"late.dat"},"lines":{"text":"after needle\\n"},"line_number":10005,"absolute_offset":120032,"submatches":[{"match":{"text":"needle"},"start":6,"end":12}]}}\n{"type":"end","data":{"path":{"text":"late.dat"},"binary_offset":120030,"stats":{"elapsed":{},"searches":1,"searches_with_match":1,"bytes_searched":120045,"bytes_printed":630,"matched_lines":3,"matches":3}}}\n{"data":{"elapsed_total":{},"stats":{"bytes_printed":630,"bytes_searched":120045,"elapsed":{},"matched_lines":3,"matches":3,"searches":1,"searches_with_match":1}},"type":"summary"}\n', 0, '{"type":"begin","data":{"path":{"text":"late.dat"}}}\n{"type":"match","data":{"path":{"text":"late.dat"},"lines":{"text":"first needle line\\n"},"line_number":1,"absolute_offset":0,"submatches":[{"match":{"text":"needle"},"start":6,"end":12}]}}\n{"type":"match","data":{"path":{"text":"late.dat"},"lines":{"text":"near needle\\n"},"line_number":10002,"absolute_offset":120018,"submatches":[{"match":{"text":"needle"},"start":5,"end":11}]}}\n{"type":"match","data":{"path":{"text":"late.dat"},"lines":{"text":"after needle\\n"},"line_number":10004,"absolute_offset":120032,"submatches":[{"match":{"text":"needle"},"start":6,"end":12}]}}\n{"type":"end","data":{"path":{"text":"late.dat"},"binary_offset":null,"stats":{"elapsed":{},"searches":1,"searches_with_match":1,"bytes_searched":120045,"bytes_printed":630,"matched_lines":3,"matches":3}}}\n{"data":{"elapsed_total":{},"stats":{"bytes_printed":630,"bytes_searched":120045,"elapsed":{},"matched_lines":3,"matches":3,"searches":1,"searches_with_match":1}},"type":"summary"}\n'],
+  ['RG-MMAP-EVERYWHERE', ["-n","[an]","peek1.dat"], null, 0, '1:a\nbinary file matches (found "\\0" byte around offset 13)\n', 0, 'binary file matches (found "\\0" byte around offset 13)\n'],
+  ['RG-MMAP-EVERYWHERE', ["-j1","-n","needle","early.dat","late.dat"], null, 0, 'early.dat: binary file matches (found "\\0" byte around offset 19)\nlate.dat:1:first needle line\nlate.dat: binary file matches (found "\\0" byte around offset 120030)\n', 0, 'early.dat: binary file matches (found "\\0" byte around offset 19)\nlate.dat:1:first needle line\nlate.dat:10002:near needle\nlate.dat:10004:after needle\n'],
+  ['RG-MMAP-EVERYWHERE', ["-n","needle","grow.dat"], null, 0, '1:needle\nbinary file matches (found "\\0" byte around offset 200017)\n', 0, '1:needle\n3:needle 2\n'],
+];
+// Every row, as one host answers it now (RG-MMAP-EVERYWHERE: a divergence row expects Linux native's).
+const P8_ROWS = [...P8_NATIVE, ...P8_NATIVE_LINUX, ...P8_MACOS_DIVERGENCE.map(([rule, argv, input, , , rc, out]) => [rule, argv, input, rc, out])]
+  .map((r) => [r]);
 async function withP8(fn) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'rg-native-p8-')));
   try {
@@ -1469,33 +1483,45 @@ async function withP8(fn) {
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 }
 const P8_NAMES_DIR = (argv) => argv.some((a) => /^q\/[a-z0-9]+$/.test(a));
-function p8Sync(root, [, argv, input], platform, { alone = false } = {}) {
+function p8Sync(root, [, argv, input], { alone = false } = {}) {
   const r = rgn.runRg(argv, {
-    cwd: root, input: P8_INPUT(input), spawnSync: cp.spawnSync, translate: NOT_TRANSLATED, platform,
+    cwd: root, input: P8_INPUT(input), spawnSync: cp.spawnSync, translate: NOT_TRANSLATED,
     ugrep: () => (alone ? null : UGREP), matchFiles: alone ? rgn.matchFilesAlone : undefined,
   });
   return { status: r.status, stdout: Buffer.from(r.stdout).toString('latin1'), stderr: Buffer.from(r.stderr).toString('latin1') };
 }
-function p8Async(root, [, argv, input], platform) {
+function p8Async(root, [, argv, input]) {
   return new Promise((resolve) => {
     const child = rgn.rgExecFile(argv, { cwd: root, encoding: 'buffer' }, (err, so, se) => {
       resolve({ status: err ? (typeof err.code === 'number' ? err.code : null) : 0, stdout: so.toString('latin1'), stderr: se.toString('latin1') });
-    }, 'rg', { translate: NOT_TRANSLATED, spawn: cp.spawn, spawnSync: cp.spawnSync, ugrep: () => UGREP, platform });
+    }, 'rg', { translate: NOT_TRANSLATED, spawn: cp.spawn, spawnSync: cp.spawnSync, ugrep: () => UGREP });
     if (input) child.stdin.end(P8_INPUT(input)); else if (child.stdin) child.stdin.end();
   });
 }
-for (const rule of ['RG-BINARY-QUIT', 'RG-BINARY-CONVERT', 'RG-BINARY-MMAP']) {
-  test(`${rule}: runRg prints what native prints, on the platform it ran on (native, over ugrep)`, needUgrep, () => withP8((root) => {
-    for (const [row, platform] of P8_ROWS.filter(([r]) => r[0] === rule)) p6Check(root, row, p8Sync(root, row, platform), false);
+for (const rule of ['RG-BINARY-QUIT', 'RG-BINARY-CONVERT', 'RG-BINARY-MMAP', 'RG-MMAP-EVERYWHERE', 'RG-STDIN-ALL-THERE']) {
+  test(`${rule}: runRg prints what native prints (native, over ugrep)`, needUgrep, () => withP8((root) => {
+    const rows = P8_ROWS.filter(([r]) => r[0] === rule);
+    assert.ok(rows.length >= 1, rule);
+    for (const [row] of rows) p6Check(root, row, p8Sync(root, row), false);
   }));
 }
+// RG-MMAP-EVERYWHERE is ONE written exception, stated once (scripts/lib/rg-probe.cjs MMAP_EVERYWHERE): its
+// rows are exactly the darwin rows where macOS native and Linux native differ, each a named file it maps.
+test('RG-MMAP-EVERYWHERE: a divergence row is one where macOS and Linux native differ, and it is the one rule', () => {
+  assert.strictEqual(require('../scripts/lib/rg-probe.cjs').MMAP_EVERYWHERE.rule, 'RG-MMAP-EVERYWHERE');
+  for (const [rule, argv, input, mrc, mout, lrc, lout] of P8_MACOS_DIVERGENCE) {
+    assert.strictEqual(rule, 'RG-MMAP-EVERYWHERE');
+    assert.ok(mrc !== lrc || mout !== lout, `${argv.join(' ')}: macOS and Linux agree, so it needs no exception`);
+    assert.ok(!input && !argv.includes('-') && argv.filter((a) => /\.dat$/.test(a)).length <= 10, `${argv.join(' ')}: not a mapped named file`);
+  }
+});
 test('RG-BINARY-*: with the matcher alone deciding every file, native\'s rows that name no directory', () => withP8((root) => {
   let n = 0;
-  for (const [row, platform] of P8_ROWS.filter(([r]) => !P8_NAMES_DIR(r[1]))) { p6Check(root, row, p8Sync(root, row, platform, { alone: true }), false); n++; }
+  for (const [row] of P8_ROWS.filter(([r]) => !P8_NAMES_DIR(r[1]))) { p6Check(root, row, p8Sync(root, row, { alone: true }), false); n++; }
   assert.ok(n >= 30, `${n} rows`);
 }));
 test('RG-BINARY-*: the async twin prints every row the sync one does (rgExecFile, native)', needUgrep, () => withP8(async (root) => {
-  for (const [row, platform] of P8_ROWS) p6Check(root, row, await p8Async(root, row, platform), false);
+  for (const [row] of P8_ROWS) p6Check(root, row, await p8Async(root, row), false);
 }));
 test('RG-BINARY-*: under tjs, both twins, every row (native)', { skip: needUgrep.skip || NO_TJS }, () => withP8((root) => {
   const prog = path.join(root, '..', path.basename(root) + '-probe.cjs');
@@ -1503,12 +1529,12 @@ test('RG-BINARY-*: under tjs, both twins, every row (native)', { skip: needUgrep
     const rgn = require(${JSON.stringify(path.join(__dirname, '..', 'libexec', 'rg-native.cjs'))});
     const cp = require('child_process');
     const root = ${JSON.stringify(root)}, UGREP = ${JSON.stringify(UGREP)};
-    const rows = ${JSON.stringify(P8_ROWS.map(([r, platform]) => [r[1], r[2] ? P8_INPUT(r[2]).toString('base64') : null, platform]))};
+    const rows = ${JSON.stringify(P8_ROWS.map(([r]) => [r[1], r[2] ? P8_INPUT(r[2]).toString('base64') : null]))};
     const l1 = (b) => Buffer.from(b).toString('latin1');
     (async () => {
       const out = [];
-      for (const [argv, input, platform] of rows) {
-        const ctx = { translate: () => { throw new Error('translated'); }, spawn: cp.spawn, spawnSync: cp.spawnSync, ugrep: () => UGREP, platform };
+      for (const [argv, input] of rows) {
+        const ctx = { translate: () => { throw new Error('translated'); }, spawn: cp.spawn, spawnSync: cp.spawnSync, ugrep: () => UGREP };
         const inp = input ? Buffer.from(input, 'base64') : undefined;
         const s = rgn.runRg(argv, { ...ctx, cwd: root, input: inp });
         const a = await new Promise((res) => {
