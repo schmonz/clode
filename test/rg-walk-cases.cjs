@@ -18,6 +18,7 @@
 //   uni      a non-ASCII file name, for globs over bytes
 //   plugcache, skills   2.1.283's production --max-depth 4 listings (orphaned plugin versions; skills, rt)
 //   links, linksout, linksrepo   symlinks for -L/--follow (2.1.283's FileIndex fallback), outside and inside a repo
+//   errs     paths whose errors rg words in its libc's text (RG-ERROR-TEXT)
 //   h1 h2    HOMEs: XDG's git/ignore; ~/.gitconfig's core.excludesFile with a ~
 const NEEDLE = 'needle\n';
 const TREES = {
@@ -80,6 +81,9 @@ const TREES = {
     ['.gitignore', 'ign.md\n'], ['ign.md', NEEDLE], ['.ignore', 'dot.md\n'], ['dot.md', NEEDLE],
   ],
   linksout: [['o.md', NEEDLE]],
+  // RG-ERROR-TEXT: errnos whose libc text libuv words differently (a link to itself: ELOOP; one through a loop of
+  // two), next to a broken link (ENOENT) and a file to search
+  errs: [['ok.txt', NEEDLE], ['self', { symlink: 'self' }], ['gone', { symlink: 'nowhere' }], ['dd/lp', { symlink: '../dd/lp' }]],
   linksrepo: [
     ['.git/HEAD', 'x\n'], ['real/a.md', NEEDLE], ['ldir', { symlink: 'real' }], ['.gitignore', 'ign.md\n'], ['ign.md', NEEDLE],
     ['.ignore', 'dot.md\n'], ['dot.md', NEEDLE],

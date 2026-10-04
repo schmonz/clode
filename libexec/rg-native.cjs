@@ -960,7 +960,16 @@ function parseRgSearch(argv) {
 // for it (node puts it in the error's message; tjs answers it as `new tjs.Error(-errno)`), whose
 // first letter rg's libc strerror capitalizes (they agree for the errors a search meets: ENOENT,
 // EACCES, ENOTDIR; measured against native's literals in test/rg-native.test.cjs).
+// RG-ERROR-TEXT: rg prints its platform's C library text for an errno (Rust's io::Error formats strerror_r),
+// so quaude's rg asks the engine for strerror(3) (txiki-strerror.patch: __tjs_fs_sync.strerror) and prints that,
+// as written. libuv's own table (what tjs.Error and node's messages carry, capitalized below) is the fallback
+// where an engine has no such binding: NODE (naude, and the test runner) exposes none, so there the text of an
+// errno whose libuv wording differs from the libc's (ELOOP, ENAMETOOLONG, an errno libuv cannot name) is libuv's,
+// a named divergence of the node engine only (test/rg-walk.test.cjs maps native's rows through it for node).
+const engineStrerror = () => (globalThis.__tjs_fs_sync && typeof globalThis.__tjs_fs_sync.strerror === 'function' ? globalThis.__tjs_fs_sync.strerror : null);
 function sysErrorText(n) {
+  const strerror = engineStrerror();
+  if (strerror) { try { return strerror(n); } catch { /* fall back */ } }
   try {
     const util = require('util');
     if (typeof util.getSystemErrorMessage === 'function') return util.getSystemErrorMessage(-n);
@@ -983,6 +992,8 @@ function osErrorText(e) {
   // `EUNKNOWN`) still carries its number.
   let n = code ? errnoTable()[code] : undefined;
   if (n === undefined && e && typeof e.errno === 'number' && e.errno !== 0) n = Math.abs(e.errno);
+  const libc = n !== undefined && engineStrerror() ? sysErrorText(n) : null;
+  if (libc) return `${libc} (os error ${n})`;
   const m = /^[A-Z0-9_]+: ([^,]+)/.exec(String((e && e.message) || ''));
   const text = m ? m[1] : n !== undefined ? sysErrorText(n) : null;
   return text ? `${capital(text)}${n !== undefined ? ` (os error ${n})` : ''}` : String(code || (e && e.message) || 'unknown error');

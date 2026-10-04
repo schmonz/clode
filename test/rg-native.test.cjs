@@ -1184,6 +1184,8 @@ test('RG-SPECIAL-FILE and RG-REFUSE-SPECIAL-FILE under tjs: both twins (native)'
       assert.deepStrictEqual(got[1], { status: 0, stdout: 'ok.txt\x001\n', stderr: '' }, twin);
       assert.deepStrictEqual([got[2].status, got[2].stdout], [2, 'ok.txt\n'], twin);
       assert.match(got[2].stderr, /^rg: sock: .+ \(os error \d+\)\n$/, twin);
+      // RG-ERROR-TEXT: under tjs the libc's own text, as native prints it (native 2.1.283 on darwin, measured)
+      if (process.platform === 'darwin') assert.strictEqual(got[2].stderr, 'rg: sock: Operation not supported on socket (os error 102)\n', twin);
       assert.strictEqual(got[3].status, 2, twin);
       assert.match(rgn.parseRgRefusal(got[3].stderr).reason, /RG-REFUSE-SPECIAL-FILE/, twin);
     }

@@ -58,6 +58,15 @@ const ENGINE_API_FLOOR = [
     why: 'node-shim Stats/BigIntStats: dev, ino, rdev, nlink and nanosecond times from libuv\'s uv_stat_t (file identity)',
   },
   {
+    // Without it quaude's rg falls back to libuv's error table, whose texts are not the OS's (ELOOP, ENAMETOOLONG,
+    // an errno libuv cannot name): stderr unlike native rg's, which prints its libc's strerror.
+    name: '__tjs_fs_sync.strerror',
+    expr: 'globalThis.__tjs_fs_sync.strerror',
+    kind: 'function',
+    from: 'txiki-strerror.patch',
+    why: 'quaude\'s rg error texts: the platform C library\'s strerror(3), as rg prints them (rg-native.cjs osErrorText)',
+  },
+  {
     name: '__tjs_spawn_sync',
     expr: 'globalThis.__tjs_spawn_sync',
     kind: 'function',

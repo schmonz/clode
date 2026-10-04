@@ -45,6 +45,7 @@ const POSIX = process.platform === 'win32' ? 'the walk on Windows is unmeasured 
 const needUgrep = { skip: POSIX || (!UGREP ? 'no ugrep on this host' : !CAPS.format ? CAPS.reason : false) };
 const NATIVE = providerBin(process.env);
 
+const NREP = 'n'.repeat(300);   // a path component past NAME_MAX
 const P9_NATIVE = [
   ["RG-IGNORE-FILES", "repo", ".", ["-j1", "-l", "needle", "."], "empty", 0, "./g2.txt\n./g1.txt\n./other/private\n./code/y.tsx\n./code/{b}.ts\n./code/Makefile\n./code/*.txt\n./code/README.md\n./code/x.ts\n./code/a.TXT\n./code/z.js\n./keep.ign\n./dotig.txt\n./sub/ign.txt\n./sub/anch.txt\n./a.txt\n./private/in/q.txt\n./private/p.txt\n", ""],
   ["RG-IGNORE-FILES", "repo", ".", ["-j1", "-l", "needle", "<T>"], "empty", 0, "<T>/g2.txt\n<T>/g1.txt\n<T>/other/private\n<T>/code/y.tsx\n<T>/code/{b}.ts\n<T>/code/Makefile\n<T>/code/*.txt\n<T>/code/README.md\n<T>/code/x.ts\n<T>/code/a.TXT\n<T>/code/z.js\n<T>/keep.ign\n<T>/dotig.txt\n<T>/sub/ign.txt\n<T>/sub/anch.txt\n<T>/a.txt\n<T>/private/in/q.txt\n<T>/private/p.txt\n", ""],
@@ -194,6 +195,18 @@ const P9_NATIVE = [
   ["RG-NO-IGNORE","linksrepo",".",["--files","--follow","--hidden","--glob","!.git/","."],"empty",0,"./.gitignore\n./.ignore\n./real/a.md\n./ldir/a.md\n",""],
   ["RG-NO-IGNORE","linksrepo",".",["--files","--follow","--hidden","--glob","!.git/","--no-ignore-vcs","."],"empty",0,"./.gitignore\n./.ignore\n./ign.md\n./real/a.md\n./ldir/a.md\n",""],
   ["RG-NO-IGNORE","linksrepo",".",["--files","--hidden","--glob","!.git/","--no-ignore-vcs","--ignore-vcs","."],"empty",0,"./.gitignore\n./.ignore\n./real/a.md\n",""],
+  // RG-ERROR-TEXT (Task 10 fix round 2, review N1): an errno as the platform C library words it (rg-native.cjs: the
+  // engine's strerror(3)); a link to itself or through a loop (ELOOP), a name past NAME_MAX (ENAMETOOLONG), a path
+  // through a file (ENOTDIR). Node has no strerror binding: its runs map these through libuv's table (nodeText below).
+  ["RG-ERROR-TEXT","errs",".",["-L","-l","needle","."],"empty",2,"./ok.txt\n","rg: ./gone: No such file or directory (os error 2)\nrg: ./self: Too many levels of symbolic links (os error 62)\nrg: ./dd/lp: Too many levels of symbolic links (os error 62)\n"],
+  ["RG-ERROR-TEXT","errs",".",["-j1","-L","-l","needle","."],"empty",2,"./ok.txt\n","rg: ./gone: IO error for operation on ./gone: No such file or directory (os error 2)\nrg: ./self: IO error for operation on ./self: Too many levels of symbolic links (os error 62)\nrg: ./dd/lp: IO error for operation on ./dd/lp: Too many levels of symbolic links (os error 62)\n"],
+  ["RG-ERROR-TEXT","errs",".",["--files","-L","."],"empty",2,"./ok.txt\n","rg: ./gone: No such file or directory (os error 2)\nrg: ./self: Too many levels of symbolic links (os error 62)\nrg: ./dd/lp: Too many levels of symbolic links (os error 62)\n"],
+  ["RG-ERROR-TEXT","errs",".",["-j1","--files","--follow","."],"empty",2,"./ok.txt\n","rg: ./gone: IO error for operation on ./gone: No such file or directory (os error 2)\nrg: ./self: IO error for operation on ./self: Too many levels of symbolic links (os error 62)\nrg: ./dd/lp: IO error for operation on ./dd/lp: Too many levels of symbolic links (os error 62)\n"],
+  ["RG-ERROR-TEXT","errs",".",["-l","needle","self","ok.txt"],"empty",2,"ok.txt\n","rg: self: Too many levels of symbolic links (os error 62)\n"],
+  ["RG-ERROR-TEXT","errs",".",["--files","self","ok.txt"],"empty",2,"ok.txt\n","rg: self: Too many levels of symbolic links (os error 62)\n"],
+  ["RG-ERROR-TEXT","errs",".",["-l","needle",NREP,"ok.txt"],"empty",2,"ok.txt\n",`rg: ${NREP}: File name too long (os error 63)\n`],
+  ["RG-ERROR-TEXT","errs",".",["-l","needle","ok.txt/x","ok.txt"],"empty",2,"ok.txt\n","rg: ok.txt/x: Not a directory (os error 20)\n"],
+  ["RG-ERROR-TEXT","errs",".",["-c","needle","dd/lp","ok.txt"],"empty",2,"ok.txt:1\n","rg: dd/lp: Too many levels of symbolic links (os error 62)\n"],
   // RG-GLOB-LINE (review M-2): a --glob read as a gitignore line: a comment adds nothing, trailing white space
   // goes (unless escaped), a leading / anchors, a trailing / matches directories only, X/** what is under X.
   ["RG-GLOB-LINE", "repo", ".", ["-j1", "-l", "--glob", "#a.txt", "needle", "."], "empty", 0, "./g2.txt\n./g1.txt\n./other/private\n./code/y.tsx\n./code/{b}.ts\n./code/Makefile\n./code/*.txt\n./code/README.md\n./code/x.ts\n./code/a.TXT\n./code/z.js\n./keep.ign\n./dotig.txt\n./sub/ign.txt\n./sub/anch.txt\n./a.txt\n./private/in/q.txt\n./private/p.txt\n", ""],
@@ -244,8 +257,19 @@ function rowCall(root, [, tree, cwdRel, argv, home]) {
   return { T, argv: argv.map((a) => a.split('<T>').join(T)), cwd: path.join(T, cwdRel), env: rowEnv(root, home) };
 }
 const lines = (s) => s.split('\n').filter(Boolean).sort().join('\n');
-function check(row, got, T) {
-  const [rule, tree, cwdRel, argv, home, rc, out, err] = row;
+// RG-ERROR-TEXT's one named divergence: node exposes no strerror(3), so on node quaude's rg words an errno as
+// libuv's table does (capitalized), and native's text is mapped through that same table for node's runs; under tjs
+// (the engine quaude ships) the text is judged exactly as native printed it.
+function nodeText(err) {
+  const util = require('node:util');
+  return err.split('\n').map((l) => l.replace(/: ([^:]+) \(os error (\d+)\)$/, (m, t, n) => {
+    const u = util.getSystemErrorMessage(-Number(n));
+    return `: ${u[0].toUpperCase()}${u.slice(1)} (os error ${n})`;
+  })).join('\n');
+}
+function check(row, got, T, { engine = 'node' } = {}) {
+  const [rule, tree, cwdRel, argv, home, rc, out, err0] = row;
+  const err = engine === 'node' ? nodeText(err0) : err0;
   const un = (s) => s.split(T).join('<T>');
   const what = `${rule}: (${tree}/${cwdRel}, HOME ${home}) rg ${argv.join(' ')} => ${JSON.stringify(got).slice(0, 600)}`;
   assert.strictEqual(got.status, rc, what);
@@ -312,7 +336,7 @@ test('RG-WALK-*: under tjs, both twins, every row (native)', { skip: needUgrep.s
     assert.ok(line, `the tjs probe printed nothing (exit ${res.status}): ${(res.stderr || '').slice(0, 1500)}`);
     const got = JSON.parse(line.slice('PROBE:'.length));
     assert.strictEqual(got.length, P9_NATIVE.length);
-    P9_NATIVE.forEach((row, i) => { const T = path.join(root, row[1]); check(row, got[i].sync, T); check(row, got[i].async, T); });
+    P9_NATIVE.forEach((row, i) => { const T = path.join(root, row[1]); check(row, got[i].sync, T, { engine: 'tjs' }); check(row, got[i].async, T, { engine: 'tjs' }); });
   } finally { fs.rmSync(prog, { force: true }); }
 }));
 

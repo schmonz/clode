@@ -480,6 +480,7 @@ const TXIKI_PATCH_ORDER = [
   'txiki-spawn-inherit-fd.patch',   // carries the spawn-fail UAF fix too (the old separate uaf patch was fully subsumed and removed 2026-07-25)
   'txiki-stream-write-sync-number.patch',
   'txiki-sync-fs.patch',                      // shared vm.c/CMakeLists/private.h registration — before sync-spawn + vm-context
+  'txiki-strerror.patch',                     // __tjs_fs_sync.strerror(n): the platform libc's strerror(3) text, which rg prints and libuv's own table does not (mod_fs_sync.c's function table only; after sync-fs, which creates the file)
   'txiki-sync-stat-identity.patch',           // the sync stat/lstat/fstat answer from libuv's uv_stat_t (dev, ino, rdev, nlink, blocks, ns times, as node reads them); mod_fs_sync.c's stat region only, so right after sync-fs, which creates the file, and before the mod-fs-sync-msvc fixup, whose anchors it leaves alone
   'txiki-sync-spawn.patch',                   // registers after sync-fs
   'txiki-wurl-url.patch',
