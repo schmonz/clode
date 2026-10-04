@@ -175,15 +175,27 @@ Bash tool instead".
     byte-equal (4 of the 8 no-rg ones refused before). The first-use probe (`rg --version`) and
     the file count reach quaude's rg as before. test/fidelity/agentic-tools.test.cjs drives 3 of
     those against native literals; rg-differential holds Bun.which('rg') to RG_PATH (never the
-    tripwire's) with no file there. The injected rg shadow now unaliases rg first: quaude's
-    snapshot writer spells rg `alias rg='<RG_PATH>'` on a host with none, and zsh would run that
-    missing file instead of the shadow.
+    tripwire's) with no file there.
+    THE SHELL'S rg (corrected in the fix round, review I-1/I-2). quaude's snapshot writer (no
+    argv0) spells rg `alias rg='<RG_PATH>'` inside upstream's "no host rg" guard, and the Bash
+    tool's zsh AND bash expand it (the bash snapshot starts with `shopt -s expand_aliases`), so `rg`
+    ran a missing file. b4a3f11's blanket `unalias rg` before the injected shadow was wrong twice:
+    it threw away a user's own rg alias (native honours `alias rg='rg -c'`), and with --allowedTools
+    naming Grep or Glob (searchToolsOptIn) nothing is injected at all, so `rg` still hit the missing
+    file (zsh: `no such file or directory: .../rg`, rc 127; this entry said no route reached it). Now
+    rewriteSnapshot replaces THAT line (its value is RG_PATH), and no other rg alias, with quaude's rg
+    shadow, always, and recognises a generator holding only that line as a snapshot. Real Bash tool,
+    zsh and bash, against native: --allowedTools Bash,Grep with no host rg answers (it said "command
+    not found" before Task 10b, and the missing file after), and `alias rg='rg -c'` is honoured.
+    Left open: the Bash tool's rg is the shell shadow (rgShadowBody, the old rg-to-ugrep translation),
+    not quaude's rg: under `-c` it prints zero counts (`in/e.log:0`) where rg prints none, and its file
+    order is ugrep's.
     Left open: (1) a host rg that sits AT RG_PATH (ripgrep installed in the very directory the
     quaude or naude binary is in) is what a route that execs the path for real would run; every
-    spawn is answered by basename, and the snapshot's alias, the one shell route, is written only
-    when no rg is on PATH and is unaliased whenever the shadows are injected, so no known route
-    reaches it. (2) Such a route that does meet ENOENT is worded by the bundle's own YE as
-    "ripgrep not found on PATH. Install it ..." in system mode; no route is known to reach it.
+    spawn is answered by basename, and the snapshot's alias, the one shell route, is now replaced
+    by the shadow, so no known route reaches it. (2) Such a route that does meet ENOENT is worded
+    by the bundle's own YE as "ripgrep not found on PATH. Install it ..." in system mode; no route
+    is known to reach it.
   - FIXED in part (grep-native Task 6): files_with_matches and count are quaude's rg's own now
     (libexec/rg-native.cjs: -l, -c and the standard printer, as native prints them; --max-columns
     a no-op there, as native's is). In rg-differential, 28 of the 90 files/count cells are equal

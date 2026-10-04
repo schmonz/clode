@@ -32,7 +32,8 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const cp = require('node:child_process');
-const { rewriteSnapshot } = require('../libexec/bun-shim.cjs');
+const bunShim = require('../libexec/bun-shim.cjs');
+const { rewriteSnapshot } = bunShim;
 
 // A captured upstream snapshot (grep + find shadows). rewriteSnapshot rebuilds both
 // through buildShadow and injects the rg twin (rgShadowBody), so one render carries
@@ -46,12 +47,14 @@ const FINDINGS = [
   { name: 'find', applet: 'bfs', why: 'stand-in skew', fix: 'nothing to fix' },
 ];
 // quaude's snapshot as its writer emits it on a host with no rg (grep-native Task 10b): the bundle reaches rg by
-// Bun.which('rg'), which answers quaude's own ABSOLUTE path (a path string, no file there), and with no argv0 the
-// writer (2.1.283's aAn) spells rg as an alias inside upstream's "no host rg" guard: `alias rg='<that path>'`.
-// zsh expands an alias in a sourced snapshot and runs `rg` as that missing file unless the injected rg shadow
-// takes the name back; bash, not expanding aliases there, reaches the function anyway.
-const QUAUDE_RG = path.join(os.tmpdir(), 'no-such-quaude-dir', 'rg');
-const ALIASED = `# Check for rg availability\nalias rg='${QUAUDE_RG}'\n${UPSTREAM}`;
+// Bun.which('rg'), which answers quaude's own ABSOLUTE path (RG_PATH: a path string, no file there), and with no argv0
+// the writer (2.1.283's aAn) spells rg as an alias inside upstream's "no host rg" guard: `alias rg='<RG_PATH>'`. zsh
+// expands an alias in a sourced snapshot, and so does bash, whose snapshot the writer starts with `shopt -s
+// expand_aliases` (2.1.283's gAn): that alias would run a missing file in both. rewriteSnapshot replaces THAT line
+// (and no other rg alias) with quaude's rg shadow.
+const EXPAND = '[ -n "${BASH_VERSION:-}" ] && shopt -s expand_aliases\n';
+const RG_BLOCK = `# Check for rg availability\nif ! (unalias rg 2>/dev/null; command -v rg) >/dev/null 2>&1; then\n  alias rg='${bunShim.RG_PATH}'\nfi\n`;
+const ALIASED = `${EXPAND}${RG_BLOCK}${UPSTREAM}`;
 const SHAPES = {
   plain: rewriteSnapshot(UPSTREAM),
   skewed: rewriteSnapshot(UPSTREAM, FINDINGS),
@@ -168,5 +171,60 @@ for (const shell of SHELLS) {
           `${shell.name}, ${shape} shadow: ${tool} did not reach the stand-in applet (stderr: ${r.stderr})`);
       }
     }
+  });
+}
+
+// ---- quaude's own rg alias line, and only it (grep-native Task 10b fix round, review I-1/I-2) -------------------
+// The runs below use a PATH holding no rg (only the stand-in's directory and the system's), so upstream's guard
+// takes its "no host rg" branch, as on a host without ripgrep.
+const NO_RG_PATH = [dir, ...(process.env.PATH || '').split(':').filter((d) => d && !fs.existsSync(path.join(d, 'rg')))].join(':');
+function runSnap(shell, file, cmd) {
+  const env = { ...process.env, PATH: NO_RG_PATH, CLODE_UGREP: applet, CLODE_BFS: applet, CLODE_T_CMD: cmd };
+  delete env.BASH_ENV; delete env.ENV;
+  return cp.spawnSync(shell.bin, [...shell.args, `. '${file}' && eval "$CLODE_T_CMD"`], { cwd: dir, env, encoding: 'utf8' });
+}
+// --allowedTools naming Grep or Glob (upstream's searchToolsOptIn): the writer emits no find/grep shadows, so the
+// snapshot is the rg block alone, and nothing else would define rg.
+const OPTIN = path.join(dir, 'snap-optin.sh');
+fs.writeFileSync(OPTIN, rewriteSnapshot(`${EXPAND}${RG_BLOCK}`));
+// a user's own rg alias (in the rc the snapshot captured) must be honoured, as native honours it: `-q` silences
+// the stand-in, so only the alias can explain an empty answer
+const USER_ALIAS = path.join(dir, 'snap-user-alias.sh');
+fs.writeFileSync(USER_ALIAS, rewriteSnapshot(`${EXPAND}alias rg='rg -q'\n${RG_BLOCK}${UPSTREAM}`));
+for (const shell of SHELLS) {
+  const skip = shell.bin ? false : `${shell.name} is not installed on this host`;
+  test(`${shell.name}: with only the rg block (searchToolsOptIn), rg reaches quaude's rg shadow, not a missing file`, { skip }, () => {
+    const r = runSnap(shell, OPTIN, 'rg NEEDLE f; echo rc=$?');
+    assert.strictEqual(r.stdout, 'match-1\nmatch-2\nrc=0\n', r.stderr);
+  });
+  test(`${shell.name}: a user's own rg alias is honoured, as native honours it`, { skip }, () => {
+    const r = runSnap(shell, USER_ALIAS, 'rg NEEDLE f; echo rc=$?');
+    assert.strictEqual(r.stdout, 'rc=0\n', r.stderr);
+  });
+}
+test('rewriteSnapshot replaces only quaude\'s own rg alias line, in the file and in the generator, and no other', () => {
+  const other = "alias rg='rg -c'\n  alias rg='/usr/local/bin/rg'\n";
+  assert.strictEqual(rewriteSnapshot(other), other);
+  const file = rewriteSnapshot(RG_BLOCK);
+  assert.doesNotMatch(file, /alias rg=/);
+  assert.match(file, /function rg \{/);
+  const gen = `SNAPSHOT_FILE=/x\n      echo '  alias rg='"'${bunShim.RG_PATH}'" >> "$SNAPSHOT_FILE"\n`;
+  const g = rewriteSnapshot(gen);
+  assert.doesNotMatch(g, /alias rg=/);
+  assert.match(g, /cat >> "\$SNAPSHOT_FILE" << 'CLODE_RG_FUNC_END'\nfunction rg \{[\s\S]*\nCLODE_RG_FUNC_END\n/);
+});
+// The generator itself, through the real interception: the bundle hands child_process a shell command that writes
+// the snapshot; with only the rg block in it (no ARGV0 shadow), bun-shim must still rewrite it.
+for (const shell of SHELLS) {
+  const skip = shell.bin ? false : `${shell.name} is not installed on this host`;
+  test(`${shell.name}: the snapshot GENERATOR with only the rg block is rewritten as it is spawned`, { skip }, () => {
+    const out = path.join(dir, `gen-${shell.name}.sh`);
+    const gen = [`SNAPSHOT_FILE='${out}'`, ': > "$SNAPSHOT_FILE"', `echo '${EXPAND.trim()}' >> "$SNAPSHOT_FILE"`,
+      `echo "if ! (unalias rg 2>/dev/null; command -v rg) >/dev/null 2>&1; then" >> "$SNAPSHOT_FILE"`,
+      `echo '  alias rg='"'${bunShim.RG_PATH}'" >> "$SNAPSHOT_FILE"`, 'echo "fi" >> "$SNAPSHOT_FILE"', ''].join('\n');
+    const w = cp.spawnSync(shell.bin, [...shell.args, gen], { env: { ...process.env, PATH: NO_RG_PATH }, encoding: 'utf8' });
+    assert.strictEqual(w.status, 0, w.stderr);
+    const r = runSnap(shell, out, 'rg NEEDLE f; echo rc=$?');
+    assert.strictEqual(r.stdout, 'match-1\nmatch-2\nrc=0\n', `${fs.readFileSync(out, 'utf8')}\n${r.stderr}`);
   });
 }

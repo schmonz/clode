@@ -98,7 +98,7 @@ fs.readSync = function (fd, bufferOrOpts, ...rest) {
 const _SHADOW_INVOKE = '(?:ARGV0=|exec -a )';
 const _SNAPSHOT_SHADOW = new RegExp(_SHADOW_INVOKE);
 const _looksLikeSnapshotCmd = (s) =>
-  typeof s === 'string' && s.indexOf('SNAPSHOT_FILE=') !== -1 && _SNAPSHOT_SHADOW.test(s);
+  typeof s === 'string' && s.indexOf('SNAPSHOT_FILE=') !== -1 && (_SNAPSHOT_SHADOW.test(s) || _rgOwnAliasAt(s) !== null);
 
 // --- "the skew probe has run" signal -----------------------------------------
 // extract-claude-js's diagnostics splice awaits globalThis.__clodeEnsureSnapshot
@@ -663,13 +663,37 @@ function rewriteSnapshot(text, findings){
   });
   out += text.slice(i);
   // Additive: a real snapshot that shadows find/grep but not rg gets an injected
-  // ugrep-translating rg shadow, spliced right after the last rewritten shadow. It
-  // takes the name back from an alias first, as upstream does before its find and
-  // grep shadows: quaude's snapshot writer (no argv0) spells rg `alias rg='<path>'`
-  // when the host has none, the path being Bun.which('rg')'s (RG_PATH: no file), and
-  // zsh expands that alias over the function, running a missing file.
-  if (sawAny && !sawRg) out = out.slice(0, lastEnd) + '\nunalias rg 2>/dev/null || true\n' + rgShadowBody() + out.slice(lastEnd);
-  return out;
+  // ugrep-translating rg shadow, spliced right after the last rewritten shadow.
+  if (sawAny && !sawRg) out = out.slice(0, lastEnd) + '\n' + rgShadowBody() + out.slice(lastEnd);
+  return _rewriteRgOwnAlias(out);
+}
+
+// QUAUDE'S OWN rg ALIAS LINE, and no other (grep-native Task 10b fix round, review I-1/I-2). With no argv0, the
+// snapshot writer (2.1.283's aAn) spells rg as an alias of the resolved rg inside upstream's "no host rg" guard,
+// `alias rg='<rgPath>'`, and that path is RG_PATH: a path string with no file. zsh expands aliases in the sourced
+// snapshot, and so does bash (the writer starts its snapshot with `shopt -s expand_aliases`), so `rg` would run the
+// missing file; with --allowedTools naming Grep or Glob there are no find/grep shadows either, so nothing else
+// defines rg. That line, recognised by its value being RG_PATH, becomes quaude's rg shadow, in the generator (a
+// heredoc into $SNAPSHOT_FILE, as upstream writes its own) and in a written snapshot alike. Any other rg alias,
+// a user's own above all, is left alone: native honours it, and so must we.
+const _RG_ALIAS_LINE = /^([ \t]*)(?:echo '  alias rg='"'((?:[^'"\n]|'\\'')*)'" >> "\$SNAPSHOT_FILE"|alias rg='((?:[^'\n]|'\\'')*)')[ \t]*$/gm;
+function _rgAliasValue(m) {
+  let v = (m[2] !== undefined ? m[2] : m[3]).split("'\\''").join("'");
+  if (v.length >= 2 && v[0] === "'" && v[v.length - 1] === "'") v = v.slice(1, -1).split(`'"'"'`).join("'");  // the writer's qr quoting
+  return v;
+}
+function _rgOwnAliasAt(text) {
+  for (const m of String(text).matchAll(_RG_ALIAS_LINE)) if (_rgAliasValue(m) === RG_PATH) return m.index;
+  return null;
+}
+function _rewriteRgOwnAlias(text) {
+  return String(text).replace(_RG_ALIAS_LINE, (...a) => {
+    const m = a.slice(0, 4);
+    if (_rgAliasValue(m) !== RG_PATH) return a[0];
+    return m[2] !== undefined
+      ? `${m[1]}cat >> "$SNAPSHOT_FILE" << 'CLODE_RG_FUNC_END'\n${rgShadowBody()}\nCLODE_RG_FUNC_END`
+      : rgShadowBody();
+  });
 }
 
 // Parse (without rewriting) the known search shadows present in a snapshot, for
