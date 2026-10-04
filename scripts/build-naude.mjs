@@ -208,7 +208,7 @@ export function stageDeps(nmdir) {
 // The old `builder` asset (the path of the clode building this naude, once fed to
 // the retired spawn-a-rebuild callback) is GONE: auto-update is notify-only now,
 // so nothing reads a builder path and nothing writes one.
-export function naudeSeaConfig({ mainBundle, cliCjs, bunShim, tar, sig, out, targetUpdateCheck, unicodeText, rgNative, rgRegex, manifest, manifestSig }) {
+export function naudeSeaConfig({ mainBundle, cliCjs, bunShim, tar, sig, out, targetUpdateCheck, unicodeText, rgNative, rgRegex, rgWalk, rgTypes, manifest, manifestSig }) {
   const assets = {
     'deps.tar': tar,
     'deps.sig': sig,
@@ -224,8 +224,11 @@ export function naudeSeaConfig({ mainBundle, cliCjs, bunShim, tar, sig, out, tar
     // bun-shim.cjs's other companion, quaude's rg (require(__dirname + '/rg-native.cjs')),
     // materialized beside it the same way (test/shim-companions.test.cjs).
     'rg-native.cjs': rgNative,
-    // ...and rg-native.cjs's own companion, rg's regex dialect (require(__dirname + '/rg-regex.cjs')).
+    // ...and rg-native.cjs's own companions: rg's regex dialect (require(__dirname + '/rg-regex.cjs')),
+    // its walk and its type table and version text (grep-native Task 9).
     'rg-regex.cjs': rgRegex,
+    'rg-walk.cjs': rgWalk,
+    'rg-types.cjs': rgTypes,
   };
   // manifest.json: what this naude knows about itself — which clode built it, which
   // upstream bundle it bakes, which platform that bundle was CARVED for, and the sha256
@@ -330,6 +333,9 @@ export function writeSeaConfig({
   rgNative = path.join(REPO, 'libexec', 'rg-native.cjs'),
   // rgRegex (grep-native Task 5b — rg-native.cjs's own rg-regex.cjs companion): the same.
   rgRegex = path.join(REPO, 'libexec', 'rg-regex.cjs'),
+  // rgWalk, rgTypes (grep-native Task 9 — rg-native.cjs's rg-walk.cjs and rg-types.cjs companions): the same.
+  rgWalk = path.join(REPO, 'libexec', 'rg-walk.cjs'),
+  rgTypes = path.join(REPO, 'libexec', 'rg-types.cjs'),
   extras = {}, template = null,
 }) {
   // Ensure the artifact dir exists before writing into it (sea-config.json here).
@@ -374,6 +380,10 @@ export function writeSeaConfig({
     console.error(`build-naude: rg-regex.cjs not found at: ${rgRegex}`);
     process.exit(1);
   }
+  for (const [name, file] of [['rg-walk.cjs', rgWalk], ['rg-types.cjs', rgTypes]]) {
+    // Fail loud, same reason: rg-native.cjs's own `require(__dirname + '/<name>')` 404s on first use without it.
+    if (!fs.existsSync(file)) { console.error(`build-naude: ${name} not found at: ${file}`); process.exit(1); }
+  }
   // -- the manifest + its sig, written HERE (not by main) so the shas recorded are the
   // shas of the very files the SEA config is about to name as assets: no window in which
   // an asset could be re-staged between being hashed and being embedded.
@@ -386,6 +396,8 @@ export function writeSeaConfig({
     'unicode-text.cjs': unicodeText,
     'rg-native.cjs': rgNative,
     'rg-regex.cjs': rgRegex,
+    'rg-walk.cjs': rgWalk,
+    'rg-types.cjs': rgTypes,
   };
   const members = {};
   for (const [name, file] of Object.entries(assetFiles)) {
@@ -425,6 +437,8 @@ export function writeSeaConfig({
     unicodeText,
     rgNative,
     rgRegex,
+    rgWalk,
+    rgTypes,
     manifest: manifestPath,
     manifestSig: manifestSigPath,
   });

@@ -1,20 +1,23 @@
 'use strict';
 // A stand-in ugrep, for the tests that drive quaude's rg end to end through the spawn surfaces on a
 // host with no ugrep (CI's runners have none until the grep-native plan's Task 11 provisions one).
-// It answers exactly the three calls quaude's rg makes of ugrep (libexec/rg-native.cjs), the way
+// It answers the calls made of ugrep (libexec/rg-native.cjs, and bun-shim's translation), the way
 // ugrep 7.8.2 answers them, for PLAIN LITERAL patterns only (anything else exits 2, so a test that
 // strays from what it can answer fails loudly):
 //   --version                                       `ugrep 7.8.2 ...`, at quaude's floor
-//   -r [...] -l --null -e '' -- TARGET              the walk's listing: every non-empty regular file
-//                                                   under TARGET (dot names only under -.), `.`'s bare
-//                                                   and any other target's joined to it, NUL-ended; a
-//                                                   file or directory it cannot read is 7.8.2's warning
-//                                                   (`ugrep: warning: cannot read X: Permission
-//                                                   denied`, `cannot open directory X: ...`) and exit 2
-//   -Y -H --null --format=[%u]%F%b %e%~ -e LIT -- FILES   the plumbing's records (%u: one per line)
-// FAKE_UGREP_SLOW_MS in its environment makes the listing sleep that long first, so a test can end a
-// search while ugrep is still running. Its own interpreter is the node running the tests (a shebang),
-// so it is POSIX-only, as the shell stand-ins beside it are.
+//   -r [...] -l --null -e '' -- TARGET              a listing (the translation's; quaude's rg walks in
+//                                                   JS since grep-native Task 9): every non-empty regular
+//                                                   file under TARGET (dot names only under -.), `.`'s
+//                                                   bare and any other target's joined to it, NUL-ended;
+//                                                   a file or directory it cannot read is 7.8.2's
+//                                                   warning and exit 2
+//   -Y -H --null --format=[%u]%F%b %e%~ -e LIT -- FILES   the plumbing's records (%u: one per line); a
+//                                                   file it cannot read is 7.8.2's warning (`ugrep:
+//                                                   warning: cannot read X: Permission denied`), the rest
+//                                                   answered, and exit 2
+// FAKE_UGREP_SLOW_MS in its environment makes any call but --version sleep that long first, so a test
+// can end a search while ugrep is still running. Its own interpreter is the node running the tests (a
+// shebang), so it is POSIX-only, as the shell stand-ins beside it are.
 const fs = require('node:fs');
 const path = require('node:path');
 
@@ -50,8 +53,10 @@ const go = () => {
   const fmt = opts.find((o) => o.startsWith('--format=')) || '';
   if (/[\\.+*?()|[\]{}^$]/.test(e)) { process.stderr.write('fake ugrep: plain literals only\n'); process.exit(2); }
   const lit = Buffer.from(e), out = [];
+  let warned = false;
   for (const f of files) {
-    const b = fs.readFileSync(f);
+    let b;
+    try { b = fs.readFileSync(f); } catch (x) { warned = true; process.stderr.write('ugrep: warning: cannot read ' + f + ': ' + (x.code === 'EACCES' ? 'Permission denied' : x.message) + '\n'); continue; }
     let lastLine = -2;
     for (let i = b.indexOf(lit); i !== -1; i = b.indexOf(lit, i + lit.length)) {
       const ls = i === 0 ? -1 : b.lastIndexOf(10, i - 1);
@@ -61,10 +66,10 @@ const go = () => {
     }
   }
   process.stdout.write(Buffer.concat(out));
-  process.exit(out.length ? 0 : 1);
+  process.exit(warned ? 2 : out.length ? 0 : 1);
 };
 const slow = Number(process.env.FAKE_UGREP_SLOW_MS || 0);
-if (slow && opts.includes('-r')) setTimeout(go, slow); else go();
+if (slow) setTimeout(go, slow); else go();
 `;
 
 // Writes the stand-in as DIR/NAME and returns its path.

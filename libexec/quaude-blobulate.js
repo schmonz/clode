@@ -512,6 +512,10 @@ members.push({ name: 'rg-native.cjs', data: await mustRead(path.join(libexecDir,
 // rg-regex.cjs, rg's regex dialect, which rg-native.cjs requires as ITS sibling
 // (`require(__dirname + '/rg-regex.cjs')`): at the archive ROOT beside it, for the same reasons.
 members.push({ name: 'rg-regex.cjs', data: await mustRead(path.join(libexecDir, 'rg-regex.cjs'), 'rg-regex.cjs member') });
+// rg-walk.cjs (rg's walk) and rg-types.cjs (rg's type table and version text, generated from native), which
+// rg-native.cjs requires as its siblings too (grep-native Task 9): at the archive ROOT beside it, the same way.
+members.push({ name: 'rg-walk.cjs', data: await mustRead(path.join(libexecDir, 'rg-walk.cjs'), 'rg-walk.cjs member') });
+members.push({ name: 'rg-types.cjs', data: await mustRead(path.join(libexecDir, 'rg-types.cjs'), 'rg-types.cjs member') });
 
 // ext-dep closure (DEPS = extras.deps, derived node-side — see above). The
 // node side already fails the build if a listed package is missing from

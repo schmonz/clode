@@ -658,6 +658,16 @@ test('the controlled set is EXACTLY the modules a guard was deliberately written
   // has the same --check gate (rg-regex-oracle-fresh) but derives it with JSON.parse and string
   // equality, which the classifier does not read as a verdict, so it is named, not counted. The
   // baseline did not move.
+  //
+  // scripts/gen-rg-types.cjs ADDED 2026-10-04 (grep-native plan, task 9), the mechanism a
+  // thirteenth time, gate-shaped on the day it was written: it generates libexec/rg-types.cjs's
+  // type table and version text from native's embedded rg, refuses a --type-list line that does not
+  // read back or a --version quaude's rg would print otherwise, and its --check derives staleness
+  // from the generated region and exits 1. It landed with its guard,
+  // test/build-gates/rg-types-gates.test.cjs (rg-types-fresh, whose control runs the generator's
+  // own staleness()), so uncontrolled stayed at 27; without it it reads 28. Its companions
+  // libexec/rg-walk.cjs (pattern-matches but returns, never refuses) and libexec/rg-types.cjs (no
+  // verdict) are not gate-shaped. The baseline did not move.
   assert.deepStrictEqual([...controlledProductionModules().keys()].sort(), [
     'libexec/bun-shim.cjs',
     'libexec/clode-build.cjs',
@@ -670,6 +680,7 @@ test('the controlled set is EXACTLY the modules a guard was deliberately written
     'scripts/build-runner.cjs',
     'scripts/carve-probe.mjs',
     'scripts/gen-rg-regex-data.cjs',
+    'scripts/gen-rg-types.cjs',
     'scripts/lib/paint-probe.cjs',
     'scripts/lib/reset-patch.cjs',
     'scripts/lib/rg-probe.cjs',

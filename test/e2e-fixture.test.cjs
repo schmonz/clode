@@ -28,6 +28,7 @@ test('extractor carves fixture and Node boots it to the label', (t) => {
   fs.copyFileSync(path.join(REPO, 'libexec', 'unicode-text.cjs'), path.join(sbx.dir, 'unicode-text.cjs'));
   fs.copyFileSync(path.join(REPO, 'libexec', 'rg-native.cjs'), path.join(sbx.dir, 'rg-native.cjs'));
   fs.copyFileSync(path.join(REPO, 'libexec', 'rg-regex.cjs'), path.join(sbx.dir, 'rg-regex.cjs'));
+  for (const c of ['rg-walk.cjs', 'rg-types.cjs']) fs.copyFileSync(path.join(REPO, 'libexec', c), path.join(sbx.dir, c));
 
   // run "$CLODE_NODE" "$TMP/cli.cjs"
   const r = spawnSync(NODE, [cli], { encoding: 'utf8', env: sbx.env });

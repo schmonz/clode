@@ -1,6 +1,6 @@
 'use strict';
 // Run fail-loud shim children with module resolution ISOLATED from the repo's own
-// node_modules: copy bun-shim.cjs (and unicode-text.cjs, rg-native.cjs and rg-regex.cjs, the
+// node_modules: copy bun-shim.cjs (and unicode-text.cjs, rg-native.cjs, rg-regex.cjs, rg-walk.cjs and rg-types.cjs, the
 // companions it requires from its own directory; see test/shim-companions.test.cjs) into a temp dir OUTSIDE the
 // repo and require it from there, with cwd in that temp dir. Then `require("ws")`
 // (in the shim AND in the body) walks up a clean chain and can't reach
@@ -20,6 +20,7 @@ function isoDir() {
   fs.copyFileSync(path.resolve(__dirname, '../libexec/unicode-text.cjs'), path.join(_dir, 'unicode-text.cjs'));
   fs.copyFileSync(path.resolve(__dirname, '../libexec/rg-native.cjs'), path.join(_dir, 'rg-native.cjs'));
   fs.copyFileSync(path.resolve(__dirname, '../libexec/rg-regex.cjs'), path.join(_dir, 'rg-regex.cjs'));
+  for (const c of ['rg-walk.cjs', 'rg-types.cjs']) fs.copyFileSync(path.resolve(__dirname, '../libexec', c), path.join(_dir, c));
   return _dir;
 }
 // Run `node -e '<prelude requiring the isolated shim as Bun>; <body>'`. env overrides

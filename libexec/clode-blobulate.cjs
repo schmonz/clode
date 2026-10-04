@@ -61,7 +61,7 @@ const path = require('node:path');
 // (quaude/bootstrap), plus the prebuilt naude bundle, postject, and the naude
 // assembler scripts (build naude). Extra members a given target doesn't use
 // are harmless. Member-name -> on-disk-home mapping mirrors quaude-blobulate.js's
-// archive namespace (target-env.cjs, unicode-text.cjs, rg-native.cjs, rg-regex.cjs and the naude bundle
+// archive namespace (target-env.cjs, unicode-text.cjs, rg-native.cjs, rg-regex.cjs, rg-walk.cjs, rg-types.cjs and the naude bundle
 // ride at the archive ROOT; everything else keeps its path).
 function materializeBlobPayload(vfs, mat) {
   for (const [name, bytes] of vfs.files) {
@@ -79,8 +79,8 @@ function materializeBlobPayload(vfs, mat) {
     // rg-native.cjs (quaude's rg, bun-shim.cjs's other companion) rides at the archive
     // ROOT the same way, and belongs at libexec/ on disk beside bun-shim.cjs.
     else if (name === 'rg-native.cjs') dest = path.join(mat, 'libexec', name);
-    // rg-regex.cjs (rg-native.cjs's own companion) beside it, the same way.
-    else if (name === 'rg-regex.cjs') dest = path.join(mat, 'libexec', name);
+    // rg-regex.cjs, rg-walk.cjs and rg-types.cjs (rg-native.cjs's own companions) beside it, the same way.
+    else if (name === 'rg-regex.cjs' || name === 'rg-walk.cjs' || name === 'rg-types.cjs') dest = path.join(mat, 'libexec', name);
     // deps/claude (ext-dep closure + lockfile sources of truth) AND deps/clode
     // (postject's carried JS — build naude's --postject) keep their paths.
     else if (name.startsWith('deps/')) dest = path.join(mat, name);

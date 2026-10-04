@@ -236,12 +236,12 @@ function runNaude(opts = {}) {
   // there is workDir, so the file must actually exist on disk here or that
   // require 404s the moment the notify-only autoupdater fires (mirrors quaude-
   // blobulate.js's product-role member of the same name, same reasoning).
-  // unicode-text.cjs and rg-native.cjs (and rg-native.cjs's own rg-regex.cjs) ride for the same reason, one level further in:
+  // unicode-text.cjs and rg-native.cjs (and rg-native.cjs's own rg-regex.cjs, rg-walk.cjs and rg-types.cjs) ride for the same reason, one level further in:
   // bun-shim.cjs (itself materialized here) requires THEM dynamically the same way, off
   // its own __dirname — see test/shim-companions.test.cjs.
   const depsRoot = materializeDeps({ sea, cacheDir });
   const workDir = opts.workDir || path.join(cacheDir, 'sea-deps', 'naude');
-  materializeAssets({ sea, destDir: workDir, names: ['cli.cjs', 'bun-shim.cjs', 'target-update-check.cjs', 'unicode-text.cjs', 'rg-native.cjs', 'rg-regex.cjs'] });
+  materializeAssets({ sea, destDir: workDir, names: ['cli.cjs', 'bun-shim.cjs', 'target-update-check.cjs', 'unicode-text.cjs', 'rg-native.cjs', 'rg-regex.cjs', 'rg-walk.cjs', 'rg-types.cjs'] });
   const cliPath = path.join(workDir, 'cli.cjs');
 
   // Build the child env: sentinel points at the baked cli.cjs; NODE_PATH PREPENDS

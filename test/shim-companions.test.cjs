@@ -51,9 +51,10 @@ const SITES = [
 // (`require(__dirname + '/<name>')`), and every module THOSE require the same way.
 // unicode-text.cjs (CellSegmenter phase 3, task 5); rg-native.cjs (grep-native plan, task 4:
 // quaude's rg, which answers every rg call the bundle makes); rg-regex.cjs (grep-native task
-// 5b: rg's regex dialect, which rg-native.cjs requires). A test below derives this list from
+// 5b: rg's regex dialect, which rg-native.cjs requires); rg-walk.cjs and rg-types.cjs (grep-native
+// task 9: rg's walk, and its type table and version text, which rg-native.cjs requires). A test below derives this list from
 // the sources, transitively, so a new companion cannot be required there without being named here.
-const COMPANIONS = ['unicode-text.cjs', 'rg-native.cjs', 'rg-regex.cjs'];
+const COMPANIONS = ['unicode-text.cjs', 'rg-native.cjs', 'rg-regex.cjs', 'rg-walk.cjs', 'rg-types.cjs'];
 
 // read() — the only I/O: this repo's own site sources. Nothing this guard could
 // write to; it never touches ~/.local/share/clode or any build output.
@@ -114,7 +115,7 @@ test('a site that no longer names bun-shim.cjs at all is its own finding', () =>
 // synthetic input independent of the real tree).
 test('a site naming bun-shim.cjs and every companion is clean', () => {
   const r = scanCompanions({
-    sites: [{ rel: 'synthetic/clean.cjs', src: "const a = 'bun-shim.cjs'; const b = 'unicode-text.cjs'; const c = 'rg-native.cjs'; const d = 'rg-regex.cjs';\n" }],
+    sites: [{ rel: 'synthetic/clean.cjs', src: "const a = 'bun-shim.cjs'; const b = 'unicode-text.cjs'; const c = 'rg-native.cjs'; const d = 'rg-regex.cjs'; const e = 'rg-walk.cjs'; const f = 'rg-types.cjs';\n" }],
   });
   assert.deepStrictEqual(r.findings, []);
   assert.strictEqual(r.examined, 1);
@@ -126,7 +127,8 @@ test('a site that stages one companion but not another is a finding naming the o
   const r = scanCompanions({
     sites: [{ rel: 'synthetic/half.cjs', src: "const a = 'bun-shim.cjs'; const b = 'unicode-text.cjs'; const c = 'rg-native.cjs';\n" }],
   });
-  assert.deepStrictEqual(r.findings, ['synthetic/half.cjs: stages bun-shim.cjs but never rg-regex.cjs']);
+  assert.deepStrictEqual(r.findings, ['synthetic/half.cjs: stages bun-shim.cjs but never rg-regex.cjs', 'synthetic/half.cjs: stages bun-shim.cjs but never rg-walk.cjs',
+    'synthetic/half.cjs: stages bun-shim.cjs but never rg-types.cjs']);
 });
 
 // COMPANIONS is derived-checked, not trusted: every `require(__dirname + '/<x>')` in bun-shim.cjs

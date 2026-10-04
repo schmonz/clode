@@ -310,6 +310,12 @@ const ALLOWED = {
     // 641/646 are GLOBS, where "/" is the glob's own semantics, not a path
     // separator. 837 is _exeIsPathed, which tests backslash and drive-letter too.
     'libexec/bun-shim.cjs': 3,
+    // rg's walk (grep-native Task 9): one is a GLOB line (a `/` in an rg glob is the glob's own
+    // anchoring, gitignore.rs add_line); two are rg's unix pathutil.rs (is_file_name, file_name) over
+    // the walk's OWN paths, which it joins with `/` on every host, so `/` is their only separator by
+    // construction. rg's Windows walk (`\` joins, component-wise strip) is unmeasured (BACKLOG, and
+    // test/rg-walk.test.cjs skips there saying so).
+    'libexec/rg-walk.cjs': 3,
     // The loader's internal module ids are POSIX-canonical by construction.
     'libexec/node-shim/loader.cjs': 2,
     // resolveExe: the correct implementation everything else mirrors.

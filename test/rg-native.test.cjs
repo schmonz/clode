@@ -971,33 +971,41 @@ test('RG-EXIT: an unreadable path is rg\'s error on stderr, the rest answered, e
 });
 
 // What the emulation does not answer yet goes to its own task, refused by name (never answered
-// differently): -U (Task 10); --files, --version and --type stay with today's translation. --json is
-// the printers' own since Task 7 (it never reaches the translation: NOT_TRANSLATED throws).
-test('a search flag the printers do not answer is refused by name; --files/--type go to the translation, --json does not', () => {
+// differently): -U (Task 10); --files stays with today's translation (Task 10). --json is the printers'
+// own since Task 7, and --type, --type-not, --type-list and --version quaude's rg's since Task 9 (none
+// reaches the translation: NOT_TRANSLATED throws); --type-add and --type-clear are refused by name.
+test('a search flag the printers do not answer is refused by name; --files goes to the translation, --json/--type/--version do not', () => {
   const seen = [];
   const r = rgn.runRg(['-U', '--multiline-dotall', '-l', 'needle', '.'], { translate: NOT_TRANSLATED, spawnSync: cp.spawnSync, ugrep: () => UGREP });
   assert.strictEqual(r.status, 2);
   assert.deepStrictEqual(rgn.parseRgRefusal(r.stderr) && rgn.parseRgRefusal(r.stderr).flag, '-U');
   const nope = rgn.runRg(['--frobnicate', 'needle', '.'], { translate: NOT_TRANSLATED, spawnSync: cp.spawnSync, ugrep: () => UGREP });
   assert.strictEqual(rgn.parseRgRefusal(nope.stderr).flag, '--frobnicate');
-  for (const argv of [['--files', '.'], ['--type', 'ts', 'needle', '.'], ['--version']]) {
+  for (const flag of ['--type-add', '--type-clear']) {
+    assert.strictEqual(rgn.parseRgRefusal(rgn.runRg([flag, 'x:*.x', 'needle', '.'], { translate: NOT_TRANSLATED, spawnSync: cp.spawnSync }).stderr).flag, flag);
+  }
+  for (const argv of [['--files', '.']]) {
     rgn.runRg(argv, { translate: (a) => { seen.push(a); return { refuse: 'stand-in' }; }, spawnSync: cp.spawnSync, ugrep: () => UGREP });
   }
-  assert.strictEqual(seen.length, 3);
-  // --type beside --json: the translation cannot print JSON, so the refusal names --type (Task 9's)
-  const typed = rgn.runRg(['--json', '--type', 'ts', 'needle', '.'], { translate: NOT_TRANSLATED, spawnSync: cp.spawnSync, ugrep: () => UGREP });
-  assert.strictEqual(rgn.parseRgRefusal(typed.stderr).flag, '--type');
-  assert.strictEqual(rgn.parseRgRefusal(rgn.runRg(['-t', 'ts', '--json', 'needle', '.'], { translate: NOT_TRANSLATED, spawnSync: cp.spawnSync }).stderr).flag, '-t');
+  assert.strictEqual(seen.length, 1);
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'rg-native-flags-')));
+  try {
+    fs.writeFileSync(path.join(dir, 'a.ts'), 'needle\n');
+    for (const argv of [['--json', '--type', 'ts', 'needle', '.'], ['-t', 'ts', '--json', 'needle', '.'], ['--version'], ['-V'], ['--type-list']]) {
+      const a = rgn.runRg(argv, { translate: NOT_TRANSLATED, spawnSync: cp.spawnSync, ugrep: () => UGREP, matchFiles: UGREP ? undefined : rgn.matchFilesAlone, cwd: dir });
+      assert.strictEqual(a.status, 0, `${argv.join(' ')}: ${a.status} ${a.stderr}`);
+    }
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
   const json = rgn.runRg(['--json', 'needle', '-'], { translate: NOT_TRANSLATED, spawnSync: cp.spawnSync, ugrep: () => UGREP, input: 'a needle\n' });
   assert.strictEqual(json.status, 0);
   assert.match(String(json.stdout), /^\{"type":"begin","data":\{"path":\{"text":"<stdin>"\}\}\}\n/);
 });
 
 // THE SYNCHRONOUS TWIN IS BOUNDED (spawnSync, execFileSync: node's own cannot be interrupted, and
-// neither can this). The caller's timeout ends it, wherever it is: in ugrep's walk (every ugrep run
+// neither can this). The caller's timeout ends it, wherever it is: in ugrep's match pass (every ugrep run
 // gets the time left), or deciding a long line (every slice of steps checks it), reported as node
 // reports a spawnSync timeout. With no timeout, RG-RE-REFUSE-COST's per-line budget still holds.
-test('runRg ends at the caller\'s timeout: in ugrep\'s walk, and while deciding lines', { skip: process.platform === 'win32' ? 'needs a shebang stand-in' : false }, () => {
+test('runRg ends at the caller\'s timeout: in ugrep\'s match pass, and while deciding lines', { skip: process.platform === 'win32' ? 'needs a shebang stand-in' : false }, () => {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'rg-native-timeout-')));
   try {
     const fake = require('./rg-fake-ugrep.cjs').writeFakeUgrep(dir);

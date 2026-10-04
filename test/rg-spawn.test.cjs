@@ -616,14 +616,15 @@ test('CLODE_RG_DEBUG: a search quaude\'s rg answers, and one it refuses, each pr
   assert.ok(buf.split('\n').includes(`clode rg-debug: rg -U needle ${dir} !! untranslatable -U`), buf);
 });
 
-// WHEN UGREP FAILS UNDER A SEARCH (Task 6 review I-2, I-3, M-3). quaude's rg runs ugrep twice: its
-// walk (the interim listing) and its match pass. Each has a legitimate rc 2 and a failing one:
-//   - the walk exits 2 whenever it WARNS (ugrep 7.8.2, measured: one chmod-000 file or directory is
-//     enough). That is rg's own per-path error (`rg: tree/locked.txt: Permission denied (os error
-//     13)`, the rest answered, exit 2), never skew: nothing reaches the operator's stderr or /doctor;
-//   - a walk that fails otherwise, or a match pass that fails having printed nothing, is ugrep
-//     failing: the CALLER gets quaude's refusal (the Grep tool shows the model an error, where a bare
-//     rc 2 with no output reads as "No files found"), and the operator hears which pass failed.
+// WHEN UGREP FAILS UNDER A SEARCH (Task 6 review I-2, I-3, M-3). quaude's rg walks in JS (grep-native
+// Task 9, libexec/rg-walk.cjs) and runs ugrep for its match pass only, which has a legitimate rc 2 and a
+// failing one:
+//   - it exits 2 whenever it WARNS about a file it cannot read (ugrep 7.8.2, measured: one chmod-000
+//     file is enough). That is rg's own per-path error (`rg: tree/locked.txt: Permission denied (os
+//     error 13)`, the rest answered, exit 2), never skew: nothing reaches the operator's stderr or /doctor;
+//   - a match pass that fails otherwise is ugrep failing: the CALLER gets quaude's refusal (the Grep tool
+//     shows the model an error, where a bare rc 2 with no output reads as "No files found"), and the
+//     operator hears which pass failed.
 function withSearchStub(body, fn) {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'rg-fail-')));
   const fake = writeFakeUgrep(dir, 'fake-ugrep');
@@ -654,7 +655,7 @@ test('ugrep failing in the match pass, nothing printed: the caller gets a refusa
     assert.doesNotMatch(s.said(), /translated rg command/);
     assert.strictEqual(s.skews(), 1);
   }));
-test('ugrep\'s walk warning about an unreadable entry is rg\'s per-path error, never skew', {
+test('ugrep\'s warning about an unreadable file is rg\'s per-path error, never skew', {
   skip: posixExec.skip || ((process.getuid && process.getuid() === 0) ? 'root reads a chmod 000 file' : false),
 }, () => withSearchStub('', (s) => {
   fs.writeFileSync(path.join(s.dir, 'tree', 'locked.txt'), 'needle\n');
@@ -666,15 +667,19 @@ test('ugrep\'s walk warning about an unreadable entry is rg\'s per-path error, n
   assert.strictEqual(s.said(), '', 'nothing reaches the operator: this is rg\'s answer, not skew');
   assert.strictEqual(s.skews(), 0);
 }));
-test('a walk that fails otherwise refuses, and the operator hears it was the walk', posixExec, () =>
-  withSearchStub('for a in "$@"; do case "$a" in -r) echo "ugrep: boom in the walk" >&2; exit 2;; esac; done', (s) => {
-    const r = cp.spawnSync('rg', ['-l', '--null', 'needle', 'tree'], { cwd: s.dir, encoding: 'utf8' });
-    assert.strictEqual(r.status, 2);
-    assert.strictEqual(r.stdout, '');
-    const ref = parseRgRefusal(r.stderr);
-    assert.ok(ref && /boom in the walk/.test(ref.reason), JSON.stringify(r.stderr));
-    assert.match(s.said(), /ugrep exited 2 in quaude's rg's walk/);
-    assert.strictEqual(s.skews(), 1);
+// THE WALK IS quaude's rg's OWN (grep-native Task 9): ugrep is never asked to list a directory, so a
+// ugrep whose every listing fails changes nothing a search answers.
+test('a search never asks ugrep to walk: a ugrep failing every -r listing changes nothing', posixExec, () =>
+  withSearchStub('for a in "$@"; do case "$a" in -r) echo "ugrep: boom in a walk" >&2; exit 2;; esac; done', (s) => {
+    fs.writeFileSync(path.join(s.dir, 'tree', 'b.txt'), 'needle\n');
+    for (const argv of [['-l', '--null', 'needle', 'tree'], ['--hidden', '-c', '-H', '--null', 'needle', 'tree']]) {
+      const r = cp.spawnSync('rg', argv, { cwd: s.dir, encoding: 'utf8' });
+      assert.strictEqual(r.status, 0, JSON.stringify(r));
+      const recs = (argv.includes('-c') ? r.stdout.split('\n') : r.stdout.split('\0')).filter(Boolean).sort();
+      assert.deepStrictEqual(recs, argv.includes('-c') ? ['tree/b.txt\x001', 'tree/ok.txt\x001'] : ['tree/b.txt', 'tree/ok.txt']);
+    }
+    assert.strictEqual(s.said(), '');
+    assert.strictEqual(s.skews(), 0);
   }));
 // A PASS THAT FAILS PART WAY (Task 6 re-review N3). A ugrep that printed part of its answer and then
 // failed for a reason that is not rg's own per-path error (an infrastructure failure: it died, ran out
@@ -692,16 +697,6 @@ test('ugrep failing part way through the match pass, having printed some: the ca
       assert.ok(ref && /died midway/.test(ref.reason), JSON.stringify(r.stderr));
     }
     assert.match(s.said(), /ugrep exited 2 in quaude's rg's match pass/);
-  }));
-test('ugrep\'s walk listing some files, then failing with what rg never says: the caller gets a refusal, never the part', posixExec, () =>
-  withSearchStub('for a in "$@"; do case "$a" in -r) "$(dirname "$0")/fake-ugrep" "$@"; echo "ugrep: warning: something unexpected happened" >&2; exit 2;; esac; done', (s) => {
-    fs.writeFileSync(path.join(s.dir, 'tree', 'b.txt'), 'needle\n');
-    // --hidden: a walk argv no earlier test surfaced (the operator hears each failing argv once)
-    const r = cp.spawnSync('rg', ['--hidden', '-l', '--null', 'needle', 'tree'], { cwd: s.dir, encoding: 'utf8' });
-    assert.deepStrictEqual([r.status, r.stdout], [2, ''], JSON.stringify(r));
-    const ref = parseRgRefusal(r.stderr);
-    assert.ok(ref && /something unexpected happened/.test(ref.reason), JSON.stringify(r.stderr));
-    assert.match(s.said(), /ugrep exited 2 in quaude's rg's walk/);
   }));
 test('a per-path warning in the match pass is rg\'s error for that path, the rest answered, never a refusal or skew', posixExec, () =>
   withSearchStub('for a in "$@"; do case "$a" in --format=*) "$(dirname "$0")/fake-ugrep" "$@"; echo "ugrep: warning: cannot read tree/b.txt: Permission denied" >&2; exit 2;; esac; done', (s) => {
