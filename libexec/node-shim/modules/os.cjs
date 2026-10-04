@@ -96,6 +96,9 @@ module.exports = {
   getPriority: () => 0,
   setPriority: () => {},
   EOL: (globalThis.process && process.platform === 'win32') ? '\r\n' : '\n',
+  // node's os.devNull: the 2.1.283 bundle stats it to tell the null device from any other character
+  // device (dirSync's stamp); undefined here, that stat failed and nothing was the null device.
+  devNull: (globalThis.process && process.platform === 'win32') ? '\\\\.\\nul' : '/dev/null',
   // os.cpus()/availableParallelism (Task 4 wall): the -p boot sizes worker
   // parallelism from os.cpus().length. Backed by tjs.system.cpus, which is the
   // real per-core table in Node's exact shape (model/speed/times{user,nice,sys,
