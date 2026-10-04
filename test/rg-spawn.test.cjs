@@ -614,3 +614,64 @@ test('CLODE_RG_DEBUG: a search quaude\'s rg answers, and one it refuses, each pr
   assert.ok(buf.split('\n').includes(`clode rg-debug: rg -l needle ${dir} => quaude's rg over ${ugrep}`), buf);
   assert.ok(buf.split('\n').includes(`clode rg-debug: rg -U needle ${dir} !! untranslatable -U`), buf);
 });
+
+// WHEN UGREP FAILS UNDER A SEARCH (Task 6 review I-2, I-3, M-3). quaude's rg runs ugrep twice: its
+// walk (the interim listing) and its match pass. Each has a legitimate rc 2 and a failing one:
+//   - the walk exits 2 whenever it WARNS (ugrep 7.8.2, measured: one chmod-000 file or directory is
+//     enough). That is rg's own per-path error (`rg: tree/locked.txt: Permission denied (os error
+//     13)`, the rest answered, exit 2), never skew: nothing reaches the operator's stderr or /doctor;
+//   - a walk that fails otherwise, or a match pass that fails having printed nothing, is ugrep
+//     failing: the CALLER gets quaude's refusal (the Grep tool shows the model an error, where a bare
+//     rc 2 with no output reads as "No files found"), and the operator hears which pass failed.
+function withSearchStub(body, fn) {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'rg-fail-')));
+  const fake = writeFakeUgrep(dir, 'fake-ugrep');
+  const ugrep = path.join(dir, 'ugrep');
+  fs.writeFileSync(ugrep, `#!/bin/sh\n${body}\nexec ${JSON.stringify(fake)} "$@"\n`, { mode: 0o755 });
+  fs.mkdirSync(path.join(dir, 'tree'));
+  fs.writeFileSync(path.join(dir, 'tree', 'ok.txt'), 'needle\n');
+  const prev = process.env.CLODE_UGREP; process.env.CLODE_UGREP = ugrep;
+  const origErr = process.stderr.write; let said = '';
+  process.stderr.write = (s) => { said += s; return true; };
+  const doctor = () => ((globalThis.__clodeDoctor && globalThis.__clodeDoctor.appletSkew) || []).length;
+  const before = doctor();
+  try { return fn({ dir, ugrep, said: () => said, skews: () => doctor() - before }); } finally {
+    process.stderr.write = origErr;
+    if (prev === undefined) delete process.env.CLODE_UGREP; else process.env.CLODE_UGREP = prev;
+    try { fs.chmodSync(path.join(dir, 'tree', 'locked.txt'), 0o644); } catch { /* none */ }
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+test('ugrep failing in the match pass, nothing printed: the caller gets a refusal naming it, the operator the pass', posixExec, () =>
+  withSearchStub('for a in "$@"; do case "$a" in --format=*) echo "ugrep: error: simulated failure in the match pass" >&2; exit 2;; esac; done', (s) => {
+    const r = cp.spawnSync('rg', ['-l', '--null', 'needle', 'tree'], { cwd: s.dir, encoding: 'utf8' });
+    assert.strictEqual(r.status, 2);
+    assert.strictEqual(r.stdout, '');
+    const ref = parseRgRefusal(r.stderr);
+    assert.ok(ref && /simulated failure in the match pass/.test(ref.reason), JSON.stringify(r.stderr));
+    assert.match(s.said(), /ugrep exited 2 in quaude's rg's match pass/);
+    assert.doesNotMatch(s.said(), /translated rg command/);
+    assert.strictEqual(s.skews(), 1);
+  }));
+test('ugrep\'s walk warning about an unreadable entry is rg\'s per-path error, never skew', {
+  skip: posixExec.skip || ((process.getuid && process.getuid() === 0) ? 'root reads a chmod 000 file' : false),
+}, () => withSearchStub('', (s) => {
+  fs.writeFileSync(path.join(s.dir, 'tree', 'locked.txt'), 'needle\n');
+  fs.chmodSync(path.join(s.dir, 'tree', 'locked.txt'), 0);
+  const r = cp.spawnSync('rg', ['-c', '-H', '--null', 'needle', 'tree'], { cwd: s.dir, encoding: 'utf8' });
+  // native 2.1.283's embedded rg, the same tree (measured: rc 2, the error, the rest answered)
+  assert.deepStrictEqual([r.status, r.stdout, r.stderr], [2, 'tree/ok.txt\x001\n', 'rg: tree/locked.txt: Permission denied (os error 13)\n']);
+  assert.strictEqual(parseRgRefusal(r.stderr), null);
+  assert.strictEqual(s.said(), '', 'nothing reaches the operator: this is rg\'s answer, not skew');
+  assert.strictEqual(s.skews(), 0);
+}));
+test('a walk that fails otherwise refuses, and the operator hears it was the walk', posixExec, () =>
+  withSearchStub('for a in "$@"; do case "$a" in -r) echo "ugrep: boom in the walk" >&2; exit 2;; esac; done', (s) => {
+    const r = cp.spawnSync('rg', ['-l', '--null', 'needle', 'tree'], { cwd: s.dir, encoding: 'utf8' });
+    assert.strictEqual(r.status, 2);
+    assert.strictEqual(r.stdout, '');
+    const ref = parseRgRefusal(r.stderr);
+    assert.ok(ref && /boom in the walk/.test(ref.reason), JSON.stringify(r.stderr));
+    assert.match(s.said(), /ugrep exited 2 in quaude's rg's walk/);
+    assert.strictEqual(s.skews(), 1);
+  }));

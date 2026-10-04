@@ -7,7 +7,10 @@
 //   --version                                       `ugrep 7.8.2 ...`, at quaude's floor
 //   -r [...] -l --null -e '' -- TARGET              the walk's listing: every non-empty regular file
 //                                                   under TARGET (dot names only under -.), `.`'s bare
-//                                                   and any other target's joined to it, NUL-ended
+//                                                   and any other target's joined to it, NUL-ended; a
+//                                                   file or directory it cannot read is 7.8.2's warning
+//                                                   (`ugrep: warning: cannot read X: Permission
+//                                                   denied`, `cannot open directory X: ...`) and exit 2
 //   -Y -H --null --format=[%u]%F%b %e%~ -e LIT -- FILES   the plumbing's records (%u: one per line)
 // FAKE_UGREP_SLOW_MS in its environment makes the listing sleep that long first, so a test can end a
 // search while ugrep is still running. Its own interpreter is the node running the tests (a shebang),
@@ -26,16 +29,23 @@ const go = () => {
   if (opts.includes('-r')) {
     const hidden = opts.includes('-.'), T = files[0], out = [];
     const prefix = T === '.' || T === './' ? '' : T.replace(/\/+$/, '') + '/';
+    let warned = false;
+    const warn = (what, r, e) => { warned = true; process.stderr.write('ugrep: warning: cannot ' + what + ' ' + prefix + r + ': ' + (e.code === 'EACCES' ? 'Permission denied' : e.message) + '\n'); };
     const walk = (d, rel) => {
-      for (const n of fs.readdirSync(d).sort()) {
+      let names;
+      try { names = fs.readdirSync(d).sort(); } catch (e) { warn('open directory', rel, e); return; }
+      for (const n of names) {
         if (!hidden && n.startsWith('.')) continue;
         const p = path.join(d, n), r = rel ? rel + '/' + n : n, st = fs.lstatSync(p);
-        if (st.isDirectory()) walk(p, r); else if (st.isFile() && st.size) out.push(prefix + r + '\0');
+        if (st.isDirectory()) walk(p, r);
+        else if (st.isFile() && st.size) {
+          try { fs.closeSync(fs.openSync(p, 'r')); out.push(prefix + r + '\0'); } catch (e) { warn('read', r, e); }
+        }
       }
     };
     walk(T, '');
     process.stdout.write(out.join(''));
-    process.exit(out.length ? 0 : 1);
+    process.exit(warned ? 2 : out.length ? 0 : 1);
   }
   const fmt = opts.find((o) => o.startsWith('--format=')) || '';
   if (/[\\.+*?()|[\]{}^$]/.test(e)) { process.stderr.write('fake ugrep: plain literals only\n'); process.exit(2); }

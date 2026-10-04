@@ -227,7 +227,7 @@ const _rgCtx = {
   ugrep: () => process.env.CLODE_UGREP || which('ugrep'),
   missing: () => _rgNative.rgRefusal(_rgAppletMissing(null, 'ugrep', { debug: false }).refuse),
   debug: (args, verdict) => _rgDebug(['rg', ...args], verdict),
-  onRejected: (argv, st) => _surfaceRgSkew(argv, st),
+  onRejected: (argv, st, pass) => _surfaceRgSkew(argv, st, pass),
 };
 
 // A child_process call whose file is rg, in the shape that surface returns. execFile and spawn
@@ -695,11 +695,20 @@ function _recordSkew(f){
 const _rgSurfaced = new Set();
 // Loud, at the point of use: ugrep rejected an rg→ugrep translation at runtime.
 // exit >=2 only (1 == no match). Records to /doctor so the app's fallback can't hide it.
-function _surfaceRgSkew(rewritten, status){
+// `pass`: which of quaude's rg's own ugrep runs failed ('walk', 'match pass'), when the call was a
+// search quaude's rg answers itself rather than a translated one: the message says what failed.
+function _surfaceRgSkew(rewritten, status, pass){
   if (!(status >= 2)) return;
   const key = rewritten.join('\0');
   if (_rgSurfaced.has(key)) return;
   _rgSurfaced.add(key);
+  if (pass) {
+    const why = `host ugrep exited ${status} in quaude's rg's ${pass}: ${rewritten.join(' ')}`;
+    process.stderr.write(`clode: quaude's rg could not search — ${why}\n` +
+      `       file an issue with this search.\n`);
+    _recordSkew({ name: 'rg', applet: 'ugrep', why, fix: `quaude's rg (libexec/rg-native.cjs): its ugrep ${pass} failed` });
+    return;
+  }
   const why = `host ugrep exited ${status} for a translated rg command: ${rewritten.join(' ')}`;
   process.stderr.write(`clode: rg→ugrep translation was rejected by ugrep — ${why}\n` +
     `       file an issue with this command; meanwhile run ugrep directly.\n`);

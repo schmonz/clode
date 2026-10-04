@@ -1004,9 +1004,12 @@ function* searchCore(spec, opts) {
       const r = yield { op: 'list', P, argv: walkArgv(spec, P) };
       if (r.refusal) return r.refusal;
       const { files, errors, unknown } = readListing(P, r.stdout, r.stderr);
-      // ugrep's walk exits 0 past what it could not read (it warns); >= 2 is ugrep failing, which the
-      // operator hears of, and which refuses when it listed nothing and said nothing rg would say.
-      if (r.status >= 2 && opts.onRejected) opts.onRejected([opts.ugrepName || 'ugrep', ...walkArgv(spec, P)], r.status);
+      // ugrep's walk exits 2 whenever it WARNS (7.8.2, measured: one unreadable file or directory),
+      // and each warning is rg's own per-path error, printed above: that is rg's answer, not skew.
+      // Anything else at rc >= 2 is ugrep failing: the operator hears of it, and when it listed
+      // nothing and said nothing rg would say, the search refuses.
+      const legit = errors.length > 0 && unknown.length === 0;
+      if (r.status >= 2 && !legit && opts.onRejected) opts.onRejected([opts.ugrepName || 'ugrep', ...walkArgv(spec, P)], r.status, 'walk');
       if (r.status >= 2 && !files.length && !errors.length) return appletRejected(opts.ugrepName || 'ugrep', r.status, r.stderr);
       for (const f of files) entries.push({ ...f, walked: true });
       for (const e of [...errors, ...unknown]) entries.push({ error: e });
@@ -1041,6 +1044,9 @@ function* searchCore(spec, opts) {
     if (!m.length || (e.walked && binaryAtFirstRead(text))) continue;
     if (printFile(spec, { ...e, text, matches: m, withFilename }, out, state)) found = true;
   }
+  // A match pass that FAILED having printed nothing refuses (the Grep tool reads a bare rc 2 with no
+  // output as "No files found"); one that printed some of its answer first is rg's error after it.
+  if (failed && !out.length) return appletRejected(opts.ugrepName || 'ugrep', failed.status || 2, failed.stderr || failed.message);
   if (failed) err.push(Buffer.from(`rg: ${failed.message}\n`));
   return { stdout: Buffer.concat(out), stderr: Buffer.concat(err), status: broke ? 2 : found ? 0 : 1, signal: null };
 }
@@ -1051,7 +1057,7 @@ function matchOutcome(e, opts, ugrep) {
   if (!(e instanceof UgrepError)) throw e;
   if (e.timedOut) throw e;
   if (e.refused) return { refusal: rgRefusal(e.message) };
-  if (opts.onRejected) opts.onRejected([ugrep || 'ugrep', `(${e.message})`], e.status || 2);
+  if (opts.onRejected) opts.onRejected([ugrep || 'ugrep', `(${e.message})`], e.status || 2, 'match pass');
   return { error: e };
 }
 
