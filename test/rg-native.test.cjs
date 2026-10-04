@@ -17,6 +17,14 @@ const cp = require('node:child_process');
 const rgn = require('../libexec/rg-native.cjs');
 const { makeRgTree, normalizeRg } = require('../scripts/lib/rg-probe.cjs');
 const { tjsPath, runLoader, engineSpawn, LOADER } = require('./node-shim-helper.cjs');
+const { missingExtDeps } = require('./shim-surface/collect.cjs');
+// Why a test under tjs cannot run here: no engine, or the shim without its ext-dep closure (quaude
+// always carries it; without it node-shim falls back to buffer-lite, a shim quaude never ships, which
+// lacks Buffer methods rg-native uses: the test would fail on the checkout, not on quaude).
+const NO_TJS = !tjsPath() ? 'no tjs engine' : (() => {
+  const missing = missingExtDeps();
+  return missing.length ? `the shim's ext-dep closure is not installed (${missing.join(', ')}; npm ci --prefix deps/claude)` : false;
+})();
 
 // The host ugrep the tests drive (quaude's own resolution: CLODE_UGREP, else PATH).
 function hostUgrep() {
@@ -448,7 +456,7 @@ test('a prefilter never stalls ugrep on a 5 MB line: `.{0,100}needle` and `x.*ne
 // The async twin decides in SLICES of steps, so an abort lands DURING one long line, not after it
 // (review I2: it used to yield only between files). Under tjs, where one such line takes seconds.
 test('ugrepMatchesAsync under tjs: an abort lands within a bound during one long line', {
-  skip: needUgrep.skip || (!tjsPath() ? 'no tjs engine' : false),
+  skip: needUgrep.skip || NO_TJS,
 }, () => {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-native-abort-tjs-'));
   try {
@@ -540,7 +548,7 @@ test('ugrepMatchesAsync answers what ugrepMatches does, and rejects as it throws
 });
 
 test('ugrepMatches and ugrepMatchesAsync under tjs: native\'s ranges', {
-  skip: needUgrep.skip || (!tjsPath() ? 'no tjs engine' : false),
+  skip: needUgrep.skip || NO_TJS,
 }, () => {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-native-tjs-'));
   try {
@@ -894,7 +902,7 @@ test('the async twin prints every row the sync one does (rgExecFile, native)', n
 }));
 
 // Under the engine quaude ships: both twins, every row.
-test('the printers under tjs: both twins, every row (native)', { skip: needUgrep.skip || (!tjsPath() ? 'no tjs engine' : false) }, () => withP6((root) => {
+test('the printers under tjs: both twins, every row (native)', { skip: needUgrep.skip || NO_TJS }, () => withP6((root) => {
   const prog = path.join(root, '..', path.basename(root) + '-probe.cjs');
   const rows = [...P6_NATIVE.map((r) => [r, false]), ...P6_NATIVE_WALK.map((r) => [r, true])];
   fs.writeFileSync(prog, `
@@ -1019,7 +1027,7 @@ test('runRg ends at the caller\'s timeout: in ugrep\'s walk, and while deciding 
 // line (its `.*` is greedy), so deciding every match took 5.3 s under tjs (this Mac, 2026-10-04; the
 // pinned carve's own one-line 59 MB extracted bundle passed Grep's 20 s timeout); the earliest search takes 70 ms.
 test('RG-FIRST-MATCH: -l and -c over a 5 MB line answer in well under a second under tjs (both twins)', {
-  skip: needUgrep.skip || (!tjsPath() ? 'no tjs engine' : false),
+  skip: needUgrep.skip || NO_TJS,
 }, () => {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'rg-native-first-')));
   try {
@@ -1142,7 +1150,7 @@ test('RG-SPECIAL-FILE: /dev/null is an empty file, a socket is rg\'s per-path er
 // The same under tjs, where node-shim's Stats answers isFIFO() false for every path: the type is
 // read from the mode bits, so a FIFO still refuses at once and /dev/null still answers.
 test('RG-SPECIAL-FILE and RG-REFUSE-SPECIAL-FILE under tjs: both twins (native)', {
-  skip: needUgrep.skip || (process.platform === 'win32' ? 'no /dev/null, mkfifo or unix sockets' : !tjsPath() ? 'no tjs engine' : false),
+  skip: needUgrep.skip || (process.platform === 'win32' ? 'no /dev/null, mkfifo or unix sockets' : NO_TJS),
 }, async () => {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'rg-native-special-tjs-')));
   const server = require('node:net').createServer();
@@ -1190,7 +1198,7 @@ test('RG-SPECIAL-FILE and RG-REFUSE-SPECIAL-FILE under tjs: both twins (native)'
 // (2026-10-04): ~2.4 s a twin alone, 11 s in a loaded full suite, so linearity is judged by COUNT
 // (rgn.searchStats.scannedBack), not wall time; the next test does the same fast, on node.
 test('RG-JSON: every match on a 5 MB line prints in linear time under tjs (both twins, native\'s summary)', {
-  skip: needUgrep.skip || (!tjsPath() ? 'no tjs engine' : false),
+  skip: needUgrep.skip || NO_TJS,
 }, () => {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'rg-native-jsonbig-')));
   try {
@@ -1236,7 +1244,7 @@ test('RG-JSON: every match on a 5 MB line prints in linear time under tjs (both 
 // quaude's own stdin a terminal nothing writes to (the repro: native printed ok.txt, ours never ended).
 test('RG-REFUSE-SPECIAL-FILE: /dev/stdin, /dev/fd/0 and /dev/tty refuse at once under a terminal, never read (tjs, both twins)', {
   skip: needUgrep.skip || (!['darwin', 'linux'].includes(process.platform) ? 'needs script(1) for a pty'
-    : !tjsPath() ? 'no tjs engine' : !fs.existsSync('/usr/bin/script') ? 'no /usr/bin/script' : false),
+    : NO_TJS ? NO_TJS : !fs.existsSync('/usr/bin/script') ? 'no /usr/bin/script' : false),
 }, async () => {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'rg-native-tty-')));
   try {
@@ -1315,7 +1323,7 @@ test('RG-JSON: finding each match\'s line steps over the text at most once (coun
 // The loop's longest gap is the one wall-clock bound left: it is what the review measured.
 const MB_SLACK = 512 * 1024;   // one 64 KiB slice of JSON, every byte of it escaped (x6), and change
 test('rg stops printing at the caller\'s maxBuffer and the async twin never holds the loop (tjs, counted)', {
-  skip: needUgrep.skip || (!tjsPath() ? 'no tjs engine' : false),
+  skip: needUgrep.skip || NO_TJS,
 }, () => {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'rg-native-maxbuf-')));
   try {
@@ -1489,7 +1497,7 @@ test('RG-BINARY-*: with the matcher alone deciding every file, native\'s rows th
 test('RG-BINARY-*: the async twin prints every row the sync one does (rgExecFile, native)', needUgrep, () => withP8(async (root) => {
   for (const [row, platform] of P8_ROWS) p6Check(root, row, await p8Async(root, row, platform), false);
 }));
-test('RG-BINARY-*: under tjs, both twins, every row (native)', { skip: needUgrep.skip || (!tjsPath() ? 'no tjs engine' : false) }, () => withP8((root) => {
+test('RG-BINARY-*: under tjs, both twins, every row (native)', { skip: needUgrep.skip || NO_TJS }, () => withP8((root) => {
   const prog = path.join(root, '..', path.basename(root) + '-probe.cjs');
   fs.writeFileSync(prog, `
     const rgn = require(${JSON.stringify(path.join(__dirname, '..', 'libexec', 'rg-native.cjs'))});
