@@ -6,10 +6,11 @@
 // the rule it pins (RG-RE-*, stated in rg-regex.cjs). Non-ASCII is built from code points (the
 // Write/Edit tool hazard): no literal non-ASCII character appears in this file.
 //
-// THE PROPERTY TEST (test/fixtures/rg-regex-oracle.json, scripts/gen-rg-regex-oracle.cjs): 300
-// patterns drawn from the grammar quaude's rg answers, over a corpus of ASCII, Latin-1, marks,
-// CJK, emoji, case-folding specials and invalid UTF-8; ours must equal native's matches on every
-// one it answers, and the prefilter must propose every line native selects.
+// THE PROPERTY TEST (test/fixtures/rg-regex-oracle.json, scripts/gen-rg-regex-oracle.cjs): 500
+// patterns, 300 drawn from the grammar quaude's rg answers and 200 from the lift family (shared
+// branch prefixes, repetitions at branch ends: RG-RE-ALT-LIFT), over a corpus of ASCII, Latin-1,
+// marks, CJK, emoji, case-folding specials, invalid UTF-8 and words; ours must equal native's
+// matches on every one it answers, and the prefilter must propose every line native selects.
 const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -264,6 +265,35 @@ test('RG-RE-ALT-MERGE: single-character branches merge before rg strips \\n and 
   }
 });
 
+// RG-RE-ALT-LIFT (review round 4): regex-syntax's Hir::alternation lifts a prefix shared by
+// EVERY branch (all of them concatenations whose leading elements are HIR-equal: adjacent literal
+// characters are ONE literal, classes compare by set, repetitions by min/max/greedy/sub, captures
+// never) out of the alternation, `X..|X..` -> `X(?:..|..)`, and that changes leftmost-first
+// priority when X repeats greedily. grep-regex then strips \n from every class and REBUILDS the
+// HIR through the same constructors, so a prefix equal only after the strip is lifted too
+// (`[\na]\w+x|a\w+y`). Native's literals, on `FooErrorException\nfoo bar\nab\nxaxb\naqqxqqy\n`:
+const NATIVE_LIFT = [
+  ['\\w+Error|\\w+Exception', [[1,[[0,17]]]]],
+  ['(?:\\w+)Error|(?:\\w+)Exception', [[1,[[0,17]]]]],
+  ['.*foo|.*bar', [[2,[[18,25]]]]],
+  ['.{0,15}a|.{0,15}b', [[2,[[18,24]]],[3,[[26,28]]],[4,[[29,33]]],[5,[[34,35]]]]],
+  ['x.*a|x.*b', [[4,[[29,33]]]]],
+  ['[a-z]+o|[a-z]+r', [[1,[[1,3],[4,8],[9,16]]],[2,[[18,21],[22,25]]]]],
+  ['(\\w+)Error|(\\w+)Exception', [[1,[[0,8]]]]],
+  ['Foo\\w+?|Foo\\w+', [[1,[[0,4]]]]],
+  ['[\\na]\\w+x|a\\w+y', [[5,[[34,41]]]]],
+  ['a\\w+x|a\\w+y', [[5,[[34,41]]]]],
+  ['[\\na]\\w+x|[a\\n]\\w+y', [[5,[[34,41]]]]],
+  ['(?s).\\w*x|.\\w*y', [[1,[[0,10]]],[4,[[29,32]]],[5,[[34,41]]]]],
+  ['\\w+x|\\w+y|z', [[1,[[0,10]]],[4,[[29,32]]],[5,[[34,38],[38,41]]]]],
+  ['\\w+(?:Error|Exc)|\\w+Exception', [[1,[[0,11]]]]],
+  ['q|\\w+Error|\\w+Exception', [[1,[[0,8]]],[5,[[35,36],[36,37],[38,39],[39,40]]]]],
+];
+test('RG-RE-ALT-LIFT: a prefix every branch shares is lifted, as rg lifts it, before and after the \\n strip (native)', () => {
+  const buf = B('FooErrorException\nfoo bar\nab\nxaxb\naqqxqqy\n');
+  for (const [pattern, want] of NATIVE_LIFT) assert.deepStrictEqual(allLines(buf, pattern), want, pattern);
+});
+
 // RG-RE-MATCH-AT-UNTERMINATED-END. The MATCHER finds a match at the end of a last line that has
 // no terminator; rg's PRINTERS do not print it (grep-printer's find_iter_at_in_context stops at a
 // match starting at the line's end, and --json drops an empty match there). Native shows both
@@ -429,7 +459,7 @@ function corpusLines(pattern, ignoreCase) {
   } catch (e) { if (e.name === 'RgRegexRefusal') return { refused: e.rule }; throw e; }
   return { lines, t };
 }
-const ANSWERED_FLOOR = 250;
+const ANSWERED_FLOOR = 450;
 // rg-regex-oracle-property: ours equals native's digest on every oracle pattern it answers. Only
 // rg's own rejections, and the look-behind lines the corpus holds on purpose
 // (RG-RE-REFUSE-LOOKBEHIND), may refuse. Control: a case whose native digest was tampered with.

@@ -52,6 +52,9 @@
 //   RG-RE-SYNTAX           regex-syntax 0.8.4's grammar, the pattern wrapped as `(?:PATTERN)`
 //   RG-RE-ALT-MERGE        branches that are all single characters, or all classes, are one class
 //                          before rg strips \n and bans NUL (`\n|a` is [a]; `[ab]|\n` is refused)
+//   RG-RE-ALT-LIFT         a prefix every branch shares is lifted out (`\w+Error|\w+Exception` is
+//                          `\w+(?:Error|Exception)`, which changes leftmost-first priority), again
+//                          after rg's \n strip rebuilds the HIR
 //   RG-RE-LITERAL          a plain literal matches its bytes, leftmost, without overlap
 //   RG-RE-MATCH-AT-UNTERMINATED-END  the matcher's match at the end of an unterminated last line
 //                          is reported (rg selects the line by it; its printers do not print it)
@@ -599,31 +602,104 @@ function hir(n) {
   switch (n.k) {
     case 'group': return n.cap ? { k: 'cap', sub: hir(n.sub) } : hir(n.sub);
     case 'cap': return n;
+    case 'cat': return mkCat(n.subs.map(hir));
+    case 'alt': return mkAlt(n.subs.map(hir));
+    case 'rep': return mkRep(hir(n.sub), n);
+    default: return n;
+  }
+}
+// Hir::concat: nested concatenations flatten, empties drop out.
+function mkCat(list) {
+  const subs = [];
+  for (const s of list) { if (s.k === 'cat') subs.push(...s.subs); else if (s.k !== 'empty') subs.push(s); }
+  return subs.length === 0 ? { k: 'empty' } : subs.length === 1 ? subs[0] : { k: 'cat', subs };
+}
+// Hir::repetition: the max_len 0 clamp, x{0} empty, x{1} x.
+function mkRep(sub, { min, max, greedy }) {
+  if (lens(sub)[1] === 0) { min = Math.min(min, 1); max = max === null ? 1 : Math.min(max, 1); }
+  if (min === 0 && max === 0) return { k: 'empty' };
+  if (min === 1 && max === 1) return sub;
+  return { k: 'rep', sub, min, max, greedy };
+}
+// Hir::alternation: flatten, then RG-RE-ALT-MERGE, then RG-RE-ALT-LIFT.
+function mkAlt(list) {
+  const subs = [];
+  for (const s of list) { if (s.k === 'alt') subs.push(...s.subs); else subs.push(s); }
+  if (subs.length === 1) return subs[0];
+  // RG-RE-ALT-MERGE (singleton_chars / class_chars): branches that are ALL single characters (a
+  // one-character class is a literal there), or ALL classes of any other size, become one class.
+  const one = (s) => s.k === 'cls' && count(s.set) === 1;
+  const many = (s) => s.k === 'cls' && count(s.set) !== 1;
+  if (subs.every(one) || subs.every(many)) return { k: 'cls', set: subs.reduce((a, s) => union(a, s.set), []) };
+  return liftCommonPrefix(subs) || { k: 'alt', subs };
+}
+// RG-RE-ALT-LIFT (lift_common_prefix): when EVERY branch is a concatenation and they share leading
+// elements, `X..|X..` becomes `X(?:..|..)`, the suffixes rebuilt as an alternation (merged and
+// lifted again). It changes leftmost-first priority when X repeats greedily (`\w+Error|\w+Exception`
+// matches all of `FooErrorException` in rg). Its elements are the HIR's: adjacent literal characters
+// are ONE literal (so `ab|ac` is two literals, not concatenations, and nothing is lifted).
+function rustElems(node) {
+  const out = [];
+  let lit = null;
+  for (const x of node.subs) {
+    if (x.k === 'cls' && count(x.set) === 1) {
+      if (lit) { lit.text.push(x.set[0]); lit.nodes.push(x); } else { lit = { text: [x.set[0]], nodes: [x] }; out.push(lit); }
+    } else { lit = null; out.push({ node: x, nodes: [x] }); }
+  }
+  return out;
+}
+const sameSet = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
+function elemEq(a, b) {
+  if (a.text || b.text) return !!a.text && !!b.text && sameSet(a.text, b.text);
+  return hirEq(a.node, b.node);
+}
+// The HIR's equality (derived PartialEq): a capture is never equal (its index differs).
+function hirEq(a, b) {
+  if (a.k !== b.k) return false;
+  switch (a.k) {
+    case 'empty': return true;
+    case 'cls': return sameSet(a.set, b.set);
+    case 'look': return a.look === b.look;
+    case 'rep': return a.min === b.min && a.max === b.max && a.greedy === b.greedy && hirEq(a.sub, b.sub);
+    case 'cap': return false;
+    case 'alt': return a.subs.length === b.subs.length && a.subs.every((x, i) => hirEq(x, b.subs[i]));
     case 'cat': {
-      const subs = [];
-      for (const s of n.subs.map(hir)) { if (s.k === 'cat') subs.push(...s.subs); else if (s.k !== 'empty') subs.push(s); }
-      return subs.length === 0 ? { k: 'empty' } : subs.length === 1 ? subs[0] : { k: 'cat', subs };
+      const ea = rustElems(a), eb = rustElems(b);
+      return ea.length === eb.length && ea.every((x, i) => elemEq(x, eb[i]));
     }
-    case 'alt': {
-      const subs = [];
-      for (const s of n.subs.map(hir)) { if (s.k === 'alt') subs.push(...s.subs); else subs.push(s); }
-      if (subs.length === 1) return subs[0];
-      // RG-RE-ALT-MERGE (Hir::alternation's singleton_chars / class_chars): branches that are ALL
-      // single characters (a one-character class is a literal there), or ALL classes of any other
-      // size, become one class. A mix, or anything else, stays an alternation.
-      const one = (s) => s.k === 'cls' && count(s.set) === 1;
-      const many = (s) => s.k === 'cls' && count(s.set) !== 1;
-      if (subs.every(one) || subs.every(many)) return { k: 'cls', set: subs.reduce((a, s) => union(a, s.set), []) };
-      return { k: 'alt', subs };
-    }
-    case 'rep': {
-      const sub = hir(n.sub);
-      let { min, max } = n;
-      if (lens(sub)[1] === 0) { min = Math.min(min, 1); max = max === null ? 1 : Math.min(max, 1); }
-      if (min === 0 && max === 0) return { k: 'empty' };
-      if (min === 1 && max === 1) return sub;
-      return { k: 'rep', sub, min, max, greedy: n.greedy };
-    }
+    default: return false;
+  }
+}
+function liftCommonPrefix(subs) {
+  if (subs.length <= 1) return null;
+  const elems = [];
+  for (const s of subs) {
+    if (s.k !== 'cat') return null;
+    const e = rustElems(s);
+    if (e.length < 2) return null;                 // literal characters only: a Literal, not a Concat
+    elems.push(e);
+  }
+  let len = elems[0].length;
+  for (const e of elems.slice(1)) {
+    let k = 0;
+    while (k < len && k < e.length && elemEq(elems[0][k], e[k])) k++;
+    len = k;
+    if (!len) return null;
+  }
+  const prefix = elems[0].slice(0, len).flatMap((x) => x.nodes);
+  const suffixes = elems.map((e) => mkCat(e.slice(len).flatMap((x) => x.nodes)));
+  return mkCat([...prefix, mkAlt(suffixes)]);
+}
+// grep-regex strip.rs removes \n from every class and REBUILDS the HIR through the same
+// constructors, so a class that was \n-and-one-character becomes a literal, and merges and lifts
+// see the stripped classes (`[\na]\w+x|a\w+y` is lifted). After checkHir, so no class is \n alone.
+function stripHir(n) {
+  switch (n.k) {
+    case 'cls': return n.set.length ? { k: 'cls', set: withoutNewline(n.set) } : n;
+    case 'cat': return mkCat(n.subs.map(stripHir));
+    case 'alt': return mkAlt(n.subs.map(stripHir));
+    case 'rep': return mkRep(stripHir(n.sub), n);
+    case 'cap': return { k: 'cap', sub: stripHir(n.sub) };
     default: return n;
   }
 }
@@ -1244,8 +1320,9 @@ function translateRgRegex(pattern, opts = {}) {
     if (!ps.eof()) ps.syntax('unopened group');
     const bound = sizeBound(ast) + SIZE_OVERHEAD;
     if (bound > NFA_SIZE_LIMIT) refuse('RG-RE-REFUSE-SIZE-LIMIT', `an NFA of up to ${bound > 1e15 ? 'more than 1e15' : Math.ceil(bound)} bytes`);
-    const node = hir(ast);
+    let node = hir(ast);
     checkHir(node);
+    node = stripHir(node);
     return { prog: program(node), prefilter: pre(node) };
   } catch (e) {
     if (e instanceof RgRegexRefusal) return { refuse: refusalReason(e), rule: e.rule };

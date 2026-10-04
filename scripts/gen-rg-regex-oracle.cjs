@@ -27,7 +27,7 @@ const { runNativeRg, nativeRgVersion } = require('./lib/rg-probe.cjs');
 
 const REPO = path.resolve(__dirname, '..');
 const TARGET = path.join(REPO, 'test', 'fixtures', 'rg-regex-oracle.json');
-const SEED = 20261003, CASES = 300, LINES = 40;
+const SEED = 20261003, CASES = 300, LIFT_CASES = 200, LINES = 40, WORD_LINES = 20;
 
 function refuse(msg) { process.stderr.write(`gen-rg-regex-oracle: ${msg}\n`); process.exit(2); }
 
@@ -38,7 +38,8 @@ function digest(lines) {
 
 function draw() {
   let seed = SEED;
-  const rnd = (n) => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed % n; };
+  // the high bits: this LCG's low bits cycle (rnd(2) would merely alternate)
+  const rnd = (n) => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return (seed >>> 12) % n; };
   const pick = (a) => a[rnd(a.length)];
   const cp = (...c) => String.fromCodePoint(...c);
   const PIECES = ['a', 'b', 'ab', 'k', 'K', 's', 'S', '_', '1', '9', ' ', '  ', '.', '-', 'x', 'needle', 'foo', 'bar', '\t', '\r',
@@ -48,6 +49,13 @@ function draw() {
   for (let i = 0; i < LINES; i++) {
     const k = rnd(7);
     for (let j = 0; j < k; j++) parts.push(Buffer.from(pick(PIECES)));
+    parts.push(Buffer.from('\n'));
+  }
+  // words the lift family's branches share prefixes and suffixes over (review round 4)
+  const WORDS = ['FooErrorException', 'foo bar', 'ab', 'xaxb', 'aqqxqqy', 'xyxyb', 'Error', 'Exception', 'aaa bbb', 'o', 'xx ErrEx',
+    'foofoobar', 'a b a', 'bar foo bar', '12 34', 'yyyxq'];
+  for (let i = 0; i < WORD_LINES; i++) {
+    for (let j = 1 + rnd(3); j > 0; j--) parts.push(Buffer.from(pick(WORDS) + (rnd(2) ? ' ' : '')));
     parts.push(Buffer.from('\n'));
   }
   const corpus = Buffer.concat(parts);
@@ -68,6 +76,27 @@ function draw() {
   };
   const cases = [];
   for (let i = 0; i < CASES; i++) cases.push({ pattern: pat(0), ignoreCase: rnd(5) === 0 });
+  // THE LIFT FAMILY: alternations whose branches share prefixes (and suffixes), with greedy and lazy
+  // repetitions at branch starts and ends, nested alternations, captures that block the lift,
+  // (?i), and \n-classes that only the strip makes equal (RG-RE-ALT-LIFT).
+  const REP = ['\\w+', '\\w*', '\\w+?', '.*', '.+?', '.*?', '[a-z]+', '[a-z]+?', 'a{1,3}', 'a{1,3}?', '(?:x|y)+', '\\d*', '[^ ]+', 'o+', '\\s*', 'b?', '.{0,4}'];
+  const WATOM = ['a', 'b', 'o', 'x', 'y', 'q', 'Error', 'Exception', 'foo', 'bar', 'r', 'e', 'Ex', ' ', '\\b', '$', '[ab]', '[\\na]', '\\w', '.', '(?:Err|Ex)'];
+  const seg = (n) => { let x = ''; for (let i = 0; i < n; i++) x += rnd(2) ? pick(REP) : pick(WATOM); return x; };
+  for (let i = 0; i < LIFT_CASES; i++) {
+    const prefix = seg(1 + rnd(3)), k = 2 + rnd(3), branches = [];
+    for (let b = 0; b < k; b++) {
+      const r = rnd(10);
+      const p = r === 0 ? `(${prefix})` : r === 1 ? seg(1 + rnd(2)) : r === 2 ? prefix + seg(1) : prefix;
+      branches.push(p + seg(rnd(3)));
+    }
+    let p = branches.join('|');
+    const w = rnd(8);
+    if (w === 0) p = `(?:${p})${pick(['', 'z', '\\b', '+'])}`;
+    else if (w === 1) p = `${pick(['a', '\\w+', `(?:${branches[0]}|${branches[1]})`])}(?:${p})`;
+    else if (w === 2) p = `(?:${branches[0]}(?:${branches.slice(1).join('|')})|${branches[0]}${seg(1)})`;
+    else if (w === 3) p = `(?i)${p}`;
+    cases.push({ pattern: p, ignoreCase: false });
+  }
   return { corpus, cases };
 }
 
