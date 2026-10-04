@@ -351,6 +351,18 @@ Bash tool instead".
   HAS them: its async `tjs.stat('/dev/null')` answers dev 27896451, ino 339, rdev 50331650, the
   same as host node's statSync (this Mac, 2026-10-04). The fix is in the engine's sync binding, not
   in invented values. (The type methods, isFIFO() and the rest, read the mode bits since eba6c57.)
+  ALSO `{ bigint: true }` is ignored under tjs (numbers come back, ctimeNs is undefined), so the
+  2.1.283 bundle's zero-inode guards (`ino !== 0n`) never see the zero and treat 0 as an identity.
+  What that defeats (Task 7 re-review, Important 2; the engine fix is scheduled as its own task):
+  - git worktree `commondir` identity: any directory is accepted as the repo's;
+  - openReadBoundToApproval and the et() "gone" check, and the approval-bound reopen they guard;
+  - the staging-dir identity checks (and Yin's);
+  - since eba6c57 (isCharacterDevice() is now true for every character device), Qp in the
+    credentials reader (Ip) and M8 (dirSync's null-device stamp) compare rdev with /dev/null's, and
+    every rdev is 0: EVERY character device counts as /dev/null. AWS_SHARED_CREDENTIALS_FILE=/dev/zero
+    or /dev/tty reads as silently empty where native says it is a device.
+- node-shim's `fs.opendirSync` returns a Dir without `readSync` (found by the Task 7 re-review, M3); the
+  2.1.283 bundle never calls it.
 - **Acceptance to run: a credential handed over an inherited fd, on Linux.** The 2.1.283 bundle's
   CLAUDE_CODE_{API_KEY,OAUTH_TOKEN,GATEWAY_TOKEN,WEBSOCKET_AUTH}_FILE_DESCRIPTOR reader takes an fd
   that fstat calls a socket directly, and otherwise opens `/dev/fd/N`. Before eba6c57 node-shim's
