@@ -1285,18 +1285,16 @@ function jsonSummary(t) {
 //   - anything else (a socket, a block device) is opened without blocking and closed unread: an open
 //     that fails is rg's per-path error (a unix socket: `Operation not supported on socket (os error
 //     102)`, the rest answered, rc 2); one that opens is refused (native reads it to its end).
-// The type comes from the mode bits, which every engine reports.
-const S_IFMT = 0o170000, S_IFIFO = 0o010000, S_IFCHR = 0o020000;
+// The type is the engine's Stats' (node-shim's reads the mode bits since Task 7 review I3).
 const DESCRIPTOR_PATH = /^\/(?:dev\/(?:std(?:in|out|err)$|fd\/)|proc\/(?:self|thread-self|\d+)\/fd\/)/;
 function isDescriptorPath(p) {
   if (DESCRIPTOR_PATH.test(p)) return true;
   try { return DESCRIPTOR_PATH.test(require('fs').realpathSync(p)); } catch { return false; }
 }
 function specialKind(p, st) {
-  const type = st ? st.mode & S_IFMT : 0;
-  if (type === S_IFIFO) return { kind: 'refuse' };
+  if (st.isFIFO()) return { kind: 'refuse' };
   const fs = require('fs');
-  if (type === S_IFCHR) {
+  if (st.isCharacterDevice()) {
     let real = null;
     try { real = fs.realpathSync(p); } catch { /* not resolvable: not /dev/null */ }
     return real === '/dev/null' ? { kind: 'empty' } : { kind: 'refuse' };
