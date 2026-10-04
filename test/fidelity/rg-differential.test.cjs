@@ -125,6 +125,14 @@ test('compareRg forgives elapsed times in --json (named normalization 2), and no
   assert.strictEqual(P.compareRg(res(JSON_ARGV, lines(J1)), res(JSON_ARGV, lines(otherStat))).same, false);
 });
 
+// The last of --json, -l and -c is what rg prints (RG-ARGV): `--json -l` prints paths, so their order
+// is forgiven as -l's, not looked for as JSON records (Task 7 review M2).
+test('compareRg reads the printer from the LAST of --json, -l and -c', () => {
+  assert.strictEqual(P.compareRg(res(['--json', '-l', 'needle', '.'], './a.txt\n./b.txt\n'), res(['--json', '-l', 'needle', '.'], './b.txt\n./a.txt\n')).same, true);
+  assert.strictEqual(P.compareRg(res(['--json', '-c', 'needle', '.'], './a.txt:1\n./b.txt:2\n'), res(['--json', '-c', 'needle', '.'], './b.txt:2\n./a.txt:1\n')).same, true);
+  assert.strictEqual(P.compareRg(res(['-l', '--json', 'needle', '.'], lines(J1)), res(['-l', '--json', 'needle', '.'], lines(J2))).same, true);
+});
+
 test('compareRg does not forgive order where rg promised one (--sort=modified)', () => {
   const c = P.compareRg(res(GLOB, 'a.txt\0b.txt\0'), res(GLOB, 'b.txt\0a.txt\0'));
   assert.strictEqual(c.same, false);

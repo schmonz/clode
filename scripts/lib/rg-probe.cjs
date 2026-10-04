@@ -406,12 +406,16 @@ function runOursRg(argv, cwd, opts = {}) { return runOursRgBatch([{ argv, cwd }]
 //      blanked. Every other stat must match.
 const L = (b) => Buffer.from(b || '').toString('latin1');   // one char per byte, both ways
 const rgSorts = (argv) => argv.some((x) => /^--sortr?(=|$)/.test(x));
+// The printer is the LAST of --json, -l and -c on the argv (rg's own rule, RG-ARGV: `--json -l` prints
+// paths); --files lists files whatever else is asked.
 function recordShape(argv) {
-  if (argv.includes('--json')) return 'json';
-  if (argv.includes('--files') || argv.includes('-l') || argv.includes('--files-with-matches')) {
-    return argv.includes('--null') || argv.includes('-0') ? '\0' : '\n';
-  }
-  if (argv.includes('-c') || argv.includes('--count') || argv.includes('--count-matches')) return '\n';
+  const last = (...flags) => Math.max(...flags.map((f) => argv.lastIndexOf(f)));
+  const json = last('--json'), files = last('-l', '--files-with-matches'), count = last('-c', '--count', '--count-matches');
+  const sep = argv.includes('--null') || argv.includes('-0') ? '\0' : '\n';
+  if (argv.includes('--files')) return sep;
+  if (json > files && json > count) return 'json';
+  if (files > count) return sep;
+  if (count !== -1) return '\n';
   return null;   // the standard printer: nothing measured calls for reordering it
 }
 const splitAfter = (s, sep) => { const out = []; let i = 0; for (let j; (j = s.indexOf(sep, i)) !== -1; i = j + 1) out.push(s.slice(i, j + 1)); if (i < s.length) out.push(s.slice(i)); return out; };
