@@ -357,8 +357,12 @@ Bash tool instead".
   engine-floor and stat-types tests all GREEN on NetBSD 11 arm64 (VM, node 24.18.0; before: 2620 of
   3450 answers differed, incl. a regular file's rdev, NODEV, as 0 where node has
   18446744073709552000 / -1n) and on Linux x86_64 (node:24.21.0-bookworm container; before: 2492 of
-  3450). The identity test now judges a directory fd and a socket fd too, and runs on win32 for
-  the files, directory and (privilege permitting) symlink: its first Windows run is the next push.
+  3450). The identity test now judges a directory fd and a socket fd too, and can judge win32 for
+  the files, directory and (privilege permitting) symlink. CORRECTED (round 3): un-skipping it
+  ran nothing, since it skips without an engine and the only Windows jobs with one (ci.yml's
+  windows-amd64/arm64 engine jobs) ran just node-shim-roundtrip and node-shim-agentic; suite.yml
+  has no engine. Those two jobs now also run node-shim-fs-stat-identity and node-shim-os-devnull,
+  so the next push is their first Windows run. Not yet seen green there.
   CONSUMERS, driven through the real 2.1.283 graph (scratch probe: the staged cli.cjs with its
   entry swapped for a module that imports the chunk and calls the bundle's own function; node,
   quaude now, and quaude before = the old engine + old shim), all now equal to node:

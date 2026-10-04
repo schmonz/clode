@@ -306,7 +306,11 @@ jobs:
           chmod +x ./tjs.exe || true
           ./tjs.exe run test/win-sync-battery.js | tee battery.out
           grep -q '^BATTERY OK' battery.out
-      - name: node-shim oracles (roundtrip + agentic) on the real Windows kernel
+      # The stat identity and os oracles judge node-shim against this runner's node on the
+      # Windows rules (libuv's FileId ino, volume-serial dev, lstat at reparse points; node's
+      # devNull): files, a directory and a symlink. They skip without CLODE_TJS, so this job is
+      # the only place they run on Windows at all.
+      - name: node-shim oracles (roundtrip + agentic + stat identity + os) on the real Windows kernel
         run: |
           set -euo pipefail
           PROV="$(node scripts/stage-provider.mjs)" || exit 1
@@ -314,7 +318,9 @@ jobs:
           CLODE_TJS="$PWD/tjs.exe" CLODE_PROVIDER_BIN="$PROV" \
             node --test --test-concurrency=1 \
               test/node-shim-roundtrip.test.cjs \
-              test/node-shim-agentic.test.cjs
+              test/node-shim-agentic.test.cjs \
+              test/node-shim-fs-stat-identity.test.cjs \
+              test/node-shim-os-devnull.test.cjs
 
   # Windows ConPTY TUI render (windows-tjs-port spec, sub-project D). The FIRST
   # CI PTY harness on any platform: build a real quaude (`clode build`) and drive
@@ -446,7 +452,11 @@ jobs:
           chmod +x ./tjs.exe || true
           ./tjs.exe run test/win-sync-battery.js | tee battery.out
           grep -q '^BATTERY OK' battery.out
-      - name: node-shim oracles (roundtrip + agentic) on the real Windows kernel
+      # The stat identity and os oracles judge node-shim against this runner's node on the
+      # Windows rules (libuv's FileId ino, volume-serial dev, lstat at reparse points; node's
+      # devNull): files, a directory and a symlink. They skip without CLODE_TJS, so this job is
+      # the only place they run on Windows at all.
+      - name: node-shim oracles (roundtrip + agentic + stat identity + os) on the real Windows kernel
         run: |
           set -euo pipefail
           PROV="$(node scripts/stage-provider.mjs)" || exit 1
@@ -454,7 +464,9 @@ jobs:
           CLODE_TJS="$PWD/tjs.exe" CLODE_PROVIDER_BIN="$PROV" \
             node --test --test-concurrency=1 \
               test/node-shim-roundtrip.test.cjs \
-              test/node-shim-agentic.test.cjs
+              test/node-shim-agentic.test.cjs \
+              test/node-shim-fs-stat-identity.test.cjs \
+              test/node-shim-os-devnull.test.cjs
 
   # templates-drift MOVED OUT OF ci.yml (2026-08-24).
   #
