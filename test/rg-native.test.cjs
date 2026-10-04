@@ -591,15 +591,16 @@ test('ugrepMatches and ugrepMatchesAsync under tjs: native\'s ranges', {
 //   RG-RE-MATCH-AT-UNTERMINATED-END  (the printers' half) the matcher's match at the end of an
 //                              unterminated last line selects the line (-l, -c, standard) but is not
 //                              printed (-o) or counted as a match (-c -o)
-//   RG-STDIN                   target `-` searches what the caller piped in, named `<stdin>`
+//   RG-STDIN                   target `-` searches what the caller piped in, named `<stdin>`; a named
+//                              path to rg, so a NUL in it does not end the search
 //   RG-TEXT-BOM                (the printers' half) lines are printed, and measured, from rg's text
 //   RG-EXIT                    0 when something was found, 1 when nothing was, 2 when any path
 //                              failed (its error on stderr, the rest still searched and printed)
 //   RG-ARGV                    -l and -c: the last one given wins; -M/--max-columns/-A/-B/-C take a
 //                              number, else rg's own usage error; `--` ends the flags
 //   RG-BINARY-QUIT-FIRST-READ  (interim, the plan's Task 8 replaces it with rg's LineBuffer) a WALKED
-//                              file whose first 64 KiB of text hold a NUL prints nothing; a named one
-//                              is searched as text
+//                              file whose first 64 KiB of text hold a NUL prints nothing; a named one,
+//                              and stdin, are searched as text
 const u16le = (s) => Buffer.from(s, 'utf16le');
 const P6_FILES = [
   ['a.txt', 'alpha needle\nbeta\nneedle two needle\n'],
@@ -618,6 +619,7 @@ const P6_FILES = [
   ['two/1.txt', 'a needle\nb\n'],
   ['two/2.txt', 'c\nd needle\n'],
   ['u1.txt', 'xyz'],
+  ['nul.bin', Buffer.concat([Buffer.from('needle one\n'), Buffer.from([0]), Buffer.from('x\nneedle two\n')])],
 ];
 const X600 = 'x'.repeat(600);
 // What a row pipes into stdin: the bytes this test wrote for that fixture file.
@@ -647,6 +649,12 @@ const P6_NATIVE = [
   ['RG-RE-MATCH-AT-UNTERMINATED-END', ["-c","-o","$","nonl.txt"], null, 0, '1\n'],
   ['RG-RE-MATCH-AT-UNTERMINATED-END', ["-c","-o","q*","nonl.txt"], null, 0, '7\n'],
   ['RG-RE-MATCH-AT-UNTERMINATED-END', ["-c","-o","$","u1.txt"], null, 0, '0\n'],
+  // stdin is a NAMED path to rg, never a walked one: a NUL in it does not end the search (review I-1)
+  ['RG-STDIN', ["-l","--null","needle","-"], "nul.bin", 0, '<stdin>\x00'],
+  ['RG-STDIN', ["-c","needle","-"], "nul.bin", 0, '2\n'],
+  ['RG-STDIN', ["-c","-H","--null","needle","-"], "nul.bin", 0, '<stdin>\x002\n'],
+  ['RG-EXPLICIT-FILE', ["-l","needle","nul.bin"], null, 0, 'nul.bin\n'],
+  ['RG-EXPLICIT-FILE', ["-c","needle","nul.bin"], null, 0, '2\n'],
   ['RG-RE-MATCH-AT-UNTERMINATED-END', ["-c","-o","-H","$","u1.txt"], null, 0, 'u1.txt:0\n'],
   ['RG-RE-MATCH-AT-UNTERMINATED-END', ["-n","-o","$","u1.txt"], null, 0, '1:xyz\n'],
   ['RG-MAX-COLUMNS', ["-c","--max-columns","5","needle","long.txt"], null, 0, '2\n'],

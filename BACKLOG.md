@@ -275,9 +275,11 @@ Bash tool instead".
     first block). What ugrep's walk could not read comes back as its warnings (`cannot read X`,
     `cannot open directory X`, the phrasing of 7.8.2 and 5.0.0), re-spelled as rg's errors. Task
     9's JS walk replaces both. A NAMED file skips the walk (RG-EXPLICIT-FILE).
-  - RG-BINARY-QUIT-FIRST-READ IS INTERIM: a walked file (or stdin) whose first 64 KiB of text hold
-    a NUL prints nothing; native agrees for a NUL there, not for one later (late.dat: -l lists it,
-    -c prints nothing; ours counts it). Task 8 replaces it with rg's LineBuffer.
+  - RG-BINARY-QUIT-FIRST-READ IS INTERIM: a WALKED file whose first 64 KiB of text hold a NUL
+    prints nothing; native agrees for a NUL there, not for one later (late.dat: -l lists it, -c
+    prints nothing; ours counts it). A named file and stdin are searched as text: native's convert
+    mode for them (stdin `needle one\n\0x\nneedle two\n`: -l `<stdin>`, -c 2) agrees for -l and
+    -c, not for the standard printer (Task 8). Task 8 replaces all of it with rg's LineBuffer.
   - REFUSED BY NAME, never passed to ugrep: every flag outside the set a search reads (-l -c -i -s
     -n -N -H -I -0 -o -. -A -B -C -M -e -g -j, their long names, --iglob --no-ignore --no-hidden
     --case-sensitive), so -U (Task 10), -S/--smart-case, -w, -F, -v and the rest; more than one -e;

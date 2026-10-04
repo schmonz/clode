@@ -680,12 +680,13 @@ function ugrepMatchesAsync(files, pattern, opts = {}) {
 //   RG-RE-MATCH-AT-UNTERMINATED-END (the printers' half) the matcher's match at the end of an
 //                              unterminated last line selects the line but is never printed or counted
 //                              as a match
-//   RG-STDIN                   `-` searches what the caller piped in, named `<stdin>`
+//   RG-STDIN                   `-` searches what the caller piped in, named `<stdin>`; to rg it is a
+//                              NAMED path, so a NUL in it does not end the search (review I-1)
 //   RG-EXIT                    0 found, 1 not found, 2 when any path failed (its error on stderr, the
 //                              rest still searched and printed): never quaude's refusal
 //   RG-BINARY-QUIT-FIRST-READ  INTERIM (the plan's Task 8 replaces it with rg's LineBuffer): a WALKED
-//                              file (or stdin) whose first 64 KiB of text hold a NUL prints nothing;
-//                              a NAMED file is searched as text
+//                              file whose first 64 KiB of text hold a NUL prints nothing; a NAMED
+//                              file, and stdin, are searched as text (native's convert mode, Task 8)
 //
 // WHERE WE PRINT. As rg prints to a pipe or a file, which is what every surface the bundle uses
 // hands it (no heading, no colour, no line numbers unless -n).
@@ -978,7 +979,7 @@ function* searchCore(spec, opts) {
   const entries = [];
   for (let i = 0; i < spec.paths.length; i++) {
     const P = spec.paths[i], k = kinds[i];
-    if (k.kind === 'stdin') entries.push({ disp: '<stdin>', stdin: true, walked: true });
+    if (k.kind === 'stdin') entries.push({ disp: '<stdin>', stdin: true, walked: false });
     else if (k.kind === 'error') entries.push({ error: `rg: ${P}: ${sequential ? `IO error for operation on ${P}: ` : ''}${osErrorText(k.e)}` });
     else if (k.kind === 'file') {
       let err = null;
