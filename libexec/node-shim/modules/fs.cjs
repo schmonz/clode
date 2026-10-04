@@ -414,8 +414,22 @@ function readSync(fd, buf, offset, length, position) {
   return src.length;
 }
 
-const statSync = (p, opts) => makeStats(FSS.stat(p), opts);
-const lstatSync = (p, opts) => makeStats(FSS.lstat(p), opts);
+// `{ throwIfNoEntry: false }`, node's rule exactly (lib/fs.js, measured against node 24): every stat
+// form (statSync, fs.promises.stat, fs.stat) answers undefined for ENOENT and ENOTDIR; lstatSync for
+// ENOENT only; fs.promises.lstat and fs.lstat ignore the option. Ignoring it everywhere threw where
+// the 2.1.283 bundle expects undefined: one caller then read "absent" as "present", and one in the
+// permission deny path has no try around it.
+const noEntry = (opts, e, codes) => !!opts && opts.throwIfNoEntry === false && !!e && codes.includes(e.code);
+function statSync(p, opts) {
+  let raw;
+  try { raw = FSS.stat(p); } catch (e) { if (noEntry(opts, e, ['ENOENT', 'ENOTDIR'])) return undefined; throw e; }
+  return makeStats(raw, opts);
+}
+function lstatSync(p, opts) {
+  let raw;
+  try { raw = FSS.lstat(p); } catch (e) { if (noEntry(opts, e, ['ENOENT'])) return undefined; throw e; }
+  return makeStats(raw, opts);
+}
 
 // Encode string data honoring encoding (shared by writeFileSync/appendFileSync/
 // writeSync); never silently mis-encode an unimplemented charset — fail loud.
@@ -865,7 +879,7 @@ const promises = {
     };
   },
   stat: async (p, opts) => statSync(p, opts),
-  lstat: async (p, opts) => lstatSync(p, opts),
+  lstat: async (p, opts) => makeStats(FSS.lstat(p), opts), // ignores throwIfNoEntry, as node's does
   fstat: async (fd, opts) => fsMod.fstatSync(fd, opts),
   mkdir: async (p, opts) => mkdirSync(p, opts),
   readdir: async (p, opts) => readdirCore(p, opts),
