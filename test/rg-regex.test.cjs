@@ -294,6 +294,16 @@ test('RG-RE-ALT-LIFT: a prefix every branch shares is lifted, as rg lifts it, be
   for (const [pattern, want] of NATIVE_LIFT) assert.deepStrictEqual(allLines(buf, pattern), want, pattern);
 });
 
+// RG-RE-CLASS-SCALARS (Task 5b review minor, ruling G11): a Rust class is a set of `char`s, which
+// never holds a surrogate (D800-DFFF), so `[\x{0}-\x{10FFFF}]`, `[\x00-\x09\x0b-\x{10FFFF}]` and `.`
+// (after rg's \n strip) are the SAME class: HIR-equal, so RG-RE-ALT-LIFT lifts them, and one count.
+// Native's literals, on the review's corpus: ONE match per line, the lifted `.+(?:x|y)`.
+test('RG-RE-CLASS-SCALARS: an explicit full-range class equals `.` once rg strips \\n, so a shared prefix lifts (native)', () => {
+  const buf = B('FooErrorException\nfoo bar\nab\nxaxb\naqqxqqy\nfooBarbaz FOObarBAZ\nxyzzyxyzzy\n');
+  const want = [[1, [[0, 10]]], [4, [[29, 32]]], [5, [[34, 41]]], [7, [[62, 72]]]];
+  for (const p of ['[\\x{0}-\\x{10FFFF}]+x|.+y', '[\\x00-\\x09\\x0b-\\x{10FFFF}]+x|.+y']) assert.deepStrictEqual(allLines(buf, p), want, p);
+});
+
 // RG-RE-MATCH-AT-UNTERMINATED-END. The MATCHER finds a match at the end of a last line that has
 // no terminator; rg's PRINTERS do not print it (grep-printer's find_iter_at_in_context stops at a
 // match starting at the line's end, and --json drops an empty match there). Native shows both

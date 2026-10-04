@@ -55,6 +55,8 @@
 //   RG-RE-ALT-LIFT         a prefix every branch shares is lifted out (`\w+Error|\w+Exception` is
 //                          `\w+(?:Error|Exception)`, which changes leftmost-first priority), again
 //                          after rg's \n strip rebuilds the HIR
+//   RG-RE-CLASS-SCALARS    a class never holds a surrogate (Rust's char), so `[\x{0}-\x{10FFFF}]`
+//                          is `.` once \n is stripped, for equality and size alike (norm)
 //   RG-RE-LITERAL          a plain literal matches its bytes, leftmost, without overlap
 //   RG-RE-MATCH-AT-UNTERMINATED-END  the matcher's match at the end of an unterminated last line
 //                          is reported (rg selects the line by it; its printers do not print it)
@@ -109,9 +111,18 @@ function data() {
 }
 
 // ---- classes: sorted, merged [lo, hi, lo, hi, ...] over Unicode scalar values -------------------
+// RG-RE-CLASS-SCALARS: a Rust class is a set of `char`s, and a char is never a surrogate, so every
+// set is cut at D800-DFFF HERE, the one place every class passes through (a bracket's ranges,
+// union, case folding; negate() builds its complement over scalars itself). Then
+// `[\x{0}-\x{10FFFF}]` and `.` without \n are the same set, HIR-equal (RG-RE-ALT-LIFT) and the
+// same count(), as they are in regex-syntax.
 function norm(flat) {
   const ps = [];
-  for (let i = 0; i < flat.length; i += 2) ps.push([flat[i], flat[i + 1]]);
+  for (let i = 0; i < flat.length; i += 2) {
+    const lo = flat[i], hi = flat[i + 1];
+    if (hi < 0xd800 || lo > 0xdfff) ps.push([lo, hi]);
+    else { if (lo < 0xd800) ps.push([lo, 0xd7ff]); if (hi > 0xdfff) ps.push([0xe000, hi]); }
+  }
   ps.sort((a, b) => a[0] - b[0]);
   const out = [];
   for (const [lo, hi] of ps) {
