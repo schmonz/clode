@@ -10,9 +10,10 @@
 //           binary spawned with argv0 `rg` and `--no-config` (runNativeRg)
 //   ours    quaude's rg under tjs, THROUGH THE SAME INTERCEPTION THE BUNDLE HITS: bun-shim
 //           loaded, `child_process.execFile(Bun.which('rg') ?? 'rg', argv, ...)` (runOursRg)
-// and the two are compared on stdout bytes and exit code (compareRg), after exactly the two
-// named normalizations compareRg owns (rg's nondeterministic walk ORDER, and the elapsed
-// times in --json). Nothing else is forgiven.
+// and the two are compared on stdout bytes and exit code (compareRg), after exactly the three
+// named normalizations compareRg owns (rg's nondeterministic parallel walk ORDER, the elapsed
+// times in --json, and on x86_64 only `rg --version`'s CPU-read simd(runtime) line). Nothing else
+// is forgiven.
 //
 // THE ONE WRITTEN PLATFORM DIVERGENCE (RG-MMAP-EVERYWHERE, user ruling 2026-10-04; stated once in
 // scripts/lib/rg-probe.cjs MMAP_EVERYWHERE): quaude's rg answers a named binary as rg searching a memory
@@ -163,6 +164,20 @@ test('compareRg does not forgive order where rg walks on one thread (-j1, -j 1, 
   }
   // -j2 and -j0 (rg's default count) walk in parallel: still forgiven
   for (const j of [['-j2'], ['-j', '0']]) assert.strictEqual(P.compareRg(res([...j, ...FILES], 'a.txt\0b.txt\0'), res([...j, ...FILES], 'b.txt\0a.txt\0')).same, true, j.join(' '));
+});
+
+// NAMED NORMALIZATION 3 (controller ruling 2026-10-04, under the user's doctrine): `rg --version`'s
+// simd(runtime) line on x86_64 ONLY (RG-VERSION-SIMD, libexec/rg-types.cjs: native reads the CPU there). The
+// control: on x86_64 any other byte of --version still differs, and on aarch64 the runtime line is judged.
+const VX = (runtime, head = 'ripgrep 14.1.1 (rev 7c1d0ed28a)') => `${head}\n\nfeatures:+pcre2\nsimd(compile):+SSE2,+SSSE3,-AVX2\nsimd(runtime):${runtime}\n\nPCRE2 10.45 is available (JIT is available)\n`;
+test('compareRg forgives ONLY --version\'s simd(runtime) line, and only on x86_64 (named normalization 3)', () => {
+  const V = ['--version'];
+  assert.strictEqual(P.compareRg(res(V, VX('+SSE2,+SSSE3,+AVX2')), res(V, VX('+SSE2,+SSSE3,-AVX2')), { arch: 'x64' }).same, true);
+  assert.strictEqual(P.compareRg(res(V, VX('+SSE2,+SSSE3,+AVX2', 'ripgrep 14.1.2 (rev 7c1d0ed28a)')), res(V, VX('+SSE2,+SSSE3,-AVX2')), { arch: 'x64' }).same, false);
+  assert.strictEqual(P.compareRg(res(V, VX('+SSE2,+SSSE3,+AVX2').replace('-AVX2\nsimd(runtime)', '+AVX2\nsimd(runtime)')), res(V, VX('+SSE2,+SSSE3,-AVX2')), { arch: 'x64' }).same, false);
+  assert.strictEqual(P.compareRg(res(V, VX('+NEON')), res(V, VX('-NEON')), { arch: 'arm64' }).same, false);
+  // not --version: the same text in a search's output is judged
+  assert.strictEqual(P.compareRg(res(['needle', '-'], VX('+AVX2')), res(['needle', '-'], VX('-AVX2')), { arch: 'x64' }).same, false);
 });
 
 test('compareRg: a record set that differs only by a MISSING record is not forgiven by the order normalization', () => {

@@ -6,7 +6,7 @@
 //   RG_MATRIX, cellArgv()       every argv upstream's Grep and Glob tools build, per tree kind
 //   runNativeRg(bin, argv, cwd) native Claude Code's EMBEDDED rg, reached as upstream reaches it
 //   runOursRg(argv, cwd)        quaude's rg under tjs, through the interception the bundle hits
-//   compareRg(a, b)             stdout bytes + exit code, after the two named normalizations
+//   compareRg(a, b)             stdout bytes + exit code, after the three named normalizations
 //
 // Measurements behind every choice here: .superpowers/sdd/2026-09-26-netbsd-fixes/report-grep.md
 // section 1 (the argv the tools build, how rg is spawned native vs quaude, the walk order, the
@@ -401,7 +401,7 @@ function runOursRgBatch(cells, { env } = {}) {
 function runOursRg(argv, cwd, opts = {}) { return runOursRgBatch([{ argv, cwd }], opts)[0]; }
 
 // ---- the comparer ------------------------------------------------------------------------------
-// stdout BYTES and the exit code. Two differences are forgiven, each here and nowhere else:
+// stdout BYTES and the exit code. Three differences are forgiven, each here and nowhere else:
 //
 //   1. WALK ORDER. rg searches a tree in parallel and prints each file as it finishes, so the
 //      ORDER of files is not deterministic (measured 2026-09-27, report-grep.md
@@ -416,6 +416,13 @@ function runOursRg(argv, cwd, opts = {}) { return runOursRgBatch([{ argv, cwd }]
 //   2. ELAPSED TIMES in --json: `"elapsed":{...}` in each end message's stats and
 //      `"elapsed_total":{...}` in the summary are wall-clock readings; their contents are
 //      blanked. Every other stat must match.
+//   3. --version's simd(runtime) LINE, ON x86_64 ONLY (controller ruling 2026-10-04, under the user's
+//      doctrine for performance artifacts; RG-VERSION-SIMD in libexec/rg-types.cjs): rg's x86_64 build
+//      reads that line from the CPU (version.rs runtime_cpu_features: is_x86_feature_detected for SSE2,
+//      SSSE3, AVX2), which quaude's rg, using no SIMD, does not; it prints the compile set there. On an
+//      x86_64 host (`arch`, the one native and ours ran on) the line's contents are blanked in `rg
+//      --version`'s output, and every other byte must match; on aarch64 the line is a build constant
+//      (+NEON) and is judged.
 const L = (b) => Buffer.from(b || '').toString('latin1');   // one char per byte, both ways
 const rgSorts = (argv) => argv.some((x) => /^--sortr?(=|$)/.test(x));
 // rg walks on one thread: -j1 / --threads=1, or the flag then `1`.
@@ -433,8 +440,10 @@ function recordShape(argv) {
   return null;   // the standard printer: nothing measured calls for reordering it
 }
 const splitAfter = (s, sep) => { const out = []; let i = 0; for (let j; (j = s.indexOf(sep, i)) !== -1; i = j + 1) out.push(s.slice(i, j + 1)); if (i < s.length) out.push(s.slice(i)); return out; };
-function normalizeRg(stdout, argv) {
+const isVersion = (argv) => argv.length === 1 && argv[0] === '--version';
+function normalizeRg(stdout, argv, { arch = process.arch } = {}) {
   let s = L(stdout);
+  if (arch === 'x64' && isVersion(argv)) s = s.replace(/^simd\(runtime\):.*$/m, 'simd(runtime):');
   const shape = recordShape(argv);
   if (shape === 'json') s = s.replace(/"(elapsed|elapsed_total)":\{[^{}]*\}/g, '"$1":{}');
   if (!shape || rgSorts(argv) || rgOneThread(argv)) return s;
@@ -449,13 +458,13 @@ function normalizeRg(stdout, argv) {
 }
 
 const snip = (s, i) => JSON.stringify(s.slice(Math.max(0, i - 24), i + 40));
-function compareRg(a, b) {
+function compareRg(a, b, { arch = process.arch } = {}) {
   const argv = a.argv || b.argv || [];
   const why = [];
   if (a.status !== b.status || (a.signal || null) !== (b.signal || null)) {
     why.push(`exit ${a.status}${a.signal ? ` (${a.signal})` : ''} vs ${b.status}${b.signal ? ` (${b.signal})` : ''}`);
   }
-  const x = normalizeRg(a.stdout, argv), y = normalizeRg(b.stdout, argv);
+  const x = normalizeRg(a.stdout, argv, { arch }), y = normalizeRg(b.stdout, argv, { arch });
   if (x !== y) {
     let i = 0;
     while (i < x.length && i < y.length && x[i] === y[i]) i++;
