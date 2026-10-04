@@ -2136,6 +2136,10 @@ function* searchCore(spec, opts) {
   const out = outBuffers(), err = [], state = { printed: false, json: spec.mode === 'json' ? jsonTotals() : null,
     limit: typeof opts.maxBuffer === 'number' && opts.maxBuffer >= 0 ? opts.maxBuffer : Infinity };
   let found = false, broke = false;
+  // RG-STDERR-ORDER: what ugrep could not read is written where the walk met that file (below), so on one thread a
+  // walk's message (an ignore file that does not parse) and a search's error keep rg's order; one for a path no
+  // entry names is written first.
+  const pathErrors = new Map();
   if (files.length) {
     // N-2: every walked file is known to be a regular file, so the match pass need not stat it again.
     const r = yield { op: 'match', files, pattern, first, known: new Set(entries.filter((e) => e.walked).map((e) => e.file)) };
@@ -2147,8 +2151,9 @@ function* searchCore(spec, opts) {
     // What it only warned about is rg's per-path error (RG-EXIT), the rest answered.
     for (const w of matches.pathErrors || []) {
       const e = entries.find((x) => x.file && spellForUgrep(x.file) === w.file);
-      err.push(Buffer.from(`rg: ${e ? e.disp : w.file}: ${w.text}\n`));
-      broke = true;
+      if (!e) { err.push(Buffer.from(`rg: ${w.file}: ${w.text}\n`)); broke = true; continue; }
+      if (!pathErrors.has(e.file)) pathErrors.set(e.file, []);
+      pathErrors.get(e.file).push(Buffer.from(`rg: ${e.disp}: ${w.text}\n`));
     }
   }
   // RG-BINARY-MMAP: whether rg memory-maps this search's named files (never on macOS).
@@ -2160,6 +2165,7 @@ function* searchCore(spec, opts) {
     if (e.error) { err.push(Buffer.from(e.error + '\n')); broke = true; continue; }
     // RG-IGNORE-FILE-ERRORS: rg's message about an ignore file it read, which leaves the exit status be
     if (e.message) { err.push(Buffer.from(e.message + '\n')); continue; }
+    if (e.file && pathErrors.has(e.file)) { err.push(...pathErrors.get(e.file)); pathErrors.delete(e.file); broke = true; }
     if (t.multiLine) {
       // RG-MULTILINE: each file ugrep proposed (stdin always), read whole and searched as rg's multi-line
       // searcher does, a walked one with binary quit (RG-MULTILINE-BINARY)

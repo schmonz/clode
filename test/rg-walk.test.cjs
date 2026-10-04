@@ -462,6 +462,53 @@ test('RG-WALK-ERROR: a directory or file rg cannot read is its error, the rest s
   }
 });
 
+// ---- RG-STDERR-ORDER ---------------------------------------------------------------------------------------------
+// On one thread rg writes each message where its walk meets it: an ignore file that does not parse when its
+// directory is entered, a file it cannot read when that file is searched. quaude's rg used to write every file
+// ugrep could not read FIRST, before the walk's messages (grep-native Task 10 re-review 2, minor 4; ruling G29 (4)).
+// Native 2.1.283 darwin-arm64, measured 2026-10-04, 3 runs each, the same bytes every run. The trees make the
+// order the filesystem's readdir cannot change: A's .ignore is read on entering the root, before any entry of it;
+// B's two roots are walked in the order named.
+const STDERR_ORDER_IGNORE = "rg: ./.ignore: line 1: error parsing glob '[': unclosed character class; missing ']'\n";
+const STDERR_ORDER = [
+  ['A', ['-j1', 'needle', '.'], './d/a.txt:needle\n', `${STDERR_ORDER_IGNORE}rg: ./locked.txt: Permission denied (os error 13)\n`],
+  ['A', ['-j1', '-l', 'needle', '.'], './d/a.txt\n', `${STDERR_ORDER_IGNORE}rg: ./locked.txt: Permission denied (os error 13)\n`],
+  ['A', ['-j1', '-c', 'needle', '.'], './d/a.txt:1\n', `${STDERR_ORDER_IGNORE}rg: ./locked.txt: Permission denied (os error 13)\n`],
+  ['B', ['-j1', 'needle', 'b', 'a'], 'b/x.txt:needle\na/ok.txt:needle\n',
+    "rg: b/.ignore: line 1: error parsing glob '[': unclosed character class; missing ']'\nrg: a/locked.txt: Permission denied (os error 13)\n"],
+  ['B', ['-j1', '-l', 'needle', 'b', 'a'], 'b/x.txt\na/ok.txt\n',
+    "rg: b/.ignore: line 1: error parsing glob '[': unclosed character class; missing ']'\nrg: a/locked.txt: Permission denied (os error 13)\n"],
+  ['B', ['-j1', '-c', 'needle', 'b', 'a'], 'b/x.txt:1\na/ok.txt:1\n',
+    "rg: b/.ignore: line 1: error parsing glob '[': unclosed character class; missing ']'\nrg: a/locked.txt: Permission denied (os error 13)\n"],
+  ['B', ['-j1', 'needle', 'a', 'b'], 'a/ok.txt:needle\nb/x.txt:needle\n',
+    "rg: a/locked.txt: Permission denied (os error 13)\nrg: b/.ignore: line 1: error parsing glob '[': unclosed character class; missing ']'\n"],
+];
+test('RG-STDERR-ORDER: on one thread the walk\'s messages and the search\'s errors are written in walk order (native; both twins)', {
+  skip: needUgrep.skip || ((process.getuid && process.getuid() === 0) ? 'root reads a chmod 000 file' : false),
+}, async () => {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'rg-stderr-order-')));
+  const locked = ['A/locked.txt', 'B/a/locked.txt'];
+  try {
+    for (const [p, d] of [['A/.ignore', '[\n'], ['A/d/a.txt', 'needle\n'], ['A/locked.txt', 'needle\n'],
+      ['B/a/locked.txt', 'needle\n'], ['B/a/ok.txt', 'needle\n'], ['B/b/.ignore', '[\n'], ['B/b/x.txt', 'needle\n']]) {
+      fs.mkdirSync(path.dirname(path.join(dir, p)), { recursive: true }); fs.writeFileSync(path.join(dir, p), d);
+    }
+    for (const p of locked) fs.chmodSync(path.join(dir, p), 0);
+    for (const [tree, argv, out, err] of STDERR_ORDER) {
+      const cwd = path.join(dir, tree);
+      const s = rgn.runRg(argv, { cwd, spawnSync: cp.spawnSync, ugrep: () => UGREP });
+      const a = await new Promise((res) => rgn.rgExecFile(argv, { cwd, encoding: 'buffer' }, (e, so, se) => res({ status: e ? e.code : 0, stdout: so, stderr: se }),
+        'rg', { spawn: cp.spawn, spawnSync: cp.spawnSync, ugrep: () => UGREP }));
+      for (const [how, g] of [['sync', s], ['async', a]]) {
+        assert.deepStrictEqual([g.status, l1(g.stdout), l1(g.stderr)], [2, out, err], `${tree} ${argv.join(' ')} (${how})`);
+      }
+    }
+  } finally {
+    for (const p of locked) try { fs.chmodSync(path.join(dir, p), 0o644); } catch { /* gone */ }
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // ---- RG-VERSION, RG-VERSION-SIMD, RG-TYPE-LIST ------------------------------------------------------------------------
 // native's own text: darwin-arm64 (this Mac) and linux-x64 (a node:24.21.0-bookworm container on a Xeon E5-1650 v2,
 // which has SSSE3 and no AVX2), measured 2026-10-04.
