@@ -5,9 +5,10 @@
 // WHY. These runs used to inherit the developer's real HOME, so the bundle read ~/.claude/settings.json and RAN ITS
 // HOOKS (on the dev box an iTerm2 status hook that blocks 30 s per call: ten agentic rows timed out in one suite), and
 // WROTE into the real ~/.claude (the headless plugin install restamped ~/.claude/plugins/known_marketplaces.json).
-// The guard bundle-runs-own-home (test/build-gates/bundle-home-gates.test.cjs) fails any env that talks to a model
-// without one. USERPROFILE too: HOME's spelling on Windows.
+// The guard bundle-runs-own-home (test/bundle-home-hermetic.test.cjs) fails any spawn of the bundle whose env does
+// not give it one (test/bundle-spawn-scan.cjs finds the spawns). USERPROFILE too: HOME's spelling on Windows.
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 
 function throwawayHome(dir) {
@@ -18,4 +19,9 @@ function throwawayHome(dir) {
   return { HOME: home, USERPROFILE: home, CLAUDE_CONFIG_DIR: cfg };
 }
 
-module.exports = { throwawayHome };
+// freshHome(prefix): throwawayHome under a new temp dir of its own, for a run with no temp dir at hand.
+function freshHome(prefix = 'bundle-home-') {
+  return throwawayHome(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
+}
+
+module.exports = { throwawayHome, freshHome };

@@ -56,7 +56,9 @@ function resolveNativeOracle(env = process.env) {
 }
 
 function nativeVersion(bin) {
-  const env = { ...process.env, DISABLE_AUTOUPDATER: '1' };
+  // a home of its own, never the developer's (test/bundle-home-hermetic.test.cjs, ruling G32)
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'native-version-home-'));
+  const env = { ...process.env, HOME: home, USERPROFILE: home, CLAUDE_CONFIG_DIR: path.join(home, '.claude'), DISABLE_AUTOUPDATER: '1' };
   delete env.NODE_PATH;
   const r = spawnSync(bin, ['--version'], { encoding: 'utf8', env, timeout: 60000 });
   return ((r.stdout || '') + (r.stderr || '')).split('\n')[0].trim();

@@ -24,6 +24,7 @@
 //   4. A staged split bundle wrote graph.json and no runnable file, which is the original
 //      defect. The stage must carry BOTH shapes.
 const test = require('node:test');
+const { throwawayHome } = require('./throwaway-home.cjs');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -61,7 +62,7 @@ function writeRunner(doc) {
 }
 
 function runNode(f, dir) {
-  return execFileSync(process.execPath, [f], { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  return execFileSync(process.execPath, [f], { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, ...throwawayHome(`${dir}-home`) } });
 }
 
 // Resolve the engine the way every OTHER tjs-gated test in this suite does, via
@@ -82,7 +83,7 @@ function tjsAvailable(t) {
 }
 function runTjs(f, dir) {
   return execFileSync(TJS, ['run', path.join(REPO, 'libexec/node-shim/loader.cjs'), f],
-    { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, ...throwawayHome(`${dir}-home`) } });
 }
 
 // --- 1. the marker ------------------------------------------------------------------

@@ -1,4 +1,5 @@
 const { test, before, after } = require('node:test');
+const { freshHome } = require('./throwaway-home.cjs');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -46,7 +47,7 @@ before(() => {
   if (!tjsPath()) { SKIP = 'no tjs binary (CLODE_TJS or build/tjs/tjs)'; return; }
   const native = nativeClaude();
   if (!native) { SKIP = 'native claude not on PATH (environmental)'; return; }
-  const nver = version([native], cleanEnv({ DISABLE_AUTOUPDATER: '1' }));
+  const nver = version([native], cleanEnv({ ...freshHome('doctor-parity-ver-'), DISABLE_AUTOUPDATER: '1' }));
   if (!nver) { SKIP = 'native claude did not run here'; return; }
   SBX = sandbox();
   // Past-onboarding + trusted profile keyed by the capture cwd (REPO), so the fixed-
@@ -73,7 +74,7 @@ before(() => {
     },
   });
   if (build.status !== 0) { SKIP = `clode build failed:\n${build.stdout}\n${build.stderr}`; return; }
-  const cver = version([quaude], cleanEnv());
+  const cver = version([quaude], cleanEnv(freshHome('doctor-parity-ver-')));
   if (nver !== cver) { SKIP = `version mismatch: native='${nver}' clode='${cver}'`; return; }
   const capOpts = { seconds: 16, thenHex: THEN_HEX, rows: 120, cols: 100 };
   NATIVE = capture(SBX, { ...capOpts, cmd: [native], env: { DISABLE_AUTOUPDATER: '1' } });

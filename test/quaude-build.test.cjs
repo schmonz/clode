@@ -20,7 +20,7 @@
 // suites). Hermetic: CLODE_CACHE points into the fixture tmp dir; the repo's
 // own node_modules feeds the dep members (ensureDeps early-returns).
 const { test, before, after } = require('node:test');
-const { throwawayHome } = require('./throwaway-home.cjs');
+const { freshHome } = require('./throwaway-home.cjs');
 const assert = require('node:assert');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -97,7 +97,7 @@ test('clode build blobulates a quaude and its internal PONG + attest smokes pass
 
 test('attest golden: stable manifest fields + full member verification', async (t) => {
   if (SKIP) { t.skip(SKIP); return; }
-  const r = await runQuaude(['--clode-attest'], cleanEnv());
+  const r = await runQuaude(['--clode-attest'], cleanEnv(freshHome('quaude-build-home-')));
   assert.strictEqual(r.status, 0, r.stderr);
   // Output = manifest JSON verbatim, then one ok/FAIL line per member, then the summary.
   const lines = r.stdout.split('\n');
@@ -249,7 +249,7 @@ test('the BINARY says which platform it was carved for, without being run', (t) 
 
 test('reserved namespace: unknown --clode-foo errors from quaude, bundle never runs', async (t) => {
   if (SKIP) { t.skip(SKIP); return; }
-  const r = await runQuaude(['--clode-frobnicate', '-p', 'say PONG'], cleanEnv());
+  const r = await runQuaude(['--clode-frobnicate', '-p', 'say PONG'], cleanEnv(freshHome('quaude-build-home-')));
   assert.strictEqual(r.status, 64);
   assert.match(r.stderr, /quaude: unknown option '--clode-frobnicate'/);
   assert.match(r.stderr, /reserved/);
@@ -260,7 +260,7 @@ test('reserved namespace: --clode-attest short-circuits before the bundle sees a
   if (SKIP) { t.skip(SKIP); return; }
   // With bundle args alongside, attest still wins and no session starts (no
   // mock is listening — a bundle boot would fail loudly or hang, not attest).
-  const r = await runQuaude(['-p', 'say PONG', '--clode-attest'], cleanEnv(), 60000);
+  const r = await runQuaude(['-p', 'say PONG', '--clode-attest'], cleanEnv(freshHome('quaude-build-home-')), 60000);
   assert.strictEqual(r.status, 0, r.stderr);
   assert.ok(r.stdout.includes(require('../libexec/clode-attest.cjs').ATTEST_VERIFIED), r.stdout);
   assert.doesNotMatch(r.stdout, /PONG/);
@@ -271,7 +271,7 @@ test('reserved namespace: --clode-attest short-circuits before the bundle sees a
 // a quaude that prints an attest report for a flag we no longer implement.
 test('the retired --quaude-attest is no longer a quaude flag', async (t) => {
   if (SKIP) { t.skip(SKIP); return; }
-  const r = await runQuaude(['--quaude-attest'], cleanEnv(), 60000);
+  const r = await runQuaude(['--quaude-attest'], cleanEnv(freshHome('quaude-build-home-')), 60000);
   assert.notStrictEqual(r.status, 0, `--quaude-attest still succeeded:\n${r.stdout}`);
   assert.doesNotMatch(r.stdout, /all members verified/, 'the retired flag still attests');
 });
@@ -298,7 +298,7 @@ test('strict-mode sweep: agentic Bash mock oracle against the blobulated quaude'
   try {
     const r = await runQuaude(
       ['-p', 'run the command', '--allowedTools', 'Bash'],
-      cleanEnv({ ...throwawayHome(fs.mkdtempSync(path.join(os.tmpdir(), 'quaude-build-home-'))), ANTHROPIC_BASE_URL: mock.url, ANTHROPIC_API_KEY: 'sk-ant-mock' }));
+      cleanEnv({ ...freshHome('quaude-build-home-'), ANTHROPIC_BASE_URL: mock.url, ANTHROPIC_API_KEY: 'sk-ant-mock' }));
     assert.strictEqual(r.status, 0, `stderr:\n${r.stderr}`);
     assert.match(r.stdout, /TOOLDONE/, `stdout:\n${r.stdout}`);
     assert.ok(stdoutInline(mock), 'tool_result lacks the command\'s stdout inline (missing, or degraded to the '
@@ -343,7 +343,7 @@ test('quaude remote-control: the headless subcommand runs, and runs clean', asyn
     projects: { [DIR]: { hasTrustDialogAccepted: true, hasCompletedProjectOnboarding: true } },
   }));
   const r = await runQuaude(['remote-control'],
-    { ...cleanEnv(), HOME: home, CLODE_SHIM_TRACE: '1' }, 30000);
+    { ...cleanEnv(), HOME: home, CLAUDE_CONFIG_DIR: path.join(home, '.claude'), CLODE_SHIM_TRACE: '1' }, 30000);
   const out = (r.stdout || '') + (r.stderr || '');
   assert.doesNotMatch(out, /Unknown argument: --settings/, 'update-guard must no longer break the subcommand parser');
   assert.doesNotMatch(out, /not an object/, 'must not hit the util.inherits TypeError (stream fix holds)');

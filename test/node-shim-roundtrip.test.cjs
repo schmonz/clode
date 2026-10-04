@@ -10,6 +10,7 @@
 // async dispatch is REQUIRED here: the mock server lives in this process, and a
 // spawnSync'd child would deadlock against its own answer.
 const test = require('node:test');
+const { freshHome: freshBundleHome } = require('./throwaway-home.cjs');
 const assert = require('node:assert');
 const { skipUnlessTjs } = require('./node-shim-helper.cjs');
 const { startMockAnthropic } = require('./mock-anthropic-helper.cjs');
@@ -72,7 +73,7 @@ test('LIVE finale: -p against api.anthropic.com (opt-in)', async (t) => {
   if (!process.env.ANTHROPIC_API_KEY) { t.skip('no ANTHROPIC_API_KEY in env'); return; }
   const staged = stage(t);
   if (!staged) return;
-  const env = { ...process.env };
+  const env = { ...process.env, ...freshBundleHome('roundtrip-live-') };   // the key comes from the env; the home is its own
   delete env.ANTHROPIC_BASE_URL;                        // real endpoint
   const r = await runQuaudeModelAsync(staged.cli, ['-p', 'say PONG'], {
     cwd: staged.dir, env, timeout: 120000,

@@ -5,6 +5,7 @@
 // and test/test_keying.bats (extractor-sig change re-extracts an unchanged binary).
 // Real "bundle" fixtures come from test/mkfixture.cjs.
 const { test } = require('node:test');
+const { throwawayHome } = require('./throwaway-home.cjs');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -43,7 +44,7 @@ function run(s, extra = {}) {
 }
 
 function boot(cacheDir) {
-  return spawnSync(NODE, [path.join(cacheDir, 'cli.cjs')], { encoding: 'utf8' });
+  return spawnSync(NODE, [path.join(cacheDir, 'cli.cjs')], { encoding: 'utf8', env: { ...process.env, ...throwawayHome(`${cacheDir}-home`) } });
 }
 
 test('first call: cache miss extracts cli.cjs + shim + sig, and boots the fixture', () => {

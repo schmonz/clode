@@ -52,6 +52,7 @@
 //    because the common local case (engine + provider present, no native claude) used
 //    to pay for the whole build and then skip all three tests anyway.
 const { test } = require('node:test');
+const { freshHome } = require('./throwaway-home.cjs');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const { spawnSync } = require('node:child_process');
@@ -85,7 +86,8 @@ const NATIVE_ONLY = ['Organization policy'];
 const QUAUDE_ONLY = ['Invoked'];   // quaude names its VFS entry; native has no analogue
 
 function doctor(bin) {
-  const r = spawnSync(bin, ['doctor'], { encoding: 'utf8', timeout: 120000 });
+  // its own throwaway home: native `doctor` in a fresh HOME writes ~/.claude.json and ~/.claude/backups (measured)
+  const r = spawnSync(bin, ['doctor'], { encoding: 'utf8', timeout: 120000, env: { ...process.env, ...freshHome('doctor-parity-') } });
   return { status: r.status, out: `${r.stdout || ''}${r.stderr || ''}` };
 }
 

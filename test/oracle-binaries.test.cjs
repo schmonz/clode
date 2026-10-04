@@ -14,7 +14,7 @@
 // and additionally needs Node >= 24 (SEA) + a tjs (blobulate) + a Bun-packaged CC
 // provider. Missing any of those, it SKIPs — never a false green.
 const test = require('node:test');
-const { throwawayHome } = require('./throwaway-home.cjs');
+const { freshHome } = require('./throwaway-home.cjs');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -66,8 +66,8 @@ test('naude and quaude binaries agree on the same baked Claude Code', async (t) 
   // Cheap axis first: --version is deterministic and needs no network. A binary
   // that cannot even self-report has nothing to say about parity.
   const [nv, qv] = [
-    await runBinaryAsync(naude, ['--version'], { timeout: RUN_TIMEOUT }),
-    await runBinaryAsync(quaude, ['--version'], { timeout: RUN_TIMEOUT }),
+    await runBinaryAsync(naude, ['--version'], { timeout: RUN_TIMEOUT, env: { ...process.env, ...freshHome('oracle-bin-ver-') } }),
+    await runBinaryAsync(quaude, ['--version'], { timeout: RUN_TIMEOUT, env: { ...process.env, ...freshHome('oracle-bin-ver-') } }),
   ];
   assert.strictEqual(nv.status, 0, `naude --version failed:\n${nv.stderr}`);
   assert.strictEqual(qv.status, 0, `quaude --version failed:\n${qv.stderr}`);
@@ -83,7 +83,7 @@ test('naude and quaude binaries agree on the same baked Claude Code', async (t) 
         timeout: RUN_TIMEOUT,
         env: {
           ...process.env,
-          ...throwawayHome(fs.mkdtempSync(path.join(os.tmpdir(), 'oracle-bin-home-'))),
+          ...freshHome('oracle-bin-home-'),
           ANTHROPIC_BASE_URL: mock.url,
           ANTHROPIC_API_KEY: 'sk-ant-mock',        // dummy; the mock ignores it. NOT a secret.
           ...extraEnv,

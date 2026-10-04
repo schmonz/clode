@@ -16,7 +16,7 @@
 // machinery: this test is validating a DIFFERENT build output's shape, not
 // driving the ordinary built product. CLODE_QUAUDE_EXE stays its own gate.
 const test = require('node:test');
-const { throwawayHome } = require('./throwaway-home.cjs');
+const { freshHome } = require('./throwaway-home.cjs');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const { spawn, spawnSync } = require('node:child_process');
@@ -39,7 +39,7 @@ function bootQuaude(exe, args, env, timeoutMs) {
 test('blobulated quaude.exe --clode-attest self-loads and verifies all members', (t) => {
   const exe = quaudeExe();
   if (!exe) { t.skip('no CLODE_QUAUDE_EXE'); return; }
-  const r = spawnSync(exe, ['--clode-attest'], { encoding: 'utf8', timeout: 60000 });
+  const r = spawnSync(exe, ['--clode-attest'], { encoding: 'utf8', timeout: 60000, env: { ...process.env, ...freshHome('quaude-win-attest-') } });
   assert.strictEqual(r.status, 0, `stderr:\n${r.stderr}`);
   assert.ok(r.stdout.includes(require('../libexec/clode-attest.cjs').ATTEST_VERIFIED), `stdout:\n${r.stdout}`);
 });
@@ -52,7 +52,7 @@ test('blobulated quaude.exe -p prints PONG through the VFS module path', async (
   try {
     const r = await bootQuaude(exe, ['-p', 'say PONG'], {
       ...process.env,
-      ...throwawayHome(fs.mkdtempSync(path.join(os.tmpdir(), 'quaude-win-home-'))),
+      ...freshHome('quaude-win-home-'),
       ANTHROPIC_BASE_URL: mock.url,
       ANTHROPIC_API_KEY: 'sk-ant-mock',   // dummy; NOT a secret
     }, 120000);

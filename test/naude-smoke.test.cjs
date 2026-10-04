@@ -171,7 +171,7 @@ test('naude: a tampered asset fails --clode-attest (the build gate can fail)', a
   const tampered = path.join(cache, path.basename(naude) + '.tampered');
   try {
     // Sanity: the pristine binary attests clean, so a FAIL below is the tampering.
-    const clean = await run(naude, ['--clode-attest'], { env: { ...process.env, NAUDE_CACHE: cache }, timeout: 180000 });
+    const clean = await run(naude, ['--clode-attest'], { env: { ...process.env, ...throwawayHome(cache), NAUDE_CACHE: cache }, timeout: 180000 });
     assert.strictEqual(clean.status, 0, `pristine naude did not attest:\n${clean.stdout}\n${clean.stderr}`);
     assert.ok(clean.stdout.includes(ATTEST_VERIFIED), clean.stdout);
 
@@ -188,7 +188,7 @@ test('naude: a tampered asset fails --clode-attest (the build gate can fail)', a
       execFileSync('codesign', ['-f', '-s', '-', tampered], { stdio: 'ignore' });
     }
 
-    const r = await run(tampered, ['--clode-attest'], { env: { ...process.env, NAUDE_CACHE: cache }, timeout: 180000 });
+    const r = await run(tampered, ['--clode-attest'], { env: { ...process.env, ...throwawayHome(cache), NAUDE_CACHE: cache }, timeout: 180000 });
     assert.notStrictEqual(r.status, 0, `a tampered naude exited 0:\n${r.stdout}\n${r.stderr}`);
     assert.ok(!r.stdout.includes(ATTEST_VERIFIED),
       `the tampered binary still printed the verdict the build gate greps:\n${r.stdout}`);

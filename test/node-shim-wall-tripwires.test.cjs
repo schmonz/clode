@@ -352,6 +352,7 @@
 // asserts nothing against a baseline; the version gate still runs, and still SKIPS
 // before `scanWalls()` ever sees a mismatched carve's `sources`.
 const test = require('node:test');
+const { freshHome } = require('./throwaway-home.cjs');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -549,7 +550,7 @@ function resolvedProviderVersion(bin) {
   if (!bin) return null;
   let p;
   try {
-    p = spawnSync(bin, ['--version'], { encoding: 'utf8', timeout: 5000 });
+    p = spawnSync(bin, ['--version'], { encoding: 'utf8', timeout: 5000, env: { ...process.env, ...freshHome('wall-provider-version-') } });
   } catch {
     return null;
   }
