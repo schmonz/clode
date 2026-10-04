@@ -80,18 +80,25 @@ function scan({ results, what }) {
   }
   return { findings, examined: results.length, note: `${what}: ${results.length} argv shapes` };
 }
-function readCarve() {
+// The pinned carve's text, read once for both guards below (extract-claude-js and the graph decode take seconds).
+let carved = null;
+function carveText() {
+  if (carved) return carved;
   const bin = providerBin(process.env);
-  if (!bin || !fs.existsSync(bin)) return { skip: 'no native provider (CLODE_PROVIDER_BIN or the pinned version) to read the carve of' };
+  if (!bin || !fs.existsSync(bin)) return (carved = { skip: 'no native provider (CLODE_PROVIDER_BIN or the pinned version) to read the carve of' });
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-carve-argv-gate-'));
   try {
     const cli = path.join(dir, 'cli.cjs');
     const ex = cp.spawnSync(process.execPath, [EXTRACT, bin, cli], { encoding: 'utf8' });
     if (ex.status !== 0) throw new Error(`extract-claude-js could not carve ${bin}: ${(ex.stderr || '').slice(0, 400)}`);
     const decoded = decodeGraphRunner(cli);
-    const text = decoded !== null ? decoded : fs.readFileSync(cli, 'latin1');
-    return { results: answer(P.carveRgArgvShapes(text)), what: `the carve of ${bin}` };
+    return (carved = { text: decoded !== null ? decoded : fs.readFileSync(cli, 'latin1'), bin });
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+}
+function readCarve() {
+  const c = carveText();
+  if (c.skip) return { skip: c.skip };
+  return { results: answer(P.carveRgArgvShapes(c.text)), what: `the carve of ${c.bin}` };
 }
 const control = () => ({ results: answer(P.carveRgArgvShapes(`${CARVE_2_1_283};let z=await run(["--files","--frobnicate","--hidden"],e)`)),
   what: 'the 2.1.283 snippets plus a planted --frobnicate listing' });
@@ -129,4 +136,78 @@ test('the control names the planted refused listing, by its argv', () => {
   const r = scan(control());
   assert.strictEqual(r.findings.length, 2, r.findings.join('\n'));   // it, and it again under -j 1
   for (const f of r.findings) assert.match(f, /REFUSES rg (?:-j 1 )?--files --frobnicate --hidden \. \(--frobnicate: /);
+});
+
+// ---- rg-resolution-accounted (grep-native Task 10b Step 0, ruling G29 (3)) -------------------------------------------
+// The net above finds a runner by its SHAPE, and its floor counts shapes: a NEW runner of another shape would be
+// missed silently. This one accounts for every reference to the resolution (each `rgPath`, and each call of the
+// accessor Q4 reads) and every call of a runner it found (scripts/lib/rg-probe.cjs rgResolutionReferences,
+// rgRunnerCalls): a reference must sit in a runner's destructure or match a NAMED non-runner (RG_RESOLUTION_NON_RUNNERS,
+// each with why it runs nothing); a call must be read as an argv shape, or forward the enclosing runner's own argv.
+// A finding is anything else: classify it by hand (a runner the extraction must read, or a named non-runner).
+// FLOOR: 2.1.283's 29 (measured 2026-10-04: 14 `rgPath` (3 runners' destructures, Q4, 2 target-form tests, 4 spawn-cwd
+// calls, the sandbox's command, its 2 dependency checks, the snapshot's alias) + 4 accessor calls (Q4, the ENOENT
+// advice, the status, the first-use probe) + 11 runner calls (9 shapes, oX's 2 forwards to bD)).
+// CONTROL: the 2.1.283 snippets verbatim plus a planted reader of `Q4().rgPath` that spawns it, and a planted call of
+// oX whose argv is computed: both must be named.
+const RESOLUTION_FLOOR = 29;
+// VERBATIM from the 2.1.283 darwin-arm64 carve (decoded graph.json, 2026-10-04): every non-runner reference (the status,
+// uTo, rides in the file-count snippet above).
+const RESOLUTION_SNIPPETS_2_1_283 = [
+  "function YE(e){if(e.code===\"ENOENT\"&&am().mode===\"system\"){let r=Error(SQ,{cause:e});return r.code=\"ENOENT\",r}return e}function Q4(){let e=am();return{rgPath:e.command,rgArgs:e.args,argv0:e.argv0}}var mf=20000000",
+  "dPath},b=!jr.isAbsolute(Q4().rgPath),S=()=>{throw new s_e(`Refusing to search ${e}`)},T=async(I=e)=>{let D=hc(e,Q4().rgPath);if(b&&!Tp(e,D))S();let L;try{",
+  "=D)throw h()},O=hc(D,Q4().rgPath),z;try{z=(await HE(D)).isDi",
+  "ectory()&&jr.isAbsolute(Q4().rgPath))return{lexical:e,canonical:O,spawnCwd:L}",
+  "y()){let ee=hc(O,Q4().rgPath);if(!Tp(O,ee))S();return{lexica",
+  "ical:O,spawnCwd:hc(O,Q4().rgPath),target:L",
+  "nu!==void 0&&{sigv4:nu}}:void 0,{rgPath:Bm,rgArgs:Lm,argv0:Pm}=Q4(),Um=hf().map((Q)=>Q?.sandbox?.ripgrep).find((Q)=>Q!==void 0)??{command:Bm,args:Lm,argv0:Pm},L",
+  " r;let n=e.dependencyProbeGeneration,{rgPath:s,rgArgs:h}=Q4(),g=await Qt.checkDependenciesAsync({command:s,args:h}),y=mO(g);if(n===e.depende",
+  "let e=gO();if(e)return e;let{rgPath:r,rgArgs:n}=Q4(),s=Qt.checkDependencies({command:r,args:n});return mO(s)}f",
+  "function aAn(){let e=Q4();if(e.argv0)return{type:\"function\",snippet:dbe(\"rg\",e.argv0)};let n=qr([e.rgPath]),r=e.rgArgs.map((g)=>qr([g]));return{type:\"alias\",snippet:n}}",
+  "async function DQ(){let e=ko();if(e.status!==null)return;let r=am();try{let n;if(r.argv0){let h=Bun.spawn([r.command,\"--version\"],{argv0:r.argv0}),[g,y]=await Promise.all([h.stdout.text(),h.exited]);n={code:y,stdout:g}}else n=await Ke(r.command,[...r.args,\"--version\"],{timeout:5000});",
+];
+const RESOLUTION_2_1_283 = [CARVE_2_1_283, ...RESOLUTION_SNIPPETS_2_1_283].join(';');
+function scanResolution({ refs, calls, what }) {
+  const findings = [];
+  for (const r of refs) if (!r.cls) findings.push(`@${r.at}: ${r.what} is read where no runner destructures it and no named non-runner matches: ${r.context}`);
+  for (const c of calls) if (!c.kind) findings.push(`@${c.at}: ${c.local}(...) calls the runner ${c.runner} with an argv the extraction cannot read, and forwards no runner's own: ${c.context}`);
+  return { findings, examined: refs.length + calls.length, note: `${what}: ${refs.length} references to the resolution, ${calls.length} runner calls` };
+}
+const resolutionOf = (text, what) => ({ refs: P.rgResolutionReferences(text), calls: P.rgRunnerCalls(text), what });
+function readResolution() {
+  const c = carveText();
+  if (c.skip) return { skip: c.skip };
+  return resolutionOf(c.text, `the carve of ${c.bin}`);
+}
+const PLANTS = 'function zQ(e,r){let c=Q4();return qE(c.rgPath,[...c.rgArgs,...e],{cwd:r})};async function pZ(e,r,n){return oX(Zq(e),r,n)}';
+const resolutionControl = () => resolutionOf(`${RESOLUTION_2_1_283};${PLANTS}`, 'the 2.1.283 snippets plus a planted rgPath reader and a planted computed-argv call');
+
+guardTests(defineGuard({ name: 'rg-resolution-accounted', floor: RESOLUTION_FLOOR, read: readResolution, scan: scanResolution, control: resolutionControl }));
+
+test('every reference to the resolution in 2.1.283\'s snippets is a runner\'s or named, and every runner call is a shape or a forward', () => {
+  const refs = P.rgResolutionReferences(RESOLUTION_2_1_283), calls = P.rgRunnerCalls(RESOLUTION_2_1_283);
+  const count = (xs, k) => xs.reduce((m, x) => { m[x[k]] = (m[x[k]] || 0) + 1; return m; }, {});
+  assert.deepStrictEqual(count(refs, 'cls'), {
+    'the ENOENT advice (YE)': 1, 'the resolution (Q4)': 2, 'the Grep target form (djn)': 2, 'the spawn cwd (hc)': 4,
+    'the runner bD': 1, 'the runner NQ': 1, 'the runner dTo': 1, 'the sandbox\'s ripgrep command': 1, 'the sandbox\'s dependency check': 2,
+    'the shell snapshot\'s rg (aAn)': 1, 'the status (uTo)': 1, 'the first-use probe (DQ)': 1,
+  });
+  assert.deepStrictEqual(count(refs, 'what'), { rgPath: 14, 'am()': 4 });
+  assert.deepStrictEqual(calls.map((c) => `${c.runner}:${c.kind}`).sort(), [
+    'NQ:shape', 'bD:forward (oX hands its argv on)', 'dTo:shape', 'jv:shape', 'oX:shape', 'oX:shape', 'oX:shape', 'oX:shape', 'oX:shape']);
+  assert.deepStrictEqual(scanResolution(resolutionOf(RESOLUTION_2_1_283, 'snippets')).findings, []);
+});
+test('the resolution control names the planted rgPath reader and the planted computed-argv call', () => {
+  const r = scanResolution(resolutionControl());
+  assert.strictEqual(r.findings.length, 2, r.findings.join('\n'));
+  assert.match(r.findings[0], /rgPath is read where no runner destructures it .*qE\(c\.rgPath/);
+  assert.match(r.findings[1], /oX\(\.\.\.\) calls the runner oX with an argv the extraction cannot read.*oX\(Zq\(e\)/);
+});
+test('runner calls are scoped to the runner\'s chunk and the chunks importing it, by their local name', () => {
+  const mark = (n) => `\nimport.meta.require = globalThis.__quaudeRequire; import.meta.url = "file:///$bunfs/root/chunk-${n}.js";\n`;
+  const t = `${mark('a')}function bD(e,r,n){let{rgPath:b,rgArgs:S,argv0:T}=Q4();return 0}async function oX(e,r,n){return bD(e,r,n)}export{oX};`
+    + `${mark('b')}import{oX as Lq}from"/$bunfs/root/chunk-a.js";let s=await Lq(["--files","--hidden"],e,r);let u=await Lq(mk(e),e,r)`
+    + `${mark('c')}function oX(h){return yRt(h.path)}let w=oX(v)`;
+  const calls = P.rgRunnerCalls(t);
+  assert.deepStrictEqual(calls.map((c) => [c.local, c.kind]), [['bD', 'forward (oX hands its argv on)'], ['Lq', 'shape'], ['Lq', null]]);
 });

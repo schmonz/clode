@@ -373,38 +373,45 @@ function carveRunners(t) {
   }
   return runners;
 }
+// The argv a runner call at `i` (the index of `NAME(`) is handed, as the flags it reads: its first argument when that
+// is an array literal, or a variable bound to one (`X=[` within 6000 bytes before) plus what `X.push(...)` adds
+// between the binding and the call; null when the argument is neither, or does not start with a flag.
+function runnerCallArgv(t, i, name) {
+  const a = i + name.length + 1;
+  let region = null;
+  if (t[a] === '[') {
+    const end = arrayEnd(t, a);
+    if (end !== -1) region = t.slice(a, end);
+  } else {
+    const v = new RegExp(`^(${ID})[,)]`).exec(t.slice(a, a + 80));
+    if (!v) return null;
+    const X = v[1], back = t.slice(Math.max(0, i - 6000), i), base = Math.max(0, i - 6000);
+    let def = -1;
+    for (const m of back.matchAll(new RegExp(`(?<![\\w$.])${X.replace(/\$/g, '\\$')}=\\[`, 'g'))) def = base + m.index + X.length + 1;
+    if (def === -1) return null;
+    const end = arrayEnd(t, def);
+    if (end === -1 || end > i) return null;
+    const parts = [t.slice(def, end)];
+    const pushes = t.slice(end, i);
+    for (const m of pushes.matchAll(new RegExp(`(?<![\\w$.])${X.replace(/\$/g, '\\$')}\\.push\\(`, 'g'))) {
+      const open = end + m.index + m[0].length - 1, close = parenEnd(t, open);
+      if (close !== -1 && close <= i) parts.push(t.slice(open, close));
+    }
+    region = parts.join(',');
+  }
+  if (!region) return null;
+  const first = jsLiterals(region)[0];
+  if (!first || !first.value.startsWith('-')) return null;
+  return argvOfRegion(region);
+}
 // Every argv a runner is called with: [{ where, argv }].
 function runnerCallShapes(t, runners) {
   const shapes = [];
   for (const name of runners.keys()) {
     for (let i = t.indexOf(`${name}(`); i !== -1; i = t.indexOf(`${name}(`, i + 1)) {
       if (isIdent(t[i - 1]) || t[i - 1] === '.' || t.slice(Math.max(0, i - 9), i) === 'function ') continue;
-      const a = i + name.length + 1;
-      let region = null;
-      if (t[a] === '[') {
-        const end = arrayEnd(t, a);
-        if (end !== -1) region = t.slice(a, end);
-      } else {
-        const v = new RegExp(`^(${ID})[,)]`).exec(t.slice(a, a + 80));
-        if (!v) continue;
-        const X = v[1], back = t.slice(Math.max(0, i - 6000), i), base = Math.max(0, i - 6000);
-        let def = -1;
-        for (const m of back.matchAll(new RegExp(`(?<![\\w$.])${X.replace(/\$/g, '\\$')}=\\[`, 'g'))) def = base + m.index + X.length + 1;
-        if (def === -1) continue;
-        const end = arrayEnd(t, def);
-        if (end === -1 || end > i) continue;
-        const parts = [t.slice(def, end)];
-        const pushes = t.slice(end, i);
-        for (const m of pushes.matchAll(new RegExp(`(?<![\\w$.])${X.replace(/\$/g, '\\$')}\\.push\\(`, 'g'))) {
-          const open = end + m.index + m[0].length - 1, close = parenEnd(t, open);
-          if (close !== -1 && close <= i) parts.push(t.slice(open, close));
-        }
-        region = parts.join(',');
-      }
-      if (!region) continue;
-      const first = jsLiterals(region)[0];
-      if (!first || !first.value.startsWith('-')) continue;
-      const flags = argvOfRegion(region);
+      const flags = runnerCallArgv(t, i, name);
+      if (!flags) continue;
       // a search with no -e reads its pattern from a positional the carve computes: stand one in
       const searches = !flags.includes('--files') && !flags.includes('--version') && !flags.includes('-e') && !flags.includes('--regexp');
       const argv = [...flags, ...(searches ? ['x'] : []), '.'];
@@ -437,6 +444,120 @@ function carveRgArgvShapes(text) {
   if (t.includes('?["-j","1"]:[]')) for (const s of shapes.slice()) shapes.push({ where: `${s.where} (retried: -j 1)`, argv: ['-j', '1', ...s.argv] });
   const seen = new Set();
   return shapes.filter((s) => { const k = JSON.stringify(s.argv); if (seen.has(k)) return false; seen.add(k); return true; });
+}
+
+// ---- every reference to the rg resolution, and every call of a runner (grep-native Task 10b Step 0, ruling G29 (3)) --
+// THE LOUD NETS. carveRunners finds a runner by its SHAPE; a new runner of another shape (one that reads
+// `Q4().rgPath` into a variable, or spawns the accessor's `.command`) would be missed with only the shape floor
+// to notice. So every reference to the resolution is accounted for, and so is every call of a runner it found:
+//   - each `rgPath` in the carve, and each call of the accessor that Q4 itself reads (`let e=am();return{rgPath:
+//     e.command,...}`), is inside a runner's destructure (carveRunners) or matches one NAMED non-runner below,
+//     each with why it never runs rg;
+//   - each call of a found runner (scoped: in the runner's own chunk, or in a chunk that imports it from there,
+//     by its local name) is read as an argv shape (runnerCallArgv) or FORWARDS: it passes the enclosing
+//     function's own first parameter, and that function is a runner too (oX hands its argv to bD).
+// Anything else is a finding: a new runner, or a new reader of the resolution, must be classified by hand.
+const RG_RESOLUTION_NON_RUNNERS = [
+  { name: 'the resolution (Q4)', why: 'returns {rgPath,rgArgs,argv0} from the accessor; it runs nothing',
+    re: `function ${ID}\\(\\)\\{let ${ID}=(${ID})\\(\\);return\\{rgPath:${ID}\\.command,rgArgs:${ID}\\.args,argv0:${ID}\\.argv0\\}\\}` },
+  { name: 'the Grep target form (djn)', why: 'whether rgPath is absolute picks `.` + cwd or the absolute target, and refuses outside cwd for a bare name; a string test',
+    re: `${ID}\\.isAbsolute\\(${ID}\\(\\)\\.rgPath\\)` },
+  { name: 'the spawn cwd (hc)', why: 'hc(target, rgPath) picks the directory a runner spawns in; a string test',
+    re: `(?<![\\w$.])${ID}\\(${ID},${ID}\\(\\)\\.rgPath\\)` },
+  { name: 'the sandbox\'s ripgrep command', why: 'hands {command,args,argv0} to the sandbox, whose runner (jv, by its {command:"rg"} default) carveRunners finds',
+    re: `\\{rgPath:${ID},rgArgs:${ID},argv0:${ID}\\}=${ID}\\(\\),${ID}=${ID}\\(\\)\\.map\\(\\(${ID}\\)=>${ID}\\?\\.sandbox\\?\\.ripgrep\\)` },
+  { name: 'the sandbox\'s dependency check', why: 'checkDependencies({command}) asks Bun.which(command) on Linux and srt-win on Windows; it never runs rg',
+    re: `\\{rgPath:${ID},rgArgs:${ID}\\}=${ID}\\(\\),${ID}=(?:await )?${ID}\\.checkDependencies(?:Async)?\\(\\{command:${ID},args:${ID}\\}\\)` },
+  { name: 'the shell snapshot\'s rg (aAn)', why: 'writes the Bash tool\'s `alias rg=<rgPath>` into the snapshot (bun-shim\'s rewriteSnapshot answers `rg` there); it runs nothing',
+    re: `if\\(${ID}\\.argv0\\)return\\{type:"function",snippet:${ID}\\("rg",${ID}\\.argv0\\)\\};let ${ID}=${ID}\\(\\[${ID}\\.rgPath\\]\\)` },
+  { name: 'the ENOENT advice (YE)', why: 'reads the accessor\'s mode to word a spawn\'s ENOENT; it runs nothing',
+    re: `if\\(${ID}\\.code==="ENOENT"&&${ID}\\(\\)\\.mode==="system"\\)` },
+  { name: 'the status (uTo)', why: 'reports {mode,path,working} for /doctor; it runs nothing',
+    re: `let ${ID}=${ID}\\(\\);return\\{mode:${ID}\\.mode,path:${ID}\\.command` },
+  { name: 'the first-use probe (DQ)', why: 'runs `<command> --version`: read as the first-use probe shape by carveRgArgvShapes',
+    re: `let ${ID}=${ID}\\(\\);try\\{let ${ID};if\\(${ID}\\.argv0\\)\\{let ${ID}=Bun\\.spawn\\(\\[${ID}\\.command,"--version"\\]` },
+];
+const CHUNK_MARK = 'import.meta.require = globalThis.__quaudeRequire;';
+// The carve's chunks (one ESM module each, as extract-claude-js writes them): [{ start, end, path }]; the whole text
+// is one chunk when it has no marks (the test's snippets).
+function carveChunks(t) {
+  const marks = [];
+  for (let i = t.indexOf(CHUNK_MARK); i !== -1; i = t.indexOf(CHUNK_MARK, i + 1)) marks.push(i);
+  if (!marks.length) return [{ start: 0, end: t.length, path: null }];
+  const chunks = [{ start: 0, end: marks[0], path: null }];
+  marks.forEach((m, k) => {
+    const u = /import\.meta\.url = "file:\/\/([^"]+)"/.exec(t.slice(m, m + 300));
+    chunks.push({ start: m, end: k + 1 < marks.length ? marks[k + 1] : t.length, path: u ? u[1] : null });
+  });
+  return chunks;
+}
+const chunkAt = (chunks, i) => chunks.find((c) => i >= c.start && i < c.end);
+// Where a name defined in chunk `home` is called: [{ chunk, local }] for its own chunk and every chunk importing it.
+function scopesOf(t, chunks, home, name) {
+  const scopes = [{ chunk: home, local: name }];
+  if (!home.path) return scopes;
+  const esc = (n) => n.replace(/\$/g, '\\$');
+  const spec = `from"${home.path}"`;
+  for (let k = t.indexOf(spec); k !== -1; k = t.indexOf(spec, k + 1)) {
+    const open = t.lastIndexOf('import{', k);
+    if (open === -1) continue;
+    const m = new RegExp(`[{,]${esc(name)}(?: as (${ID}))?[,}]`).exec(t.slice(open, k));
+    const c = chunkAt(chunks, k);
+    if (m && c && c !== home) scopes.push({ chunk: c, local: m[1] || name });
+  }
+  return scopes;
+}
+function callsIn(t, chunk, local) {
+  const out = [];
+  for (let i = t.indexOf(`${local}(`, chunk.start); i !== -1 && i < chunk.end; i = t.indexOf(`${local}(`, i + 1)) {
+    if (isIdent(t[i - 1]) || t[i - 1] === '.' || t.slice(Math.max(0, i - 9), i) === 'function ') continue;
+    out.push(i);
+  }
+  return out;
+}
+const around = (t, i) => JSON.stringify(t.slice(Math.max(0, i - 60), i + 60));
+// Every reference to the resolution: [{ at, what, cls }], `cls` null when it is neither a runner's nor named.
+function rgResolutionReferences(text) {
+  const t = String(text), runners = carveRunners(t), chunks = carveChunks(t);
+  const spans = [];
+  for (const m of t.matchAll(new RegExp(`function (${ID})\\([^)]*\\)\\{let\\{rgPath:${ID},rgArgs:${ID},argv0:${ID}\\}=${ID}\\(\\)`, 'g'))) {
+    if (runners.has(m[1])) spans.push({ start: m.index, end: m.index + m[0].length, cls: `the runner ${m[1]}` });
+  }
+  let accessor = null;
+  for (const N of RG_RESOLUTION_NON_RUNNERS) {
+    for (const m of t.matchAll(new RegExp(N.re, 'g'))) {
+      spans.push({ start: m.index, end: m.index + m[0].length, cls: N.name });
+      if (N.name === 'the resolution (Q4)') accessor = accessor || { name: m[1], at: m.index };
+    }
+  }
+  const refs = [];
+  const classify = (at, len) => { const s = spans.find((x) => at >= x.start && at + len <= x.end); return s ? s.cls : null; };
+  for (const m of t.matchAll(/(?<![\w$])rgPath(?![\w$])/g)) refs.push({ at: m.index, what: 'rgPath', cls: classify(m.index, 6), context: around(t, m.index) });
+  if (accessor) {
+    const home = chunkAt(carveChunks(t), accessor.at);
+    for (const { chunk, local } of scopesOf(t, chunks, home, accessor.name)) {
+      for (const i of callsIn(t, chunk, local)) refs.push({ at: i, what: `${local}()`, cls: classify(i, local.length + 2), context: around(t, i) });
+    }
+  }
+  return refs.sort((a, b) => a.at - b.at);
+}
+// Every call of a found runner: [{ at, runner, kind }], kind 'shape' | 'forward' | null.
+function rgRunnerCalls(text) {
+  const t = String(text), runners = carveRunners(t), chunks = carveChunks(t);
+  const calls = [];
+  for (const [name, defAt] of runners) {
+    for (const { chunk, local } of scopesOf(t, chunks, chunkAt(chunks, defAt), name)) {
+      for (const i of callsIn(t, chunk, local)) {
+        let kind = runnerCallArgv(t, i, local) ? 'shape' : null;
+        if (!kind) {
+          const f = enclosingFunction(t, i);
+          if (f && f.first && runners.has(f.name) && t.startsWith(`${local}(${f.first},`, i)) kind = `forward (${f.name} hands its argv on)`;
+        }
+        calls.push({ at: i, runner: name, local, kind, context: around(t, i) });
+      }
+    }
+  }
+  return calls.sort((a, b) => a.at - b.at);
 }
 
 // The variants report-grep measured, and the content-only flags. Patterns come from the regex
@@ -746,5 +867,5 @@ function mmapEverywhere(id, native, argv, tree, platform) {
 }
 
 module.exports = { RG_TREE_KINDS, makeRgTree, treeEntries, RG_MATRIX, cellArgv, grepArgv, globArgv, VCS_DIRS, flagLiterals, builderFlagLiterals, matrixDrift,
-  consumerUsageErrorRegex, refusalDrift, carveRgArgvShapes, carveRunners,
+  consumerUsageErrorRegex, refusalDrift, carveRgArgvShapes, carveRunners, rgResolutionReferences, rgRunnerCalls, RG_RESOLUTION_NON_RUNNERS,
   runNativeRg, nativeRgVersion, runOursRg, cellInput, assertNoAncestorRules, runOursRgBatch, compareRg, normalizeRg, rgOneThread, MMAP_EVERYWHERE, mmapEverywhere, inTree };
