@@ -701,6 +701,9 @@ function ugrepMatchesAsync(files, pattern, opts = {}) {
 //   RG-FIRST-MATCH             -l stops at a file's first match, -c and the standard printer
 //                              without -o at a line's first (rg-regex.cjs RG-RE-EARLIEST), as rg
 //                              does; -o and -c -o find every match
+//   RG-REFUSE-SPECIAL-FILE     a NAMED path that is neither a regular file nor a directory (a FIFO,
+//                              a device) refuses: rg reads it until it ends, quaude's rg cannot
+//                              without blocking its caller; a walked one is skipped, as rg skips it
 //   RG-EXIT                    0 found, 1 not found, 2 when any path failed (its error on stderr, the
 //                              rest still searched and printed): never quaude's refusal
 //   RG-BINARY-QUIT-FIRST-READ  INTERIM (the plan's Task 8 replaces it with rg's LineBuffer): a WALKED

@@ -273,8 +273,21 @@ Bash tool instead".
     --ignore-files`, `-.` for --hidden, --include/--exclude for --glob; `-l --null -e ''`), then
     ugrepMatches searches that list: two ugrep passes per directory (the listing reads each file's
     first block). What ugrep's walk could not read comes back as its warnings (`cannot read X`,
-    `cannot open directory X`, the phrasing of 7.8.2 and 5.0.0), re-spelled as rg's errors. Task
-    9's JS walk replaces both. A NAMED file skips the walk (RG-EXPLICIT-FILE).
+    `cannot open directory X`, the phrasing of 7.8.2 and 5.0.0), re-spelled as rg's errors; the
+    walk then exits 2 (7.8.2, measured), which is rg's answer, not skew (review I-3). Task 9's JS
+    walk replaces both. A NAMED file skips the walk (RG-EXPLICIT-FILE).
+  - THE WALK'S GLOBS ARE TODAY'S (rg-native.cjs ugrepGlobArg, one statement since review M-1):
+    ugrep's --exclude names FILES, so a deny glob naming a DIRECTORY excludes nothing rg excludes.
+    Measured (native 2.1.283 vs ours, a tree with private/x.txt and sub/private/y.txt): `--glob
+    '!private'` native drops both, ours neither; `--iglob '!/private'` and `--glob '!/private'`
+    native drop private/x.txt, ours list it. THE DENY-RULE ANGLE for Task 9: the Grep tool turns
+    each Read-deny rule into an `--iglob` (`Vin`; `!**/x/**` shapes are equal today, measured), so
+    a deny rule written without its `/**` would let Grep list files the user denied. Until then the
+    Grep tool's own deny shapes (`**/x/**`, `**/.git/hooks/**`) are the ones that hold.
+  - A NAMED FIFO or device refuses (RG-REFUSE-SPECIAL-FILE): native reads it until a writer closes
+    it (none: it waits); a walked one is skipped by both (review M-2).
+  - THE SYNC TWIN'S BOUND reaches every spawn (ugrep --version included) and is checked before each
+    file is read; one read, once started, runs to its end (review M-2).
   - RG-BINARY-QUIT-FIRST-READ IS INTERIM: a WALKED file whose first 64 KiB of text hold a NUL
     prints nothing; native agrees for a NUL there, not for one later (late.dat: -l lists it, -c
     prints nothing; ours counts it). A named file and stdin are searched as text: native's convert
