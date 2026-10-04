@@ -68,3 +68,23 @@ test('buffer-lite answers every node encoding as node does: toString, from and b
   }
   assert.deepStrictEqual(diffs, []);
 });
+
+// buf.copy(target, targetStart, sourceStart, sourceEnd), as node's: the bytes copied, the range clamped to
+// both buffers, a negative start or end (or a source start past the source) a RangeError, an overlapping
+// copy within one buffer as if through a temporary (Task 8 review M3: rg-native's ByteWriter copies with it,
+// and buffer-lite had none).
+test('buffer-lite copy answers as node does: count, clamping, errors, overlap', () => {
+  const src = [1, 2, 3, 4, 5, 6, 7, 8];
+  const args = [[], [0], [2], [7], [8], [9], [-1], [0, 0], [0, 3], [1, 3, 6], [0, 5, 2], [0, 2, 99], [0, 8], [0, 9], [0, -1], [0, 0, -1],
+    [3, 0, 8], ['2', '1', '4'], [1.7, 0.2, 3.9], [NaN, NaN, NaN]];
+  const run = (B, a, same) => {
+    const s = B.from(src), t = same ? s : B.alloc(6, 0);
+    try { const n = s.copy(t, ...a); return `${n}:${[...t].join(',')}`; } catch (e) { return `throws ${e.name} ${e.code || ''}`; }
+  };
+  const diffs = [];
+  for (const a of args) for (const same of [false, true]) {
+    const n = run(Buffer, a, same), l = run(Lite, a, same);
+    if (n !== l) diffs.push(`copy(${JSON.stringify(a)})${same ? ' within one buffer' : ''}: node ${n}, lite ${l}`);
+  }
+  assert.deepStrictEqual(diffs, []);
+});

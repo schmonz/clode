@@ -132,6 +132,26 @@ class Buffer extends Uint8Array {
     return td.decode(v);
   }
   slice(a, b) { return new Buffer(super.slice(a, b)); }
+  // node: copy(target[, targetStart[, sourceStart[, sourceEnd]]]) -> the bytes copied. Each index is
+  // read as an integer (NaN as 0); a negative one, or a sourceStart past this buffer, is a RangeError
+  // ERR_OUT_OF_RANGE; the range is clamped to both buffers; a copy within one buffer acts as if through
+  // a temporary (TypedArray set does).
+  copy(target, targetStart, sourceStart, sourceEnd) {
+    const int = (v) => { const n = +v; return Number.isNaN(n) ? 0 : Math.floor(n); };
+    const range = (name, v, ok) => { const e = new RangeError(`The value of "${name}" is out of range. It must be ${ok}. Received ${v}`); e.code = 'ERR_OUT_OF_RANGE'; return e; };
+    const ts = targetStart === undefined ? 0 : int(targetStart);
+    if (ts < 0) throw range('targetStart', ts, '>= 0');
+    const ss = sourceStart === undefined ? 0 : int(sourceStart);
+    if (ss < 0 || ss > this.length) throw range('sourceStart', ss, `>= 0 && <= ${this.length}`);
+    let se = sourceEnd === undefined ? this.length : int(sourceEnd);
+    if (se < 0) throw range('sourceEnd', se, '>= 0');
+    if (ts >= target.length || ss >= se) return 0;
+    if (se - ss > target.length - ts) se = ss + target.length - ts;
+    const n = Math.min(se - ss, this.length - ss);
+    if (n <= 0) return 0;
+    Uint8Array.prototype.set.call(target, this.subarray(ss, ss + n), ts);
+    return n;
+  }
   equals(other) { return this.length === other.length && this.every((v, i) => v === other[i]); }
 
   // SEARCH METHODS MUST BE OVERRIDDEN, NOT INHERITED. Uint8Array.prototype.indexOf
