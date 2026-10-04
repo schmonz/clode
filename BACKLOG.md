@@ -284,11 +284,14 @@ Bash tool instead".
     each Read-deny rule into an `--iglob` (`Vin`; `!**/x/**` shapes are equal today, measured), so
     a deny rule written without its `/**` would let Grep list files the user denied. Until then the
     Grep tool's own deny shapes (`**/x/**`, `**/.git/hooks/**`) are the ones that hold.
-  - A NAMED FIFO, or a device that has bytes or would wait (/dev/zero, a terminal), refuses
-    (RG-REFUSE-SPECIAL-FILE): native reads it until it ends (a FIFO until a writer closes it; none:
-    it waits); a walked one is skipped by both (review M-2). Any other named special path answers as
-    native (RG-SPECIAL-FILE, re-review N1): /dev/null is an empty file, a socket is rg's per-path
-    error, and neither takes the rest of the search down.
+  - A NAMED special path is decided UNREAD (Task 7 review I1). /dev/stdin, /dev/std{out,err},
+    /dev/fd/N and /proc/self/fd/N refuse by name (to native they are the rg child's descriptors;
+    quaude's rg runs inside its caller, and opening /dev/fd/0 there froze the engine under a
+    terminal), as do a FIFO, any character device but /dev/null, and a block device that opens
+    (RG-REFUSE-SPECIAL-FILE): native reads each until it ends. A walked one is skipped by both
+    (review M-2). /dev/null (by its resolved path) is an empty file and a socket's failed open is
+    rg's per-path error (RG-SPECIAL-FILE, re-review N1); neither takes the rest of the search down.
+    Accepted, not changed: /dev/fd/1 refuses where native says EACCES (review M4).
   - A UGREP PASS THAT FAILS refuses, whatever it printed first (re-review N3): the Grep tool shows
     rc-2 output to the model as the whole answer. Only ugrep's per-path warnings (`cannot read X:
     ...`, `X: No such file or directory`, naming a path it was given) are rg's own errors, the rest
@@ -298,7 +301,9 @@ Bash tool instead".
     symbolic links` (ELOOP), `i/o error` with no `(os error 5)` for EIO, and libuv's wording for
     ENAMETOOLONG and EISDIR; an errno libuv has no name for (EOPNOTSUPP on a socket, darwin 102)
     reads `Unknown system error -102 (os error 102)` where native says `Operation not supported on
-    socket (os error 102)`. The fix is the engine's strerror, not a table here.
+    socket (os error 102)`; ENXIO (a socket's open on Linux) is libuv's `No such device or address`,
+    which is Linux's strerror but not macOS's `Device not configured`. The fix is the engine's
+    strerror, not a table here.
   - THE SYNC TWIN'S BOUND reaches every spawn (ugrep --version included) and is checked before each
     file is read; one read, once started, runs to its end (review M-2).
   - RG-BINARY-QUIT-FIRST-READ IS INTERIM: a WALKED file whose first 64 KiB of text hold a NUL
@@ -332,9 +337,28 @@ Bash tool instead".
   - A path that is not UTF-8 would be `{"bytes": ...}` in native's JSON; the interim walk reads
     ugrep's listing as UTF-8 (lossy), so such a name cannot reach the printer as its bytes. Task 9's
     walk must carry names as bytes. `--type` beside `--json` refuses naming `--type` (Task 9).
-  - SPEED: linear, but every match of a 5 MB minified line (275,822 of them, a 20 MB answer: past
-    the Grep tool's maxBuffer anyway) takes ~2.4 s under tjs on this Mac, 0.7 s of it reading
-    ugrep's records; native ~100 ms.
+  - SPEED: linear, and bounded by the caller's maxBuffer and event loop since Task 7 review I2 (the
+    search stops printing past execFile's maxBuffer; the async twin hands the loop back at least
+    every 20 ms while it reads ugrep's records, decides and prints). Before that the whole answer
+    was built first, holding the loop: under tjs with the Grep tool's execFile options, `--json ''`
+    over 200,000 lines blocked 20.3 s (the 20 s timeout could not fire). Still slow beside native
+    (~100 ms each): that case takes 12.9 s with a 138 ms longest gap; every match of a 5 MB line
+    3.4 s (32 ms); `--json -n e .` over this repo 7.0 s (77 ms); `-o -n e .` 9.4 s (44 ms).
+- **node-shim's sync stat has no dev, ino or rdev: an engine gap** (found by the grep-native Task 7
+  review, I3). fs.statSync/lstatSync/fstatSync (and Stats from fs.promises, which uses the same
+  binding) report dev, ino and rdev as 0 because the engine's sync binding (txiki.js
+  src/mod_fs_sync.c `stat_to_js`) carries only size, mode, uid, gid, mtimeMs and kind. The engine
+  HAS them: its async `tjs.stat('/dev/null')` answers dev 27896451, ino 339, rdev 50331650, the
+  same as host node's statSync (this Mac, 2026-10-04). The fix is in the engine's sync binding, not
+  in invented values. (The type methods, isFIFO() and the rest, read the mode bits since eba6c57.)
+- **Acceptance to run: a credential handed over an inherited fd, on Linux.** The 2.1.283 bundle's
+  CLAUDE_CODE_{API_KEY,OAUTH_TOKEN,GATEWAY_TOKEN,WEBSOCKET_AUTH}_FILE_DESCRIPTOR reader takes an fd
+  that fstat calls a socket directly, and otherwise opens `/dev/fd/N`. Before eba6c57 node-shim's
+  fstat called no fd a socket, so quaude always took `/dev/fd/N`; on macOS that works for a pipe or
+  socket (measured end to end, a canned mock token on fd 3 from a socketpair: native and quaude
+  both send it, before and after the fix), but on Linux opening /dev/fd/N of a socket fails
+  (ENXIO), so the credential would be lost. Driven on macOS only (scratch fdauth.cjs); run the
+  same on Linux (and NetBSD) with a canned token, never a real one.
 - **The Grep tool's files_with_matches ORDER differs from native's under quaude: node-shim's stat
   has whole-second mtimes** (found driving the real 2.1.283 bundle end to end, grep-native Task 6,
   2026-10-03). The tool sorts -l's files in JS, newest mtime first, then by name; node-shim's
