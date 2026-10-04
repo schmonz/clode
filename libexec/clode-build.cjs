@@ -685,14 +685,27 @@ async function attestTarget(bin, { spawnRun, env, cwd, timeout }) {
   return { ok: r.status === 0 && String(r.stdout).includes(ATTEST_VERIFIED), ...r };
 }
 
+// THE SMOKE'S OWN HOME (grep-native Task 10b fix round 3, ruling G33). The smoke BOOTS the bundle it just built, and the
+// bundle reads HOME: it runs ~/.claude/settings.json's hooks and writes ~/.claude.json, ~/.tjs/localStorage.db and
+// ~/.tjs/cookies.txt. Handing it clode's inherited environment ran the user's hooks and wrote into the user's home on
+// every build (measured). A build must never touch the user's home, so the smoke gets a HOME, USERPROFILE and
+// CLAUDE_CONFIG_DIR of its own, in a temp dir created here and removed after.
+function buildSmokeHome() {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-build-smoke-home-'));
+  const cfg = path.join(home, '.claude');
+  fs.mkdirSync(cfg);
+  return { env: { HOME: home, USERPROFILE: home, CLAUDE_CONFIG_DIR: cfg }, remove: () => fs.rmSync(home, { recursive: true, force: true }) };
+}
+
 async function smokeTarget(bin, { spawnRun, env, cwd, timeout }) {
   const mock = await startPongMock();
+  const home = buildSmokeHome();
   let result;
   try {
-    const smokeEnv = { ...env, ANTHROPIC_BASE_URL: mock.url, ANTHROPIC_API_KEY: 'sk-ant-clode-build-smoke' };
+    const smokeEnv = { ...env, ...home.env, ANTHROPIC_BASE_URL: mock.url, ANTHROPIC_API_KEY: 'sk-ant-clode-build-smoke' };
     delete smokeEnv.NODE_PATH;
     result = await spawnRun(bin, ['-p', 'say PONG'], { env: smokeEnv, cwd, timeout });
-  } finally { await mock.close(); }
+  } finally { await mock.close(); home.remove(); }
   const posted = mock.requests.some((q) => q.method === 'POST' && /\/messages/.test(q.url));
   if (result.status !== 0 || !/PONG/.test(result.stdout) || !posted) {
     // `how` carries run()'s verdict verbatim (timed out / killed / exit N). A smoke
@@ -1145,7 +1158,25 @@ function carveVerdict({ naude, self, providerPlatform, target, hostPlatform, env
 // clode build [--out PATH]. Returns the exit status (0 on success). Injectable
 // bits (env/stderr/stdout) keep the unit-testable surface consistent with the
 // sibling subcommand modules.
+// THE BUILD'S OWN TJS HOME (ruling G33). Every tjs process the build starts (the blobulate worker, the attest, the
+// product's smoke) creates its "home", $TJS_HOME or else ~/.tjs, before anything else runs (txiki's run-main), and the
+// smoke's bundle writes localStorage.db and cookies.txt there. A build must not leave that in the user's home, so
+// unless the caller chose a TJS_HOME the build hands its children one of its own, removed when the build ends.
 async function clodeBuild(args, opts) {
+  const base = opts.env || process.env;
+  if (base.TJS_HOME) return clodeBuildIn(args, opts);
+  const tjsHome = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-build-tjs-home-'));
+  // set on the build's own env object, as the build already records CLODE_TARGET_TEMPLATE there: every step reads it,
+  // including those that spawn with process.env directly (the CLI's env IS process.env)
+  base.TJS_HOME = tjsHome;
+  try { return await clodeBuildIn(args, opts); }
+  finally {
+    delete base.TJS_HOME;
+    try { fs.rmSync(tjsHome, { recursive: true, force: true }); } catch { /* best effort */ }
+  }
+}
+
+async function clodeBuildIn(args, opts) {
   const { here, version } = opts;
   const env = opts.env || process.env;
   const stderr = opts.stderr || process.stderr;
@@ -2189,7 +2220,7 @@ async function clodeBuild(args, opts) {
 }
 
 module.exports = {
-  clodeBuild, carveVerdict, parseBuildArgs, resolveBuildOut, makePhaseSpinner, startPongMock, cannedSSE, smokeTarget, attestTarget, timeoutScale, codesignAdHoc, thinToHostSlice, describeExit,
+  clodeBuild, carveVerdict, parseBuildArgs, resolveBuildOut, makePhaseSpinner, startPongMock, cannedSSE, smokeTarget, buildSmokeHome, attestTarget, timeoutScale, codesignAdHoc, thinToHostSlice, describeExit,
   readDirectDeps, computeDepClosure, assertClosureMatchesLockfile,
   scanBareSpecifiers, scannableTexts, specifierPackageName, isBuiltinSpecifier, shimProvidedModules,
   assertNoUnknownBareSpecifiers, KNOWN_UNREACHABLE, resolveClaudeNmDir,

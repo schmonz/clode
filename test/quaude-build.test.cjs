@@ -41,17 +41,33 @@ const VERSION = fs.readFileSync(path.join(REPO, 'VERSION'), 'utf8').replace(/\n+
 function providerBin() { const p = process.env.CLODE_PROVIDER_BIN; return p && fs.existsSync(p) ? p : null; }
 function sha256File(p) { return crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex'); }
 
-let SKIP = null, DIR = null, QUAUDE = null, BUILD = null;
+let SKIP = null, DIR = null, QUAUDE = null, BUILD = null, SENTINEL = null, SENTINEL_BEFORE = null;
+// A sentinel HOME for the build (ruling G33): `clode build`'s smoke boots the bundle, and must do it in a home of its
+// own. The build is handed this one; it must be byte-untouched afterwards.
+const snapshotTree = (dir) => {
+  const out = [];
+  const walk = (d, rel) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+    const r = path.join(rel, e.name), p = path.join(d, e.name);
+    if (e.isDirectory()) { out.push(`${r}/`); walk(p, r); } else out.push(`${r} ${sha256File(p)}`);
+  } };
+  walk(dir, '');
+  return out.sort();
+};
 before(() => {
   if (!tjsPath()) { SKIP = 'no tjs binary (CLODE_TJS or build/tjs/tjs)'; return; }
   if (!providerBin()) { SKIP = 'no CLODE_PROVIDER_BIN'; return; }
   DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'quaude-build-'));
   QUAUDE = path.join(DIR, 'quaude');
+  SENTINEL = path.join(DIR, 'sentinel-home');
+  fs.mkdirSync(path.join(SENTINEL, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(SENTINEL, '.claude', 'settings.json'), '{"hooks":{}}\n');
+  SENTINEL_BEFORE = snapshotTree(SENTINEL);
   BUILD = spawnSync(process.execPath, [ENTRY, 'build', '--out', QUAUDE], {
     encoding: 'utf8',
     timeout: 300000,
     env: {
       ...process.env,
+      HOME: SENTINEL, USERPROFILE: SENTINEL, CLAUDE_CONFIG_DIR: path.join(SENTINEL, '.claude'),
       CLODE_CLAUDE_BIN: providerBin(),
       CLODE_CACHE: path.join(DIR, 'cache'),   // hermetic: never the real cache
       // stateRoot(DIR): respects test/run.mjs's central CLODE_STATE_ROOT when
@@ -85,6 +101,12 @@ function cleanEnv(extra) {
   delete env.NODE_PATH;
   return env;
 }
+
+test('clode build leaves the HOME it was given byte-untouched: its smoke boots the bundle in a home of its own', (t) => {
+  if (SKIP) { t.skip(SKIP); return; }
+  assert.strictEqual(BUILD.status, 0, `clode build failed:\n${BUILD.stdout}\n${BUILD.stderr}`);
+  assert.deepStrictEqual(snapshotTree(SENTINEL), SENTINEL_BEFORE, 'the build wrote into its HOME');
+});
 
 test('clode build blobulates a quaude and its internal PONG + attest smokes pass', (t) => {
   if (SKIP) { t.skip(SKIP); return; }

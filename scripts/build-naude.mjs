@@ -553,10 +553,14 @@ const SELFCHECK_TIMEOUT_MS = 120000 * (Number(process.env.CLODE_TIMEOUT_SCALE) |
 
 function smokeCheck(bin) {
   const cache = fs.mkdtempSync(path.join(os.tmpdir(), 'naude-selfcheck-'));
+  // the self-check boots the baked bundle: a home of its own (inside the cache dir removed below), never the user's
+  // (clode-build.cjs buildSmokeHome, ruling G33)
+  const home = path.join(cache, 'home');
+  fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
   try {
     const r = spawnSync(bin, ['--version'], {
       encoding: 'utf8', timeout: SELFCHECK_TIMEOUT_MS,
-      env: { ...process.env, NAUDE_CACHE: cache },
+      env: { ...process.env, HOME: home, USERPROFILE: home, CLAUDE_CONFIG_DIR: path.join(home, '.claude'), NAUDE_CACHE: cache },
     });
     if (r.status !== 0 || /Cannot find module|MODULE_NOT_FOUND/.test(r.stderr || '')) {
       // TIMED OUT AND CRASHED ARE DIFFERENT BUGS, and spawnSync reports both as a signal:
