@@ -245,3 +245,46 @@ test('RG-SORT-MODIFIED (ruling G12): files written within one second list in nat
     } finally { fs.rmSync(prog, { force: true }); }
   } finally { fs.rmSync(base, { recursive: true, force: true }); }
 });
+
+// The Glob tool's own argv over 30,000 files under tjs, as the bundle runs it (the async twin, execFile): the listing
+// and its sort (a stat a file) hand the loop back (longest gap under 600 ms), the answer is every file, counted, and
+// the caller's timeout ends a run within a bound (review minor of Task 10's fix round; measured here: longest gap 59 ms
+// over a 1.3 s listing, the 200 ms timeout ending it at 203 ms).
+test('RG-SORT-MODIFIED: the async twin keeps the loop turning over 30,000 files and ends at a timeout (tjs, counted)', { skip: POSIX || NO_TJS }, () => {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'rg-files-gap-')));
+  try {
+    const tree = path.join(dir, 'w');
+    for (let a = 0; a < 60; a++) {
+      for (let b = 0; b < 50; b++) {
+        const d = path.join(tree, `pkg${a}`, `lib${b}`);
+        fs.mkdirSync(d, { recursive: true });
+        for (let c = 0; c < 10; c++) fs.writeFileSync(path.join(d, `file${c}.js`), `module.exports = ${c};\n`);
+      }
+    }
+    const prog = path.join(dir, 'probe.cjs');
+    fs.writeFileSync(prog, `
+      const rgn = require(${JSON.stringify(path.join(__dirname, '..', 'libexec', 'rg-native.cjs'))});
+      const cp = require('child_process');
+      const ctx = { spawn: cp.spawn, spawnSync: cp.spawnSync, ugrep: () => null };
+      const argv = ['--files', '--null', '--glob', '**/*.js', '--sort=modified', '--no-ignore', '--hidden', 'w'];
+      const run = (o) => new Promise((res) => { const t0 = Date.now(); rgn.rgExecFile(argv, { cwd: ${JSON.stringify(dir)}, encoding: 'buffer', ...o },
+        (e, so) => res({ code: e ? e.code : 0, killed: e ? e.killed : false, signal: e ? e.signal : null, n: so.toString('latin1').split('\\0').filter(Boolean).length,
+          ms: Date.now() - t0 }), 'rg', ctx); });
+      (async () => {
+        let last = Date.now(), maxGap = 0;
+        const iv = setInterval(() => { const n = Date.now(); maxGap = Math.max(maxGap, n - last); last = n; }, 10);
+        const full = await run({ timeout: 120000, maxBuffer: 20000000 });
+        clearInterval(iv);
+        const cut = await run({ timeout: 200, killSignal: 'SIGKILL', maxBuffer: 20000000 });
+        process.stdout.write('PROBE:' + JSON.stringify({ maxGap, full, cut }) + '\\n');
+      })();
+    `);
+    const res = runLoader(prog, [], { timeout: 240000 });
+    const got = JSON.parse(((res.stdout || '').split('\n').find((l) => l.startsWith('PROBE:')) || 'PROBE:null').slice(6));
+    assert.ok(got, `the tjs probe printed nothing (exit ${res.status}): ${(res.stderr || '').slice(0, 1500)}`);
+    assert.deepStrictEqual([got.full.code, got.full.n], [0, 30000], JSON.stringify(got.full));
+    assert.ok(got.maxGap < 600, `the loop was held ${got.maxGap} ms (the listing took ${got.full.ms} ms)`);
+    assert.deepStrictEqual([got.cut.killed, got.cut.signal], [true, 'SIGKILL'], JSON.stringify(got.cut));
+    assert.ok(got.cut.ms < 5000, `the timeout ended the listing ${got.cut.ms} ms in`);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
