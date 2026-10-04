@@ -1629,9 +1629,12 @@ test('RG-BINARY-*: the line buffer\'s fills step over the text a bounded number 
 
 // RG-BINARY-QUIT's fills over a minified bundle with a NUL at its end (Task 8 review I-2, a 59 MB one): each read scans
 // back to its last newline and each roll back over the context lines it keeps, and a byte loop in JS
-// over 55 MB of 500 KB lines held the event loop 761-1011 ms under tjs (Task 7's own gap bound is
-// 600 ms). The async twin must keep handing the loop back: walked, with context, and -l.
-test('RG-BINARY-QUIT: the async twin keeps the loop turning over a 55 MB file of long lines with a NUL at its end (tjs)', {
+// over 55 MB of 500 KB lines held the event loop 761-1011 ms under tjs. The async twin must keep handing the loop back:
+// walked, with context, and -l. COUNTED, not timed (Task 10b fix round: a 600 ms wall-clock bound failed at 668 ms
+// under load): each stage that loops hands control back at a stated rate, searchStats.ticks counts it, and the test
+// holds the count to the work done: the fills once per FILL_TICK_BYTES they read (or 64 reads), the selected lines
+// once per 4096 matches (measured here: 335 for -n -C 2, stopped at maxBuffer). Removing either yield fails it.
+test('RG-BINARY-QUIT: the async twin keeps handing the loop back over a 55 MB file of long lines with a NUL at its end (counted; tjs)', {
   skip: needUgrep.skip || NO_TJS,
 }, () => {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'rg-native-p8gap-')));
@@ -1653,18 +1656,25 @@ test('RG-BINARY-QUIT: the async twin keeps the loop turning over a 55 MB file of
           const a = await new Promise((res) => rgn.rgExecFile(argv, { cwd, encoding: 'buffer', maxBuffer: 1000000, timeout: 60000, killSignal: 'SIGKILL' },
             (e, so) => res({ code: e ? e.code : 0, bytes: so.length }), 'rg', ctx));
           clearInterval(iv);
-          out.push({ argv, maxGap, ...a });
+          out.push({ argv, maxGap, ticks: { ...rgn.searchStats.ticks }, filled: rgn.searchStats.filled, ...a });
         }
-        process.stdout.write('PROBE:' + JSON.stringify(out) + '\\n');
+        process.stdout.write('PROBE:' + JSON.stringify({ out, FILL_TICK_BYTES: rgn.FILL_TICK_BYTES }) + '\\n');
       })();
     `);
     const res = runLoader(prog, [], { timeout: 180000 });
-    const got = JSON.parse(((res.stdout || '').split('\n').find((l) => l.startsWith('PROBE:')) || 'PROBE:null').slice(6));
-    assert.ok(got, `the tjs probe printed nothing (exit ${res.status}): ${(res.stderr || '').slice(0, 1500)}`);
-    if (process.env.RG_TIMINGS) console.log(JSON.stringify(got));
+    const probe = JSON.parse(((res.stdout || '').split('\n').find((l) => l.startsWith('PROBE:')) || 'PROBE:null').slice(6));
+    assert.ok(probe, `the tjs probe printed nothing (exit ${res.status}): ${(res.stderr || '').slice(0, 1500)}`);
+    const got = probe.out;
+    if (process.env.RG_TIMINGS) console.log(JSON.stringify(probe));
     assert.strictEqual(got[0].code, 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER', JSON.stringify(got[0]));
     assert.deepStrictEqual([got[1].code, got[1].bytes], [0, 12], JSON.stringify(got[1]));
-    for (const r of got) assert.ok(r.maxGap < 600, `the loop was held ${r.maxGap} ms: ${JSON.stringify(r)}`);
+    const [ctxRun] = got;
+    assert.ok(probe.FILL_TICK_BYTES > 0 && ctxRun.filled >= 8 * probe.FILL_TICK_BYTES, `the fills read ${ctxRun.filled} bytes: the case no longer exercises them`);
+    // a tick covers at most FILL_TICK_BYTES plus the read that crossed it, and no read here exceeds FILL_TICK_BYTES (the
+    // buffer grows to about twice a 500 KB line): at least one tick per 2 x FILL_TICK_BYTES (measured: 37 over 55 MB)
+    assert.ok(ctxRun.ticks.fill >= Math.floor(ctxRun.filled / (2 * probe.FILL_TICK_BYTES)),
+      `the fills handed the loop back ${ctxRun.ticks.fill} times over ${ctxRun.filled} bytes (one per ${2 * probe.FILL_TICK_BYTES} at least)`);
+    assert.ok(ctxRun.ticks.select >= 100, `the selected lines handed the loop back ${ctxRun.ticks.select} times (335 measured)`);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 

@@ -1096,6 +1096,10 @@ function readRgBytes(file, cwd) {
 // no match in too (rg grows its buffer on any long line it reads), and no upstream tool passes -j1:
 // BACKLOG. A UTF-16 read the line buffer's room cuts short is taken to end on a whole character.
 const RG_BUFFER = 64 * 1024;          // grep-searcher's DEFAULT_BUFFER_CAPACITY
+// The fills hand the loop back every 64 reads OR every FILL_TICK_BYTES read, whichever comes first: with lines of
+// hundreds of KB the buffer grows and 64 reads covered a 55 MB file, one yield for all of it (Task 10b fix round;
+// counted by searchStats.ticks.fill and .filled, test/rg-native.test.cjs).
+const FILL_TICK_BYTES = 1024 * 1024;
 const MMAP_MAX_PATHS = 10;            // hiargs.rs: memory maps for at most 10 paths, all files
 // How rg searches one target: 'quit' (walked), 'convert' (named or stdin), 'mmap' (named, RG-BINARY-MMAP).
 function binaryHow(e, mmap) { return e.walked ? 'quit' : e.stdin || !mmap ? 'convert' : 'mmap'; }
@@ -1158,7 +1162,7 @@ function precedingStart(t, from, to, count) {
 // yields TICK now and then.
 function* lineBufferFills(v, { quit, maxContext, visited, cap = RG_BUFFER, stopAfter = -1, partial = false }) {
   const t = v.text, reader = rgReader(t, v.read);
-  let A = 0, end = 0, lastLT = 0, at = 0, from = 0, reads = 0;
+  let A = 0, end = 0, lastLT = 0, at = 0, from = 0, reads = 0, sinceTick = 0;
   for (;;) {
     // core.roll: what the search let go of in the buffer it searched ([A, A + lastLT))
     let consumed = lastLT;
@@ -1177,7 +1181,8 @@ function* lineBufferFills(v, { quit, maxContext, visited, cap = RG_BUFFER, stopA
       if (n === 0) { if (partial) return { more: true }; lastLT = end; didread = lastLT > 0; break; }
       const oldend = end;
       end += n; at += n;
-      if (++reads % 64 === 0) yield TICK;
+      searchStats.filled += n; sinceTick += n;
+      if (++reads % 64 === 0 || sinceTick >= FILL_TICK_BYTES) { sinceTick = 0; searchStats.ticks.fill++; yield TICK; }
       if (v.nul !== -1 && v.nul < A + end) {
         met = true;
         if (quit) { end = v.nul - A; lastLT = end; break; }
@@ -1231,7 +1236,7 @@ function* sunkLines(text, sel, spec) {
     if (ev === GAP) continue;
     const le = lineEndAt(text, ev.ls);
     out.push(ev.at, le < text.length ? le + 1 : le);
-    if (++n % TICK_EVERY === 0) yield TICK;
+    if (++n % TICK_EVERY === 0) { searchStats.ticks.sunk++; yield TICK; }
   }
   return out;
 }
@@ -1320,7 +1325,7 @@ function* selectedLines(text, matches) {
       le = lineEndAt(text, ls);
     }
     if (!(unterminated && m.start === text.length)) L.ms.push(m);
-    if (++n % SLICE_LINES === 0) yield TICK;
+    if (++n % SLICE_LINES === 0) { searchStats.ticks.select++; yield TICK; }
   }
   return sel;
 }
@@ -1366,7 +1371,7 @@ function* eachPrintedLine(text, sel, spec) {
 // read or trust it.
 // ticks: how often a listing's three stages handed control back (the walk, RG-SORT-MODIFIED's stat, the printing):
 // counted, so a stage that stops yielding is seen however fast this host is (fix round 2, review N3).
-const searchStats = { printed: 0, scannedBack: 0, read: 0, ticks: { walk: 0, sort: 0, list: 0 } };
+const searchStats = { printed: 0, scannedBack: 0, read: 0, filled: 0, ticks: { walk: 0, sort: 0, list: 0, fill: 0, select: 0, sunk: 0 } };
 // The start of the line holding offset `at`, stepping back no further than `floor` (the start of the
 // first line it could be: the one after the last line taken). Every printer and the candidate lines find
 // line starts HERE, so searchStats.scannedBack counts every step.
@@ -2042,7 +2047,7 @@ function* printListing(spec, entries, cwd) {
 // rules above are stated once. It returns { stdout, stderr, status } or a refusal. A directory is walked
 // here, in JS, as rg walks it (rg-walk.cjs), and ugrep searches the files it lists.
 function* searchCore(spec, opts) {
-  searchStats.ticks = { walk: 0, sort: 0, list: 0 };
+  searchStats.ticks = { walk: 0, sort: 0, list: 0, fill: 0, select: 0, sunk: 0 };
   const fs = require('fs'), path = require('path');
   const cwd = opts.cwd || process.cwd();
   const pattern = spec.patterns[0];
@@ -2133,7 +2138,7 @@ function* searchCore(spec, opts) {
   const first = spec.mode === 'files' ? 'file' : spec.mode !== 'json' && !spec.only ? 'line' : undefined;
   const files = [...new Set(entries.filter((e) => e.file).map((e) => e.file))];
   let matches = new Map();
-  searchStats.printed = 0; searchStats.scannedBack = 0; searchStats.read = 0;
+  searchStats.printed = 0; searchStats.scannedBack = 0; searchStats.read = 0; searchStats.filled = 0;
   const out = outBuffers(), err = [], state = { printed: false, json: spec.mode === 'json' ? jsonTotals() : null,
     limit: typeof opts.maxBuffer === 'number' && opts.maxBuffer >= 0 ? opts.maxBuffer : Infinity };
   let found = false, broke = false;
@@ -2596,4 +2601,4 @@ function rgExecFileSync(r, opts, file, args) {
 
 module.exports = { isRgExe, rgRefusal, parseRgRefusal, untranslatableReason, runRg, rgSpawn, rgExecFile, rgSpawnSync, rgExecFileSync, RG_MAX_BUFFER,
   UGREP_MIN, parseUgrepVersion, versionAtLeast, ugrepCapabilities, ugrepCapabilitiesAsync, ugrepMatchArgv, chunkFiles, parseUgrepRanges,
-  ugrepMatches, ugrepMatchesAsync, matchFilesAlone, parseRgSearch, ugrepGlobArg, UgrepError, rgText, searchStats };
+  ugrepMatches, ugrepMatchesAsync, matchFilesAlone, parseRgSearch, ugrepGlobArg, UgrepError, rgText, searchStats, FILL_TICK_BYTES };
