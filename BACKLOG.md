@@ -368,7 +368,10 @@ Bash tool instead".
     (TextDecoder had dropped it, so `<BOM>*.log` excluded what native lists); several roots share the
     ancestors' matchers the previous root built (dir.rs's cache), so `-j1 sub docs .` lists docs/a.md as
     native does. In PARALLEL the roots race to build those ancestors and native's file SET varies (two sets
-    in 30 runs, 12/18 and 14/16): quaude's rg gives -j1's.
+    in 30 runs, 12/18 and 14/16): quaude's rg gives -j1's sharing, but a root that is no directory (a file, a
+    missing path) drops the chain ON ONE THREAD ONLY; the parallel walk never drops it (CORRECTED, Task 10
+    Step 0, ruling G26: `-l needle sub nosuch docs` lists docs/a.md 12 of 12 in parallel, never under -j1;
+    quaude's rg had dropped it in both).
   - SPEED (fix round 1, review I-2): under tjs a walk of 20,000 files in 2,000 directories (local disk,
     warm) takes ~1.0 s (2.3-2.6 s before an ASCII path skipped the UTF-8 encode); `-l` over it 2.1 s sync;
     the async twin's longest loop gap 75 ms (700-800 ms before the BOM sniff yielded in slices). Over this

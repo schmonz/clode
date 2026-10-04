@@ -1675,8 +1675,10 @@ function* searchCore(spec, opts) {
   const entries = [];
   for (let i = 0; i < spec.paths.length; i++) {
     const P = spec.paths[i], k = kinds[i];
-    // RG-IGNORE-PARENTS: a root that is no directory, stdin aside, drops the ancestors the last one built
-    if (k.kind !== 'stdin' && k.kind !== 'dir') walker.dropParents();
+    // RG-IGNORE-PARENTS: on ONE thread a root that is no directory, stdin aside, drops the ancestors the last
+    // one built (walk.rs's sequential walker: `self.ig = self.ig_root.clone()`); the parallel walk never drops
+    // them (every root starts from ig_root's clone and its cache; measured 12 of 12, ruling G26)
+    if (sequential && k.kind !== 'stdin' && k.kind !== 'dir') walker.dropParents();
     if (k.kind === 'stdin') entries.push({ disp: '<stdin>', stdin: true, walked: false });
     else if (k.kind === 'error') entries.push({ error: `rg: ${P}: ${sequential ? `IO error for operation on ${P}: ` : ''}${osErrorText(k.e)}` });
     else if (k.kind === 'openError') entries.push({ error: `rg: ${P}: ${osErrorText(k.e)}` });

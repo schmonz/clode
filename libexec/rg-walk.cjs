@@ -417,8 +417,10 @@ function makeWalker(spec, ctx) {
   // RG-IGNORE-PARENTS across roots (review M-1): add_parents keeps a cache of the ancestors it built (dir.rs
   // `compiled`, weak), and walk.rs holds one root's chain until the next root is set up, so the next root
   // REUSES the ancestors the previous one built, absolute base (the path rebuild's root) and all; a root that
-  // is no directory (stdin aside) drops the chain (walk.rs: `self.ig = self.ig_root.clone()`), and the next
-  // one builds afresh. Measured: -j1 over `sub docs .` lists docs/a.md, over `sub ok.txt docs .` it does not.
+  // is no directory (stdin aside) drops the chain ON ONE THREAD (walk.rs's sequential walker: `self.ig =
+  // self.ig_root.clone()`), and the next one builds afresh; the parallel walk never drops it (every root starts
+  // from ig_root's clone; rg-native.cjs calls dropParents only for a sequential walk, ruling G26). Measured: -j1
+  // over `sub docs .` lists docs/a.md, over `sub ok.txt docs .` it does not; in parallel both list it.
   let liveParents = new Map();
   function withParents(P) {
     if (!opts.parents && !opts.gitIgnore && !opts.gitExclude && !opts.gitGlobal) { liveParents = new Map(); return { node: ROOT, errs: [] }; }
@@ -442,7 +444,7 @@ function makeWalker(spec, ctx) {
     liveParents = live;
     return { node, errs };
   }
-  // A root that is not a directory (a named file, a path that is not there): the ancestors are not kept.
+  // A root that is not a directory (a named file, a path that is not there), on one thread: the ancestors are not kept.
   const dropParents = () => { liveParents = new Map(); };
   const chainOf = function* (node) { for (let n = node; n; n = n.parent) yield n; };
   // dir.rs matched_ignore, on one-char-per-byte paths

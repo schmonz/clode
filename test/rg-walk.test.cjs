@@ -150,14 +150,22 @@ const P9_NATIVE = [
   ["RG-IGNORE-FILES", "bomig", ".", ["-l", "needle", "."], "empty", 0, "./ok.txt\n./a.log\n", ""],
   // RG-IGNORE-PARENTS (review M-1): several roots share their ancestors' matchers, built by the first root whose
   // walk needs them and kept while the previous root's chain lives (dir.rs add_parents' cache; walk.rs keeps one
-  // root's chain until the next root is set up, and a root that is no directory, but stdin, drops it). -j1 only:
-  // in parallel the roots race to build them, so the files listed vary from run to run (measured, 30 runs).
+  // root's chain until the next root is set up, and a root that is no directory, but stdin, drops it). -j1 rows
+  // here: in parallel the roots race to build them, so for some argv the files listed vary from run to run
+  // (measured, 30 runs); the parallel rows below are the ones native answered alike (or nearly) over 12 runs.
   ["RG-IGNORE-PARENTS", "shared", ".", ["-j1", "-l", "needle", "sub", "docs", "."], "empty", 0, "sub/x.txt\nsub/docs/c.md\nsub/gen/g2.txt\ndocs/sub/b.md\ndocs/a.md\n./ok.txt\n./docs/sub/b.md\n./sub/x.txt\n./sub/docs/c.md\n", ""],
   ["RG-IGNORE-PARENTS", "shared", ".", ["-j1", "-l", "needle", "docs", "sub", "."], "empty", 0, "sub/x.txt\nsub/gen/g2.txt\n./ok.txt\n./docs/sub/b.md\n./sub/x.txt\n./sub/docs/c.md\n", ""],
   ["RG-IGNORE-PARENTS", "shared", ".", ["-j1", "-l", "needle", "sub", "ok.txt", "docs", "."], "empty", 0, "sub/x.txt\nsub/docs/c.md\nsub/gen/g2.txt\nok.txt\n./ok.txt\n./docs/sub/b.md\n./sub/x.txt\n./sub/docs/c.md\n", ""],
   ["RG-IGNORE-PARENTS", "shared", ".", ["-j1", "-l", "needle", "sub", "-", "docs"], "empty", 0, "sub/x.txt\nsub/docs/c.md\nsub/gen/g2.txt\ndocs/sub/b.md\ndocs/a.md\n", ""],
   ["RG-IGNORE-PARENTS", "shared", ".", ["-j1", "-l", "needle", "docs", "gen"], "empty", 0, "gen/g.txt\n", ""],
   ["RG-IGNORE-PARENTS", "shared", "sub", ["-j1", "-l", "needle", ".", "../docs"], "empty", 0, "./x.txt\n./docs/c.md\n./gen/g2.txt\n../docs/sub/b.md\n../docs/a.md\n", ""],
+  // In PARALLEL a root that is no directory drops nothing (walk.rs's parallel visit hands every root ig_root's
+  // clone, and only the one-thread walker resets its chain): measured 12 runs each (Task 9 re-review, ruling G26),
+  // the same answer 12 of 12 for the first two; the third gave this 10 of 12 (2 runs listed neither docs file nor
+  // sub/docs/c.md: the parallel race the -j1 rows above avoid). Under -j1 the same argv drop the chain (rows above).
+  ["RG-IGNORE-PARENTS", "shared", ".", ["-l", "needle", "sub", "nosuch", "docs"], "empty", 2, "docs/a.md\ndocs/sub/b.md\nsub/docs/c.md\nsub/gen/g2.txt\nsub/x.txt\n", "rg: nosuch: No such file or directory (os error 2)\n"],
+  ["RG-IGNORE-PARENTS", "shared", ".", ["-l", "needle", "sub", "docs/sub", "ok.txt", "docs"], "empty", 0, "docs/a.md\ndocs/sub/b.md\ndocs/sub/b.md\nok.txt\nsub/docs/c.md\nsub/gen/g2.txt\nsub/x.txt\n", ""],
+  ["RG-IGNORE-PARENTS", "shared", ".", ["-l", "needle", "sub", "-", "ok.txt", "docs"], "empty", 0, "docs/a.md\ndocs/sub/b.md\nok.txt\nsub/docs/c.md\nsub/gen/g2.txt\nsub/x.txt\n", ""],
   // RG-GLOB-LINE (review M-2): a --glob read as a gitignore line: a comment adds nothing, trailing white space
   // goes (unless escaped), a leading / anchors, a trailing / matches directories only, X/** what is under X.
   ["RG-GLOB-LINE", "repo", ".", ["-j1", "-l", "--glob", "#a.txt", "needle", "."], "empty", 0, "./g2.txt\n./g1.txt\n./other/private\n./code/y.tsx\n./code/{b}.ts\n./code/Makefile\n./code/*.txt\n./code/README.md\n./code/x.ts\n./code/a.TXT\n./code/z.js\n./keep.ign\n./dotig.txt\n./sub/ign.txt\n./sub/anch.txt\n./a.txt\n./private/in/q.txt\n./private/p.txt\n", ""],
