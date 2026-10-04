@@ -152,9 +152,9 @@ Bash tool instead".
     (libexec/rg-native.cjs: -l, -c and the standard printer, as native prints them; --max-columns
     a no-op there, as native's is). In rg-differential, 28 of the 90 files/count cells are equal
     (none were); every one of the other 62 is in a class below that a later task of that plan owns
-    (.git, ignore precedence, whitelist and brace globs, --type: Task 9, done 2026-10-04; -U: Task 10;
-    a binary's NUL past rg's first read: Task 8, done 2026-10-04). After Task 9, 8 files and 8 count
-    cells differ, every one -U.
+    (.git, ignore precedence, whitelist and brace globs, --type: Task 9, done 2026-10-04; -U: Task 10,
+    done 2026-10-04; a binary's NUL past rg's first read: Task 8, done 2026-10-04). After Task 9, 8 files
+    and 8 count cells differed, every one -U; after Task 10, none.
   - With `--max-columns` dropped, 44 of the 60 files/count argv x tree cells still differ from
     native (the other 16 are empty on both sides): `--glob '!.git'` excludes no directory in
     ugrep (.git/HEAD is searched); ugrep -I drops invalid-UTF-8 files; `-c` prints zero counts;
@@ -279,9 +279,9 @@ Bash tool instead".
   - THE DENY-RULE ANGLE (review M-1) is CLOSED for searches: the Grep tool's Read-deny `--iglob` shapes
     (`Vin`: `!/S`, `!/S/**` with `!/S` beside it, `!**/S`, `!**`, braces as `[{]`) are walked as rg walks
     any glob (RG-GLOB-DENY-RULES rows; `--glob '!private'` and `--iglob '!/private'` now exclude what
-    native excludes). STILL OPEN in the Glob tool until Task 10: `--files` goes to the translation, whose
-    globs are ugrepGlobArg's (`!G` -> --exclude, files only), so a deny rule naming a directory still lets
-    Glob list what native hides.
+    native excludes). CLOSED for the Glob tool too (grep-native Task 10): `--files` is quaude's rg's own walk
+    now (RG-FILES; RG-FILES-DENY rows for every shape), and the old ugrep/bfs listing that let a deny rule
+    naming a directory list what native hides is deleted.
   - A NAMED special path is decided UNREAD (Task 7 review I1). /dev/stdin, /dev/std{out,err},
     /dev/fd/N and /proc/self/fd/N refuse by name (to native they are the rg child's descriptors;
     quaude's rg runs inside its caller, and opening /dev/fd/0 there froze the engine under a
@@ -308,7 +308,8 @@ Bash tool instead".
     RG-BINARY-MMAP replace the interim RG-BINARY-QUIT-FIRST-READ): see the entry for Task 8 below.
   - REFUSED BY NAME, never passed to ugrep: every flag outside the set a search reads (-l -c -i -s
     -n -N -H -I -0 -o -. -A -B -C -M -e -g -j, their long names, --iglob --no-ignore --no-hidden
-    --case-sensitive), so -U (Task 10), -S/--smart-case, -w, -F, -v and the rest; more than one -e;
+    --case-sensitive, and since Task 10 -U/--multiline, --multiline-dotall, --files, --sort/--sortr), so
+    -S/--smart-case, -w, -F, -v and the rest; more than one -e;
     an rg with no path (rg then reads stdin or walks `./` by what its stdin is). A number flag that
     is not a number is rg's own usage error, its text measured.
   - STDIN (target `-`) is decided by the matcher alone, every line, no ugrep: about 1 microsecond a
@@ -388,6 +389,34 @@ Bash tool instead".
   - --type-add, --type-clear, --ignore-file, --no-ignore-vcs and the other --no-ignore-* flags,
     --no-require-git, --follow, --max-depth, --max-filesize, --one-file-system are refused by name (no
     upstream tool passes them).
+- **quaude's rg under -U, its \n refusal, and --files for Glob (grep-native Task 10, 2026-10-04).**
+  rg-differential is GREEN: 0 of 184 cells differ (42 before: -U 24, Glob's --null 18), only the named
+  normalizations; proved to bite (a listing left unsorted: 10 Glob cells; --multiline-dotall ignored: the 9
+  -U cells). Rules stated in libexec/rg-native.cjs ("rg's multi-line search", "rg --files"), native rows in
+  test/rg-multiline.test.cjs (379; the first 374 equal to linux-x64 native too, and ours there) and
+  test/rg-files.test.cjs (46; linux-x64 equal). The real bundle end to end under tjs vs native (one canned
+  mock): Glob x3 and Grep count/files_with_matches (multiline too) byte-equal; multiline content equal but
+  for file order, rg's own parallel walk order (the gate's named normalization).
+  - THE GATE'S MULTILINE COVERAGE IS ONE PATTERN (`one.beta`, the shared dialect): a mutation of lines::locate
+    (a match ending just after a \n) passes rg-differential and is caught only by test/rg-multiline.test.cjs's
+    rows (5 tests red). Widening the matrix's patterns is a choice for Task 11 (matrixDrift compares the
+    builders' flags, not patterns).
+  - SPEED UNDER -U (tjs, this Mac, warm): a 3.9 MB file of 130,000 two-line blocks, -c 5.1 s (native 40 ms),
+    --json 8.5 s (native 130 ms); the same size with 60 blocks 340 ms; -l 320 ms. Linear and bounded (one step
+    budget per file, RG-RE-REFUSE-COST; the async twin yields every 256 finds and inside a long one: its longest
+    loop gap stays under 600 ms on that file, it was 4.6 s before; execFile's timeout and maxBuffer end it).
+    Not optimised: profile the slow box first.
+  - A multi-line search reads each file whole, as rg does (memory as the file's size).
+  - RG-MULTILINE-PRINTED refuses where a match the printers find again reaches past the block rg's searcher
+    gave it (rg would slice past its bytes); never seen in measurement.
+  - -U with a pattern the LINE searcher answers, over a NAMED binary, is RG-MMAP-EVERYWHERE's divergence
+    (three such rows differed on macOS); the -U rows name no binary for line-mode patterns, P8 pins it.
+  - REFUSED BY NAME: --sort/--sortr path, accessed, created (no upstream tool passes them); --files over `-`;
+    --files naming no path. The last of --files, -l, -c and --json decides the mode, as ripgrep 14.1.1's
+    Mode::update lets any mode override (its comment says otherwise; measured).
+  - THE OLD TRANSLATION IS GONE for a spawned rg (bun-shim's _rgTranslate and rgFilesToListing deleted);
+    rgToUgrep stays only as the spec of the shell snapshot's `rg` function (rgShadowBody).
+  - Windows path spelling for --files is unmeasured, as the walk's is.
 - **quaude's rg's binary detection is rg's line buffer (grep-native Task 8, 2026-10-04).** Read from
   grep-searcher 0.1.14, encoding_rs_io 0.1.7, grep-printer 0.2.2 and ripgrep 14.1.1's hiargs.rs, every
   rule measured against native 2.1.283 on darwin-arm64 and linux-x64 (test/rg-native.test.cjs P8 rows;
@@ -519,8 +548,11 @@ Bash tool instead".
   (ENXIO), so the credential would be lost. Driven on macOS only (scratch fdauth.cjs); run the
   same on Linux (and NetBSD) with a canned token, never a real one.
 - **The Grep tool's files_with_matches ORDER differs from native's under quaude: node-shim's stat
-  had whole-second mtimes** (the stat half FIXED by 6d43ee6: mtimeMs now carries the nanoseconds,
-  equal to node's; the Grep tool's order not yet re-driven end to end) (found driving the real 2.1.283 bundle end to end, grep-native Task 6,
+  had whole-second mtimes** (FIXED: the stat half by 6d43ee6, mtimeMs now carries the nanoseconds, equal
+  to node's; RE-DRIVEN END TO END in grep-native Task 10 (ruling G12): the real 2.1.283 bundle under tjs
+  against native, one canned mock, a tree of sub-second mtimes: the Grep tool's files_with_matches (plain
+  and multiline) and the Glob tool's `--sort=modified` listings are byte-equal to native's; and
+  test/rg-files.test.cjs lists files written within one second in native's order under tjs) (found driving the real 2.1.283 bundle end to end, grep-native Task 6,
   2026-10-03). The tool sorts -l's files in JS, newest mtime first, then by name; node-shim's
   Stats carries `mtimeMs` at second resolution (libexec/node-shim/modules/fs.cjs: FSS.stat exposes
   only st_mtime, a documented divergence), so two files written within one second tie and sort by
