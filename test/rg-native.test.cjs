@@ -1187,8 +1187,9 @@ test('RG-SPECIAL-FILE and RG-REFUSE-SPECIAL-FILE under tjs: both twins (native)'
 // Native 2.1.283: ~100 ms, 20,324,168 bytes, its summary below (elapsed blanked, rg-probe.cjs's
 // normalization). Selecting each match's line by scanning back from it was quadratic (191 s under
 // node); building every piece as its own Buffer took 25 s under tjs. Linear, under tjs on this Mac
-// (2026-10-04): ~2.4 s a twin (0.7 s of it reading ugrep's 275,822 records), past the Grep tool's 20 MB
-// maxBuffer anyway; the bound leaves room for a loaded host and still fails both of those.
+// (2026-10-04): ~2.4 s a twin alone (0.7 s of it reading ugrep's 275,822 records), 3.3 s for the async
+// twin once it hands the loop back every 20 ms, 11 s in a full suite at load ~15; the bound leaves
+// room for that and still fails both of those shapes.
 test('RG-JSON: every match on a 5 MB line prints in linear time under tjs (both twins, native\'s summary)', {
   skip: needUgrep.skip || (!tjsPath() ? 'no tjs engine' : false),
 }, () => {
@@ -1221,7 +1222,7 @@ test('RG-JSON: every match on a 5 MB line prints in linear time under tjs (both 
       assert.strictEqual(r.status, 0, JSON.stringify(r).slice(0, 300));
       assert.strictEqual(normalizeRg(Buffer.from(r.summary, 'latin1'), ['--json']), '{"data":{"elapsed_total":{},"stats":{"bytes_printed":20323626,'
         + '"bytes_searched":5000007,"elapsed":{},"matched_lines":1,"matches":275822,"searches":1,"searches_with_match":1}},"type":"summary"}\n', r.twin);
-      assert.ok(r.ms < 10000, `${r.twin}: ${r.ms} ms (native ~100 ms; linear ~2.4 s here)`);
+      assert.ok(r.ms < 20000, `${r.twin}: ${r.ms} ms (native ~100 ms; linear ~2.4-3.3 s alone here)`);
     }
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
@@ -1311,7 +1312,7 @@ test('rg\'s output stops at the caller\'s maxBuffer and the async twin never hol
           const iv = setInterval(() => { const n = Date.now(); maxGap = Math.max(maxGap, n - last); last = n; }, 10);
           const t0 = Date.now();
           const a = await new Promise((res) => rgn.rgExecFile(argv, { cwd, encoding: 'buffer', maxBuffer: 20000000, timeout: 20000, killSignal: 'SIGKILL' },
-            (e, so) => res({ code: e ? e.code : 0, bytes: so.length }), 'rg', ctx));
+            (e, so) => res({ code: e ? e.code : 0, signal: e ? e.signal : null, bytes: so.length }), 'rg', ctx));
           clearInterval(iv);
           out.push({ argv, twin: 'async', ms: Date.now() - t0, maxGap, ...a });
         }
@@ -1329,10 +1330,13 @@ test('rg\'s output stops at the caller\'s maxBuffer and the async twin never hol
     for (const r of got) {
       const what = JSON.stringify(r);
       if (r.twin === 'sync') { assert.strictEqual(r.code, 'ENOBUFS', what); assert.ok(r.ms < 30000, what); continue; }
-      // the three --json calls pass 20 MB (native: execFile's maxBuffer error); -n -o fits
-      assert.strictEqual(r.code, r.argv[0] === '--json' ? 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' : 0, what);
+      // the three --json calls pass 20 MB (native: execFile's maxBuffer error); -n -o fits. Or the
+      // caller's 20 s timeout fires ON TIME (what held the loop never let it: alone `--json ''` ends
+      // at 20 MB in 12.9 s, in a loaded full suite it ran into the timeout at 20.2 s, as it should).
+      const timedOut = r.code === null && r.signal === 'SIGKILL' && r.ms < 21500;
+      assert.ok(timedOut || r.code === (r.argv[0] === '--json' ? 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' : 0), what);
       assert.ok(r.maxGap < 600, `the loop was held ${r.maxGap} ms: ${what}`);
-      assert.ok(r.ms < 15000, what);
+      assert.ok(r.ms < 21500, what);
     }
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
