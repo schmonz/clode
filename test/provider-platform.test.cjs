@@ -87,7 +87,7 @@ function resolveProvider() {
   if (process.env.CLODE_CLAUDE_BIN && fs.existsSync(process.env.CLODE_CLAUDE_BIN)) {
     return process.env.CLODE_CLAUDE_BIN;
   }
-  const vdir = path.join(os.homedir(), '.local', 'share', 'claude', 'versions');
+  const vdir = process.env.CLODE_TEST_NATIVE_VERSIONS || path.join(os.homedir(), '.local', 'share', 'claude', 'versions');
   if (!fs.existsSync(vdir)) return null;
   const found = fs.readdirSync(vdir)
     .map((n) => path.join(vdir, n))

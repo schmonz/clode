@@ -178,14 +178,14 @@ test('candidate order is CLODE_BUILD_SCRATCH, TMPDIR, tmpdir, cache', () => {
 
 test('scratchRoot picks the first exec-able candidate outside a checkout', () => {
   const good = fs.mkdtempSync(path.join(os.tmpdir(), 'good-'));
-  const root = S.scratchRoot({ CLODE_BUILD_SCRATCH: good, HOME: os.homedir() });
+  const root = S.scratchRoot({ CLODE_BUILD_SCRATCH: good, HOME: process.env.HOME });
   assert.strictEqual(root, good);
 });
 
 test('scratchRoot SKIPS a candidate inside a checkout and falls through', () => {
   const inTree = path.join(fakeCheckout(), '.matrix', 'tjs-vendor');
   const good = fs.mkdtempSync(path.join(os.tmpdir(), 'fallthrough-'));
-  const root = S.scratchRoot({ CLODE_BUILD_SCRATCH: inTree, TMPDIR: good, HOME: os.homedir() });
+  const root = S.scratchRoot({ CLODE_BUILD_SCRATCH: inTree, TMPDIR: good, HOME: process.env.HOME });
   assert.strictEqual(root, good);
 });
 
@@ -220,7 +220,7 @@ test('buildPath refuses to hand back a path inside the checkout', () => {
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'buildpath-root-'));
   const escape = path.relative(scratch, checkout);
   assert.throws(
-    () => S.buildPath(escape, 'build', { env: { CLODE_BUILD_SCRATCH: scratch, HOME: os.homedir() } }),
+    () => S.buildPath(escape, 'build', { env: { CLODE_BUILD_SCRATCH: scratch, HOME: process.env.HOME } }),
     /CLODE_BUILD_SCRATCH|checkout/,
   );
 });
@@ -233,7 +233,7 @@ test('buildPath memoizes scratchRoot: two calls with the same env+probe probe on
   const good = fs.mkdtempSync(path.join(os.tmpdir(), 'memo-'));
   let calls = 0;
   const probe = () => { calls++; return { ok: true, reason: 'stub' }; };
-  const env = { CLODE_BUILD_SCRATCH: good, HOME: os.homedir() };
+  const env = { CLODE_BUILD_SCRATCH: good, HOME: process.env.HOME };
   const p1 = S.buildPath('x', { env, probe });
   const p2 = S.buildPath('y', { env, probe });
   assert.strictEqual(calls, 1, `probe should be invoked once, got ${calls}`);
@@ -246,8 +246,8 @@ test('buildPath memoization: a CHANGED env re-probes (does not serve a stale roo
   const goodB = fs.mkdtempSync(path.join(os.tmpdir(), 'memo-b-'));
   let calls = 0;
   const probe = () => { calls++; return { ok: true, reason: 'stub' }; };
-  const p1 = S.buildPath('x', { env: { CLODE_BUILD_SCRATCH: goodA, HOME: os.homedir() }, probe });
-  const p2 = S.buildPath('x', { env: { CLODE_BUILD_SCRATCH: goodB, HOME: os.homedir() }, probe });
+  const p1 = S.buildPath('x', { env: { CLODE_BUILD_SCRATCH: goodA, HOME: process.env.HOME }, probe });
+  const p2 = S.buildPath('x', { env: { CLODE_BUILD_SCRATCH: goodB, HOME: process.env.HOME }, probe });
   assert.strictEqual(calls, 2, `changed env must re-probe, got ${calls} calls`);
   assert.strictEqual(path.dirname(p1), goodA);
   assert.strictEqual(path.dirname(p2), goodB);

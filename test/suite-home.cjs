@@ -1,0 +1,72 @@
+'use strict';
+// suite-home: the test suite runs with a THROWAWAY HOME, USERPROFILE and CLAUDE_CONFIG_DIR, never the developer's
+// (grep-native Task 10b fix round 3, ruling G33).
+//
+// WHY CENTRAL. Per-test homes left holes faster than guards could find them: rows that inherited the runner's HOME ran
+// the developer's ~/.claude/settings.json hooks (an iTerm2 status hook blocking 30 s per call timed ten of them out),
+// and every test that built a quaude booted the bundle against the real home (it left ~/.claude.json, ~/.tjs/*). A
+// whole-suite default, set once like CLODE_STATE_ROOT (test/run.mjs), reaches every child of every test, including
+// the ones no guard can see. Tests that need DISTINCT homes still make their own (test/throwaway-home.cjs).
+//
+// THE REAL VALUES are kept under ONE name, CLODE_TEST_REAL_HOME (JSON: HOME, USERPROFILE, CLAUDE_CONFIG_DIR), for the
+// one run that exists to use them: fidelity/interactive-live-turn's opt-in real-credential turn. Nothing else may read
+// it (test/suite-home-hermetic.test.cjs, fail-closed).
+//
+// WHAT THE SUITE STILL NEEDS FROM THE REAL HOME is handed over as an EXPLICIT path, never as the home:
+//   - CLODE_TEST_PROVIDER_STORE: the operator's Claude provider store (<home>/.local/share/clode/providers), READ by
+//     test/provider-resolve.cjs to find carves; the runner's hermetic guard still watches it for writes;
+//   - PATH: the directory of the node running the suite first, so `node` by name never needs a version manager's
+//     shim (asdf's resolve through HOME);
+//   - CLODE_TEST_USER_CACHE: the developer's clode cache (<home>/.cache/clode: the carve caches and templates a few
+//     gates read), and CLODE_TJS_VENDOR (unless set) its txiki checkout, which the engine builds share as before;
+//   - CLODE_TEST_NATIVE_VERSIONS and CLODE_TEST_NATIVE_LAUNCHER: the native install's versions dir and launcher, read
+//     by the tests that compare against it;
+//   - git: a fixed test identity (GIT_AUTHOR_* / GIT_COMMITTER_*), so a commit in a scratch repo never needs (or
+//     reads) the developer's ~/.gitconfig, and `safe.directory` for this checkout (a command-scope GIT_CONFIG_* entry,
+//     which git honours as protected configuration), which the developer's ~/.gitconfig used to grant.
+//
+// Idempotent and inherited: the first require in a process tree applies it; a child (CLODE_TEST_REAL_HOME already set)
+// keeps what it was given. test/run.mjs requires it first; a standalone `node --test file` gets the same through the
+// helpers that launch the bundle (provider-resolve.cjs, oracle-models.cjs, node-shim-helper.cjs, e2e.cjs, which require
+// this module).
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+
+const REAL_NAME = 'CLODE_TEST_REAL_HOME';
+
+function applySuiteHome(env = process.env) {
+  if (env[REAL_NAME]) return JSON.parse(env[REAL_NAME]);
+  const real = { HOME: env.HOME || os.homedir(), USERPROFILE: env.USERPROFILE || null, CLAUDE_CONFIG_DIR: env.CLAUDE_CONFIG_DIR || null };
+  env[REAL_NAME] = JSON.stringify(real);
+  if (!env.CLODE_TEST_PROVIDER_STORE) env.CLODE_TEST_PROVIDER_STORE = path.join(real.HOME, '.local', 'share', 'clode', 'providers');
+  if (!env.CLODE_TEST_USER_CACHE) env.CLODE_TEST_USER_CACHE = path.join(env.XDG_CACHE_HOME || path.join(real.HOME, '.cache'), 'clode');
+  if (!env.CLODE_TJS_VENDOR && !env.CLODE_TJS_LOCAL_ROOT) env.CLODE_TJS_VENDOR = path.join(env.CLODE_TEST_USER_CACHE, 'tjs-vendor');
+  if (!env.CLODE_TEST_NATIVE_VERSIONS) env.CLODE_TEST_NATIVE_VERSIONS = path.join(real.HOME, '.local', 'share', 'claude', 'versions');
+  if (!env.CLODE_TEST_NATIVE_LAUNCHER) env.CLODE_TEST_NATIVE_LAUNCHER = path.join(real.HOME, '.local', 'bin', 'claude');
+  const n = Number(env.GIT_CONFIG_COUNT) || 0;
+  env[`GIT_CONFIG_KEY_${n}`] = 'safe.directory';
+  env[`GIT_CONFIG_VALUE_${n}`] = path.resolve(__dirname, '..');
+  env.GIT_CONFIG_COUNT = String(n + 1);
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-test-home-'));
+  fs.mkdirSync(path.join(home, '.claude'));
+  env.HOME = home;
+  env.USERPROFILE = home;
+  env.CLAUDE_CONFIG_DIR = path.join(home, '.claude');
+  const nodeDir = path.dirname(process.execPath);
+  if (!(env.PATH || '').split(path.delimiter).includes(nodeDir)) env.PATH = [nodeDir, env.PATH || ''].join(path.delimiter);
+  for (const k of ['GIT_AUTHOR_NAME', 'GIT_COMMITTER_NAME']) if (!env[k]) env[k] = 'clode-test';
+  for (const k of ['GIT_AUTHOR_EMAIL', 'GIT_COMMITTER_EMAIL']) if (!env[k]) env[k] = 'clode-test@example.invalid';
+  return real;
+}
+
+// The real values, for the run that exists to use them (and test/run.mjs, which watches the real dirs).
+function realHome(env = process.env) {
+  return env[REAL_NAME] ? JSON.parse(env[REAL_NAME]) : null;
+}
+
+applySuiteHome();
+
+const userCacheDir = (env = process.env) => env.CLODE_TEST_USER_CACHE || path.join(os.homedir(), '.cache', 'clode');
+
+module.exports = { applySuiteHome, realHome, REAL_NAME, userCacheDir };

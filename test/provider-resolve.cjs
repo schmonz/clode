@@ -1,4 +1,5 @@
 'use strict';
+require('./suite-home.cjs');   // the suite's own HOME, also for a standalone `node --test` run (ruling G33)
 // ONE way for tests to find a Claude Code provider, and ONE way to say so when they
 // cannot.
 //
@@ -32,6 +33,8 @@ const REPO = path.resolve(__dirname, '..');
 // PATH, no `current` pointer, no most-recently-cached. An explicit env var still wins,
 // because an operator who names a provider means it.
 function storeDir(env) {
+  // the operator's store, handed over explicitly by test/suite-home.cjs (the suite runs under its own HOME)
+  if (env.CLODE_TEST_PROVIDER_STORE) return env.CLODE_TEST_PROVIDER_STORE;
   const home = env.HOME || require('node:os').homedir();
   return path.join(home, '.local', 'share', 'clode', 'providers');
 }

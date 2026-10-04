@@ -33,6 +33,7 @@
 // the quaude test — so a red there still means quaude diverged from a
 // confirmed-good reference, never "nobody was logged in here".
 const { test, before, after } = require('node:test');
+const { realHome } = require('../suite-home.cjs');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -67,11 +68,16 @@ function lines(screen) { return screen.replace(STRIP, '').split(/\r?\n/).map((l)
 function renderedAnswer(screen) { return lines(screen).some((l) => ANSWER.test(l) && !ECHO.test(l)); }
 
 // Drive one real turn under a PTY against the real HOME (real credentials).
+// THE ONE RUN THAT READS THE REAL HOME on purpose (test/suite-home.cjs; exempt by name in
+// test/suite-home-hermetic.test.cjs): the suite runs under a throwaway HOME, and this opt-in turn needs the
+// developer's own credentials and config.
 function liveTurn(cmd) {
-  const env = { ...process.env };
+  const real = realHome() || { HOME: os.homedir() };
+  const env = { ...process.env, HOME: real.HOME, USERPROFILE: real.USERPROFILE || real.HOME };
+  if (real.CLAUDE_CONFIG_DIR) env.CLAUDE_CONFIG_DIR = real.CLAUDE_CONFIG_DIR; else delete env.CLAUDE_CONFIG_DIR;
   delete env.CLAUDE_CODE_CHILD_SESSION;   // else the child disables transcript saving
   const hex = Buffer.from(PROMPT, 'utf8').toString('hex');
-  return capture({ env, home: os.homedir() }, {
+  return capture({ env, home: real.HOME }, {
     seconds: 40, rows: 40, cols: 100,
     thenHex: [`${hex}@5`, '0d@8'],
     env: { DISABLE_AUTOUPDATER: '1' }, cmd,

@@ -17,6 +17,12 @@ const HERE = path.dirname(fileURLToPath(import.meta.url)); // .../test
 const ROOT = path.dirname(HERE);                           // repo root
 process.chdir(ROOT);
 
+// THE SUITE'S OWN HOME (ruling G33): HOME, USERPROFILE and CLAUDE_CONFIG_DIR point at a throwaway dir for this runner
+// and every child, the real values kept under one name (test/suite-home.cjs says why, and what the suite still takes
+// from the real home as explicit paths). FIRST, before anything below resolves a path off HOME.
+const { realHome } = require('./suite-home.cjs');
+const SUITE_HOME = process.env.HOME;
+
 // Offline gate: the runner is the single source of truth; an ambient CLODE_OFFLINE never leaks in.
 const arg = process.argv[2] || '--offline';
 if (arg === '--online') delete process.env.CLODE_OFFLINE;
@@ -321,7 +327,8 @@ if (!fs.existsSync(NAUDE_BUNDLE) || !fs.existsSync(MAIN_BUNDLE)) {
 const guard = require('./hermetic-guard.cjs');
 const tree = require('./tree-guard.cjs');
 const { resolveAllowList, sourceContainsWrite } = require('./allow-list.cjs');
-const home = os.homedir();
+// the REAL home's dirs: the suite runs under its own (above), and these are what it must never touch
+const home = realHome().HOME;
 const dataBase = process.env.XDG_DATA_HOME || path.join(home, '.local', 'share');
 const cacheBase = process.env.XDG_CACHE_HOME || path.join(home, '.cache');
 const REAL_STORE = path.join(dataBase, 'clode');
@@ -818,4 +825,5 @@ if (treeChanged.length) {
         .map((k) => [k, process.env[k]])),
   }));
 }
+try { fs.rmSync(SUITE_HOME, { recursive: true, force: true }); } catch { /* best effort */ }
 process.exit(process.exitCode === 2 ? 2 : (fails ? 1 : 0));

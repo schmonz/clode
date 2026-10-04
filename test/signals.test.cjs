@@ -190,7 +190,7 @@ function twoCarvesOfOneVersion() {
   let providerPlatformOf;
   try { ({ providerPlatformOf } = require('../libexec/extract-claude-js.cjs')); } catch { return null; }
   const roots = [
-    path.join(os.homedir(), '.local', 'share', 'clode', 'providers'),
+    process.env.CLODE_TEST_PROVIDER_STORE || path.join(os.homedir(), '.local', 'share', 'clode', 'providers'),
     process.env.CLODE_SIGNALS_ALT_CARVE_DIR,
   ].filter(Boolean);
   const byVersion = new Map();

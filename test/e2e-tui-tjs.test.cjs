@@ -22,7 +22,7 @@ const { liveRenderSkipReason } = require('./live-render-helper.cjs');
 const ENTRY = path.join(REPO, 'scripts', 'stage0.mjs');
 function realProvider() {
   try { const p = resolveClaudeBin({ env: process.env }); if (p && fs.existsSync(p)) return p; } catch { /* */ }
-  const home = path.join(os.homedir(), '.local', 'bin', 'claude');
+  const home = process.env.CLODE_TEST_NATIVE_LAUNCHER || path.join(os.homedir(), '.local', 'bin', 'claude');
   return fs.existsSync(home) ? home : null;
 }
 

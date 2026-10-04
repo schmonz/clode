@@ -1,4 +1,5 @@
 'use strict';
+require('./suite-home.cjs');   // the suite's own HOME, also for a standalone `node --test` run (ruling G33)
 // Locates the patched tjs binary and runs entries through the node-shim
 // loader. Tests SKIP when no binary is present (CLODE_TJS, or the scratch dir
 // tjsBin() resolves through build-scratch.cjs's buildPath() — see below; run

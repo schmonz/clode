@@ -42,6 +42,7 @@
 // mapping, which derives "which guard controls this production gate" by reading that exact
 // string out of this file's source — same trick as the sibling guard next door.
 const { test } = require('node:test');
+const { userCacheDir } = require('../suite-home.cjs');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -384,7 +385,7 @@ function readGraphSources() {
     return { skip: 'UPSTREAM_PIN has no `claude-code <version>` line — cannot locate the '
       + 'pinned carve to scan' };
   }
-  const graphPath = path.join(os.homedir(), '.cache', 'clode', pin, 'graph.json');
+  const graphPath = path.join(userCacheDir(), pin, 'graph.json');
   if (!fs.existsSync(graphPath)) {
     return { skip: `pinned carve not found at ${graphPath} — the local ~/.cache/clode store `
       + 'has not been populated on this box (build once, or run the extractor)' };

@@ -1,4 +1,5 @@
 'use strict';
+require('./suite-home.cjs');   // the suite's own HOME, also for a standalone `node --test` run (ruling G33)
 // Shared end-to-end harness for node:test launcher tests — the node-native successor
 // to test_helper.bash's bash sandbox. Every clode subprocess is spawned with a
 // CONSTRUCTED-CLEAN env (nothing from the real process.env), so no test can read or

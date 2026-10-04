@@ -45,6 +45,7 @@
 // write time), so the retired mtime-vs-highest ordering no longer has anything to
 // choose between — see the task-8 report for the full trace.
 const fs = require('node:fs');
+const { userCacheDir } = require('./suite-home.cjs');
 const os = require('node:os');
 const path = require('node:path');
 const { SUBCOMMANDS } = require('../libexec/update-guard.cjs');
@@ -59,7 +60,7 @@ const { defineGuard, guardTests } = require('./guard.cjs');
 function pinnedCarve() {
   const pin = pinnedVersion();
   if (!pin) return { skip: 'UPSTREAM_PIN is missing or malformed — no pinned version to scan' };
-  const root = path.join(os.homedir(), '.cache', 'clode');
+  const root = userCacheDir();
   const have = fs.existsSync(root)
     ? fs.readdirSync(root).filter((d) => /^\d+(?:\.\d+)*$/.test(d)
         && (fs.existsSync(path.join(root, d, 'graph.json')) || fs.existsSync(path.join(root, d, 'cli.cjs'))))

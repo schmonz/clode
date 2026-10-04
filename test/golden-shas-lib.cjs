@@ -30,7 +30,7 @@ const VERSIONS = [
 ];
 
 function providersDir() {
-  return process.env.CLODE_PROVIDERS ||
+  return process.env.CLODE_PROVIDERS || process.env.CLODE_TEST_PROVIDER_STORE ||
     path.join(process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local/share'),
       'clode/providers');
 }

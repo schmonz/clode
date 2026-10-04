@@ -11,6 +11,7 @@
 // string out of the guard's own source — see test/guards-population.cjs's
 // isMigratedSource()/DESTRUCTURES_DEFINEGUARD for the same trick applied one layer up.
 const { test } = require('node:test');
+const { userCacheDir } = require('../suite-home.cjs');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -181,7 +182,7 @@ function scanSources({ sources, allowed = PHANTOM_ALLOWED }) {
 // ~/.local/share/clode or anything this guard could write to (it never does — read-only).
 function pinnedCarveDir() {
   const pin = pinnedVersion();
-  return pin ? path.join(os.homedir(), '.cache', 'clode', pin) : null;
+  return pin ? path.join(userCacheDir(), pin) : null;
 }
 
 function readGraphSources() {

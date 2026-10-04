@@ -12,6 +12,7 @@
 // which runs everywhere. A skip here is "this host cannot be the second
 // opinion", not "unverified".
 const { test } = require('node:test');
+const { userCacheDir } = require('./suite-home.cjs');
 const assert = require('node:assert');
 const { spawnSync } = require('node:child_process');
 const { depscanExe } = require('./depscan-build.cjs');
@@ -142,7 +143,7 @@ test('cached cross-built engine templates parse to a definite answer', (t) => {
   const fs = require('node:fs');
   const os = require('node:os');
   const path = require('node:path');
-  const dir = path.join(os.homedir(), '.cache', 'clode', 'templates');
+  const dir = path.join(userCacheDir(), 'templates');
   // A bare `return` here passes in CI having examined NOTHING, with no
   // diagnostic saying so -- ~/.cache/clode/templates exists on a dev box
   // that has fetched engines and does NOT exist on a CI runner, so this is

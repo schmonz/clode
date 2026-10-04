@@ -1,4 +1,5 @@
 'use strict';
+require('./suite-home.cjs');   // the suite's own HOME, also for a standalone `node --test` run (ruling G33)
 // The oracle's two runtime models — how each build target runs a cli.cjs.
 //
 //   naude-model:  node cli.cjs …                       (real Node built-ins)

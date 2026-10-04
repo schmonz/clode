@@ -15,6 +15,7 @@
 // which derives "which guard controls this production gate" by reading this exact
 // string out of the guard's own source.
 const { test } = require('node:test');
+const { userCacheDir } = require('../suite-home.cjs');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -64,7 +65,7 @@ test('this guard names its production module by a literal that still exists', ()
 // directly.)
 function pinnedCarveDir() {
   const pin = pinnedVersion();
-  return pin ? path.join(os.homedir(), '.cache', 'clode', pin) : null;
+  return pin ? path.join(userCacheDir(), pin) : null;
 }
 
 // ==========================================================================
