@@ -353,26 +353,41 @@ Bash tool instead".
   socket, /dev/null and /dev/zero through every stat call, both ways, against host node: red
   2466 of 3450 answers, now 0 (darwin-arm64). The engine-api-floor refuses an engine without it,
   and node-shim refuses one at its first stat (ERR_CLODE_ENGINE_FLOOR) instead of reporting zeros.
-  Windows: libuv's rules there (deps/libuv/src/win/fs.c) are ino = FileId, dev = the volume
-  serial's low 32 bits, nlink = NumberOfLinks, blksize 4096, uid/gid/rdev 0 for a file, and lstat
-  no longer follows a reparse point (the CRT's stat had stood in for it): node's own rules, since it
-  reads the same struct. NOT MEASURED there: the identity test skips win32 (no FIFOs, sockets or
-  /dev/null), and making it judge the files and directory on Windows was not done in this task.
-  OPEN, each an acceptance to run (the inputs they read are judged field by field above, but no
-  consumer was driven end to end through the bundle in this task):
-  - the credentials reader (Ip, `claude plugin eval` with a case granting Bash): with
-    AWS_SHARED_CREDENTIALS_FILE=/dev/zero quaude must refuse as native does ("it is a device, whose
-    content cannot be inspected"), and with /dev/null read it as empty. Not driven: running native
-    `claude plugin eval` on this Mac may reach the login Keychain, and the auto-mode permission
-    check stopped the bundle inspection this needed;
-  - M8 (dirSync's null-device stamp), the same rdev comparison;
-  - the approval-bound reopen (openReadBoundToApproval, et()'s "gone" check) with the file
-    swapped after approval: refused as native;
-  - git worktree `commondir` identity with a non-matching directory: rejected;
-  - the staging-dir identity checks (and Yin's).
-  NOT RUN either: the rebuild + oracle test on the NetBSD VM and in a Linux container (the
-  permission check refused remote execution in this session); CI's legs build the engine fresh and
-  run the node-shim tests, so the first push is that run.
+  OTHER LEGS (round 2, 2026-10-04): the engine rebuilt and the identity, throwIfNoEntry,
+  engine-floor and stat-types tests all GREEN on NetBSD 11 arm64 (VM, node 24.18.0; before: 2620 of
+  3450 answers differed, incl. a regular file's rdev, NODEV, as 0 where node has
+  18446744073709552000 / -1n) and on Linux x86_64 (node:24.21.0-bookworm container; before: 2492 of
+  3450). The identity test now judges a directory fd and a socket fd too, and runs on win32 for
+  the files, directory and (privilege permitting) symlink: its first Windows run is the next push.
+  CONSUMERS, driven through the real 2.1.283 graph (scratch probe: the staged cli.cjs with its
+  entry swapped for a module that imports the chunk and calls the bundle's own function; node,
+  quaude now, and quaude before = the old engine + old shim), all now equal to node:
+  - git worktree commondir identity (g3e): a directory whose .git names another worktree's gitdir
+    is rejected; before, accepted as that worktree (bigint ignored, so `0 !== 0n` and ino 0 === 0);
+  - the approval-bound reopen (xan, identity from XOt): an approved file replaced by a link to
+    another file is refused ("Refusing to read ...: its symlink resolution changed"); before, the
+    other file's content was read;
+  - the plugin-eval credentials reader (Ip): /dev/zero refused, "it is a device, whose content
+    cannot be inspected"; /dev/null skipped (null); a regular mock file read. Before, /dev/zero was
+    skipped as if it were /dev/null;
+  - M8 / dirSync's stamp (jD): /dev/null stamps `nulldevice`, /dev/zero `special`; before, both
+    `undigested` with 0:0 identities. It also needed os.devNull (06316f4): with only the stat
+    fixed, both still stamped `undigested`;
+  - the staging-dir checks (f$o, vft, h5n): a staging dir replaced after it was recorded is
+    refused (StagingDirTamperedError); before, allowed. Yin's check was not separately driven.
+  Not a committed gate: those functions' names and chunks are minified and move with every pin,
+  so the gate is the field-level tests above; the probe is the way to re-drive them.
+  STILL OPEN from the round 2 review (each to MEASURE where it lives):
+  - CLODE_TARGET_TEMPLATE is not probed for this binding: a stale TARGET engine (cross-build)
+    passes the front door and fails at its first stat at runtime (loud, ERR_CLODE_ENGINE_FLOOR);
+  - uid/gid >= 2^31 are unexercised (now read unsigned, as node does; macOS's nobody is the case);
+  - Windows: libuv codes this file does not map now surface as errno 4xxx (EUNKNOWN) where the CRT
+    gave its own errno;
+  - Windows semantics to measure on CI: lstat no longer follows a reparse point; fstat goes through
+    uv_guess_handle, so a NUL stdin no longer reads as S_IFCHR / a TTY (check
+    libexec/node-shim/internal/terminal-fd.cjs and anything else deciding "is a TTY"); stat now
+    converts UTF-8 to UTF-16 while open and readdir stay on the ANSI CRT, so stat and open can
+    disagree about a non-ASCII path.
 - node-shim's `fs.opendirSync` returns a Dir without `readSync` (found by the Task 7 re-review, M3); the
   2.1.283 bundle never calls it.
 - **An unhandled rejection exits 0 under node-shim; node exits 1** (noticed 2026-10-04, ruling G18).
@@ -381,7 +396,15 @@ Bash tool instead".
   trusts the exit status alone passes on an empty stdout (node-shim-fs-stat-identity now also
   checks that stdout is there). Measured: `Promise.reject(new Error('boom'))` under the loader,
   rc 0; node 24, rc 1.
-- **Acceptance to run: a credential handed over an inherited fd, on Linux.** The 2.1.283 bundle's
+- **NEXT PIN BUMP WALL: upstream 2.1.289 dies under quaude at `new Intl.ListFormat(...)`**
+  (`TypeError: not a function`, chunk-2df325cf.js, the plugin-name check), and the unhandled
+  rejection that follows exits 0 with an empty stdout (the entry above). Reported by the round 2
+  review of ruling G18; not reproduced here.
+- **A credential handed over an inherited fd, on Linux: PASSES** (round 2, 2026-10-04; was an
+  acceptance to run). fdauth.cjs, a canned mock token on fd 3 from a socketpair, against a mock API:
+  in a node:24.21.0-bookworm container native linux-x64 2.1.283 and quaude each made 2 requests, 1
+  carrying the fd's token, and printed the canned answer; on NetBSD 11 arm64 quaude the same (no
+  native there). Original note: The 2.1.283 bundle's
   CLAUDE_CODE_{API_KEY,OAUTH_TOKEN,GATEWAY_TOKEN,WEBSOCKET_AUTH}_FILE_DESCRIPTOR reader takes an fd
   that fstat calls a socket directly, and otherwise opens `/dev/fd/N`. Before eba6c57 node-shim's
   fstat called no fd a socket, so quaude always took `/dev/fd/N`; on macOS that works for a pipe or
