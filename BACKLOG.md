@@ -386,29 +386,38 @@ Bash tool instead".
     hidden, and strips ignore-file roots by path component (not bytes); quaude's rg joins with `/`, hides
     dot names only, and strips by bytes. Real platform facts in rg's source, to be measured on a Windows
     native before they are copied (test/rg-walk.test.cjs skips there, saying so).
-  - --type-add, --type-clear, --ignore-file, --no-ignore-vcs and the other --no-ignore-* flags,
-    --no-require-git, --follow, --max-depth, --max-filesize, --one-file-system are refused by name (no
-    upstream tool passes them).
+  - --type-add, --type-clear, --ignore-file, the --no-ignore-* flags but --no-ignore-vcs, --no-require-git,
+    --max-filesize, --one-file-system are refused by name. CORRECTED (Task 10 fix round, review I-1): this said
+    "no upstream tool passes them" of --max-depth, --follow and --no-ignore-vcs too, and 2.1.283 passes all three
+    in production (orphanedVersionGlobExclusions, rt and the sandbox scan: --max-depth; the FileIndex fallback
+    outside a repo: --follow and --no-ignore-vcs). Task 10 had made it worse: the old translation answered
+    --max-depth, quaude's rg refused it, and upstream cached [] (orphaned plugin versions went unexcluded from
+    Glob and Grep; rt listed nothing). All three are walked as rg walks now (RG-WALK-MAX-DEPTH, RG-WALK-FOLLOW,
+    RG-NO-IGNORE; 24 native rows), and test/build-gates/rg-carve-argv-gates.test.cjs (guard
+    rg-carve-argv-answered) reads EVERY rg argv the carve builds and requires it answered, never refused.
 - **quaude's rg under -U, its \n refusal, and --files for Glob (grep-native Task 10, 2026-10-04).**
   rg-differential is GREEN: 0 of 184 cells differ (42 before: -U 24, Glob's --null 18), only the named
   normalizations; proved to bite (a listing left unsorted: 10 Glob cells; --multiline-dotall ignored: the 9
-  -U cells). Rules stated in libexec/rg-native.cjs ("rg's multi-line search", "rg --files"), native rows in
+  -U cells). Fix round: 253 cells (three more -U variants and root's sp.txt), 0 differ. Rules stated in libexec/rg-native.cjs ("rg's multi-line search", "rg --files"), native rows in
   test/rg-multiline.test.cjs (379; the first 374 equal to linux-x64 native too, and ours there) and
   test/rg-files.test.cjs (46; linux-x64 equal). The real bundle end to end under tjs vs native (one canned
   mock): Glob x3 and Grep count/files_with_matches (multiline too) byte-equal; multiline content equal but
   for file order, rg's own parallel walk order (the gate's named normalization).
-  - THE GATE'S MULTILINE COVERAGE IS ONE PATTERN (`one.beta`, the shared dialect): a mutation of lines::locate
-    (a match ending just after a \n) passes rg-differential and is caught only by test/rg-multiline.test.cjs's
-    rows (5 tests red). Widening the matrix's patterns is a choice for Task 11 (matrixDrift compares the
-    builders' flags, not patterns).
+  - THE GATE'S MULTILINE COVERAGE was one pattern (`one.beta`): a mutation of lines::locate passed it. FIXED in
+    the fix round: `needle.`, `^\w` and `ab|^c.d` (with root's sp.txt) are gate variants, and on a scratch copy
+    the locate, merge and slice mutations name 7, 9 and 2 cells.
   - SPEED UNDER -U (tjs, this Mac, warm): a 3.9 MB file of 130,000 two-line blocks, -c 5.1 s (native 40 ms),
     --json 8.5 s (native 130 ms); the same size with 60 blocks 340 ms; -l 320 ms. Linear and bounded (one step
     budget per file, RG-RE-REFUSE-COST; the async twin yields every 256 finds and inside a long one: its longest
     loop gap stays under 600 ms on that file, it was 4.6 s before; execFile's timeout and maxBuffer end it).
-    Not optimised: profile the slow box first.
+    Not optimised: profile the slow box first. FIXED in the fix round (review I-2): many matches on ONE long line
+    were QUADRATIC (each located from its line's start: a 1 MB minified line stepped back over 23.3 GB, 7.6 s
+    under node, native 0.8 s); each search now covers only the bytes since the last match (51 ms; counted test).
   - A multi-line search reads each file whole, as rg does (memory as the file's size).
   - RG-MULTILINE-PRINTED refuses where a match the printers find again reaches past the block rg's searcher
-    gave it (rg would slice past its bytes); never seen in measurement.
+    gave it: native's --json PANICS there (`rg -U --json 'a|^b|b\nc\nd'` over `ab\nc\nd\n`: "range end index 6
+    out of range for slice of length 3", no exit status; measured in the fix round); -c, -l, -o and the standard
+    printer answer it, ours as native's.
   - -U with a pattern the LINE searcher answers, over a NAMED binary, is RG-MMAP-EVERYWHERE's divergence
     (three such rows differed on macOS); the -U rows name no binary for line-mode patterns, P8 pins it.
   - REFUSED BY NAME: --sort/--sortr path, accessed, created (no upstream tool passes them); --files over `-`;
