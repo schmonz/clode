@@ -296,9 +296,10 @@ function assertRefused(a, what, flagOrApplet) {
 test('a refusal is a failed child: rc 2, the flag and the reason on stderr, never ripgrep (every surface)', posixExec, () => {
   const s = stubs();
   const prog = path.join(s.dir, 'probe.cjs');
-  fs.writeFileSync(prog, surfacesProbe(s.rgs, ['--json', 'needle', '.']));
+  // --pcre2: a flag quaude's rg refuses by name (PCRE2 is not rg's default engine, nor emulated)
+  fs.writeFileSync(prog, surfacesProbe(s.rgs, ['--pcre2', 'needle', '.']));
   const got = parseProbe(cp.spawnSync(process.execPath, [prog], { encoding: 'utf8', env: s.env, cwd: s.dir }));
-  for (const rg of s.rgs) for (const surf of SURFACES) assertRefused(got[rg][surf], `${surf}(${rg})`, '--json');
+  for (const rg of s.rgs) for (const surf of SURFACES) assertRefused(got[rg][surf], `${surf}(${rg})`, '--pcre2');
   fs.rmSync(s.dir, { recursive: true, force: true });
 });
 
@@ -501,7 +502,7 @@ function bookkeepingProbe() {
       const run = (args) => new Promise((res) => cp.execFile('rg', args, { signal: sig, maxBuffer: 20000000 }, (err, so) => res({ err: err && err.code, so })));
       const answers = [];
       for (let i = 0; i < ${N_CALLS}; i++) answers.push(await run(['needle', 'tree']));
-      for (let i = 0; i < 3; i++) answers.push(await run(['--json', 'needle', '.']));   // refused: no process
+      for (let i = 0; i < 3; i++) answers.push(await run(['--pcre2', 'needle', '.']));   // refused: no process
       await tick();
       out.n1 = { calls: answers.length, listeners: held.size, answered: answers.filter((a) => /needle/.test(String(a.so))).length };
       // N2: a fake applet that has EXITED (rc 2, nothing printed) when kill() arrives.

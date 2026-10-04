@@ -20,13 +20,13 @@
 // theirs do in node) through rgSpawnSync/rgExecFileSync. A refusal is a child that started
 // no process at all.
 //
-// A SEARCH (rg's standard printer, -l, -c) is answered here, rule by rule as native answers it
-// (grep-native Task 6, "quaude's rg answers a search itself" below): the plumbing (ugrepMatches and
-// ugrepMatchesAsync: an explicit file list in, rg's match byte ranges out, over a ugrep at or above
-// UGREP_MIN, UGREP PROPOSING candidate lines and rg-regex.cjs's matcher DECIDING them) and rg's
-// printers over rg's own text. What it does not answer yet still goes to today's rg -> ugrep
-// translation, which bun-shim owns and passes in (`translate`): --json (Task 7), --files (Task
-// 10), --version and --type (Task 9). The walk is ugrep's under today's flags until Task 9's.
+// A SEARCH (rg's standard printer, -l, -c, --json) is answered here, rule by rule as native answers
+// it (grep-native Tasks 6 and 7, "quaude's rg answers a search itself" below): the plumbing
+// (ugrepMatches and ugrepMatchesAsync: an explicit file list in, rg's match byte ranges out, over a
+// ugrep at or above UGREP_MIN, UGREP PROPOSING candidate lines and rg-regex.cjs's matcher DECIDING
+// them) and rg's printers over rg's own text. What it does not answer yet still goes to today's rg
+// -> ugrep translation, which bun-shim owns and passes in (`translate`): --files (Task 10),
+// --version and --type (Task 9). The walk is ugrep's under today's flags until Task 9's.
 //
 // Loaded by bun-shim.cjs as `require(__dirname + '/rg-native.cjs')`, so it travels beside
 // bun-shim.cjs in every packaging (test/shim-companions.test.cjs), with its own companion
@@ -686,16 +686,18 @@ function ugrepMatchesAsync(files, pattern, opts = {}) {
 }
 
 // ==== quaude's rg answers a search itself (grep-native Task 6) ===================================
-// A search (rg's standard printer, -l, or -c) no longer goes through today's translation: quaude's
+// A search (rg's standard printer, -l, -c, or --json) no longer goes through today's translation: quaude's
 // rg reads rg's argv (parseRgSearch), finds what to search (its targets: stdin, named files, and a
 // directory's files as ugrep's walk lists them under today's walk flags, until the plan's Task 9
 // walks in JS), takes every file's matches from ugrepMatches (stdin's from the matcher alone), and
-// PRINTS THEM AS rg's PRINTERS DO, from rg's own text of each file (RG-TEXT-BOM). --json (Task 7),
-// --files (Task 10), --version and --type (Task 9) still go to the translation; -U refuses (Task 10).
+// PRINTS THEM AS rg's PRINTERS DO, from rg's own text of each file (RG-TEXT-BOM). --files (Task 10),
+// --version and --type (Task 9) still go to the translation (beside --json, they refuse); -U refuses
+// (Task 10). The JSON printer's own rules (RG-JSON, RG-JSON-CONTEXT, RG-JSON-BYTES, RG-JSON-ESCAPE,
+// RG-JSON-ONLY-MATCHING) are stated where it is, "rg's JSON Lines printer" below.
 //
 // THE RULES, one statement each, every one measured against native 2.1.283's embedded rg (ripgrep
 // 14.1.1) and pinned by a same-named test in test/rg-native.test.cjs (native's literals):
-//   RG-ARGV                    the flags a search reads; -l and -c, the last one wins; a number
+//   RG-ARGV                    the flags a search reads; -l, -c and --json, the last one wins; a number
 //                              flag that is not a number is rg's own usage error; `--` ends flags
 //   RG-FILES-NULL              -l: `path` then \n, or \0 under --null
 //   RG-COUNT-NONZERO           -c: `[path SEP]N\n` per file with a selected line; a file with none
@@ -719,7 +721,7 @@ function ugrepMatchesAsync(files, pattern, opts = {}) {
 //                              `context`), a -o match by its own bytes; 0 means no limit
 //   RG-RE-MATCH-AT-UNTERMINATED-END (the printers' half) the matcher's match at the end of an
 //                              unterminated last line selects the line but is never printed or counted
-//                              as a match
+//                              as a match (--json: a match message with submatches [])
 //   RG-STDIN                   `-` searches what the caller piped in, named `<stdin>`; to rg it is a
 //                              NAMED path, so a NUL in it does not end the search (review I-1)
 //   RG-FIRST-MATCH             -l stops at a file's first match, -c and the standard printer
@@ -743,7 +745,7 @@ function ugrepMatchesAsync(files, pattern, opts = {}) {
 // The flags quaude's rg answers itself. Anything else is refused BY NAME, never passed on to an
 // applet that reads it some other way (ugrep's -U is --binary, for one).
 const LONG_BOOL = {
-  '--files-with-matches': (s) => { s.mode = 'files'; }, '--count': (s) => { s.mode = 'count'; },
+  '--files-with-matches': (s) => { s.mode = 'files'; }, '--count': (s) => { s.mode = 'count'; }, '--json': (s) => { s.mode = 'json'; },
   '--ignore-case': (s) => { s.ignoreCase = true; }, '--case-sensitive': (s) => { s.ignoreCase = false; },
   '--line-number': (s) => { s.lineNumber = true; }, '--no-line-number': (s) => { s.lineNumber = false; },
   '--with-filename': (s) => { s.withFilename = true; }, '--no-filename': (s) => { s.withFilename = false; },
@@ -755,8 +757,8 @@ const SHORT_BOOL = { l: '--files-with-matches', c: '--count', i: '--ignore-case'
 const LONG_VALUE = { '--after-context': 'after', '--before-context': 'before', '--context': 'context', '--max-columns': 'maxColumns',
   '--regexp': 'pattern', '--glob': 'glob', '--iglob': 'iglob', '--threads': 'threads' };
 const SHORT_VALUE = { A: 'after', B: 'before', C: 'context', M: 'maxColumns', e: 'pattern', g: 'glob', j: 'threads' };
-// Still today's translation's: --json (Task 7), --files (Task 10), --version and the type flags (Task 9).
-const TRANSLATED_LONG = new Set(['--json', '--files', '--version', '--type', '--type-not', '--type-list', '--type-add', '--type-clear']);
+// Still today's translation's: --files (Task 10), --version and the type flags (Task 9).
+const TRANSLATED_LONG = new Set(['--files', '--version', '--type', '--type-not', '--type-list', '--type-add', '--type-clear']);
 const TRANSLATED_SHORT = new Set(['t', 'T', 'V']);
 // The reason quaude's rg gives for a flag it cannot answer as native does (stated once; bun-shim's
 // translation refuses with it too).
@@ -783,10 +785,15 @@ function setValue(s, key, flag, v) {
 
 // parseRgSearch(argv) -> { spec } | { translate: true } | { refuse, flag } | { usage: stderr line }
 function parseRgSearch(argv) {
-  const s = { mode: 'standard', patterns: [], ignoreCase: false, lineNumber: false, withFilename: null, nul: false, only: false,
+  const s = { mode: 'standard', patterns: [], ignoreCase: false, lineNumber: null, withFilename: null, nul: false, only: false,
     before: null, after: null, context: null, maxColumns: 0, hidden: false, noIgnore: false, globs: [], threads: null, paths: [] };
   const pos = [];
   let end = false;
+  // A flag still the translation's, beside --json: the translation cannot print rg's JSON, so the
+  // flag is refused by name (--type with --json is Task 9's), never answered without it.
+  const dd = argv.indexOf('--');
+  const json = (dd === -1 ? argv : argv.slice(0, dd)).includes('--json');
+  const translated = (flag) => (json ? cannotYet(flag) : { translate: true });
   for (let i = 0; i < argv.length; i++) {
     const a = String(argv[i]);
     if (end || a === '-' || a[0] !== '-') { pos.push(a); continue; }
@@ -795,14 +802,14 @@ function parseRgSearch(argv) {
     if (a.startsWith('--')) {
       const eq = a.indexOf('=');
       const name = eq === -1 ? a : a.slice(0, eq);
-      if (TRANSLATED_LONG.has(name)) return { translate: true };
+      if (TRANSLATED_LONG.has(name)) return translated(name);
       if (LONG_BOOL[name] && eq === -1) LONG_BOOL[name](s);
       else if (LONG_VALUE[name]) r = setValue(s, LONG_VALUE[name], name, eq !== -1 ? a.slice(eq + 1) : i + 1 < argv.length ? argv[++i] : null);
       else return cannotYet(name);
     } else {
       for (let j = 1; j < a.length; j++) {
         const c = a[j];
-        if (TRANSLATED_SHORT.has(c)) return { translate: true };
+        if (TRANSLATED_SHORT.has(c)) return translated(`-${c}`);
         if (SHORT_VALUE[c]) { const rest = a.slice(j + 1); r = setValue(s, SHORT_VALUE[c], `-${c}`, rest !== '' ? rest : i + 1 < argv.length ? argv[++i] : null); break; }
         if (!SHORT_BOOL[c]) return cannotYet(`-${c}`);
         LONG_BOOL[SHORT_BOOL[c]](s);
@@ -822,6 +829,8 @@ function parseRgSearch(argv) {
   s.before = s.before !== null ? s.before : s.context || 0;
   s.after = s.after !== null ? s.after : s.context || 0;
   s.countMatches = s.mode === 'count' && s.only;
+  // RG-JSON: line numbers unless -N.
+  if (s.mode === 'json') s.lineNumber = s.lineNumber !== false;
   return { spec: s };
 }
 
@@ -948,21 +957,65 @@ const NL = Buffer.from('\n');
 const SEP = Buffer.from('--\n');
 const OMITTED_MATCH = Buffer.from('[Omitted long matching line]');
 const OMITTED_CONTEXT = Buffer.from('[Omitted long context line]');
+// A file's selected lines: [{ ls, ms }] ascending, ms its printable matches. RG-RE-MATCH-AT-
+// UNTERMINATED-END: the matcher's match at the end of an unterminated last line selects that line and
+// is never printed or counted (rg's printers drop an empty match at the end of a line's bytes).
+// LINEAR in the text: the matches ascend, so a match at or before the current line's terminator is on
+// that line, and a later one's line start is found scanning back no further than that terminator
+// (scanning back from every match to its line's start was quadratic on a minified line).
+function selectedLines(text, matches) {
+  const unterminated = text.length > 0 && text[text.length - 1] !== 0x0a;
+  const sel = [];
+  let L = null, le = -1;
+  for (const m of matches) {
+    if (!L || m.start > le) {
+      let ls = m.start;
+      while (ls > le + 1 && text[ls - 1] !== 0x0a) ls--;
+      L = { ls, ms: [] }; sel.push(L);
+      le = lineEndAt(text, ls);
+    }
+    if (!(unterminated && m.start === text.length)) L.ms.push(m);
+  }
+  return sel;
+}
+// RG-CONTEXT, stated once for every printer: each selected line with spec.before lines before it and
+// spec.after after it, merged where they meet. visit(ls, num, L) for every line printed, in order (L
+// the selected line, null for a context line); gap() before a line that does not follow the one
+// printed before it in this file (and before the first).
+function eachPrintedLine(text, sel, spec, visit, gap) {
+  const next = (ls) => { const i = text.indexOf(0x0a, ls); return i === -1 || i + 1 >= text.length ? -1 : i + 1; };
+  const prev = (ls) => (ls === 0 ? -1 : ls < 2 ? 0 : text.lastIndexOf(0x0a, ls - 2) + 1);
+  // Line numbers, counted forward once.
+  let at = 0, atNum = 1;
+  const numAt = (ls) => { for (let i = text.indexOf(0x0a, at); i !== -1 && i < ls; i = text.indexOf(0x0a, i + 1)) atNum++; at = ls; return atNum; };
+  let cur = -1, curNum = 0, pend = 0;
+  const drainAfter = (upTo) => {
+    for (let nx; pend > 0 && (nx = next(cur)) !== -1 && (upTo === -1 || nx < upTo); pend--) { visit(nx, curNum + 1, null); cur = nx; curNum++; }
+  };
+  for (const L of sel) {
+    const n = numAt(L.ls);
+    drainAfter(L.ls);
+    let first = L.ls, firstNum = n;
+    for (let k = 0, p; k < spec.before && (p = prev(first)) !== -1 && (cur === -1 || p > cur); k++) { first = p; firstNum--; }
+    if (cur === -1 || next(cur) !== first) gap();
+    for (let ls = first, num = firstNum; ls !== L.ls; ls = next(ls), num++) visit(ls, num, null);
+    visit(L.ls, n, L);
+    cur = L.ls; curNum = n; pend = spec.after;
+  }
+  drainAfter(-1);
+}
+// A line's end: the index of its \n, or the text's end.
+function lineEndAt(text, ls) { const i = text.indexOf(0x0a, ls); return i === -1 ? text.length : i; }
+
 // One file's (or stdin's) output into `out` (an array of Buffers): true when rg found something in it.
-// `state.printed` carries "something was printed before" across files (RG-CONTEXT's `--`).
+// `state.printed` carries "something was printed before" across files (RG-CONTEXT's `--`); `state.json`
+// the JSON printer's running totals (its summary).
 function printFile(spec, e, out, state) {
   const { text, matches } = e;
   if (spec.mode === 'files') { out.push(Buffer.from(e.disp + (spec.nul ? '\0' : '\n'))); return true; }
-  // RG-RE-MATCH-AT-UNTERMINATED-END: such a match selects its line; it is never printed.
-  const unterminated = text.length > 0 && text[text.length - 1] !== 0x0a;
-  const sel = [];
-  for (const m of matches) {
-    const ls = m.start === 0 ? 0 : text.lastIndexOf(0x0a, m.start - 1) + 1;
-    let L = sel[sel.length - 1];
-    if (!L || L.ls !== ls) { L = { ls, ms: [] }; sel.push(L); }
-    if (!(unterminated && m.start === text.length)) L.ms.push(m);
-  }
+  const sel = selectedLines(text, matches);
   if (!sel.length) return false;
+  if (spec.mode === 'json') { printJson(spec, e, sel, out, state.json); return true; }
   const path = e.withFilename ? Buffer.from(e.disp) : null;
   // A file with a selected line prints its count, even a -c -o count of 0 (its only match was the
   // unprintable one at an unterminated end: native prints `0`); a file with none prints nothing.
@@ -972,46 +1025,145 @@ function printFile(spec, e, out, state) {
     return true;
   }
   const cols = spec.maxColumns;
-  const lineEnd = (ls) => { const i = text.indexOf(0x0a, ls); return i === -1 ? text.length : i; };
-  const next = (ls) => { const i = text.indexOf(0x0a, ls); return i === -1 || i + 1 >= text.length ? -1 : i + 1; };
-  const prev = (ls) => (ls === 0 ? -1 : ls < 2 ? 0 : text.lastIndexOf(0x0a, ls - 2) + 1);
   const prefix = (num, sep) => {
     const p = [];
     if (path) p.push(path, Buffer.from(spec.nul ? '\0' : sep));
     if (spec.lineNumber) p.push(Buffer.from(`${num}${sep}`));
     return p;
   };
-  const emit = (ls, num, ms) => {
+  const ctx = spec.before > 0 || spec.after > 0;
+  eachPrintedLine(text, sel, spec, (ls, num, L) => {
+    const ms = L && L.ms;
     const sep = ms ? ':' : '-';
+    if (ms) state.printed = true;
     if (ms && spec.only && ms.length) {
       for (const m of ms) out.push(...prefix(num, sep), cols && m.end - m.start > cols ? OMITTED_MATCH : text.subarray(m.start, m.end), NL);
       return;
     }
-    const le = lineEnd(ls), end = le < text.length ? le + 1 : le;
+    const le = lineEndAt(text, ls), end = le < text.length ? le + 1 : le;
     if (cols && end - ls > cols) out.push(...prefix(num, sep), ms ? OMITTED_MATCH : OMITTED_CONTEXT, NL);
     else { out.push(...prefix(num, sep), text.subarray(ls, end)); if (end === le) out.push(NL); }
-  };
-  // Line numbers, counted forward once.
-  let at = 0, atNum = 1;
-  const numAt = (ls) => { for (let i = text.indexOf(0x0a, at); i !== -1 && i < ls; i = text.indexOf(0x0a, i + 1)) atNum++; at = ls; return atNum; };
-  const ctx = spec.before > 0 || spec.after > 0;
-  let cur = -1, curNum = 0, pend = 0;
-  const drainAfter = (upTo) => {
-    for (let nx; pend > 0 && (nx = next(cur)) !== -1 && (upTo === -1 || nx < upTo); pend--) { emit(nx, curNum + 1, null); cur = nx; curNum++; }
-  };
-  for (const L of sel) {
-    const n = numAt(L.ls);
-    drainAfter(L.ls);
-    let first = L.ls, firstNum = n;
-    for (let k = 0, p; k < spec.before && (p = prev(first)) !== -1 && (cur === -1 || p > cur); k++) { first = p; firstNum--; }
-    if (ctx && state.printed && (cur === -1 || next(cur) !== first)) out.push(SEP);
-    for (let ls = first, num = firstNum; ls !== L.ls; ls = next(ls), num++) emit(ls, num, null);
-    emit(L.ls, n, L.ms);
-    state.printed = true;
-    cur = L.ls; curNum = n; pend = spec.after;
-  }
-  drainAfter(-1);
+  }, () => { if (ctx && state.printed) out.push(SEP); });
   return true;
+}
+
+// ---- rg's JSON Lines printer (grep-native Task 7) -------------------------------------------------
+// grep-printer 0.2.2's JSON sink and ripgrep 14.1.1's summary (read from the crates), every rule
+// measured against native 2.1.283 and pinned by test/rg-native.test.cjs's P7 rows:
+//   RG-JSON          per file with a selected line: `begin`, a `match` per selected line (`context`
+//                    around them), `end` with the file's stats; then ONE `summary` after every file,
+//                    whatever was found (rc 1 and rc 2 too). line_number unless -N (null then); the
+//                    path always (-H, --no-filename and --null change nothing); --max-columns changes
+//                    nothing. A match's `lines` are its line's bytes with their terminator,
+//                    `absolute_offset` the line's offset into rg's text, `submatches` every match on
+//                    it (start/end from the line's start). The end's stats: searches 1,
+//                    searches_with_match 1, bytes_searched the text's length (the whole file, as
+//                    rg's decoder gave it), bytes_printed the bytes of this file's begin, match and
+//                    context messages, matched_lines, matches; the summary sums the files that printed
+//                    (a file with no match adds nothing) with serde_json's sorted keys, elapsed_total
+//                    the whole run. Elapsed times are wall-clock readings (rg-probe.cjs normalizes
+//                    them, its one named --json normalization).
+//   RG-JSON-CONTEXT  a context line is a `context` message, submatches []; groups are not separated
+//   RG-JSON-BYTES    `lines`, a submatch's `match` and `path` are {"text": ...} when they are UTF-8
+//                    (Rust's str::from_utf8), else {"bytes": standard base64 with padding}
+//   RG-JSON-ESCAPE   serde_json: `"` and `\` escaped, \b \f \n \r \t, every other C0 control as
+//                    \u00XX in lowercase hex; DEL and everything at or above U+0080 raw
+//   RG-JSON-ONLY-MATCHING  -o changes nothing
+// The bytes a JSON message is written into, grown by doubling: one buffer per file, so printing every
+// match of a minified line costs no allocation per match (building each piece as its own Buffer took
+// 25 s under tjs for the 5 MB line test/rg-native.test.cjs times; native ~100 ms).
+class ByteWriter {
+  constructor(n = 4096) { this.buf = Buffer.alloc(n); this.len = 0; }
+  room(n) {
+    if (this.len + n <= this.buf.length) return;
+    const b = Buffer.alloc(Math.max(this.buf.length * 2, this.len + n));
+    this.buf.copy(b, 0, 0, this.len);
+    this.buf = b;
+  }
+  ascii(str) { this.room(str.length); for (let i = 0; i < str.length; i++) this.buf[this.len++] = str.charCodeAt(i); }
+  bytes(b, from = 0, to = b.length) { this.room(to - from); b.copy(this.buf, this.len, from, to); this.len += to - from; }
+  done() { return this.buf.subarray(0, this.len); }
+}
+// RG-JSON-ESCAPE: what serde_json writes for each byte it escapes (nothing else is escaped).
+const BACKSLASH = String.fromCharCode(0x5c);
+const JSON_ESCAPE = [];
+for (let c = 0; c < 0x20; c++) JSON_ESCAPE[c] = BACKSLASH + 'u00' + c.toString(16).padStart(2, '0');
+for (const [c, e] of [[0x22, '"'], [0x5c, BACKSLASH], [0x08, 'b'], [0x0c, 'f'], [0x0a, 'n'], [0x0d, 'r'], [0x09, 't']]) JSON_ESCAPE[c] = BACKSLASH + e;
+// Rust's str::from_utf8: shortest forms only, no surrogates, nothing past U+10FFFF.
+function isUtf8(b, i, end) {
+  while (i < end) {
+    const c = b[i];
+    if (c < 0x80) { i++; continue; }
+    const n = c >= 0xc2 && c <= 0xdf ? 1 : c >= 0xe0 && c <= 0xef ? 2 : c >= 0xf0 && c <= 0xf4 ? 3 : 0;
+    if (n === 0 || i + n >= end) return false;
+    const c1 = b[i + 1];
+    const lo = c === 0xe0 ? 0xa0 : c === 0xf0 ? 0x90 : 0x80, hi = c === 0xed ? 0x9f : c === 0xf4 ? 0x8f : 0xbf;
+    if (c1 < lo || c1 > hi) return false;
+    for (let k = 2; k <= n; k++) if (b[i + k] < 0x80 || b[i + k] > 0xbf) return false;
+    i += n + 1;
+  }
+  return true;
+}
+// RG-JSON-BYTES: grep-printer's Data, written into `w`: {"text": the bytes, escaped} when they are
+// UTF-8, else {"bytes": standard base64}.
+function jsonData(w, b, from = 0, to = b.length) {
+  if (!isUtf8(b, from, to)) { w.ascii(`{"bytes":"${Buffer.from(b.subarray(from, to)).toString('base64')}"}`); return; }
+  w.ascii('{"text":"');
+  let run = from;
+  for (let i = from; i < to; i++) {
+    const c = b[i];
+    if (c >= 0x20 && c !== 0x22 && c !== 0x5c) continue;
+    if (run < i) w.bytes(b, run, i);
+    w.ascii(JSON_ESCAPE[c]);
+    run = i + 1;
+  }
+  if (run < to) w.bytes(b, run, to);
+  w.ascii('"}');
+}
+// A wall-clock reading in ns, and grep-printer's NiceDuration of a span of them: its own field order,
+// or serde_json's sorted one (the summary's).
+const clockNs = () => (typeof performance !== 'undefined' && performance.now ? Math.round(performance.now() * 1e6) : Date.now() * 1e6);
+function jsonDuration(ns, sorted) {
+  const secs = Math.floor(ns / 1e9), nanos = Math.round(ns - secs * 1e9), human = `${(ns / 1e9).toFixed(6)}s`;
+  return sorted ? `{"human":"${human}","nanos":${nanos},"secs":${secs}}` : `{"secs":${secs},"nanos":${nanos},"human":"${human}"}`;
+}
+// The running totals the summary sums (only files that printed add to them).
+const jsonTotals = () => ({ startNs: clockNs(), elapsedNs: 0, searches: 0, withMatch: 0, bytesSearched: 0, bytesPrinted: 0, matchedLines: 0, matches: 0 });
+function printJson(spec, e, sel, out, totals) {
+  const t0 = clockNs();
+  const { text } = e;
+  const pw = new ByteWriter(64);
+  jsonData(pw, Buffer.from(e.disp));
+  const path = Buffer.from(pw.done());
+  const w = new ByteWriter();
+  w.ascii('{"type":"begin","data":{"path":'); w.bytes(path); w.ascii('}}\n');
+  let matchedLines = 0, matches = 0;
+  eachPrintedLine(text, sel, spec, (ls, num, L) => {
+    const le = lineEndAt(text, ls), end = le < text.length ? le + 1 : le;
+    w.ascii(L ? '{"type":"match","data":{"path":' : '{"type":"context","data":{"path":'); w.bytes(path);
+    w.ascii(',"lines":'); jsonData(w, text, ls, end);
+    w.ascii(`,"line_number":${spec.lineNumber ? num : 'null'},"absolute_offset":${ls},"submatches":[`);
+    if (L) {
+      matchedLines++; matches += L.ms.length;
+      L.ms.forEach((m, i) => { w.ascii(i ? ',{"match":' : '{"match":'); jsonData(w, text, m.start, m.end); w.ascii(`,"start":${m.start - ls},"end":${m.end - ls}}`); });
+    }
+    w.ascii(']}}\n');
+  }, () => {});
+  const printed = w.len;
+  const ns = clockNs() - t0;
+  w.ascii('{"type":"end","data":{"path":'); w.bytes(path);
+  w.ascii(`,"binary_offset":null,"stats":{"elapsed":${jsonDuration(ns, false)},"searches":1,"searches_with_match":1,"bytes_searched":${text.length},`
+    + `"bytes_printed":${printed},"matched_lines":${matchedLines},"matches":${matches}}}}\n`);
+  out.push(w.done());
+  Object.assign(totals, { elapsedNs: totals.elapsedNs + ns, searches: totals.searches + 1, withMatch: totals.withMatch + 1,
+    bytesSearched: totals.bytesSearched + text.length, bytesPrinted: totals.bytesPrinted + printed,
+    matchedLines: totals.matchedLines + matchedLines, matches: totals.matches + matches });
+}
+// ripgrep's summary: serde_json's json! value, so every object's keys are sorted.
+function jsonSummary(t) {
+  return Buffer.from(`{"data":{"elapsed_total":${jsonDuration(clockNs() - t.startNs, true)},"stats":{"bytes_printed":${t.bytesPrinted},`
+    + `"bytes_searched":${t.bytesSearched},"elapsed":${jsonDuration(t.elapsedNs, true)},"matched_lines":${t.matchedLines},"matches":${t.matches},`
+    + `"searches":${t.searches},"searches_with_match":${t.withMatch}}},"type":"summary"}\n`);
 }
 
 // RG-SPECIAL-FILE / RG-REFUSE-SPECIAL-FILE (Task 6 re-review N1; measured against native 2.1.283): what
@@ -1108,10 +1260,11 @@ function* searchCore(spec, opts) {
   // FIRST_MATCH: what each mode needs to know of a file's matches. -l only whether there is one,
   // -c (lines) and the standard printer without -o only which lines hold one, as rg itself stops
   // there; -o and -c -o every printable match.
-  const first = spec.mode === 'files' ? 'file' : !spec.only ? 'line' : undefined;
+  // --json reports every match on a selected line (-o or not: RG-JSON-ONLY-MATCHING).
+  const first = spec.mode === 'files' ? 'file' : spec.mode !== 'json' && !spec.only ? 'line' : undefined;
   const files = [...new Set(entries.filter((e) => e.file).map((e) => e.file))];
   let matches = new Map();
-  const out = [], err = [], state = { printed: false };
+  const out = [], err = [], state = { printed: false, json: spec.mode === 'json' ? jsonTotals() : null };
   let found = false, broke = false;
   if (files.length) {
     const r = yield { op: 'match', files, pattern, first };
@@ -1144,6 +1297,8 @@ function* searchCore(spec, opts) {
     if (!m.length || (e.walked && binaryAtFirstRead(text))) continue;
     if (printFile(spec, { ...e, text, matches: m, withFilename }, out, state)) found = true;
   }
+  // RG-JSON: one summary after every file, whatever was found.
+  if (state.json) out.push(jsonSummary(state.json));
   return { stdout: Buffer.concat(out), stderr: Buffer.concat(err), status: broke ? 2 : found ? 0 : 1, signal: null };
 }
 

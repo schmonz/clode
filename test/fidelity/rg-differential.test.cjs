@@ -27,9 +27,13 @@
 // task's class: refused --type 14 and -U 16 (Tasks 9, 10), and answered differently 32, every one a
 // walk or binary class report-grep measured (.git searched 8, .gitignore/.ignore precedence outside a
 // repo 12, whitelist glob over .gitignore 4, brace glob 4: Task 9; a binary whose NUL lies past rg's
-// first read, counted 4: Task 8). Content (--json, Task 7) and Glob (Task 10) are still refused, and
-// --version still ugrep's (Task 9). The note tallies what ours refused, so each task's progress is
-// visible in the verdict itself.
+// first read, counted 4: Task 8). Glob (Task 10) is still refused, and --version still ugrep's (Task 9).
+// After Task 7 (quaude's rg prints --json itself), measured the same way: 139 differ. Of the 69 content
+// cells 11 are equal (none were); in each of the 58 left, every file record both sides print is
+// byte-identical (stats included) except a binary's, and each differs only by a later task's class:
+// .git searched 10, .gitignore/.ignore precedence 10, whitelist glob 4, brace glob 2, refused --type 7
+// (Task 9); late.dat's binary quit 10, early.dat's convert mode 7 (Task 8); refused -U 8 (Task 10).
+// The note tallies what ours refused, so each task's progress is visible in the verdict itself.
 //
 // WHERE IT RUNS: wherever a native provider, tjs and ugrep all exist. Otherwise it SKIPS
 // naming which is missing (CI wiring is the plan's Task 11).
