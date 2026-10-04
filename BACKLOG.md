@@ -294,6 +294,15 @@ Bash tool instead".
   - UNMEASURED ON WINDOWS: a walked file's path joins its target with `/` (Rust's Path::join gives
     `\` there), and a path's error text is libuv's message capitalized (`No such file or directory`,
     `Permission denied` match macOS's strerror, which is what native prints; Windows' does not).
+- **The Grep tool's files_with_matches ORDER differs from native's under quaude: node-shim's stat
+  has whole-second mtimes** (found driving the real 2.1.283 bundle end to end, grep-native Task 6,
+  2026-10-03). The tool sorts -l's files in JS, newest mtime first, then by name; node-shim's
+  Stats carries `mtimeMs` at second resolution (libexec/node-shim/modules/fs.cjs: FSS.stat exposes
+  only st_mtime, a documented divergence), so two files written within one second tie and sort by
+  name. Measured: a.txt then sub/b.txt written a moment apart; native's tool_result lists
+  `tree/sub/b.txt` then `tree/a.txt`, quaude's `tree/a.txt` then `tree/sub/b.txt` (count mode,
+  which keeps rg's order, was byte-equal). The Glob tool's `--sort=modified` (the plan's Task 10) leans on the same mtimes. Fix
+  in the engine's stat (nanoseconds), not in rg; Task 11's end to end will show it.
 - quaude's rg plumbing, deferred from the Task 5 review (2026-10-03): the sync ugrepMatches
   reports a run that hit its maxBuffer (ENOBUFS) as "could not be run", and the async twin
   buffers without any cap (M4); ARGV_BUDGET counts only the file names, not the pattern, against
