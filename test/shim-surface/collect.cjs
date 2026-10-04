@@ -47,6 +47,33 @@ function shimModuleNames() {
     .sort();
 }
 
+// THE SHIM AS SHIPPED, NOT AS A BARE CHECKOUT HAS IT. node-shim takes some modules from
+// Claude Code's own ext-deps (requireExt: today feross `buffer`), and quaude always carries that
+// closure; without it, buffer.cjs falls back to buffer-lite, which has no SlowBuffer. Measured
+// without the deps, the map then reports `buffer.SlowBuffer` as a NEW gap under node 24 (which
+// exports it) and not under node 26 (which dropped it): the oracle's version only decides whether
+// a shim quaude never ships becomes visible. So the measurement requires the closure, resolved
+// the way requireExt resolves it (NODE_PATH, then deps/claude/node_modules), and the list of
+// ext-deps is derived from libexec's own requireExt('...') calls, not written here.
+function shimExtDeps(root = path.join(REPO, 'libexec')) {
+  const out = new Set();
+  const walk = (d) => {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      if (e.name.startsWith('._')) continue;
+      const f = path.join(d, e.name);
+      if (e.isDirectory()) walk(f);
+      else if (/\.c?js$/.test(e.name)) for (const m of fs.readFileSync(f, 'utf8').matchAll(/requireExt\('([^']+)'\)/g)) out.add(m[1]);
+    }
+  };
+  walk(root);
+  return [...out].sort();
+}
+function missingExtDeps({ env = process.env, repo = REPO, deps = shimExtDeps() } = {}) {
+  const roots = [...(env.NODE_PATH || '').split(path.delimiter).filter(Boolean),
+    path.join(repo, 'deps', 'claude', 'node_modules')];
+  return deps.filter((d) => !roots.some((r) => fs.existsSync(path.join(r, d, 'package.json'))));
+}
+
 function enumerateUnderNode(names) {
   const out = execFileSync(process.execPath, [ENTRY, ...names],
     { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
@@ -124,5 +151,5 @@ function layer1Gaps({ text, index, bunProps, bunBuiltins }) {
 module.exports = {
   REPO, ENTRY, LOADER, MODULES_DIR,
   shimModuleNames, enumerateUnderNode, enumerateUnderTjs,
-  layer1Gaps, layer2Gaps,
+  layer1Gaps, layer2Gaps, shimExtDeps, missingExtDeps,
 };

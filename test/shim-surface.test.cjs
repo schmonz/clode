@@ -55,6 +55,12 @@ function inputs() {
   if (_inputs) return _inputs;
   const tjs = helper.tjsPath();
   if (!tjs) { _inputs = { skip: 'no tjs binary (CLODE_TJS or build/tjs/<tag>)' }; return _inputs; }
+  const missing = collect.missingExtDeps();
+  if (missing.length) {
+    _inputs = { skip: `the shim's ext-dep closure is not installed (${missing.join(', ')}; npm ci --prefix deps/claude): `
+      + 'this would measure a shim quaude never ships' };
+    return _inputs;
+  }
   let staged = null;
   let stageErr = null;
   try { staged = models.stageProviderCli({ env: process.env }); } catch (e) { stageErr = e.message; }
@@ -248,4 +254,40 @@ test('shim surface: the scanner still finds the known fs.watch call sites', (t) 
   assert.strictEqual(direct, false,
     'the direct require("fs").watch( shape now appears — node-shim-wall-tripwires.test.cjs'
     + ' should be firing, and this file\'s "wide vs narrow" rationale needs an update');
+});
+
+// The oracle's node version must not flip the map by itself. buffer.SlowBuffer is the measured case:
+// node 24 exports it, node 26 does not, and the shim has it only through its ext-dep (feross
+// buffer). With the closure installed, both oracles agree there is no gap; it is only a shim
+// WITHOUT the closure (buffer-lite) whose gap appears under 24 and hides under 26, which is why
+// inputs() refuses to measure that shim.
+test('shim surface: a version-only node export does not flip the map when the shim is measured as shipped', () => {
+  const scope = refs.buildScope([{ id: 'm', src: 'import{SlowBuffer as q,Buffer as b}from"buffer";q(1);b.from("x");' }], ['buffer']);
+  const node24 = { buffer: { ok: true, surface: { Buffer: 1, SlowBuffer: 1 } } };
+  const node26 = { buffer: { ok: true, surface: { Buffer: 1 } } };
+  const shipped = { buffer: { ok: true, surface: { Buffer: 1, SlowBuffer: 1 } } };
+  const bare = { buffer: { ok: true, surface: { Buffer: 1 } } };
+  const gaps = (nodeSurface, shimSurface) => collect.layer2Gaps({ nodeSurface, shimSurface, scope }).gaps.map((g) => g.api);
+  assert.deepStrictEqual(gaps(node24, shipped), []);
+  assert.deepStrictEqual(gaps(node26, shipped), []);
+  // the control: the flip is real for a shim without its closure, so the guard below must hold
+  assert.deepStrictEqual(gaps(node24, bare), ['buffer.SlowBuffer']);
+  assert.deepStrictEqual(gaps(node26, bare), []);
+});
+
+test('shim surface: the ext-dep closure is derived from libexec and found where requireExt looks', () => {
+  assert.ok(collect.shimExtDeps().includes('buffer'), 'buffer.cjs takes feross buffer through requireExt');
+  const tmp = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'shim-extdeps-'));
+  try {
+    const repo = path.join(tmp, 'repo');
+    fs.mkdirSync(repo);
+    assert.deepStrictEqual(collect.missingExtDeps({ env: {}, repo, deps: ['buffer'] }), ['buffer']);
+    const np = path.join(tmp, 'np');
+    fs.mkdirSync(path.join(np, 'buffer'), { recursive: true });
+    fs.writeFileSync(path.join(np, 'buffer', 'package.json'), '{}');
+    assert.deepStrictEqual(collect.missingExtDeps({ env: { NODE_PATH: np }, repo, deps: ['buffer'] }), []);
+    fs.mkdirSync(path.join(repo, 'deps', 'claude', 'node_modules', 'buffer'), { recursive: true });
+    fs.writeFileSync(path.join(repo, 'deps', 'claude', 'node_modules', 'buffer', 'package.json'), '{}');
+    assert.deepStrictEqual(collect.missingExtDeps({ env: {}, repo, deps: ['buffer'] }), []);
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
 });
