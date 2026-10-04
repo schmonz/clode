@@ -841,11 +841,18 @@ function strerrorText(text) {
 // --no-ignore, -. for --hidden, --include/--exclude for --glob), `-l` over an empty pattern so a file
 // is listed whatever it holds (an EMPTY file is not, and has no line rg could match), with no -I: a
 // binary is rg's decision (RG-BINARY-QUIT-FIRST-READ), not ugrep's.
+// rg's --glob as today's translation hands it to ugrep (`!G` -> --exclude=G, else --include=G), stated
+// ONCE: bun-shim's rgToUgrep spells its --glob with it too. NOT rg's dialect: ugrep's --exclude matches
+// FILES by name, so a deny glob naming a directory (`--glob '!private'`, `--iglob '!/private'`, the
+// shape a Read-deny rule takes without its /**) excludes nothing that rg excludes. Task 9's walk.
+function ugrepGlobArg(kind, g) {
+  return kind === 'iglob' ? `--iglob=${g}` : g[0] === '!' ? `--exclude=${g.slice(1)}` : `--include=${g}`;
+}
 function walkArgv(spec, P) {
   const a = ['-r'];
   if (!spec.noIgnore) a.push('--ignore-files');
   if (spec.hidden) a.push('-.');
-  for (const [k, g] of spec.globs) a.push(k === 'iglob' ? `--iglob=${g}` : g[0] === '!' ? `--exclude=${g.slice(1)}` : `--include=${g}`);
+  for (const [k, g] of spec.globs) a.push(ugrepGlobArg(k, g));
   return [...a, '-l', '--null', '-e', '', '--', spellForUgrep(P)];
 }
 // ugrep's listing of target P as [{ disp, file }] and rg's errors. ugrep prints `.`'s files bare and
@@ -1467,4 +1474,4 @@ function rgExecFileSync(r, opts, file, args) {
 
 module.exports = { isRgExe, rgRefusal, parseRgRefusal, untranslatableReason, runRg, rgSpawn, rgExecFile, rgSpawnSync, rgExecFileSync, RG_MAX_BUFFER,
   UGREP_MIN, parseUgrepVersion, versionAtLeast, ugrepCapabilities, ugrepCapabilitiesAsync, ugrepMatchArgv, chunkFiles, parseUgrepRanges,
-  ugrepMatches, ugrepMatchesAsync, matchFilesAlone, parseRgSearch, UgrepError, rgText };
+  ugrepMatches, ugrepMatchesAsync, matchFilesAlone, parseRgSearch, ugrepGlobArg, UgrepError, rgText };

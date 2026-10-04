@@ -391,7 +391,7 @@ const _RG_DENY_LONG = new Set(['--json', '--files', '--vimgrep', '--stats', '--t
 const _RG_VALUE_SHORT = new Set(['A', 'B', 'C', 'm', 'e', 'f']);
 function _pushGlob(tail, g) {
   if (g == null) throw new RgTranslateError('--glob (missing value)');
-  tail.push(g[0] === '!' ? '--exclude=' + g.slice(1) : '--include=' + g);
+  tail.push(_rgNative.ugrepGlobArg('glob', g));
 }
 function rgToUgrep(argv) {
   const tail = [], pos = [];
