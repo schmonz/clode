@@ -9,6 +9,7 @@ const bun = require('../libexec/bun-shim.cjs');
 const { _rgTranslate } = bun;
 const { tjsPath, runLoader } = require('./node-shim-helper.cjs');
 const { defineGuard, guardTests } = require('./guard.cjs');
+const { writeFakeUgrep } = require('./rg-fake-ugrep.cjs');
 
 const REPO = path.resolve(__dirname, '..');
 const SHIM = path.join(REPO, 'libexec', 'bun-shim.cjs');
@@ -73,7 +74,8 @@ test('rg spawn.sync: ugrep usage error (exit >=2) surfaces a clode diagnostic + 
   const origErr = process.stderr.write; let buf = '';
   process.stderr.write = (s) => { buf += s; return true; };
   try {
-    bun.spawnSync(['rg', '--surface-unique-xyz', 'foo']);
+    // rg --files still goes through today's translation (the plan's Task 10 takes it over)
+    bun.spawnSync(['rg', '--files', '--glob', 'surface-unique-xyz', '.']);
   } finally {
     process.stderr.write = origErr;
     if (prev === undefined) delete process.env.CLODE_UGREP; else process.env.CLODE_UGREP = prev;
@@ -90,7 +92,7 @@ test('rg spawn.sync: ugrep exit 1 (no match) does NOT surface', posixExec, () =>
   const prev = process.env.CLODE_UGREP; process.env.CLODE_UGREP = ugrep;
   const origErr = process.stderr.write; let buf = '';
   process.stderr.write = (s) => { buf += s; return true; };
-  try { bun.spawnSync(['rg', '--nomatch-unique-xyz', 'foo']); }
+  try { bun.spawnSync(['rg', '--files', '--glob', 'nomatch-unique-xyz', '.']); }
   finally {
     process.stderr.write = origErr;
     if (prev === undefined) delete process.env.CLODE_UGREP; else process.env.CLODE_UGREP = prev;
@@ -132,12 +134,14 @@ test('_rgTranslate: CLODE_RG_DEBUG logs the rewrite; unset is silent', () => {
 //
 // The probe runs every surface with the rg spelled three ways: an ABSOLUTE host rg (what
 // Bun.which returns), a bare `rg` with that host rg first on PATH, and a Windows-style
-// `rg.exe` leaf. The stand-in ugrep prints UGREP plus its argv; the stand-in host rg prints
-// HOST-RG-CALLED. Each answer must be the stand-in ugrep's, and none the host's.
+// `rg.exe` leaf. The stand-in host rg prints HOST-RG-CALLED; ugrep is test/rg-fake-ugrep.cjs (a
+// stand-in that answers quaude's rg as ugrep 7.8.2 does), and the search is `rg -n needle tree`
+// over one file, so each answer must be rg's own (`tree/a.txt:1:x needle`), and none the host's.
 const SURFACES = ['execFile', 'execFileSync', 'spawn', 'spawnSync', 'Bun.spawn', 'Bun.spawnSync'];
 
 function surfacesProbe(rgs, args) {
   return `
+    process.chdir(__dirname);   // the engine's loader is not handed a cwd (node-shim-helper runLoader)
     const Bun = require(${JSON.stringify(SHIM)});
     const cp = require('child_process');
     const RGS = ${JSON.stringify(rgs)};
@@ -187,8 +191,9 @@ function stubs({ hostRgOnly = false } = {}) {
   const hostRg = path.join(bin, 'rg');
   fs.writeFileSync(hostRg, '#!/bin/sh\necho HOST-RG-CALLED "$@"\n', { mode: 0o755 });
   fs.writeFileSync(path.join(bin, 'rg.exe'), '#!/bin/sh\necho HOST-RG-CALLED "$@"\n', { mode: 0o755 });
-  const ugrep = path.join(dir, 'ugrep');
-  fs.writeFileSync(ugrep, '#!/bin/sh\nprintf UGREP; printf " %s" "$@"; printf "\\n"\n', { mode: 0o755 });
+  const ugrep = writeFakeUgrep(dir);
+  fs.mkdirSync(path.join(dir, 'tree'));
+  fs.writeFileSync(path.join(dir, 'tree', 'a.txt'), 'x needle\n');
   const env = { ...process.env, PATH: hostRgOnly ? bin : `${bin}${path.delimiter}${process.env.PATH}`,
     CLODE_UGREP: hostRgOnly ? '' : ugrep, CLODE_BFS: '' };
   delete env.CLODE_RG_DEBUG;
@@ -204,8 +209,8 @@ function parseProbe(r) {
 // THE GATE, as two guards (one per engine): read() runs the probe, scan() judges each
 // (rg spelling, surface) pair, so `examined` is the 18 pairs and a pair the probe never
 // answered is a finding, not a silent pass. The verdict on one pair: the host rg must not
-// have run, and the answer must be exactly the stand-in ugrep's (rc 0, its argv).
-const UGREP_ANSWER = /^UGREP -r --ignore-files -I -n needle \.\n$/;
+// have run, and the answer must be exactly quaude's rg's (rc 0, native's line for that file).
+const UGREP_ANSWER = /^tree\/a\.txt:1:x needle\n$/;
 const SURFACE_PAIRS = 3 * SURFACES.length;
 
 function scanSurfaces({ got, rgs, engine }) {
@@ -232,7 +237,7 @@ function controlSurfaces() {
   const got = {};
   for (const rg of rgs) {
     got[rg] = {};
-    for (const s of SURFACES) got[rg][s] = { status: 0, out: 'UGREP -r --ignore-files -I -n needle .\n', err: '' };
+    for (const s of SURFACES) got[rg][s] = { status: 0, out: 'tree/a.txt:1:x needle\n', err: '' };
   }
   got[rgs[0]].execFile = { status: 0, out: 'HOST-RG-CALLED -n needle .\n', err: '' };
   return { got, rgs, engine: 'a synthetic control' };
@@ -242,7 +247,7 @@ function readSurfaces(run, engine) {
   const s = stubs();
   try {
     const prog = path.join(s.dir, 'probe.cjs');
-    fs.writeFileSync(prog, surfacesProbe(s.rgs, ['-n', 'needle', '.']));
+    fs.writeFileSync(prog, surfacesProbe(s.rgs, ['-n', 'needle', 'tree']));
     const r = run(prog, s);
     const line = (r.stdout || '').split('\n').find((l) => l.startsWith('PROBE:'));
     if (!line) throw new Error(`the ${engine} probe printed no result (exit ${r.status}):\n${(r.stderr || '').slice(0, 1500)}`);
@@ -306,23 +311,25 @@ test('no ugrep on this host: every rg is refused naming ugrep, and the host rg s
   fs.rmSync(s.dir, { recursive: true, force: true });
 });
 
-// ugrep rejecting a translated search (rc >= 2, nothing printed) is a refusal too: the
-// Grep tool always passes `--max-columns 500`, which ugrep rejects, and before this the
-// model read that rc 2 as "No files found" in every files and count call (report-grep.md).
+// ugrep rejecting a translated call (rc >= 2, nothing printed) is a refusal too: the Grep
+// tool's `--max-columns 500` made ugrep do exactly that, and the model read the rc 2 as "No
+// files found" in every files and count call (report-grep.md). A search is quaude's rg's own now
+// (--max-columns: RG-MAX-COLUMNS, test/rg-native.test.cjs); `rg --files` still goes through the
+// translation until the plan's Task 10, so it carries the claim.
 test('ugrep rejecting the translation reaches the caller as a refusal naming what ugrep said', posixExec, () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-rejected-'));
   const ugrep = path.join(dir, 'ugrep');
-  fs.writeFileSync(ugrep, '#!/bin/sh\necho "ugrep: invalid option --max-columns" >&2\nexit 2\n', { mode: 0o755 });
+  fs.writeFileSync(ugrep, '#!/bin/sh\necho "ugrep: invalid option --frobnicate" >&2\nexit 2\n', { mode: 0o755 });
   const prev = process.env.CLODE_UGREP; process.env.CLODE_UGREP = ugrep;
   const origErr = process.stderr.write;
   process.stderr.write = () => true;
   let r;
-  try { r = cp.spawnSync('rg', ['--max-columns', '500', '-l', 'needle', '.'], { encoding: 'utf8' }); }
+  try { r = cp.spawnSync('rg', ['--files', '--glob', 'rejected-unique', '.'], { encoding: 'utf8' }); }
   finally {
     process.stderr.write = origErr;
     if (prev === undefined) delete process.env.CLODE_UGREP; else process.env.CLODE_UGREP = prev;
   }
-  assertRefused({ status: r.status, out: r.stdout, err: r.stderr }, 'spawnSync(rg)', 'invalid option --max-columns');
+  assertRefused({ status: r.status, out: r.stdout, err: r.stderr }, 'spawnSync(rg)', 'invalid option --frobnicate');
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -347,53 +354,65 @@ test('rgRefusal: rc 2, nothing on stdout, the flag and reason on stderr; parseRg
 // "output passed the limit" (any kill it reads as "timed out after 20 seconds"). A search run
 // synchronously inside the shim (as quaude's rg first did) honours none of them.
 //
-// The stand-in ugrep is SLOW (it sleeps); each bound must end it in well under the sleep,
-// and a 20 ms interval must keep ticking meanwhile. A second stand-in echoes its stdin, for
-// the target `-` the bundle uses for a task-output file (it pipes the file into the child's
-// stdin), and a third prints more than a small maxBuffer.
+// BOTH ROUTES are held to it: a SEARCH, which quaude's rg answers itself over ugrep children
+// (`rg needle tree`: the fake ugrep, test/rg-fake-ugrep.cjs, sleeping in its walk), and what still
+// goes through today's translation to an applet (`rg --files .`: a stand-in that sleeps). Each bound
+// must end the search in well under the sleep, and a 20 ms interval must keep ticking meanwhile.
+// Target `-` (the bundle pipes a task-output file into rg's stdin) is a search: what the caller
+// writes reaches it, and rg's answer for it comes back. A third stand-in, and a big tree, print more
+// than a small maxBuffer.
 const SLOW_S = 6;
+const ROUTES = { search: ['needle', 'tree'], translated: ['--files', '.'] };
+const BIG_ARGS = { search: ['needle', 'big'], translated: ['--files', '.'] };
 function asyncProbe() {
   return `
+    process.chdir(__dirname);   // the engine's loader is not handed a cwd (node-shim-helper runLoader)
     const Bun = require(${JSON.stringify(SHIM)});
     const cp = require('child_process');
     const txt = (b) => (b == null ? '' : Buffer.isBuffer(b) ? b.toString('utf8') : String(b));
     const out = {};
     let ticks = 0; const iv = setInterval(() => { ticks++; }, 20);
     const timed = async (name, f) => { const t0 = Date.now(), k0 = ticks; const r = await f(); out[name] = { ...r, ms: Date.now() - t0, ticks: ticks - k0 }; };
-    // The translation picks its applet from THIS process's CLODE_UGREP when the call is made.
+    // quaude's rg picks its ugrep from THIS process's CLODE_UGREP when the call is made.
     const env = (u) => { process.env.CLODE_UGREP = u; return process.env; };
+    const ROUTES = ${JSON.stringify(ROUTES)}, BIG_ARGS = ${JSON.stringify(BIG_ARGS)};
+    const slowUgrep = { search: process.env.FAKE, translated: process.env.SLOW };
+    const bigUgrep = { search: process.env.FAKE, translated: process.env.BIG };
     (async () => {
-      await timed('execFile+AbortSignal', () => new Promise((res) => {
-        const ac = new AbortController(); setTimeout(() => ac.abort(), 300);
-        cp.execFile('rg', ['needle', '.'], { env: env(process.env.SLOW), signal: ac.signal },
-          (err) => res({ name: err && err.name, code: err && err.code }));
-      }));
-      await timed('execFile+timeout', () => new Promise((res) => {
-        cp.execFile('rg', ['needle', '.'], { env: env(process.env.SLOW), timeout: 300, killSignal: 'SIGKILL' },
-          (err) => res({ killed: err && err.killed, signal: err && err.signal }));
-      }));
-      await timed('spawn+kill', () => new Promise((res) => {
-        const c = cp.spawn('rg', ['needle', '.'], { env: env(process.env.SLOW) });
-        setTimeout(() => c.kill('SIGKILL'), 300);
-        c.on('close', (code, signal) => res({ code, signal }));
-      }));
-      await timed('Bun.spawn+kill', async () => {
-        env(process.env.SLOW);
-        const b = Bun.spawn(['rg', 'needle', '.']);
-        setTimeout(() => b.kill('SIGKILL'), 300);
-        return { exited: await b.exited };
-      });
+      for (const route of ['search', 'translated']) {
+        const A = ROUTES[route], U = slowUgrep[route];
+        process.env.FAKE_UGREP_SLOW_MS = String(${SLOW_S * 1000});
+        await timed(route + ' execFile+AbortSignal', () => new Promise((res) => {
+          const ac = new AbortController(); setTimeout(() => ac.abort(), 300);
+          cp.execFile('rg', A, { env: env(U), signal: ac.signal }, (err) => res({ name: err && err.name, code: err && err.code }));
+        }));
+        await timed(route + ' execFile+timeout', () => new Promise((res) => {
+          cp.execFile('rg', A, { env: env(U), timeout: 300, killSignal: 'SIGKILL' }, (err) => res({ killed: err && err.killed, signal: err && err.signal }));
+        }));
+        await timed(route + ' spawn+kill', () => new Promise((res) => {
+          const c = cp.spawn('rg', A, { env: env(U) });
+          setTimeout(() => c.kill('SIGKILL'), 300);
+          c.on('close', (code, signal) => res({ code, signal }));
+        }));
+        await timed(route + ' Bun.spawn+kill', async () => {
+          env(U);
+          const b = Bun.spawn(['rg', ...A]);
+          setTimeout(() => b.kill('SIGKILL'), 300);
+          return { exited: await b.exited };
+        });
+        delete process.env.FAKE_UGREP_SLOW_MS;
+        await timed(route + ' execFile maxBuffer', () => new Promise((res) => {
+          cp.execFile('rg', BIG_ARGS[route], { env: env(bigUgrep[route]), maxBuffer: 1000 },
+            (err, so) => res({ code: err && err.code, message: err && err.message, len: txt(so).length }));
+        }));
+      }
       await timed('execFile stdin', () => new Promise((res) => {
-        const c = cp.execFile('rg', ['-n', 'needle', '-'], { env: env(process.env.CAT) },
+        const c = cp.execFile('rg', ['-n', 'needle', '-'], { env: env(process.env.FAKE) },
           (err, so) => res({ err: err && err.message, out: txt(so) }));
         c.stdin.end('piped needle\\n');
       }));
-      const s = cp.spawnSync('rg', ['-n', 'needle', '-'], { env: env(process.env.CAT), input: 'sync needle\\n' });
+      const s = cp.spawnSync('rg', ['-n', 'needle', '-'], { env: env(process.env.FAKE), input: 'sync needle\\n' });
       out['spawnSync input'] = { out: txt(s.stdout) };
-      await timed('execFile maxBuffer', () => new Promise((res) => {
-        cp.execFile('rg', ['needle', '.'], { env: env(process.env.BIG), maxBuffer: 1000 },
-          (err, so) => res({ code: err && err.code, message: err && err.message, len: txt(so).length }));
-      }));
       clearInterval(iv);
       process.stdout.write('PROBE:' + JSON.stringify(out) + '\\n');
     })();
@@ -403,25 +422,32 @@ function asyncProbe() {
 function asyncStubs() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-async-'));
   const w = (n, body) => { const p = path.join(dir, n); fs.writeFileSync(p, `#!/bin/sh\n${body}\n`, { mode: 0o755 }); return p; };
-  return { dir, env: { ...process.env, SLOW: w('slow-ugrep', `exec sleep ${SLOW_S}`),
-    CAT: w('cat-ugrep', 'printf "STDIN:"; exec cat'), BIG: w('big-ugrep', 'i=0; while [ $i -lt 2000 ]; do echo "aaaaaaaaaaaaaaaaaaaa needle"; i=$((i+1)); done') } };
+  fs.mkdirSync(path.join(dir, 'tree'));
+  fs.writeFileSync(path.join(dir, 'tree', 'a.txt'), 'x needle\n');
+  fs.mkdirSync(path.join(dir, 'big'));
+  fs.writeFileSync(path.join(dir, 'big', 'b.txt'), 'aaaaaaaaaaaaaaaaaaaa needle\n'.repeat(2000));
+  return { dir, env: { ...process.env, SLOW: w('slow-ugrep', `exec sleep ${SLOW_S}`), FAKE: writeFakeUgrep(dir, 'fake-ugrep'),
+    BIG: w('big-ugrep', 'i=0; while [ $i -lt 2000 ]; do echo "aaaaaaaaaaaaaaaaaaaa needle"; i=$((i+1)); done') } };
 }
 
 function assertAsyncSurfaces(got) {
   const quick = SLOW_S * 1000 / 2;
-  for (const k of ['execFile+AbortSignal', 'execFile+timeout', 'spawn+kill', 'Bun.spawn+kill']) {
-    const a = got[k];
-    assert.ok(a, `${k}: no answer`);
-    assert.ok(a.ms < quick, `${k}: the bound did not end the search (${a.ms} ms; the stand-in sleeps ${SLOW_S} s): ${JSON.stringify(a)}`);
-    assert.ok(a.ticks >= 5, `${k}: the event loop did not turn while rg ran (${a.ticks} ticks in ${a.ms} ms)`);
+  for (const route of ['search', 'translated']) {
+    for (const k of ['execFile+AbortSignal', 'execFile+timeout', 'spawn+kill', 'Bun.spawn+kill'].map((x) => `${route} ${x}`)) {
+      const a = got[k];
+      assert.ok(a, `${k}: no answer`);
+      assert.ok(a.ms < quick, `${k}: the bound did not end the search (${a.ms} ms; the stand-in sleeps ${SLOW_S} s): ${JSON.stringify(a)}`);
+      assert.ok(a.ticks >= 5, `${k}: the event loop did not turn while rg ran (${a.ticks} ticks in ${a.ms} ms)`);
+    }
+    assert.strictEqual(got[`${route} execFile+AbortSignal`].name, 'AbortError');
+    assert.strictEqual(got[`${route} execFile+timeout`].killed, true);
+    assert.strictEqual(got[`${route} execFile+timeout`].signal, 'SIGKILL');
+    assert.strictEqual(got[`${route} spawn+kill`].signal, 'SIGKILL');
+    assert.strictEqual(got[`${route} execFile maxBuffer`].code, 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER', JSON.stringify(got[`${route} execFile maxBuffer`]));
   }
-  assert.strictEqual(got['execFile+AbortSignal'].name, 'AbortError');
-  assert.strictEqual(got['execFile+timeout'].killed, true);
-  assert.strictEqual(got['execFile+timeout'].signal, 'SIGKILL');
-  assert.strictEqual(got['spawn+kill'].signal, 'SIGKILL');
-  assert.strictEqual(got['execFile stdin'].out, 'STDIN:piped needle\n', 'what the caller wrote to stdin must reach the search');
-  assert.strictEqual(got['spawnSync input'].out, 'STDIN:sync needle\n', 'spawnSync input must reach the search');
-  assert.strictEqual(got['execFile maxBuffer'].code, 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER', JSON.stringify(got['execFile maxBuffer']));
+  // native 2.1.283's embedded rg, for these two (rg -n needle -, one line piped in)
+  assert.strictEqual(got['execFile stdin'].out, '1:piped needle\n', 'what the caller wrote to stdin must be what rg searched');
+  assert.strictEqual(got['spawnSync input'].out, '1:sync needle\n', 'spawnSync input must be what rg searched');
 }
 
 test('the async rg surfaces do not block the loop, and abort/kill/timeout/maxBuffer/stdin behave as node (node)', posixExec, () => {
@@ -457,6 +483,7 @@ test('the async rg surfaces do not block the loop, and abort/kill/timeout/maxBuf
 const N_CALLS = 15;
 function bookkeepingProbe() {
   return `
+    process.chdir(__dirname);   // the engine's loader is not handed a cwd (node-shim-helper runLoader)
     const Bun = require(${JSON.stringify(SHIM)});
     const cp = require('child_process');
     const { rgSpawn, parseRgRefusal } = require(${JSON.stringify(path.join(REPO, 'libexec', 'rg-native.cjs'))});
@@ -473,7 +500,7 @@ function bookkeepingProbe() {
       sig.removeEventListener = (t, f, o) => { if (t === 'abort') held.delete(f); return rm(t, f, o); };
       const run = (args) => new Promise((res) => cp.execFile('rg', args, { signal: sig, maxBuffer: 20000000 }, (err, so) => res({ err: err && err.code, so })));
       const answers = [];
-      for (let i = 0; i < ${N_CALLS}; i++) answers.push(await run(['needle', '.']));
+      for (let i = 0; i < ${N_CALLS}; i++) answers.push(await run(['needle', 'tree']));
       for (let i = 0; i < 3; i++) answers.push(await run(['--json', 'needle', '.']));   // refused: no process
       await tick();
       out.n1 = { calls: answers.length, listeners: held.size, answered: answers.filter((a) => /needle/.test(String(a.so))).length };
@@ -482,7 +509,7 @@ function bookkeepingProbe() {
       applet.stdout = new Readable({ read() {} }); applet.stderr = new Readable({ read() {} });
       applet.stdin = null; applet.pid = 4242;
       let gone = false; applet.kill = () => !gone;   // a process that is gone cannot be killed
-      const child = rgSpawn(['needle', '.'], {}, { translate: () => ({ argv: ['ugrep', 'needle', '.'] }), spawn: () => applet });
+      const child = rgSpawn(['--files', '.'], {}, { translate: () => ({ argv: ['ugrep', 'needle', '.'] }), spawn: () => applet });
       let err = '';
       child.stderr.on('data', (d) => { err += d; });
       const closed = new Promise((res) => child.on('close', (code, signal) => res({ code, signal })));
@@ -497,7 +524,7 @@ function bookkeepingProbe() {
       const live = new EventEmitter();
       live.stdout = new Readable({ read() {} }); live.stderr = new Readable({ read() {} }); live.stdin = null; live.pid = 4243;
       live.kill = (s) => { setTimeout(() => { live.stdout.push(null); live.stderr.push(null); live.emit('exit', null, s); live.emit('close', null, s); }, 0); return true; };
-      const c2 = rgSpawn(['needle', '.'], {}, { translate: () => ({ argv: ['ugrep', 'needle', '.'] }), spawn: () => live });
+      const c2 = rgSpawn(['--files', '.'], {}, { translate: () => ({ argv: ['ugrep', 'needle', '.'] }), spawn: () => live });
       c2.stdout.resume(); c2.stderr.resume();
       const closed2 = new Promise((res) => c2.on('close', (code, signal) => res({ code, signal })));
       const killRet2 = c2.kill('SIGKILL');
@@ -508,8 +535,11 @@ function bookkeepingProbe() {
 }
 function bookkeepingStubs() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-book-'));
-  const fast = path.join(dir, 'fast-ugrep');
-  fs.writeFileSync(fast, '#!/bin/sh\necho "a.txt:1:needle"\n', { mode: 0o755 });
+  // N1 searches (quaude's rg over the fake ugrep); N2 drives the translation's applet child, which
+  // `rg --files` still takes (its stand-in applets are the probe's own).
+  const fast = writeFakeUgrep(dir, 'fast-ugrep');
+  fs.mkdirSync(path.join(dir, 'tree'));
+  fs.writeFileSync(path.join(dir, 'tree', 'a.txt'), 'x needle\n');
   const prog = path.join(dir, 'probe.cjs');
   fs.writeFileSync(prog, bookkeepingProbe());
   return { dir, prog, env: { ...process.env, FAST: fast } };
@@ -560,4 +590,27 @@ test('isRgExe: rg by basename, with any PATHEXT extension, either separator, a d
   for (const f of ['', 'rgx', 'xrg', '/a/rg/x', 'rg.sh', 'rg.exe.bak', 'C:\\rg\\ugrep.exe', 'rg.', null, undefined, 7]) {
     assert.strictEqual(isRgExe(f), false, String(f));
   }
+});
+
+// CLODE_RG_DEBUG: one parseable line per rg call (scripts/rg-inventory.mjs reads them), for the calls
+// quaude's rg answers itself too: `=> quaude's rg over <ugrep>`, or `!! untranslatable <flag>`.
+test('CLODE_RG_DEBUG: a search quaude\'s rg answers, and one it refuses, each print the parseable line', posixExec, () => {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'rg-debug-')));
+  const ugrep = writeFakeUgrep(dir);
+  fs.writeFileSync(path.join(dir, 'a.txt'), 'needle\n');
+  const prev = { u: process.env.CLODE_UGREP, d: process.env.CLODE_RG_DEBUG };
+  process.env.CLODE_UGREP = ugrep; process.env.CLODE_RG_DEBUG = '1';
+  const origErr = process.stderr.write; let buf = '';
+  process.stderr.write = (s) => { buf += s; return true; };
+  try {
+    bun.spawnSync(['rg', '-l', 'needle', dir]);
+    bun.spawnSync(['rg', '-U', 'needle', dir]);
+  } finally {
+    process.stderr.write = origErr;
+    for (const [k, v] of [['CLODE_UGREP', prev.u], ['CLODE_RG_DEBUG', prev.d]]) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+  // the shape rg-inventory.mjs parses: /^clode rg-debug: (rg .*?) (?:=>|!! needs (\S+)|!! untranslatable (\S+))(?:\s|$)/
+  assert.ok(buf.split('\n').includes(`clode rg-debug: rg -l needle ${dir} => quaude's rg over ${ugrep}`), buf);
+  assert.ok(buf.split('\n').includes(`clode rg-debug: rg -U needle ${dir} !! untranslatable -U`), buf);
 });

@@ -134,35 +134,32 @@ test('both spawn routes translate rg identically (child_process and Bun.spawn)',
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-// The same claim for the ugrep/search branch — the one the original ENOENT was
-// found in (`rg --version` at startup). Its translation puts FLAGS first, so the
-// node-as-applet fixture above cannot carry it and a shell-script stand-in is the
-// only stand-in available. Windows cannot execute one: it has no shebang and no
-// executable bit, and libuv never even hands an extensionless path to
-// CreateProcess (see the note above). So this row skips there — and ONLY there,
-// on that one named ground. The ROUTE-IDENTITY claim itself is still
-// asserted on Windows by the row above; what is untestable there is only this
-// second branch's stand-in, not the claim.
-test('both spawn routes translate an rg SEARCH identically', {
+// The same claim for a SEARCH, the call the original ENOENT was found in. A search is no longer
+// translated: quaude's rg answers it itself over ugrep (libexec/rg-native.cjs, grep-native Task 6),
+// so the claim is that both routes ANSWER it, identically and as rg does. ugrep is the stand-in
+// test/rg-fake-ugrep.cjs (a shebang script), which Windows cannot execute: libuv never hands an
+// extensionless path to CreateProcess (see the note above). So this row skips there, and ONLY
+// there, on that one named ground; the ROUTE-IDENTITY claim itself is still asserted on Windows by
+// the row above.
+test('both spawn routes answer an rg SEARCH identically, as rg does', {
   skip: process.platform === 'win32'
     ? 'needs an executable shebang ugrep stand-in; libuv only execs .com/.exe'
     : false,
 }, () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-routes-search-'));
-  // A stand-in ugrep that just reports the argv it was handed.
-  const ugrep = path.join(dir, 'ugrep');
-  fs.writeFileSync(ugrep, '#!/bin/sh\nprintf "%s\\n" "$@"\n');
-  fs.chmodSync(ugrep, 0o755);
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'rg-routes-search-')));
+  const ugrep = require('./rg-fake-ugrep.cjs').writeFakeUgrep(dir);
+  const src = path.join(dir, 'src');
+  fs.mkdirSync(src);
+  fs.writeFileSync(path.join(src, 'x.txt'), 'one\ntwo needle\n');
 
-  const got = runRoutes(dir, ['-n', 'needle', 'src'], { ...process.env, CLODE_UGREP: ugrep });
+  const got = runRoutes(dir, ['-n', 'needle', src], { ...process.env, CLODE_UGREP: ugrep });
 
   assert.strictEqual(got.cpErr, null,
     'child_process spawn of rg must not fail — before the fix this was ENOENT');
-  assert.ok(got.cp.length > 0, `child_process route produced no argv: ${JSON.stringify(got)}`);
-  assert.deepStrictEqual(got.cp, got.bun,
-    'the two spawn routes must hand ugrep the SAME argv');
-  assert.deepStrictEqual(got.cp, ['-r', '--ignore-files', '-I', '-n', 'needle', 'src'],
-    'the stand-in was handed something other than the translated rg argv');
+  assert.ok(got.cp.length > 0, `child_process route produced nothing: ${JSON.stringify(got)}`);
+  assert.deepStrictEqual(got.cp, got.bun, 'the two spawn routes must answer the SAME');
+  // native 2.1.283's embedded rg, for `rg -n needle <dir>` over that one file
+  assert.deepStrictEqual(got.cp, [`${src}/x.txt:2:two needle`]);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 

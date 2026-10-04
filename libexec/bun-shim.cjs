@@ -218,9 +218,17 @@ const _rgNative = require(__dirname + '/rg-native.cjs');
 // the wrapping below (as _rawSpawnSync is for the synchronous ones).
 const _rawSpawn = cp.spawn;
 
-// How quaude's rg reaches today's translation (_rgTranslate, below) and the applets, plus the
-// operator-side surfacing the translation has always had when an applet rejects it.
-const _rgCtx = { translate: (a) => _rgTranslate(a), spawn: _rawSpawn, onRejected: (argv, st) => _surfaceRgSkew(argv, st) };
+// How quaude's rg reaches the applets: the ugrep it searches with (resolved per call, as the
+// translation resolves it), the unwrapped spawns, today's translation (_rgTranslate, below) for what
+// the emulation does not answer yet, the refusal when this host has no ugrep, the operator-side
+// surfacing when an applet rejects a search, and the CLODE_RG_DEBUG line every call gets.
+const _rgCtx = {
+  translate: (a) => _rgTranslate(a), spawn: _rawSpawn, spawnSync: _rawSpawnSync,
+  ugrep: () => process.env.CLODE_UGREP || which('ugrep'),
+  missing: () => _rgNative.rgRefusal(_rgAppletMissing(null, 'ugrep', { debug: false }).refuse),
+  debug: (args, verdict) => _rgDebug(['rg', ...args], verdict),
+  onRejected: (argv, st) => _surfaceRgSkew(argv, st),
+};
 
 // A child_process call whose file is rg, in the shape that surface returns. execFile and spawn
 // (and Bun.spawn, built on spawn) run the applet ASYNCHRONOUSLY: the event loop keeps turning
@@ -236,9 +244,8 @@ function _rgCall(method, file, args, rest) {
   const opts = (rest[0] && typeof rest[0] === 'object') ? rest[0] : {};
   if (method === 'spawn') return _rgNative.rgSpawn(args, opts, _rgCtx);
   const r = _rgNative.runRg(args, {
-    cwd: opts.cwd, env: opts.env || process.env, input: opts.input, timeout: opts.timeout,
+    ..._rgCtx, cwd: opts.cwd, env: opts.env || process.env, input: opts.input, timeout: opts.timeout,
     maxBuffer: opts.maxBuffer, killSignal: opts.killSignal,
-    translate: _rgCtx.translate, spawnSync: _rawSpawnSync, onRejected: _rgCtx.onRejected,
   });
   if (method === 'spawnSync') return _rgNative.rgSpawnSync(r, opts);
   return _rgNative.rgExecFileSync(r, opts, file, args);
@@ -803,11 +810,11 @@ hash.wyhash = hash; hash.crc32 = (b)=>{ const z=require('zlib'); return z.crc32 
 // that cannot resolve. The unresolvable argv this used to return made the bundle's own
 // not-found fallback tell the MODEL "ripgrep not found on PATH. Install it ...", which is
 // the one remedy quaude refuses on purpose.
-function _rgAppletMissing(cmd, applet) {
+function _rgAppletMissing(cmd, applet, { debug = true } = {}) {
   process.stderr.write(
     `clode: rg needs '${applet}' (set CLODE_${applet.toUpperCase()} or install it); `
     + 'not falling back to a host rg — quaude translates rg to portable applets on purpose\n');
-  _rgDebug(cmd, `!! needs ${applet}`);
+  if (debug) _rgDebug(cmd, `!! needs ${applet}`);
   return { refuse: `quaude answers rg with ${applet}, on purpose, and this host has no ${applet} `
     + `(set CLODE_${applet.toUpperCase()} or install ${applet}); nothing was searched` };
 }
@@ -816,9 +823,7 @@ function _rgAppletMissing(cmd, applet) {
 function _rgUntranslatable(cmd, e) {
   process.stderr.write(e.message + '\n');
   _rgDebug(cmd, `!! untranslatable ${e.flag}`);
-  return { flag: e.flag, refuse: `quaude answers rg with its own emulation over ugrep, on purpose, `
-    + `and it cannot yet give ${e.flag} the answer native's rg gives, so it refuses rather than `
-    + 'answer differently; nothing was searched' };
+  return { flag: e.flag, refuse: _rgNative.untranslatableReason(e.flag) };
 }
 
 // ONE parseable line per rg call the shim sees, whatever the outcome:

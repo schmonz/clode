@@ -15,7 +15,7 @@ const os = require('node:os');
 const path = require('node:path');
 const cp = require('node:child_process');
 const rgn = require('../libexec/rg-native.cjs');
-const { makeRgTree } = require('../scripts/lib/rg-probe.cjs');
+const { makeRgTree, normalizeRg } = require('../scripts/lib/rg-probe.cjs');
 const { tjsPath, runLoader } = require('./node-shim-helper.cjs');
 
 // The host ugrep the tests drive (quaude's own resolution: CLODE_UGREP, else PATH).
@@ -558,4 +558,340 @@ test('ugrepMatches and ugrepMatchesAsync under tjs: native\'s ranges', {
     assert.deepStrictEqual(got.asy, want);
     assert.strictEqual(got.caps, true);
   } finally { fs.rmSync(base, { recursive: true, force: true }); }
+});
+
+// ---- Task 6: rg's files, count and standard printers, as native prints them ----------------------
+// runRg (the synchronous surfaces) and rgSpawn/rgExecFile (the asynchronous ones) answer a search
+// THEMSELVES now: the targets walked (a directory is listed by ugrep under today's walk flags until
+// the plan's Task 9 walks in JS), every file's matches from ugrepMatches, stdin's from the matcher
+// alone, and rg's printers over rg's own text of each file (RG-TEXT-BOM). Every literal below is
+// native 2.1.283's embedded rg (ripgrep 14.1.1) on P6_FILES, run in that tree with argv0 rg and
+// --no-config (measured 2026-10-03, this Mac; the measuring script is in the task-6 report).
+//   RG-FILES-NULL              -l prints `path` then \n, or \0 under --null
+//   RG-COUNT-NONZERO           -c prints `[path SEP]N\n` for each file with a selected line, SEP
+//                              `:` or \0 under --null; a file with none prints nothing (-c -o prints
+//                              the 0 of a file selected only by an unprintable match)
+//   RG-COUNT-MATCHES           -c -o counts the matches the printer would print, not lines
+//   RG-WITH-FILENAME           the path is printed unless the search is ONE path that is not a
+//                              directory (a file, or stdin), or -H / --no-filename says otherwise
+//   RG-PATH-SPELLING           a walked file is its target joined as Rust's Path::join joins it
+//                              (`.` gives ./a.txt, `one/` one/only.txt, `one//` one//only.txt);
+//                              a named file as named; stdin `<stdin>`
+//   RG-EXPLICIT-FILE           a NAMED file is searched whatever --glob, --hidden or ignore rules say
+//   RG-STANDARD-LINES          `[path SEP][N SEP]line`, SEP `:` on a matching line and `-` on a
+//                              context line (\0 after the path under --null); the line as rg's
+//                              text holds it, its terminator kept (\r\n too), \n added when it has none
+//   RG-CONTEXT                 -A/-B/-C (C for both, A/B over it), context merged across matches,
+//                              `--` between groups that do not touch and between files
+//   RG-ONLY-MATCHING           -o prints each printable match on its own line; a selected line with
+//                              no printable match prints whole
+//   RG-MAX-COLUMNS             no-op for -l and -c; the standard printer replaces a line whose bytes
+//                              (terminator included) pass N with `[Omitted long matching line]` or
+//                              `[Omitted long context line]`, a -o match by its own bytes; 0 = no limit
+//   RG-RE-MATCH-AT-UNTERMINATED-END  (the printers' half) the matcher's match at the end of an
+//                              unterminated last line selects the line (-l, -c, standard) but is not
+//                              printed (-o) or counted as a match (-c -o)
+//   RG-STDIN                   target `-` searches what the caller piped in, named `<stdin>`
+//   RG-TEXT-BOM                (the printers' half) lines are printed, and measured, from rg's text
+//   RG-EXIT                    0 when something was found, 1 when nothing was, 2 when any path
+//                              failed (its error on stderr, the rest still searched and printed)
+//   RG-ARGV                    -l and -c: the last one given wins; -M/--max-columns/-A/-B/-C take a
+//                              number, else rg's own usage error; `--` ends the flags
+//   RG-BINARY-QUIT-FIRST-READ  (interim, the plan's Task 8 replaces it with rg's LineBuffer) a WALKED
+//                              file whose first 64 KiB of text hold a NUL prints nothing; a named one
+//                              is searched as text
+const u16le = (s) => Buffer.from(s, 'utf16le');
+const P6_FILES = [
+  ['a.txt', 'alpha needle\nbeta\nneedle two needle\n'],
+  ['b.txt', 'no match here\n'],
+  ['ctx.txt', '1 needle\n2\n3\n4\n5 needle\n6\n7\n8\n9\n10 needle\n11\n'],
+  ['long.txt', 'short needle\n' + 'x'.repeat(600) + ' needle ' + 'y'.repeat(10) + '\nafter\n'],
+  ['c2.txt', 'needle\nlong context line here\n'],
+  ['nonl.txt', 'abc\nxyz'],
+  ['crlf.txt', 'one needle\r\ntwo\r\n'],
+  ['bom8.txt', Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from('ab needle\nzz\n')])],
+  ['bom16.txt', Buffer.concat([Buffer.from([0xff, 0xfe]), u16le('ab needle\nzz\n')])],
+  ['latin1.txt', Buffer.concat([Buffer.from('caf'), Buffer.from([0xe9]), Buffer.from(' needle\n')])],
+  ['empty.txt', ''],
+  ['bin.dat', Buffer.concat([Buffer.from('text needle before\n'), Buffer.from([0, 1, 2, 0x0a]), Buffer.from('needle after nul\n')])],
+  ['one/only.txt', 'one needle\n'],
+  ['two/1.txt', 'a needle\nb\n'],
+  ['two/2.txt', 'c\nd needle\n'],
+  ['u1.txt', 'xyz'],
+];
+const X600 = 'x'.repeat(600);
+// What a row pipes into stdin: the bytes this test wrote for that fixture file.
+const P6_INPUT = (name) => (name ? Buffer.from(new Map(P6_FILES).get(name)) : undefined);
+// [rule, argv (<ROOT> is the tree), the file piped to stdin, rc, stdout (latin1), stderr when checked]
+const P6_NATIVE = [
+  ['RG-FILES-NULL', ["-l","needle","a.txt"], null, 0, 'a.txt\n'],
+  ['RG-FILES-NULL', ["-l","--null","needle","a.txt"], null, 0, 'a.txt\x00'],
+  ['RG-EXIT', ["-l","needle","b.txt"], null, 1, ''],
+  ['RG-MAX-COLUMNS', ["-l","--null","--max-columns","5","needle","long.txt"], null, 0, 'long.txt\x00'],
+  ['RG-STDIN', ["-l","--null","needle","-"], "a.txt", 0, '<stdin>\x00'],
+  ['RG-RE-MATCH-AT-UNTERMINATED-END', ["-l","$","nonl.txt"], null, 0, 'nonl.txt\n'],
+  ['RG-PATH-SPELLING', ["-l","--null","needle","./one"], null, 0, './one/only.txt\x00'],
+  ['RG-PATH-SPELLING', ["-l","--null","needle","one/"], null, 0, 'one/only.txt\x00'],
+  ['RG-PATH-SPELLING', ["-l","--null","needle","one//"], null, 0, 'one//only.txt\x00'],
+  ['RG-PATH-SPELLING', ["-l","--null","needle","<ROOT>/one"], null, 0, '<ROOT>/one/only.txt\x00'],
+  ['RG-PATH-SPELLING', ["-l","--null","needle","./a.txt"], null, 0, './a.txt\x00'],
+  ['RG-ARGV', ["-l","-c","needle","a.txt"], null, 0, '2\n'],
+  ['RG-ARGV', ["-c","-l","needle","a.txt"], null, 0, 'a.txt\n'],
+  ['RG-EXPLICIT-FILE', ["-l","--glob","*.js","needle","a.txt"], null, 0, 'a.txt\n'],
+  ['RG-COUNT-NONZERO', ["-c","needle","a.txt"], null, 0, '2\n'],
+  ['RG-COUNT-NONZERO', ["-c","-H","--null","needle","a.txt"], null, 0, 'a.txt\x002\n'],
+  ['RG-COUNT-NONZERO', ["-c","needle","b.txt"], null, 1, ''],
+  ['RG-COUNT-NONZERO', ["-c","-H","--null","needle","b.txt"], null, 1, ''],
+  ['RG-COUNT-MATCHES', ["-c","-o","needle","a.txt"], null, 0, '3\n'],
+  ['RG-RE-MATCH-AT-UNTERMINATED-END', ["-c","$","nonl.txt"], null, 0, '2\n'],
+  ['RG-RE-MATCH-AT-UNTERMINATED-END', ["-c","-o","$","nonl.txt"], null, 0, '1\n'],
+  ['RG-RE-MATCH-AT-UNTERMINATED-END', ["-c","-o","q*","nonl.txt"], null, 0, '7\n'],
+  ['RG-RE-MATCH-AT-UNTERMINATED-END', ["-c","-o","$","u1.txt"], null, 0, '0\n'],
+  ['RG-RE-MATCH-AT-UNTERMINATED-END', ["-c","-o","-H","$","u1.txt"], null, 0, 'u1.txt:0\n'],
+  ['RG-RE-MATCH-AT-UNTERMINATED-END', ["-n","-o","$","u1.txt"], null, 0, '1:xyz\n'],
+  ['RG-MAX-COLUMNS', ["-c","--max-columns","5","needle","long.txt"], null, 0, '2\n'],
+  ['RG-STDIN', ["-c","needle","-"], "a.txt", 0, '2\n'],
+  ['RG-STDIN', ["-c","-H","--null","needle","-"], "a.txt", 0, '<stdin>\x002\n'],
+  ['RG-TEXT-BOM', ["-c","-H","needle","bom16.txt"], null, 0, 'bom16.txt:1\n'],
+  ['RG-COUNT-NONZERO', ["-c","-H","needle","latin1.txt"], null, 0, 'latin1.txt:1\n'],
+  ['RG-COUNT-NONZERO', ["-c","-j1","needle","a.txt","b.txt"], null, 0, 'a.txt:2\n'],
+  ['RG-WITH-FILENAME', ["-c","--null","needle","a.txt"], null, 0, '2\n'],
+  ['RG-COUNT-NONZERO', ["-c","-A","2","needle","a.txt"], null, 0, '2\n'],
+  ['RG-STANDARD-LINES', ["needle","a.txt"], null, 0, 'alpha needle\nneedle two needle\n'],
+  ['RG-STANDARD-LINES', ["-n","needle","a.txt"], null, 0, '1:alpha needle\n3:needle two needle\n'],
+  ['RG-WITH-FILENAME', ["-H","needle","a.txt"], null, 0, 'a.txt:alpha needle\na.txt:needle two needle\n'],
+  ['RG-STANDARD-LINES', ["-H","-n","--null","needle","a.txt"], null, 0, 'a.txt\x001:alpha needle\na.txt\x003:needle two needle\n'],
+  ['RG-WITH-FILENAME', ["--null","needle","a.txt"], null, 0, 'alpha needle\nneedle two needle\n'],
+  ['RG-ONLY-MATCHING', ["-o","needle","a.txt"], null, 0, 'needle\nneedle\nneedle\n'],
+  ['RG-ONLY-MATCHING', ["-n","-o","needle","a.txt"], null, 0, '1:needle\n3:needle\n3:needle\n'],
+  ['RG-WITH-FILENAME', ["-n","needle","one"], null, 0, 'one/only.txt:1:one needle\n'],
+  ['RG-STANDARD-LINES', ["-n","--null","needle","one"], null, 0, 'one/only.txt\x001:one needle\n'],
+  ['RG-CONTEXT', ["-n","-C","1","needle","ctx.txt"], null, 0, '1:1 needle\n2-2\n--\n4-4\n5:5 needle\n6-6\n--\n9-9\n10:10 needle\n11-11\n'],
+  ['RG-CONTEXT', ["-C","1","needle","ctx.txt"], null, 0, '1 needle\n2\n--\n4\n5 needle\n6\n--\n9\n10 needle\n11\n'],
+  ['RG-CONTEXT', ["-n","-B","1","-A","2","needle","ctx.txt"], null, 0, '1:1 needle\n2-2\n3-3\n4-4\n5:5 needle\n6-6\n7-7\n--\n9-9\n10:10 needle\n11-11\n'],
+  ['RG-CONTEXT', ["-n","-A","3","needle","ctx.txt"], null, 0, '1:1 needle\n2-2\n3-3\n4-4\n5:5 needle\n6-6\n7-7\n8-8\n--\n10:10 needle\n11-11\n'],
+  ['RG-CONTEXT', ["-n","-B","2","needle","ctx.txt"], null, 0, '1:1 needle\n--\n3-3\n4-4\n5:5 needle\n--\n8-8\n9-9\n10:10 needle\n'],
+  ['RG-CONTEXT', ["-n","-C","0","needle","ctx.txt"], null, 0, '1:1 needle\n5:5 needle\n10:10 needle\n'],
+  ['RG-ONLY-MATCHING', ["-n","-o","-C","1","needle","ctx.txt"], null, 0, '1:needle\n2-2\n--\n4-4\n5:needle\n6-6\n--\n9-9\n10:needle\n11-11\n'],
+  ['RG-CONTEXT', ["-H","-n","-C","1","needle","ctx.txt"], null, 0, 'ctx.txt:1:1 needle\nctx.txt-2-2\n--\nctx.txt-4-4\nctx.txt:5:5 needle\nctx.txt-6-6\n--\nctx.txt-9-9\nctx.txt:10:10 needle\nctx.txt-11-11\n'],
+  ['RG-CONTEXT', ["-H","-n","-C","1","--null","needle","ctx.txt"], null, 0, 'ctx.txt\x001:1 needle\nctx.txt\x002-2\n--\nctx.txt\x004-4\nctx.txt\x005:5 needle\nctx.txt\x006-6\n--\nctx.txt\x009-9\nctx.txt\x0010:10 needle\nctx.txt\x0011-11\n'],
+  ['RG-CONTEXT', ["-n","-C","1","-j1","needle","two/1.txt","two/2.txt"], null, 0, 'two/1.txt:1:a needle\ntwo/1.txt-2-b\n--\ntwo/2.txt-1-c\ntwo/2.txt:2:d needle\n'],
+  ['RG-WITH-FILENAME', ["-n","-j1","needle","two/1.txt","b.txt","two/2.txt"], null, 0, 'two/1.txt:1:a needle\ntwo/2.txt:2:d needle\n'],
+  ['RG-CONTEXT', ["-n","-C","5","needle","a.txt"], null, 0, '1:alpha needle\n2-beta\n3:needle two needle\n'],
+  ['RG-MAX-COLUMNS', ["-n","--max-columns","500","needle","long.txt"], null, 0, '1:short needle\n2:[Omitted long matching line]\n'],
+  ['RG-MAX-COLUMNS', ["--max-columns","500","needle","long.txt"], null, 0, 'short needle\n[Omitted long matching line]\n'],
+  ['RG-MAX-COLUMNS', ["-n","--max-columns","13","needle","long.txt"], null, 0, '1:short needle\n2:[Omitted long matching line]\n'],
+  ['RG-MAX-COLUMNS', ["-n","--max-columns","12","needle","long.txt"], null, 0, '1:[Omitted long matching line]\n2:[Omitted long matching line]\n'],
+  ['RG-MAX-COLUMNS', ["-n","-o","--max-columns","5","needle","a.txt"], null, 0, '1:[Omitted long matching line]\n3:[Omitted long matching line]\n3:[Omitted long matching line]\n'],
+  ['RG-MAX-COLUMNS', ["-n","-o","--max-columns","6","needle","a.txt"], null, 0, '1:needle\n3:needle\n3:needle\n'],
+  ['RG-MAX-COLUMNS', ["-n","-A","1","--max-columns","10","needle","c2.txt"], null, 0, '1:needle\n2-[Omitted long context line]\n'],
+  ['RG-MAX-COLUMNS', ["-n","-A","1","--max-columns","0","needle","c2.txt"], null, 0, '1:needle\n2-long context line here\n'],
+  ['RG-MAX-COLUMNS', ["-n","-C","1","--max-columns","20","needle","long.txt"], null, 0, '1:short needle\n2:[Omitted long matching line]\n3-after\n'],
+  ['RG-RE-MATCH-AT-UNTERMINATED-END', ["-n","$","nonl.txt"], null, 0, '1:abc\n2:xyz\n'],
+  ['RG-RE-MATCH-AT-UNTERMINATED-END', ["-n","-o","$","nonl.txt"], null, 0, '1:\n2:xyz\n'],
+  ['RG-RE-MATCH-AT-UNTERMINATED-END', ["-n","-o","q*","nonl.txt"], null, 0, '1:\n1:\n1:\n1:\n2:\n2:\n2:\n'],
+  ['RG-STANDARD-LINES', ["-n","-o","z","nonl.txt"], null, 0, '2:z\n'],
+  ['RG-STANDARD-LINES', ["-n","-C","1","abc","nonl.txt"], null, 0, '1:abc\n2-xyz\n'],
+  ['RG-STANDARD-LINES', ["-n","needle","crlf.txt"], null, 0, '1:one needle\x0d\n'],
+  ['RG-MAX-COLUMNS', ["-n","--max-columns","12","needle","crlf.txt"], null, 0, '1:one needle\x0d\n'],
+  ['RG-MAX-COLUMNS', ["-n","--max-columns","13","needle","crlf.txt"], null, 0, '1:one needle\x0d\n'],
+  ['RG-ONLY-MATCHING', ["-n","-o","needle","crlf.txt"], null, 0, '1:needle\n'],
+  ['RG-TEXT-BOM', ["-n","-A","1","needle","bom8.txt"], null, 0, '1:ab needle\n2-zz\n'],
+  ['RG-TEXT-BOM', ["-n","needle","bom16.txt"], null, 0, '1:ab needle\n'],
+  ['RG-TEXT-BOM', ["-n","--max-columns","9","needle","bom16.txt"], null, 0, '1:[Omitted long matching line]\n'],
+  ['RG-TEXT-BOM', ["-n","--max-columns","10","needle","bom16.txt"], null, 0, '1:ab needle\n'],
+  ['RG-STANDARD-LINES', ["-n","needle","latin1.txt"], null, 0, '1:caf\xe9 needle\n'],
+  ['RG-STDIN', ["-n","needle","-"], "a.txt", 0, '1:alpha needle\n3:needle two needle\n'],
+  ['RG-STDIN', ["-H","-n","needle","-"], "a.txt", 0, '<stdin>:1:alpha needle\n<stdin>:3:needle two needle\n'],
+  ['RG-STDIN', ["-H","--null","needle","-"], "a.txt", 0, '<stdin>\x00alpha needle\n<stdin>\x00needle two needle\n'],
+  ['RG-STANDARD-LINES', ["-n","-i","NEEDLE","a.txt"], null, 0, '1:alpha needle\n3:needle two needle\n'],
+  ['RG-ARGV', ["-n","-e","-x","a.txt"], null, 1, ''],
+  ['RG-EXIT', ["-l","needle","nope.txt"], null, 2, '', "rg: nope.txt: IO error for operation on nope.txt: No such file or directory (os error 2)\n"],
+  ['RG-EXIT', ["-l","-j1","needle","nope.txt","a.txt"], null, 2, 'a.txt\n', "rg: nope.txt: IO error for operation on nope.txt: No such file or directory (os error 2)\n"],
+  ['RG-EXIT', ["-n","needle","nope.txt"], null, 2, '', "rg: nope.txt: IO error for operation on nope.txt: No such file or directory (os error 2)\n"],
+  ['RG-ARGV', ["-l","--max-columns","abc","needle","a.txt"], null, 2, '', "rg: error parsing flag --max-columns: value is not a valid number: invalid digit found in string\n"],
+  ['RG-ARGV', ["-l","--max-columns","","needle","a.txt"], null, 2, '', "rg: error parsing flag --max-columns: value is not a valid number: cannot parse integer from empty string\n"],
+  ['RG-ARGV', ["-n","-A","x","needle","a.txt"], null, 2, '', "rg: error parsing flag -A: value is not a valid number: invalid digit found in string\n"],
+  ['RG-ARGV', ["-l","-M5","needle","a.txt"], null, 0, 'a.txt\n'],
+  ['RG-ARGV', ["-n","--max-columns=5","needle","a.txt"], null, 0, '1:[Omitted long matching line]\n3:[Omitted long matching line]\n'],
+  ['RG-ARGV', ["-n","-A1","needle","ctx.txt"], null, 0, '1:1 needle\n2-2\n--\n5:5 needle\n6-6\n--\n10:10 needle\n11-11\n'],
+  ['RG-ARGV', ["-n","--after-context=1","needle","ctx.txt"], null, 0, '1:1 needle\n2-2\n--\n5:5 needle\n6-6\n--\n10:10 needle\n11-11\n'],
+  ['RG-CONTEXT', ["-n","--context","1","needle","two/1.txt"], null, 0, '1:a needle\n2-b\n'],
+  ['RG-EXPLICIT-FILE', ["-l","needle","bin.dat"], null, 0, 'bin.dat\n'],
+  ['RG-PATH-SPELLING', ["-c","needle","one/only.txt","one"], null, 0, 'one/only.txt:1\none/only.txt:1\n'],
+  ['RG-ARGV', ["-n","--","needle","a.txt"], null, 0, '1:alpha needle\n3:needle two needle\n'],
+];
+// Directory walks: rg's walk order is not deterministic (rg-probe.cjs normalizeRg, its one named
+// normalization), so these compare after it; the standard printer's lines compare as a set.
+const P6_NATIVE_WALK = [
+  ['RG-BINARY-QUIT-FIRST-READ', ["-l","--null","needle","."], null, 0, './crlf.txt\x00./two/1.txt\x00./two/2.txt\x00./bom8.txt\x00./long.txt\x00./a.txt\x00./c2.txt\x00./one/only.txt\x00./latin1.txt\x00./ctx.txt\x00./bom16.txt\x00'],
+  ['RG-COUNT-NONZERO', ["-c","-H","--null","needle","."], null, 0, './crlf.txt\x001\n./two/1.txt\x001\n./two/2.txt\x001\n./bom8.txt\x001\n./long.txt\x002\n./a.txt\x002\n./c2.txt\x001\n./one/only.txt\x001\n./latin1.txt\x001\n./ctx.txt\x003\n./bom16.txt\x001\n'],
+  ['RG-PATH-SPELLING', ["-l","needle","."], null, 0, './crlf.txt\n./two/1.txt\n./two/2.txt\n./bom8.txt\n./long.txt\n./a.txt\n./c2.txt\n./one/only.txt\n./latin1.txt\n./ctx.txt\n./bom16.txt\n'],
+  ['RG-PATH-SPELLING', ["-c","needle","<ROOT>"], null, 0, '<ROOT>/crlf.txt:1\n<ROOT>/two/1.txt:1\n<ROOT>/two/2.txt:1\n<ROOT>/bom8.txt:1\n<ROOT>/long.txt:2\n<ROOT>/a.txt:2\n<ROOT>/c2.txt:1\n<ROOT>/one/only.txt:1\n<ROOT>/latin1.txt:1\n<ROOT>/ctx.txt:3\n<ROOT>/bom16.txt:1\n'],
+  ['RG-STANDARD-LINES', ["-n","needle","."], null, 0, './crlf.txt:1:one needle\x0d\n./two/1.txt:1:a needle\n./two/2.txt:2:d needle\n./bom8.txt:1:ab needle\n./long.txt:1:short needle\n./long.txt:2:' + X600 + ' needle yyyyyyyyyy\n./a.txt:1:alpha needle\n./a.txt:3:needle two needle\n./c2.txt:1:needle\n./one/only.txt:1:one needle\n./latin1.txt:1:caf\xe9 needle\n./ctx.txt:1:1 needle\n./ctx.txt:5:5 needle\n./ctx.txt:10:10 needle\n./bom16.txt:1:ab needle\n'],
+  ['RG-ONLY-MATCHING', ["-l","--null","-o","needle","."], null, 0, './crlf.txt\x00./two/1.txt\x00./two/2.txt\x00./bom8.txt\x00./long.txt\x00./a.txt\x00./c2.txt\x00./one/only.txt\x00./latin1.txt\x00./ctx.txt\x00./bom16.txt\x00'],
+  ['RG-COUNT-MATCHES', ["-c","-o","--max-columns","5","needle","."], null, 0, './crlf.txt:1\n./two/1.txt:1\n./two/2.txt:1\n./bom8.txt:1\n./long.txt:2\n./a.txt:3\n./c2.txt:1\n./one/only.txt:1\n./latin1.txt:1\n./ctx.txt:3\n./bom16.txt:1\n'],
+];
+
+async function withP6(fn) {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'rg-native-p6-')));
+  try {
+    for (const [rel, data] of P6_FILES) { const p = path.join(root, rel); fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, data); }
+    return await fn(root);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+}
+const NOT_TRANSLATED = () => { throw new Error('a search must not reach today\'s translation'); };
+// ours, synchronously; `alone`: no ugrep at all, every file decided by the matcher (matchFiles)
+function p6Sync(root, [, argv, input], { alone = false } = {}) {
+  const r = rgn.runRg(argv.map((a) => a.replace('<ROOT>', root)), {
+    cwd: root, input: P6_INPUT(input), spawnSync: cp.spawnSync, translate: NOT_TRANSLATED,
+    ugrep: () => (alone ? null : UGREP), matchFiles: alone ? rgn.matchFilesAlone : undefined,
+  });
+  return { status: r.status, stdout: Buffer.from(r.stdout).toString('latin1'), stderr: Buffer.from(r.stderr).toString('latin1') };
+}
+const sortLines = (s) => s.split('\n').sort().join('\n');
+function p6Check(root, row, got, walk) {
+  const [rule, argv, , status, out, err] = row;
+  const want = out.split('<ROOT>').join(root);
+  const what = `${rule}: rg ${argv.join(' ')} => ${JSON.stringify(got)}`;
+  assert.strictEqual(got.status, status, what);
+  if (!walk) assert.strictEqual(got.stdout, want, what);
+  else if (argv.includes('-l') || argv.includes('-c')) assert.strictEqual(normalizeRg(Buffer.from(got.stdout, 'latin1'), argv), normalizeRg(Buffer.from(want, 'latin1'), argv), what);
+  else assert.strictEqual(sortLines(got.stdout), sortLines(want), what);
+  if (err !== undefined) assert.strictEqual(got.stderr.split(root).join('<ROOT>'), err, what);
+  assert.strictEqual(rgn.parseRgRefusal(got.stderr), null, `${what}: native answers this, so ours must not refuse it`);
+}
+const NAMES_DIR = (argv) => argv.some((a) => /^(?:\.|one|\.\/one|one\/|one\/\/|<ROOT>|<ROOT>\/one)$/.test(a));
+const P6_RULES = [...new Set([...P6_NATIVE, ...P6_NATIVE_WALK].map((r) => r[0]))];
+for (const rule of P6_RULES) {
+  test(`${rule}: runRg prints what native prints (native, over ugrep)`, needUgrep, () => withP6((root) => {
+    for (const row of P6_NATIVE.filter((r) => r[0] === rule)) p6Check(root, row, p6Sync(root, row), false);
+    for (const row of P6_NATIVE_WALK.filter((r) => r[0] === rule)) p6Check(root, row, p6Sync(root, row), true);
+  }));
+}
+// The same rows with no ugrep at all (so they run on every host): each named file and stdin decided
+// by the matcher alone. A directory needs ugrep's listing (until Task 9), so those rows are not here.
+test('the printers, with the matcher alone deciding every file: native\'s rows that name no directory', () => withP6((root) => {
+  let n = 0;
+  for (const row of P6_NATIVE.filter((r) => !NAMES_DIR(r[1]))) { p6Check(root, row, p6Sync(root, row, { alone: true }), false); n++; }
+  assert.ok(n >= 80, `${n} rows`);
+}));
+
+// The asynchronous twin (execFile, spawn, Bun.spawn) prints the same bytes and exits the same way.
+function p6Async(root, [, argv, input]) {
+  return new Promise((resolve) => {
+    const child = rgn.rgExecFile(argv.map((a) => a.replace('<ROOT>', root)), { cwd: root, encoding: 'buffer' }, (err, so, se) => {
+      resolve({ status: err ? (typeof err.code === 'number' ? err.code : null) : 0, stdout: so.toString('latin1'), stderr: se.toString('latin1') });
+    }, 'rg', { translate: NOT_TRANSLATED, spawn: cp.spawn, spawnSync: cp.spawnSync, ugrep: () => UGREP });
+    if (input) child.stdin.end(P6_INPUT(input)); else if (child.stdin) child.stdin.end();
+  });
+}
+test('the async twin prints every row the sync one does (rgExecFile, native)', needUgrep, () => withP6(async (root) => {
+  for (const row of P6_NATIVE) p6Check(root, row, await p6Async(root, row), false);
+  for (const row of P6_NATIVE_WALK) p6Check(root, row, await p6Async(root, row), true);
+}));
+
+// Under the engine quaude ships: both twins, every row.
+test('the printers under tjs: both twins, every row (native)', { skip: needUgrep.skip || (!tjsPath() ? 'no tjs engine' : false) }, () => withP6((root) => {
+  const prog = path.join(root, '..', path.basename(root) + '-probe.cjs');
+  const rows = [...P6_NATIVE.map((r) => [r, false]), ...P6_NATIVE_WALK.map((r) => [r, true])];
+  fs.writeFileSync(prog, `
+    const rgn = require(${JSON.stringify(path.join(__dirname, '..', 'libexec', 'rg-native.cjs'))});
+    const cp = require('child_process'), fs = require('fs'), path = require('path');
+    const root = ${JSON.stringify(root)}, UGREP = ${JSON.stringify(UGREP)};
+    const rows = ${JSON.stringify(rows.map(([r]) => [r[1], r[2] ? P6_INPUT(r[2]).toString('base64') : null]))};
+    const ctx = { translate: () => { throw new Error('translated'); }, spawn: cp.spawn, spawnSync: cp.spawnSync, ugrep: () => UGREP };
+    const l1 = (b) => Buffer.from(b).toString('latin1');
+    (async () => {
+      const out = [];
+      for (const [argv0, input] of rows) {
+        const argv = argv0.map((a) => a.replace('<ROOT>', root));
+        const inp = input ? Buffer.from(input, 'base64') : undefined;
+        const s = rgn.runRg(argv, { ...ctx, cwd: root, input: inp });
+        const a = await new Promise((res) => {
+          const c = rgn.rgExecFile(argv, { cwd: root, encoding: 'buffer' }, (err, so, se) => res({ status: err ? (typeof err.code === 'number' ? err.code : null) : 0, stdout: l1(so), stderr: l1(se) }), 'rg', ctx);
+          if (inp) c.stdin.end(inp); else if (c.stdin) c.stdin.end();
+        });
+        out.push({ sync: { status: s.status, stdout: l1(s.stdout), stderr: l1(s.stderr) }, async: a });
+      }
+      process.stdout.write('PROBE:' + JSON.stringify(out) + '\\n');
+    })();
+  `);
+  try {
+    const res = runLoader(prog, [], { timeout: 120000 });
+    const line = (res.stdout || '').split('\n').find((l) => l.startsWith('PROBE:'));
+    assert.ok(line, `the tjs probe printed nothing (exit ${res.status}): ${(res.stderr || '').slice(0, 1500)}`);
+    const got = JSON.parse(line.slice('PROBE:'.length));
+    assert.strictEqual(got.length, rows.length);
+    rows.forEach(([row, walk], i) => { p6Check(root, row, got[i].sync, walk); p6Check(root, row, got[i].async, walk); });
+  } finally { fs.rmSync(prog, { force: true }); }
+}));
+
+// RG-EXIT, and a ugrep that exits 2 for a LEGITIMATE reason: a path rg cannot read is reported on
+// stderr as rg reports it, the rest is still searched and printed, and the search exits 2. It is
+// never quaude's refusal (Task 4 review minor, deferred to Task 6). Native's literals, a tree with
+// ok.txt, sub/x.txt and an unreadable locked.txt (and, last, an unreadable sub/).
+test('RG-EXIT: an unreadable path is rg\'s error on stderr, the rest answered, exit 2; never a refusal (native)', {
+  skip: needUgrep.skip || (process.platform === 'win32' ? 'chmod 000 does not deny reads on Windows' : (process.getuid && process.getuid() === 0) ? 'root reads a chmod 000 file' : false),
+}, () => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'rg-native-exit-')));
+  try {
+    fs.mkdirSync(path.join(root, 'sub'));
+    for (const f of ['ok.txt', 'locked.txt', 'sub/x.txt']) fs.writeFileSync(path.join(root, f), 'needle\n');
+    fs.chmodSync(path.join(root, 'locked.txt'), 0);
+    const run = (argv) => { const r = p6Sync(root, [null, argv, null]); return r; };
+    const check = (argv, status, out, err, walk) => p6Check(root, ['RG-EXIT', argv, null, status, out, err], run(argv), walk);
+    check(['-l', '--null', 'needle', '.'], 2, './sub/x.txt\x00./ok.txt\x00', 'rg: ./locked.txt: Permission denied (os error 13)\n', true);
+    check(['-c', 'needle', 'locked.txt'], 2, '', 'rg: locked.txt: Permission denied (os error 13)\n', false);
+    check(['-l', 'zzzq', '.'], 2, '', 'rg: ./locked.txt: Permission denied (os error 13)\n', false);
+    check(['-l', 'needle', 'locked.txt', 'ok.txt'], 2, 'ok.txt\n', 'rg: locked.txt: Permission denied (os error 13)\n', false);
+    fs.chmodSync(path.join(root, 'sub'), 0);
+    const r = run(['-c', '-H', '--null', 'needle', '.']);
+    assert.strictEqual(r.status, 2);
+    assert.strictEqual(r.stdout, './ok.txt\x001\n');
+    assert.deepStrictEqual(r.stderr.split('\n').filter(Boolean).sort(), ['rg: ./locked.txt: Permission denied (os error 13)', 'rg: ./sub: Permission denied (os error 13)']);
+    fs.chmodSync(path.join(root, 'sub'), 0o755);
+  } finally { try { fs.chmodSync(path.join(root, 'sub'), 0o755); } catch { /* gone */ } fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+// What the emulation does not answer yet goes to its own task, refused by name (never answered
+// differently): -U (Task 10); --json, --files, --version and --type stay with today's translation.
+test('a search flag the printers do not answer is refused by name; --json/--files/--type go to the translation', () => {
+  const seen = [];
+  const r = rgn.runRg(['-U', '--multiline-dotall', '-l', 'needle', '.'], { translate: NOT_TRANSLATED, spawnSync: cp.spawnSync, ugrep: () => UGREP });
+  assert.strictEqual(r.status, 2);
+  assert.deepStrictEqual(rgn.parseRgRefusal(r.stderr) && rgn.parseRgRefusal(r.stderr).flag, '-U');
+  const nope = rgn.runRg(['--frobnicate', 'needle', '.'], { translate: NOT_TRANSLATED, spawnSync: cp.spawnSync, ugrep: () => UGREP });
+  assert.strictEqual(rgn.parseRgRefusal(nope.stderr).flag, '--frobnicate');
+  for (const argv of [['--json', 'needle', '.'], ['--files', '.'], ['--type', 'ts', 'needle', '.'], ['--version']]) {
+    rgn.runRg(argv, { translate: (a) => { seen.push(a); return { refuse: 'stand-in' }; }, spawnSync: cp.spawnSync, ugrep: () => UGREP });
+  }
+  assert.strictEqual(seen.length, 4);
+});
+
+// THE SYNCHRONOUS TWIN IS BOUNDED (spawnSync, execFileSync: node's own cannot be interrupted, and
+// neither can this). The caller's timeout ends it, wherever it is: in ugrep's walk (every ugrep run
+// gets the time left), or deciding a long line (every slice of steps checks it), reported as node
+// reports a spawnSync timeout. With no timeout, RG-RE-REFUSE-COST's per-line budget still holds.
+test('runRg ends at the caller\'s timeout: in ugrep\'s walk, and while deciding lines', { skip: process.platform === 'win32' ? 'needs a shebang stand-in' : false }, () => {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'rg-native-timeout-')));
+  try {
+    const fake = require('./rg-fake-ugrep.cjs').writeFakeUgrep(dir);
+    fs.mkdirSync(path.join(dir, 'tree'));
+    fs.writeFileSync(path.join(dir, 'tree', 'a.txt'), 'x needle\n');
+    const base = { cwd: dir, spawnSync: cp.spawnSync, translate: NOT_TRANSLATED, ugrep: () => fake, killSignal: 'SIGKILL' };
+    let t0 = Date.now();
+    const walk = rgn.runRg(['needle', 'tree'], { ...base, timeout: 300, env: { ...process.env, FAKE_UGREP_SLOW_MS: '5000' } });
+    assert.ok(Date.now() - t0 < 3000, `${Date.now() - t0} ms`);
+    assert.deepStrictEqual([walk.status, walk.signal, walk.errorCode], [null, 'SIGKILL', 'ETIMEDOUT']);
+    t0 = Date.now();
+    // an ordinary pattern over more stdin than the time allows (it answers in about 0.5 s with none)
+    const input = ('abc def '.repeat(12) + '\n').repeat(100000);
+    const lines = rgn.runRg(['\\w+', '-'], { ...base, timeout: 100, input });
+    assert.ok(Date.now() - t0 < 3000, `${Date.now() - t0} ms`);
+    assert.deepStrictEqual([lines.status, lines.errorCode], [null, 'ETIMEDOUT']);
+    assert.strictEqual(rgn.runRg(['-c', '\\w+', '-'], { ...base, input }).stdout.toString(), '100000\n');
+    // and with time enough, the same search answers
+    assert.strictEqual(rgn.runRg(['needle', 'tree'], { ...base, timeout: 60000 }).stdout.toString(), 'tree/a.txt:x needle\n');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

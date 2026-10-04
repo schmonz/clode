@@ -20,12 +20,13 @@
 // theirs do in node) through rgSpawnSync/rgExecFileSync. A refusal is a child that started
 // no process at all.
 //
-// FOR NOW both delegate to today's rg -> ugrep translation, which bun-shim owns and passes in
-// (`translate`), and run the applet it names. The emulation proper replaces that delegation
-// rule by rule, each rule measured from native. Its plumbing is here (ugrepMatches and
-// ugrepMatchesAsync: an explicit file list in, rg's match byte ranges out, over a ugrep at or
-// above UGREP_MIN, UGREP PROPOSING candidate lines and rg-regex.cjs's matcher DECIDING them);
-// the walk, rg's printers, JSON Lines, binary rules, ignore rules, globs and types come next.
+// A SEARCH (rg's standard printer, -l, -c) is answered here, rule by rule as native answers it
+// (grep-native Task 6, "quaude's rg answers a search itself" below): the plumbing (ugrepMatches and
+// ugrepMatchesAsync: an explicit file list in, rg's match byte ranges out, over a ugrep at or above
+// UGREP_MIN, UGREP PROPOSING candidate lines and rg-regex.cjs's matcher DECIDING them) and rg's
+// printers over rg's own text. What it does not answer yet still goes to today's rg -> ugrep
+// translation, which bun-shim owns and passes in (`translate`): --json (Task 7), --files (Task
+// 10), --version and --type (Task 9). The walk is ugrep's under today's flags until Task 9's.
 //
 // Loaded by bun-shim.cjs as `require(__dirname + '/rg-native.cjs')`, so it travels beside
 // bun-shim.cjs in every packaging (test/shim-companions.test.cjs), with its own companion
@@ -120,12 +121,21 @@ function appletRejected(bin, status, stderr) {
 //   input                 what the caller hands the child's stdin (rg reads it for target `-`)
 //   timeout, maxBuffer,   the caller's own bounds, when it named them
 //   killSignal
-//   translate(argv)       -> { argv: [applet, ...] } or { refuse, flag } — today's translation
-//   spawnSync             the UNWRAPPED spawnSync to run the applet with
-//   onRejected(argv, st)  told when the applet rejected the translation
+//   ugrep()               the ugrep a search runs (null: this host has none)
+//   missing()             the refusal when a search needs ugrep and there is none
+//   matchFiles            what decides files' matches instead of ugrepMatches (tests: the matcher alone)
+//   debug(argv, verdict)  told of each call's verdict (CLODE_RG_DEBUG's line)
+//   translate(argv)       -> { argv: [applet, ...] } or { refuse, flag } — today's translation, for
+//                         what a search does not answer yet (rgPlan)
+//   spawnSync             the UNWRAPPED spawnSync to run ugrep and the applet with
+//   onRejected(argv, st)  told when an applet rejected a search or the translation
+// A search is searchSync's, bounded by the caller's timeout (see there).
 // Returns { stdout, stderr, status, signal }, plus `refused` for a refusal and `errorCode` when
 // a bound fired (node's spawnSync reports ETIMEDOUT / ENOBUFS; node-shim's ETIMEDOUT for both).
 function runRg(argv, opts = {}) {
+  const plan = rgPlan(argv, opts);
+  if (plan.result) return plan.result;
+  if (!plan.translate) return searchSync(plan, opts);
   const t = opts.translate(argv);
   if (t.refuse) return rgRefusal(t.refuse, { flag: t.flag });
   const [bin, ...rest] = t.argv;
@@ -210,6 +220,16 @@ function ugrepCapabilities(bin, opts = {}) {
   const spawnSync = opts.spawnSync || require('child_process').spawnSync;
   let r;
   try { r = spawnSync(bin, ['--version'], { encoding: 'buffer', timeout: 30000 }); } catch (e) { r = { error: e }; }
+  return capsFrom(bin, r);
+}
+// The same, without blocking: what the asynchronous surfaces ask (a first Grep would otherwise hold
+// the event loop for one `ugrep --version`). Same cache.
+function ugrepCapabilitiesAsync(bin, opts = {}) {
+  if (_ugrepCaps.has(bin)) return Promise.resolve(_ugrepCaps.get(bin));
+  return runChild(opts.spawn || require('child_process').spawn, bin, ['--version'], { env: process.env }, () => {})
+    .then((r) => (_ugrepCaps.has(bin) ? _ugrepCaps.get(bin) : capsFrom(bin, r)));
+}
+function capsFrom(bin, r) {
   const version = r && !r.error ? parseUgrepVersion(toBuf(r.stdout).toString('utf8')) : null;
   const format = !!version && versionAtLeast(version, UGREP_MIN);
   const reason = format ? null
@@ -254,10 +274,10 @@ function chunkFiles(files, budget = ARGV_BUDGET) {
 // `refused` is set (the RG-RE-* rule) when the PATTERN is one quaude's rg cannot answer exactly
 // (rg-regex.cjs REFUSALS); the message is then the refusal's reason, for rgRefusal.
 class UgrepError extends Error {
-  constructor(message, { status = null, signal = null, stderr = '', matches = new Map(), refused = null } = {}) {
+  constructor(message, { status = null, signal = null, stderr = '', matches = new Map(), refused = null, timedOut = false } = {}) {
     super(message);
     this.name = 'UgrepError';
-    Object.assign(this, { status, signal, stderr, matches, refused });
+    Object.assign(this, { status, signal, stderr, matches, refused, timedOut });
   }
 }
 
@@ -426,14 +446,27 @@ function asUgrepError(e) {
 // One file: its matches, as rg's matcher finds them on the lines ugrep proposed.
 function decideFile(file, proposed, t, opts, all) {
   const { text, lines } = fileLines(file, proposed, opts, all);
+  return decideLines(text, lines, t, opts.deadline);
+}
+// The lines' matches, in order. With a `deadline` (the synchronous caller's own timeout, ms since the
+// epoch) each line is decided in slices and the search ends, timed out, once it passes: the
+// synchronous surfaces cannot be aborted, so the caller's timeout is what bounds them (beyond
+// RG-RE-REFUSE-COST's per-line budget, which holds with or without one).
+function decideLines(text, lines, t, deadline) {
   const out = [];
   try {
     for (let i = 0; i < lines.length; i += 2) {
-      for (const m of rgRegexModule().verifyLine(text, lines[i], lines[i + 1], t)) out.push(m);
+      if (!deadline) { for (const m of rgRegexModule().verifyLine(text, lines[i], lines[i + 1], t)) out.push(m); continue; }
+      const v = rgRegexModule().lineVerifier(text, lines[i], lines[i + 1], t);
+      let r;
+      while ((r = v.run(DECIDE_SLICE_STEPS)) === null) if (Date.now() > deadline) throw timedOutError();
+      for (const m of r) out.push(m);
+      if (Date.now() > deadline) throw timedOutError();
     }
   } catch (e) { throw asUgrepError(e); }
   return out;
 }
+const timedOutError = () => new UgrepError('rg-native: the search passed its caller\'s timeout', { timedOut: true });
 // The same, for the asynchronous twin: each line is decided in slices of DECIDE_SLICE_STEPS, and
 // `between()` runs after every slice (it yields to the event loop and throws on an abort), so a
 // long line no longer holds the loop for its whole search (review I2).
@@ -520,7 +553,10 @@ function ugrepMatches(files, pattern, opts = {}) {
   const ranges = new Map();
   let failed = null;
   for (const argv of chunks) {
-    const r = spawnSync(opts.ugrep, argv, { cwd: opts.cwd, env: opts.env || process.env, encoding: 'buffer', maxBuffer: RG_MAX_BUFFER });
+    if (opts.deadline && Date.now() > opts.deadline) throw timedOutError();
+    const r = spawnSync(opts.ugrep, argv, { cwd: opts.cwd, env: opts.env || process.env, encoding: 'buffer', maxBuffer: RG_MAX_BUFFER,
+      timeout: opts.deadline ? Math.max(1, opts.deadline - Date.now()) : undefined });
+    if (r.error && r.error.code === 'ETIMEDOUT') throw timedOutError();
     if (r.error) throw new UgrepError(`${leafOf(opts.ugrep)} could not be run (${r.error.code || r.error.message})`);
     // Killed: the bytes may stop anywhere, so they are not read; the kill is the answer.
     if (r.status === null || r.signal) { failed = { r, stderr: r.stderr }; break; }
@@ -607,6 +643,580 @@ function ugrepMatchesAsync(files, pattern, opts = {}) {
     }
     return out;
   })();
+}
+
+// ==== quaude's rg answers a search itself (grep-native Task 6) ===================================
+// A search (rg's standard printer, -l, or -c) no longer goes through today's translation: quaude's
+// rg reads rg's argv (parseRgSearch), finds what to search (its targets: stdin, named files, and a
+// directory's files as ugrep's walk lists them under today's walk flags, until the plan's Task 9
+// walks in JS), takes every file's matches from ugrepMatches (stdin's from the matcher alone), and
+// PRINTS THEM AS rg's PRINTERS DO, from rg's own text of each file (RG-TEXT-BOM). --json (Task 7),
+// --files (Task 10), --version and --type (Task 9) still go to the translation; -U refuses (Task 10).
+//
+// THE RULES, one statement each, every one measured against native 2.1.283's embedded rg (ripgrep
+// 14.1.1) and pinned by a same-named test in test/rg-native.test.cjs (native's literals):
+//   RG-ARGV                    the flags a search reads; -l and -c, the last one wins; a number
+//                              flag that is not a number is rg's own usage error; `--` ends flags
+//   RG-FILES-NULL              -l: `path` then \n, or \0 under --null
+//   RG-COUNT-NONZERO           -c: `[path SEP]N\n` per file with a selected line; a file with none
+//                              prints nothing (and -c -o prints the 0 of a file selected only by
+//                              an unprintable match)
+//   RG-COUNT-MATCHES           -c -o counts printable matches, not lines
+//   RG-WITH-FILENAME           the path is printed unless the search is one path that is not a
+//                              directory (a file, or stdin); -H and --no-filename override
+//   RG-PATH-SPELLING           a walked file is its target joined as Rust's Path::join joins
+//                              (`.` -> ./a.txt, `one/` -> one/only.txt, `one//` -> one//only.txt)
+//   RG-EXPLICIT-FILE           a NAMED file is searched whatever --glob, --hidden or ignore rules say
+//   RG-STANDARD-LINES          `[path SEP][N SEP]line`: SEP `:` on a match, `-` on context, \0
+//                              after the path under --null; the line's terminator kept (\r\n too)
+//                              and \n added to a line that has none
+//   RG-CONTEXT                 -A/-B/-C (-A/-B over -C), merged, `--` between groups that do not
+//                              touch and between files
+//   RG-ONLY-MATCHING           -o: each printable match on its own line; a selected line with none
+//                              prints whole (grep-printer's sink_fast)
+//   RG-MAX-COLUMNS             -l, -c: nothing; the standard printer: a line whose bytes, terminator
+//                              included, pass N prints as `[Omitted long matching line]` (or
+//                              `context`), a -o match by its own bytes; 0 means no limit
+//   RG-RE-MATCH-AT-UNTERMINATED-END (the printers' half) the matcher's match at the end of an
+//                              unterminated last line selects the line but is never printed or counted
+//                              as a match
+//   RG-STDIN                   `-` searches what the caller piped in, named `<stdin>`
+//   RG-EXIT                    0 found, 1 not found, 2 when any path failed (its error on stderr, the
+//                              rest still searched and printed): never quaude's refusal
+//   RG-BINARY-QUIT-FIRST-READ  INTERIM (the plan's Task 8 replaces it with rg's LineBuffer): a WALKED
+//                              file (or stdin) whose first 64 KiB of text hold a NUL prints nothing;
+//                              a NAMED file is searched as text
+//
+// WHERE WE PRINT. As rg prints to a pipe or a file, which is what every surface the bundle uses
+// hands it (no heading, no colour, no line numbers unless -n).
+
+// ---- rg's argv, as a search reads it -------------------------------------------------------------
+// The flags quaude's rg answers itself. Anything else is refused BY NAME, never passed on to an
+// applet that reads it some other way (ugrep's -U is --binary, for one).
+const LONG_BOOL = {
+  '--files-with-matches': (s) => { s.mode = 'files'; }, '--count': (s) => { s.mode = 'count'; },
+  '--ignore-case': (s) => { s.ignoreCase = true; }, '--case-sensitive': (s) => { s.ignoreCase = false; },
+  '--line-number': (s) => { s.lineNumber = true; }, '--no-line-number': (s) => { s.lineNumber = false; },
+  '--with-filename': (s) => { s.withFilename = true; }, '--no-filename': (s) => { s.withFilename = false; },
+  '--null': (s) => { s.nul = true; }, '--only-matching': (s) => { s.only = true; },
+  '--hidden': (s) => { s.hidden = true; }, '--no-hidden': (s) => { s.hidden = false; }, '--no-ignore': (s) => { s.noIgnore = true; },
+};
+const SHORT_BOOL = { l: '--files-with-matches', c: '--count', i: '--ignore-case', s: '--case-sensitive', n: '--line-number',
+  N: '--no-line-number', H: '--with-filename', I: '--no-filename', 0: '--null', o: '--only-matching', '.': '--hidden' };
+const LONG_VALUE = { '--after-context': 'after', '--before-context': 'before', '--context': 'context', '--max-columns': 'maxColumns',
+  '--regexp': 'pattern', '--glob': 'glob', '--iglob': 'iglob', '--threads': 'threads' };
+const SHORT_VALUE = { A: 'after', B: 'before', C: 'context', M: 'maxColumns', e: 'pattern', g: 'glob', j: 'threads' };
+// Still today's translation's: --json (Task 7), --files (Task 10), --version and the type flags (Task 9).
+const TRANSLATED_LONG = new Set(['--json', '--files', '--version', '--type', '--type-not', '--type-list', '--type-add', '--type-clear']);
+const TRANSLATED_SHORT = new Set(['t', 'T', 'V']);
+// The reason quaude's rg gives for a flag it cannot answer as native does (stated once; bun-shim's
+// translation refuses with it too).
+const untranslatableReason = (flag) => `quaude answers rg with its own emulation over ugrep, on purpose, and it cannot yet give ${flag} `
+  + 'the answer native\'s rg gives, so it refuses rather than answer differently; nothing was searched';
+const cannotYet = (flag) => ({ refuse: untranslatableReason(flag), flag });
+
+// A number as rg reads one (a Rust u64), or rg's own usage error for it.
+function rgNumber(flag, v) {
+  const why = v === '' ? 'cannot parse integer from empty string'
+    : !/^\+?[0-9]+$/.test(v) ? 'invalid digit found in string'
+      : BigInt(v) > 18446744073709551615n ? 'number too large to fit in target type' : null;
+  return why ? { usage: `rg: error parsing flag ${flag}: value is not a valid number: ${why}\n` } : { n: Number(v) };
+}
+function setValue(s, key, flag, v) {
+  if (v === null || v === undefined) return cannotYet(flag);   // no value at all: rg's clap error, not measured
+  if (key === 'pattern') { s.patterns.push(v); return null; }
+  if (key === 'glob' || key === 'iglob') { s.globs.push([key, v]); return null; }
+  const r = rgNumber(flag, v);
+  if (r.usage) return r;
+  s[key] = r.n;
+  return null;
+}
+
+// parseRgSearch(argv) -> { spec } | { translate: true } | { refuse, flag } | { usage: stderr line }
+function parseRgSearch(argv) {
+  const s = { mode: 'standard', patterns: [], ignoreCase: false, lineNumber: false, withFilename: null, nul: false, only: false,
+    before: null, after: null, context: null, maxColumns: 0, hidden: false, noIgnore: false, globs: [], threads: null, paths: [] };
+  const pos = [];
+  let end = false;
+  for (let i = 0; i < argv.length; i++) {
+    const a = String(argv[i]);
+    if (end || a === '-' || a[0] !== '-') { pos.push(a); continue; }
+    if (a === '--') { end = true; continue; }
+    let r = null;
+    if (a.startsWith('--')) {
+      const eq = a.indexOf('=');
+      const name = eq === -1 ? a : a.slice(0, eq);
+      if (TRANSLATED_LONG.has(name)) return { translate: true };
+      if (LONG_BOOL[name] && eq === -1) LONG_BOOL[name](s);
+      else if (LONG_VALUE[name]) r = setValue(s, LONG_VALUE[name], name, eq !== -1 ? a.slice(eq + 1) : i + 1 < argv.length ? argv[++i] : null);
+      else return cannotYet(name);
+    } else {
+      for (let j = 1; j < a.length; j++) {
+        const c = a[j];
+        if (TRANSLATED_SHORT.has(c)) return { translate: true };
+        if (SHORT_VALUE[c]) { const rest = a.slice(j + 1); r = setValue(s, SHORT_VALUE[c], `-${c}`, rest !== '' ? rest : i + 1 < argv.length ? argv[++i] : null); break; }
+        if (!SHORT_BOOL[c]) return cannotYet(`-${c}`);
+        LONG_BOOL[SHORT_BOOL[c]](s);
+      }
+    }
+    if (r) return r;
+  }
+  if (!s.patterns.length) {
+    if (!pos.length) return { refuse: 'quaude answers rg with its own emulation over ugrep, on purpose, and this rg names no pattern; nothing was searched' };
+    s.patterns.push(pos.shift());
+  }
+  if (s.patterns.length > 1) return cannotYet('-e');
+  // rg with no path searches its stdin or the working directory, by what its stdin is; every rg the
+  // bundle runs names one, so quaude's rg does not guess.
+  if (!pos.length) return { refuse: 'quaude answers rg with its own emulation over ugrep, on purpose, and this rg names no path to search; nothing was searched' };
+  s.paths = pos;
+  s.before = s.before !== null ? s.before : s.context || 0;
+  s.after = s.after !== null ? s.after : s.context || 0;
+  s.countMatches = s.mode === 'count' && s.only;
+  return { spec: s };
+}
+
+// ---- what a search searches -----------------------------------------------------------------------
+// rg's error for a path, as rg spells it: `Permission denied (os error 13)`. Both halves come from
+// the engine, never a table here: the number from os.constants.errno, the text from libuv's message
+// for it (node puts it in the error's message; tjs answers it as `new tjs.Error(-errno)`), whose
+// first letter rg's libc strerror capitalizes (they agree for the errors a search meets: ENOENT,
+// EACCES, ENOTDIR; measured against native's literals in test/rg-native.test.cjs).
+function sysErrorText(n) {
+  try {
+    const util = require('util');
+    if (typeof util.getSystemErrorMessage === 'function') return util.getSystemErrorMessage(-n);
+    if (typeof util.getSystemErrorMap === 'function') { const e = util.getSystemErrorMap().get(-n); if (e) return e[1]; }
+  } catch { /* not this engine's */ }
+  try {
+    if (globalThis.tjs && typeof globalThis.tjs.Error === 'function') {
+      const m = /^[A-Z0-9_]+: (.+)$/.exec(new globalThis.tjs.Error(-n).message);
+      if (m) return m[1];
+    }
+  } catch { /* not this engine's */ }
+  return null;
+}
+const errnoTable = () => { const os = require('os'); return (os.constants && os.constants.errno) || {}; };
+const capital = (t) => t[0].toUpperCase() + t.slice(1);
+function osErrorText(e) {
+  const code = e && e.code;
+  const n = code ? errnoTable()[code] : undefined;
+  const m = /^[A-Z0-9_]+: ([^,]+)/.exec(String((e && e.message) || ''));
+  const text = m ? m[1] : n !== undefined ? sysErrorText(n) : null;
+  return text ? `${capital(text)}${n !== undefined ? ` (os error ${n})` : ''}` : String(code || (e && e.message) || 'unknown error');
+}
+// What ugrep's walk says it could not read (the platform's strerror), as rg says it: the number is
+// the errno whose engine text is that text.
+function strerrorText(text) {
+  const want = String(text).toLowerCase();
+  for (const n of Object.values(errnoTable())) {
+    const t = sysErrorText(n);
+    if (t && t.toLowerCase() === want) return `${text} (os error ${n})`;
+  }
+  return text;
+}
+
+// THE WALK, INTERIM (the plan's Task 9 replaces it with rg's own, in JS): a directory's files are
+// what ugrep's walk lists under today's walk flags (bun-shim's rgToUgrep: -r, --ignore-files unless
+// --no-ignore, -. for --hidden, --include/--exclude for --glob), `-l` over an empty pattern so a file
+// is listed whatever it holds (an EMPTY file is not, and has no line rg could match), with no -I: a
+// binary is rg's decision (RG-BINARY-QUIT-FIRST-READ), not ugrep's.
+function walkArgv(spec, P) {
+  const a = ['-r'];
+  if (!spec.noIgnore) a.push('--ignore-files');
+  if (spec.hidden) a.push('-.');
+  for (const [k, g] of spec.globs) a.push(k === 'iglob' ? `--iglob=${g}` : g[0] === '!' ? `--exclude=${g.slice(1)}` : `--include=${g}`);
+  return [...a, '-l', '--null', '-e', '', '--', spellForUgrep(P)];
+}
+// ugrep's listing of target P as [{ disp, file }] and rg's errors. ugrep prints `.`'s files bare and
+// any other target's as the target (trailing slashes dropped) joined by `/` (measured, 7.8.2);
+// RG-PATH-SPELLING joins them to P as rg does.
+function readListing(P, stdout, stderr) {
+  const spelled = spellForUgrep(P);
+  const prefix = spelled === '.' || spelled === './' ? '' : spelled.replace(/\/+$/, '') + '/';
+  const rel = (u) => (u === spelled || u === spelled.replace(/\/+$/, '') ? '' : prefix === '' ? u : u.startsWith(prefix) ? u.slice(prefix.length) : null);
+  const disp = (r) => (r === '' ? P : P + (P.endsWith('/') ? '' : '/') + r);
+  const files = [], errors = [], unknown = [];
+  for (const name of toBuf(stdout).toString('utf8').split('\0')) {
+    if (!name) continue;
+    const r = rel(name);
+    if (r === null || r === '') throw new UgrepError(`rg-native: ugrep listed ${JSON.stringify(name)}, which is not under ${JSON.stringify(P)}`);
+    files.push({ disp: disp(r), file: name });
+  }
+  for (const line of toBuf(stderr).toString('utf8').split('\n')) {
+    if (!line.trim()) continue;
+    const m = /^ugrep: (?:warning: )?cannot (?:read|open directory|open)(?: file)? (.*): ([^:]+)$/.exec(line);
+    const r = m ? rel(m[1]) : null;
+    if (m) errors.push(`rg: ${r === null ? m[1] : disp(r)}: ${strerrorText(m[2])}`);
+    else unknown.push(`rg: ${line.replace(/^ugrep: (?:warning: )?/, '')}`);
+  }
+  return { files, errors, unknown };
+}
+
+// A file's text, as rg reads it (RG-TEXT-BOM); `limit` bytes of it when only its start matters.
+function readRgText(file, cwd, limit) {
+  const fs = require('fs'), path = require('path');
+  const p = path.resolve(cwd || process.cwd(), file);
+  if (!limit) return rgText(fs.readFileSync(p));
+  const fd = fs.openSync(p, 'r');
+  try { const b = Buffer.alloc(limit); return rgText(b.subarray(0, fs.readSync(fd, b, 0, limit, 0))); } finally { fs.closeSync(fd); }
+}
+const FIRST_READ = 64 * 1024;   // rg's first read of a file (grep-searcher's DEFAULT_BUFFER_CAPACITY)
+const binaryAtFirstRead = (text) => text.subarray(0, FIRST_READ).indexOf(0) !== -1;
+
+// Every line of `text` decided by the matcher alone: stdin, and matchFilesAlone.
+function matchTextLines(text, t, deadline) { return decideLines(text, candidateLines(text, null, true), t, deadline); }
+// matchFilesAlone(files, pattern, opts) -> Map: the same answer as ugrepMatches with no ugrep, every
+// line of every file decided by the matcher (slower; what stdin always takes).
+function matchFilesAlone(files, pattern, opts = {}) {
+  const t = translated(pattern, opts);
+  const out = new Map();
+  for (const f of files) {
+    if (out.has(f)) continue;
+    const m = matchTextLines(readRgText(f, opts.cwd), t, opts.deadline);
+    if (m.length) out.set(f, m);
+  }
+  return out;
+}
+
+// ---- rg's printers -------------------------------------------------------------------------------
+const NL = Buffer.from('\n');
+const SEP = Buffer.from('--\n');
+const OMITTED_MATCH = Buffer.from('[Omitted long matching line]');
+const OMITTED_CONTEXT = Buffer.from('[Omitted long context line]');
+// One file's (or stdin's) output into `out` (an array of Buffers): true when rg found something in it.
+// `state.printed` carries "something was printed before" across files (RG-CONTEXT's `--`).
+function printFile(spec, e, out, state) {
+  const { text, matches } = e;
+  if (spec.mode === 'files') { out.push(Buffer.from(e.disp + (spec.nul ? '\0' : '\n'))); return true; }
+  // RG-RE-MATCH-AT-UNTERMINATED-END: such a match selects its line; it is never printed.
+  const unterminated = text.length > 0 && text[text.length - 1] !== 0x0a;
+  const sel = [];
+  for (const m of matches) {
+    const ls = m.start === 0 ? 0 : text.lastIndexOf(0x0a, m.start - 1) + 1;
+    let L = sel[sel.length - 1];
+    if (!L || L.ls !== ls) { L = { ls, ms: [] }; sel.push(L); }
+    if (!(unterminated && m.start === text.length)) L.ms.push(m);
+  }
+  if (!sel.length) return false;
+  const path = e.withFilename ? Buffer.from(e.disp) : null;
+  // A file with a selected line prints its count, even a -c -o count of 0 (its only match was the
+  // unprintable one at an unterminated end: native prints `0`); a file with none prints nothing.
+  if (spec.mode === 'count') {
+    const n = spec.countMatches ? sel.reduce((a, L) => a + L.ms.length, 0) : sel.length;
+    out.push(...(path ? [path, Buffer.from(spec.nul ? '\0' : ':')] : []), Buffer.from(`${n}\n`));
+    return true;
+  }
+  const cols = spec.maxColumns;
+  const lineEnd = (ls) => { const i = text.indexOf(0x0a, ls); return i === -1 ? text.length : i; };
+  const next = (ls) => { const i = text.indexOf(0x0a, ls); return i === -1 || i + 1 >= text.length ? -1 : i + 1; };
+  const prev = (ls) => (ls === 0 ? -1 : ls < 2 ? 0 : text.lastIndexOf(0x0a, ls - 2) + 1);
+  const prefix = (num, sep) => {
+    const p = [];
+    if (path) p.push(path, Buffer.from(spec.nul ? '\0' : sep));
+    if (spec.lineNumber) p.push(Buffer.from(`${num}${sep}`));
+    return p;
+  };
+  const emit = (ls, num, ms) => {
+    const sep = ms ? ':' : '-';
+    if (ms && spec.only && ms.length) {
+      for (const m of ms) out.push(...prefix(num, sep), cols && m.end - m.start > cols ? OMITTED_MATCH : text.subarray(m.start, m.end), NL);
+      return;
+    }
+    const le = lineEnd(ls), end = le < text.length ? le + 1 : le;
+    if (cols && end - ls > cols) out.push(...prefix(num, sep), ms ? OMITTED_MATCH : OMITTED_CONTEXT, NL);
+    else { out.push(...prefix(num, sep), text.subarray(ls, end)); if (end === le) out.push(NL); }
+  };
+  // Line numbers, counted forward once.
+  let at = 0, atNum = 1;
+  const numAt = (ls) => { for (let i = text.indexOf(0x0a, at); i !== -1 && i < ls; i = text.indexOf(0x0a, i + 1)) atNum++; at = ls; return atNum; };
+  const ctx = spec.before > 0 || spec.after > 0;
+  let cur = -1, curNum = 0, pend = 0;
+  const drainAfter = (upTo) => {
+    for (let nx; pend > 0 && (nx = next(cur)) !== -1 && (upTo === -1 || nx < upTo); pend--) { emit(nx, curNum + 1, null); cur = nx; curNum++; }
+  };
+  for (const L of sel) {
+    const n = numAt(L.ls);
+    drainAfter(L.ls);
+    let first = L.ls, firstNum = n;
+    for (let k = 0, p; k < spec.before && (p = prev(first)) !== -1 && (cur === -1 || p > cur); k++) { first = p; firstNum--; }
+    if (ctx && state.printed && (cur === -1 || next(cur) !== first)) out.push(SEP);
+    for (let ls = first, num = firstNum; ls !== L.ls; ls = next(ls), num++) emit(ls, num, null);
+    emit(L.ls, n, L.ms);
+    state.printed = true;
+    cur = L.ls; curNum = n; pend = spec.after;
+  }
+  drainAfter(-1);
+  return true;
+}
+
+// ---- the search, once: a generator both twins drive --------------------------------------------------
+// It yields what it needs done ({ op: 'list', P }, { op: 'match', files, pattern }, { op: 'stdin' },
+// { op: 'decide', text }) and is answered synchronously (runRg) or asynchronously (rgSpawn), so the
+// rules above are stated once. It returns { stdout, stderr, status } or a refusal.
+function* searchCore(spec, opts) {
+  const fs = require('fs'), path = require('path');
+  const cwd = opts.cwd || process.cwd();
+  const pattern = spec.patterns[0];
+  let t;
+  try { t = translated(pattern, { ignoreCase: spec.ignoreCase }); } catch (e) { if (e.refused) return rgRefusal(e.message); throw e; }
+  const kinds = spec.paths.map((P) => {
+    if (P === '-') return { kind: 'stdin' };
+    try { return { kind: fs.statSync(path.resolve(cwd, P)).isDirectory() ? 'dir' : 'file' }; } catch (e) { return { kind: 'error', e }; }
+  });
+  // rg walks one path that is not a directory (and anything under -j1) with walkdir, whose error for
+  // a path it cannot stat says so; its parallel walker's does not (measured: nope.txt alone, with
+  // -j1, and beside a.txt).
+  const oneFile = spec.paths.length === 1 && kinds[0].kind !== 'dir';
+  const sequential = spec.threads === 1 || oneFile;
+  const withFilename = spec.withFilename !== null ? spec.withFilename : !oneFile;
+  // The ugrep at or above UGREP_MIN (refused otherwise, before it is asked anything else).
+  if (kinds.some((k) => k.kind === 'dir' || k.kind === 'file')) {
+    const c = yield { op: 'caps' };
+    if (c.refusal) return c.refusal;
+  }
+  const entries = [];
+  for (let i = 0; i < spec.paths.length; i++) {
+    const P = spec.paths[i], k = kinds[i];
+    if (k.kind === 'stdin') entries.push({ disp: '<stdin>', stdin: true, walked: true });
+    else if (k.kind === 'error') entries.push({ error: `rg: ${P}: ${sequential ? `IO error for operation on ${P}: ` : ''}${osErrorText(k.e)}` });
+    else if (k.kind === 'file') {
+      let err = null;
+      try { fs.closeSync(fs.openSync(path.resolve(cwd, P), 'r')); } catch (e) { err = e; }
+      entries.push(err ? { error: `rg: ${P}: ${osErrorText(err)}` } : { disp: P, file: P, walked: false });
+    } else {
+      const r = yield { op: 'list', P, argv: walkArgv(spec, P) };
+      if (r.refusal) return r.refusal;
+      const { files, errors, unknown } = readListing(P, r.stdout, r.stderr);
+      // ugrep's walk exits 0 past what it could not read (it warns); >= 2 is ugrep failing, which the
+      // operator hears of, and which refuses when it listed nothing and said nothing rg would say.
+      if (r.status >= 2 && opts.onRejected) opts.onRejected([opts.ugrepName || 'ugrep', ...walkArgv(spec, P)], r.status);
+      if (r.status >= 2 && !files.length && !errors.length) return appletRejected(opts.ugrepName || 'ugrep', r.status, r.stderr);
+      for (const f of files) entries.push({ ...f, walked: true });
+      for (const e of [...errors, ...unknown]) entries.push({ error: e });
+    }
+  }
+  const files = [...new Set(entries.filter((e) => e.file).map((e) => e.file))];
+  let matches = new Map(), failed = null;
+  if (files.length) {
+    const r = yield { op: 'match', files, pattern };
+    if (r.refusal) return r.refusal;
+    if (r.error) { failed = r.error; matches = r.error.matches || new Map(); } else matches = r.matches;
+  }
+  const out = [], err = [], state = { printed: false };
+  let found = false, broke = !!failed;
+  for (const e of entries) {
+    if (e.error) { err.push(Buffer.from(e.error + '\n')); broke = true; continue; }
+    let text, m;
+    if (e.stdin) { text = rgText(toBuf(yield { op: 'stdin' })); m = yield { op: 'decide', text, t }; if (m.refusal) return m.refusal; m = m.matches; }
+    else {
+      m = matches.get(e.file);
+      if (!m || !m.length) continue;
+      // -l reads nothing of a named file, and of a walked one only what RG-BINARY-QUIT-FIRST-READ needs.
+      if (spec.mode === 'files' && !e.walked) text = Buffer.alloc(0);
+      else {
+        try { text = readRgText(e.file, cwd, spec.mode === 'files' ? FIRST_READ : 0); } catch (x) { err.push(Buffer.from(`rg: ${e.disp}: ${osErrorText(x)}\n`)); broke = true; continue; }
+      }
+    }
+    if (!m.length || (e.walked && binaryAtFirstRead(text))) continue;
+    if (printFile(spec, { ...e, text, matches: m, withFilename }, out, state)) found = true;
+  }
+  if (failed) err.push(Buffer.from(`rg: ${failed.message}\n`));
+  return { stdout: Buffer.concat(out), stderr: Buffer.concat(err), status: broke ? 2 : found ? 0 : 1, signal: null };
+}
+
+// How a step the core asked for ended in a refusal or a failure: refusals stop the search; a ugrep
+// that failed is rg's error (exit 2, the rest answered), and is surfaced to the operator.
+function matchOutcome(e, opts, ugrep) {
+  if (!(e instanceof UgrepError)) throw e;
+  if (e.timedOut) throw e;
+  if (e.refused) return { refusal: rgRefusal(e.message) };
+  if (opts.onRejected) opts.onRejected([ugrep || 'ugrep', `(${e.message})`], e.status || 2);
+  return { error: e };
+}
+
+// The plan for one rg call: { translate } (today's translation), { result } (answered without
+// searching: a refusal or rg's usage error), or { spec, ugrep } (a search quaude's rg answers).
+function rgPlan(argv, opts) {
+  const p = parseRgSearch(argv);
+  if (p.translate) return { translate: true };
+  const debug = (v) => { if (opts.debug) opts.debug(argv, v); };
+  if (p.usage) { debug('=> quaude\'s rg (rg\'s own usage error)'); return { result: { stdout: Buffer.alloc(0), stderr: Buffer.from(p.usage), status: 2, signal: null } }; }
+  if (p.refuse) { debug(`!! untranslatable ${p.flag || '(argv)'}`); return { result: rgRefusal(p.refuse, { flag: p.flag }) }; }
+  // ugrep is needed for any file (unless the caller decides files alone) and for every directory.
+  const needs = p.spec.paths.some((P) => P !== '-');
+  let ugrep = null;
+  if (needs) {
+    ugrep = opts.ugrep ? opts.ugrep() : null;
+    if (!ugrep && !opts.matchFiles) {
+      debug('!! needs ugrep');
+      return { result: missingUgrep(opts) };
+    }
+  }
+  debug(`=> quaude's rg over ${ugrep || '(no ugrep)'}`);
+  return { spec: p.spec, ugrep };
+}
+
+// ---- the two drivers ---------------------------------------------------------------------------
+// What a step the core asked for returned; a throw ends the search (a timeout, a kill).
+function driveSync(gen, handlers) {
+  let r = gen.next();
+  while (!r.done) r = gen.next(handlers[r.value.op](r.value));
+  return r.value;
+}
+async function driveAsync(gen, handlers, stopped) {
+  let r = gen.next();
+  while (!r.done) {
+    const v = await handlers[r.value.op](r.value);
+    if (stopped()) throw new UgrepError('rg-native: the search was stopped');
+    r = gen.next(v);
+  }
+  return r.value;
+}
+// A ugrep below the floor (or not ugrep at all) refuses; none at all is the listing's or the match's
+// to refuse (a named file decided by the matcher alone needs none).
+function capsOutcome(caps) {
+  return !caps || caps.format ? {} : { refusal: rgRefusal(caps.reason) };
+}
+const missingUgrep = (opts) => (opts.missing ? opts.missing()
+  : rgRefusal('quaude answers rg with ugrep, on purpose, and this host has no ugrep (set CLODE_UGREP or install ugrep); nothing was searched'));
+
+// A search's synchronous run (runRg's, for spawnSync and execFileSync). Bounded by the caller's
+// timeout when it names one (every ugrep run and every slice of deciding checks it, ETIMEDOUT as
+// node reports it), and per line by RG-RE-REFUSE-COST with or without one. The 2.1.283 bundle calls
+// rg through no synchronous surface (measured, Task 5b review), so this is the bound for anyone who does.
+function searchSync(plan, opts) {
+  const spawnSync = opts.spawnSync || require('child_process').spawnSync;
+  const env = opts.env || process.env;
+  const deadline = typeof opts.timeout === 'number' && opts.timeout > 0 ? Date.now() + opts.timeout : 0;
+  const { spec, ugrep } = plan;
+  const handlers = {
+    caps: () => capsOutcome(ugrep && ugrepCapabilities(ugrep, { spawnSync })),
+    list: ({ argv }) => {
+      if (!ugrep) return { refusal: missingUgrep(opts) };
+      const r = spawnSync(ugrep, argv, { cwd: opts.cwd, env, encoding: 'buffer', maxBuffer: RG_MAX_BUFFER,
+        timeout: deadline ? Math.max(1, deadline - Date.now()) : undefined });
+      if (r.error && r.error.code === 'ETIMEDOUT') throw timedOutError();
+      if (r.error) return { refusal: couldNotRun(ugrep, r.error) };
+      if (r.status === null || r.signal) return { refusal: appletRejected(ugrep, r.signal || 'killed', r.stderr) };
+      return { stdout: r.stdout, stderr: r.stderr, status: r.status };
+    },
+    match: ({ files, pattern }) => {
+      const o = { ugrep, cwd: opts.cwd, env, ignoreCase: spec.ignoreCase, spawnSync, deadline };
+      try { return { matches: (opts.matchFiles || ugrepMatches)(files, pattern, o) }; } catch (e) { return matchOutcome(e, opts, ugrep); }
+    },
+    stdin: () => (typeof opts.input === 'string' ? Buffer.from(opts.input, 'utf8') : toBuf(opts.input)),
+    decide: ({ text, t }) => { try { return { matches: matchTextLines(text, t, deadline) }; } catch (e) { return matchOutcome(e, opts, ugrep); } },
+  };
+  let res;
+  try { res = driveSync(searchCore(spec, { cwd: opts.cwd, onRejected: opts.onRejected, ugrepName: ugrep && leafOf(ugrep) }), handlers); } catch (e) {
+    if (e && e.timedOut) return { stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), status: null, signal: opts.killSignal || 'SIGTERM', errorCode: 'ETIMEDOUT' };
+    throw e;
+  }
+  if (typeof opts.maxBuffer === 'number' && res.stdout && res.stdout.length > opts.maxBuffer) {
+    return { stdout: res.stdout.subarray(0, opts.maxBuffer), stderr: res.stderr, status: null, signal: opts.killSignal || 'SIGTERM', errorCode: 'ENOBUFS' };
+  }
+  return res;
+}
+
+// A child process run to its end: { stdout, stderr, status, signal } or { error }; `onChild` is told
+// of it (so a kill can reach it).
+function runChild(spawn, bin, argv, o, onChild) {
+  return new Promise((resolve) => {
+    let c;
+    try { c = spawn(bin, argv, { cwd: o.cwd, env: o.env, stdio: ['ignore', 'pipe', 'pipe'] }); } catch (e) { resolve({ error: e }); return; }
+    onChild(c);
+    const outs = [], errs = [];
+    let settled = false;
+    c.stdout.on('data', (d) => outs.push(toBuf(d)));
+    c.stderr.on('data', (d) => errs.push(toBuf(d)));
+    c.on('error', (e) => { if (!settled) { settled = true; resolve({ error: e }); } });
+    c.on('close', (status, signal) => { if (!settled) { settled = true; resolve({ stdout: Buffer.concat(outs), stderr: Buffer.concat(errs), status, signal: signal || null }); } });
+  });
+}
+// Every line of `text` decided by the matcher, in slices, `between()` after each (it yields to the
+// event loop and throws once the search is stopped).
+async function matchTextLinesAsync(text, t, between) {
+  const lines = candidateLines(text, null, true), out = [];
+  for (let i = 0; i < lines.length; i += 2) {
+    let r;
+    try {
+      const v = rgRegexModule().lineVerifier(text, lines[i], lines[i + 1], t);
+      while ((r = v.run(DECIDE_SLICE_STEPS)) === null) await between();
+    } catch (e) { throw asUgrepError(e); }
+    for (const m of r) out.push(m);
+    await between();
+  }
+  return out;
+}
+
+// A search's asynchronous run (rgSpawn's, for spawn, execFile and Bun.spawn): a child of node's shape
+// whose work is ugrep children run one after another and the matcher in slices, so the event loop
+// keeps turning, and whose kill() (the caller's own, or its signal or timeout) ends the ugrep running
+// and stops the search at its next step. Its stdin is read when a target is `-` (RG-STDIN), and
+// ignored otherwise, as rg ignores it.
+function searchChild(plan, opts, ctx) {
+  const { Writable } = require('stream');
+  const { spec, ugrep } = plan;
+  let current = null, stopped = null, wake = null;
+  const sh = childShell(opts, (sig) => {
+    stopped = stopped || sig;
+    if (current) { try { current.kill(sig); } catch { /* gone */ } }
+    if (wake) wake();
+    return true;
+  });
+  const { child } = sh;
+  child.pid = undefined;                    // no process of its own
+  const wantsStdin = spec.paths.includes('-');
+  let stdinDone;
+  const stdinP = new Promise((resolve) => { stdinDone = resolve; });
+  if (stdioSlots(opts)[0] === 'pipe') {
+    const chunks = [];
+    child.stdin = new Writable({ write(c, enc, cb) { if (wantsStdin) chunks.push(toBuf(c)); cb(); } });
+    child.stdin.on('finish', () => stdinDone(Buffer.concat(chunks)));
+  } else { child.stdin = null; stdinDone(Buffer.alloc(0)); }
+  const env = opts.env || process.env;
+  const stopSignal = { get aborted() { return !!stopped; } };
+  let slice = Date.now();
+  const between = async () => {
+    if (Date.now() - slice > DECIDE_SLICE_MS) { await new Promise((r) => setTimeout(r, 0)); slice = Date.now(); }
+    if (stopped) throw new UgrepError('rg-native: the search was stopped');
+  };
+  const handlers = {
+    caps: async () => capsOutcome(ugrep && await ugrepCapabilitiesAsync(ugrep, { spawn: ctx.spawn })),
+    list: async ({ argv }) => {
+      if (!ugrep) return { refusal: missingUgrep(ctx) };
+      const r = await runChild(ctx.spawn, ugrep, argv, { cwd: opts.cwd, env }, (c) => { current = c; });
+      current = null;
+      if (stopped) return {};
+      if (r.error) return { refusal: couldNotRun(ugrep, r.error) };
+      if (r.status === null || r.signal) return { refusal: appletRejected(ugrep, r.signal || 'killed', r.stderr) };
+      return r;
+    },
+    match: async ({ files, pattern }) => {
+      try {
+        if (ctx.matchFiles) return { matches: ctx.matchFiles(files, pattern, { cwd: opts.cwd, ignoreCase: spec.ignoreCase }) };
+        return { matches: await ugrepMatchesAsync(files, pattern, { ugrep, cwd: opts.cwd, env, ignoreCase: spec.ignoreCase, spawn: ctx.spawn,
+          spawnSync: ctx.spawnSync, onChild: (c) => { current = c; }, signal: stopSignal }) };
+      } catch (e) { if (stopped) return {}; return matchOutcome(e, ctx, ugrep); } finally { current = null; }
+    },
+    stdin: () => new Promise((resolve) => { wake = () => resolve(Buffer.alloc(0)); stdinP.then(resolve); }),
+    decide: async ({ text, t }) => {
+      try { return { matches: await matchTextLinesAsync(text, t, between) }; } catch (e) { if (stopped) return {}; return matchOutcome(e, ctx, ugrep); }
+    },
+  };
+  setTimeout(async () => {
+    if (sh.isDone()) return;
+    child.emit('spawn');
+    if (stopped) { sh.finish({ status: null, signal: stopped, stderr: null }); return; }
+    let res;
+    try { res = await driveAsync(searchCore(spec, { cwd: opts.cwd, onRejected: ctx.onRejected, ugrepName: ugrep && leafOf(ugrep) }), handlers, () => !!stopped); }
+    catch (e) { res = stopped ? null : rgRefusal(`quaude's rg failed (${(e && e.message) || e}); nothing was found`); }
+    if (stopped || !res) { sh.finish({ status: null, signal: stopped, stderr: null }); return; }
+    sh.out(toBuf(res.stdout));
+    sh.finish(res);
+  }, 0);
+  return child;
 }
 
 // ---- the children the async surfaces get ----------------------------------------------------
@@ -706,15 +1316,18 @@ function refusedChild(r, opts) {
   return child;
 }
 
-// child_process.spawn (and Bun.spawn, which bun-shim builds on it): the applet runs as a REAL
-// asynchronous child, with the caller's stdin wired straight to it (the bundle pipes a
-// task-output file into rg's stdin for target `-`). Its stdout streams through as it arrives; its
-// stderr is held until it exits, because an applet that exits >= 2 having printed nothing has
-// rejected the translation and its stderr becomes quaude's refusal. ctx:
-//   translate(argv)       today's translation (see runRg)
+// child_process.spawn (and Bun.spawn, which bun-shim builds on it). A search is searchChild's (its
+// ugrep children asynchronous, the caller's stdin read for target `-`). What still goes to today's
+// translation runs its applet as a REAL asynchronous child, with the caller's stdin wired straight to
+// it; its stdout streams through as it arrives, its stderr is held until it exits, because an applet
+// that exits >= 2 having printed nothing has rejected the translation and its stderr becomes quaude's
+// refusal. ctx: what runRg's opts carry (ugrep, missing, matchFiles, debug, translate, spawnSync,
+// onRejected), plus
 //   spawn                 the UNWRAPPED asynchronous spawn
-//   onRejected(argv, st)  told when the applet rejected the translation
 function rgSpawn(argv, opts = {}, ctx) {
+  const plan = rgPlan(argv, ctx);
+  if (plan.result) return refusedChild(plan.result, opts);
+  if (!plan.translate) return searchChild(plan, opts, ctx);
   const t = ctx.translate(argv);
   if (t.refuse) return refusedChild(rgRefusal(t.refuse, { flag: t.flag }), opts);
   const [bin, ...rest] = t.argv;
@@ -817,6 +1430,6 @@ function rgExecFileSync(r, opts, file, args) {
   return s.stdout;
 }
 
-module.exports = { isRgExe, rgRefusal, parseRgRefusal, runRg, rgSpawn, rgExecFile, rgSpawnSync, rgExecFileSync, RG_MAX_BUFFER,
-  UGREP_MIN, parseUgrepVersion, versionAtLeast, ugrepCapabilities, ugrepMatchArgv, chunkFiles, parseUgrepRanges,
-  ugrepMatches, ugrepMatchesAsync, UgrepError, rgText };
+module.exports = { isRgExe, rgRefusal, parseRgRefusal, untranslatableReason, runRg, rgSpawn, rgExecFile, rgSpawnSync, rgExecFileSync, RG_MAX_BUFFER,
+  UGREP_MIN, parseUgrepVersion, versionAtLeast, ugrepCapabilities, ugrepCapabilitiesAsync, ugrepMatchArgv, chunkFiles, parseUgrepRanges,
+  ugrepMatches, ugrepMatchesAsync, matchFilesAlone, parseRgSearch, UgrepError, rgText };

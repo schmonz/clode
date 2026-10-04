@@ -19,15 +19,17 @@
 // same way. A pattern the emulation can tell they would read differently is refused honestly
 // (rc 2, the reason on stderr), never answered differently.
 //
-// BASELINE RED BY DESIGN (the plan's Task 4). Measured 2026-10-03 against native 2.1.283
-// (ripgrep 14.1.1) on darwin-arm64 with ugrep 7.8.2: all 178 cells differ. Ours REFUSED 177 of
-// them (rc 2, nothing searched): ugrep rejects the --max-columns 500 every Grep argv carries
-// (76), --json, i.e. every content cell (69), Glob's --null (18), --type (14); and rg --version
-// is answered by ugrep's own version (BACKLOG.md, "rg --version"). Over the first 165 cells
-// (the matrix before the stdin branch and --version), with --max-columns removed from what ours
-// sees (report-grep's best case), 56 cells answer and 40 of them still differ, every one in a class report-grep measured; the 16 equal ones
-// are empty on both sides. Tasks 5-10 drive it to OK; the note tallies what ours refused so
-// each task's progress is visible in the verdict itself.
+// RED BY DESIGN until the plan's Tasks 7-10 land. Task 4's baseline (2026-10-03, native 2.1.283 /
+// ripgrep 14.1.1, darwin-arm64, ugrep 7.8.2): all 178 cells differed, 177 of them refused (--max-columns
+// 76, --json 69, Glob's --null 18, --type 14) and rg --version answered by ugrep's own version.
+// After Task 6 (quaude's rg answers -l, -c and the standard printer itself), measured the same way:
+// 150 differ. Of the 90 files/count cells 28 are equal (none were); the 62 left are each in a later
+// task's class: refused --type 14 and -U 16 (Tasks 9, 10), and answered differently 32, every one a
+// walk or binary class report-grep measured (.git searched 8, .gitignore/.ignore precedence outside a
+// repo 12, whitelist glob over .gitignore 4, brace glob 4: Task 9; a binary whose NUL lies past rg's
+// first read, counted 4: Task 8). Content (--json, Task 7) and Glob (Task 10) are still refused, and
+// --version still ugrep's (Task 9). The note tallies what ours refused, so each task's progress is
+// visible in the verdict itself.
 //
 // WHERE IT RUNS: wherever a native provider, tjs and ugrep all exist. Otherwise it SKIPS
 // naming which is missing (CI wiring is the plan's Task 11).
