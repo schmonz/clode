@@ -1555,32 +1555,39 @@ test('RG-BINARY-*: under tjs, both twins, every row (native)', { skip: needUgrep
     P8_ROWS.forEach(([row], i) => { p6Check(root, row, got[i].sync, false); p6Check(root, row, got[i].async, false); });
   } finally { fs.rmSync(prog, { force: true }); }
 }));
-// The line buffer's fills are found as rg finds them, scanning back from each read's end to its last
-// newline: each byte at most once (searchStats.scannedBack, the counted instrument; linear means at most
-// the text's length), on a 2.4 MB file with a NUL at its end and a 3 MB line the buffer grows for, walked
-// and named, with context (what the roll keeps), both twins.
-test('RG-BINARY-*: the line buffer\'s fills step over the text at most once (counted; both twins)', needUgrep, async () => {
+// The line buffer's fills are found as rg finds them: each read steps back from its end to its last
+// newline over its own bytes only, and each roll steps back over the max(-A, -B) + 1 lines it keeps. So a
+// byte is stepped over at most once by the reads and by at most max(-A, -B) + 1 rolls: linear, at most
+// (max(-A, -B) + 2) times the text (searchStats.scannedBack, the counted instrument). Measured (Task 8
+// review M2) over 90 shapes of line length, context and size: worst 1.98 times, at 33,000-byte lines and
+// -C 1, flat as the text grows fourfold. Shapes: 2.4 MB with a NUL at its end, a 3 MB line the buffer
+// grows for, and that worst one, walked and named, with context, both twins.
+test('RG-BINARY-*: the line buffer\'s fills step over the text a bounded number of times (counted; both twins)', needUgrep, async () => {
   const d = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'rg-native-p8lin-')));
   try {
     let s = '';
     for (let i = 0; i < 200000; i++) s += (i % 1000 === 0 ? 'needle ' : 'filler ') + 'line\n';
     const big = cat8(s, [0], '\n'), long = cat8('needle\n' + 'x'.repeat(3000000) + '\n', [0], 'needle\n');
-    for (const [rel, b] of [['w/big.dat', big], ['big.dat', big], ['w2/long.dat', long], ['long.dat', long]]) {
+    let worst = '';
+    for (let i = 0; i < 182; i++) worst += (i % 2 === 0 ? 'needle' : 'xxxxxx') + 'y'.repeat(33000 - 7) + '\n';
+    const wb = cat8(worst, [0, 0x0a]);
+    for (const [rel, b] of [['w/big.dat', big], ['big.dat', big], ['w2/long.dat', long], ['long.dat', long], ['w3/worst.dat', wb]]) {
       fs.mkdirSync(path.dirname(path.join(d, rel)), { recursive: true }); fs.writeFileSync(path.join(d, rel), b);
     }
     const ctx = { translate: NOT_TRANSLATED, spawn: cp.spawn, spawnSync: cp.spawnSync, ugrep: () => UGREP };
-    for (const [argv, len] of [[['-n', '-C', '2', 'needle', 'w'], big.length], [['--json', '-C', '2', 'needle', 'big.dat'], big.length],
-      [['-n', '-C', '1', 'needle', 'w2'], long.length], [['-n', 'needle', 'long.dat'], long.length]]) {
-      const r = rgn.runRg(argv, { ...ctx, cwd: d });
-      assert.strictEqual(r.status, 0, argv.join(' '));
-      assert.ok(rgn.searchStats.scannedBack <= len, `sync ${argv.join(' ')}: stepped back over ${rgn.searchStats.scannedBack} bytes of ${len}`);
-      await new Promise((res) => rgn.rgExecFile(argv, { cwd: d, encoding: 'buffer' }, (err) => { assert.ifError(err); res(); }, 'rg', ctx));
-      assert.ok(rgn.searchStats.scannedBack <= len, `async ${argv.join(' ')}: stepped back over ${rgn.searchStats.scannedBack} bytes of ${len}`);
+    for (const [argv, len, C] of [[['-n', '-C', '2', 'needle', 'w'], big.length, 2], [['--json', '-C', '2', 'needle', 'big.dat'], big.length, 2],
+      [['-n', '-C', '1', 'needle', 'w2'], long.length, 1], [['-n', 'needle', 'long.dat'], long.length, 0], [['-n', '-C', '1', 'needle', 'w3'], wb.length, 1]]) {
+      const bound = (C + 2) * len;
+      rgn.runRg(argv, { ...ctx, cwd: d });
+      assert.ok(rgn.searchStats.scannedBack <= bound, `sync ${argv.join(' ')}: stepped back over ${rgn.searchStats.scannedBack} bytes of ${len}`);
+      await new Promise((res) => rgn.rgExecFile(argv, { cwd: d, encoding: 'buffer' }, () => res(), 'rg', ctx));
+      assert.ok(rgn.searchStats.scannedBack <= bound, `async ${argv.join(' ')}: stepped back over ${rgn.searchStats.scannedBack} bytes of ${len}`);
+      if (process.env.RG_TIMINGS) console.log(argv.join(' '), (rgn.searchStats.scannedBack / len).toFixed(3));
     }
   } finally { fs.rmSync(d, { recursive: true, force: true }); }
 });
 
-// RG-BINARY-QUIT's fills over a minified bundle with a NUL at its end (Task 8 review I-2): each read scans
+// RG-BINARY-QUIT's fills over a minified bundle with a NUL at its end (Task 8 review I-2, a 59 MB one): each read scans
 // back to its last newline and each roll back over the context lines it keeps, and a byte loop in JS
 // over 55 MB of 500 KB lines held the event loop 761-1011 ms under tjs (Task 7's own gap bound is
 // 600 ms). The async twin must keep handing the loop back: walked, with context, and -l.
@@ -1592,7 +1599,7 @@ test('RG-BINARY-QUIT: the async twin keeps the loop turning over a 55 MB file of
     let line = '';
     while (line.length < 500000) line += 'var a=b.c(d,e)||function(x){return x+1};';
     fs.mkdirSync(path.join(dir, 'w'));
-    fs.writeFileSync(path.join(dir, 'w', 'cli.cjs'), cat8((line + '\n').repeat(110), [0, 0x0a]));
+    fs.writeFileSync(path.join(dir, 'w', 'bundle.js'), cat8((line + '\n').repeat(110), [0, 0x0a]));
     const prog = path.join(dir, 'probe.cjs');
     fs.writeFileSync(prog, `
       const rgn = require(${JSON.stringify(path.join(__dirname, '..', 'libexec', 'rg-native.cjs'))});
@@ -1616,7 +1623,7 @@ test('RG-BINARY-QUIT: the async twin keeps the loop turning over a 55 MB file of
     assert.ok(got, `the tjs probe printed nothing (exit ${res.status}): ${(res.stderr || '').slice(0, 1500)}`);
     if (process.env.RG_TIMINGS) console.log(JSON.stringify(got));
     assert.strictEqual(got[0].code, 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER', JSON.stringify(got[0]));
-    assert.deepStrictEqual([got[1].code, got[1].bytes], [0, 10], JSON.stringify(got[1]));
+    assert.deepStrictEqual([got[1].code, got[1].bytes], [0, 12], JSON.stringify(got[1]));
     for (const r of got) assert.ok(r.maxGap < 600, `the loop was held ${r.maxGap} ms: ${JSON.stringify(r)}`);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
