@@ -5,14 +5,17 @@ const te = new TextEncoder();
 const td = new TextDecoder();
 const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
 
+// node's base64 decoder reads BOTH alphabets (`+/` and `-_`) for 'base64' and 'base64url' alike,
+// skips whitespace and anything else outside them, and stops at the first `=`.
+const B64_VALUE = new Map([...B64].map((c, i) => [c, i]).concat([['-', 62], ['_', 63]]));
 function b64decode(s) {
-  s = s.replace(/=+$/, '');
   const out = [];
   let bits = 0, acc = 0;
   for (const ch of s) {
-    const v = B64.indexOf(ch);
-    if (v < 0) continue;
-    acc = (acc << 6) | v; bits += 6;
+    if (ch === '=') break;
+    const v = B64_VALUE.get(ch);
+    if (v === undefined) continue;
+    acc = ((acc << 6) | v) & 0xffffff; bits += 6;
     if (bits >= 8) { bits -= 8; out.push((acc >> bits) & 0xff); }
   }
   return Uint8Array.from(out);
@@ -28,15 +31,42 @@ function b64encode(bytes) {
   return out;
 }
 
+// node's encoding names, any case: 'utf8' (also 'utf-8'), 'utf16le' (also 'utf-16le', 'ucs2', 'ucs-2'),
+// 'latin1' (also 'binary'), 'ascii', 'base64', 'base64url', 'hex'. Anything else is read as utf8, as
+// before (node throws ERR_UNKNOWN_ENCODING there).
+const ENCODING = { 'utf-8': 'utf8', ucs2: 'utf16le', 'ucs-2': 'utf16le', 'utf-16le': 'utf16le', binary: 'latin1' };
+function encodingOf(enc) {
+  if (enc === undefined || enc === null) return 'utf8';
+  const e = String(enc).toLowerCase();
+  return ENCODING[e] || e;
+}
+// node's hex decoder: pairs of hex digits, up to the first pair that is not one.
+function hexdecode(s) {
+  const out = [];
+  for (let i = 0; i + 1 < s.length; i += 2) {
+    const h = s.slice(i, i + 2);
+    if (!/^[0-9a-fA-F]{2}$/.test(h)) break;
+    out.push(parseInt(h, 16));
+  }
+  return Uint8Array.from(out);
+}
+
 class Buffer extends Uint8Array {
   static from(src, enc) {
     if (typeof src === 'string') {
-      if (enc === 'hex') return new Buffer(Uint8Array.from(src.match(/../g) ?? [], (h) => parseInt(h, 16)));
-      if (enc === 'base64') return new Buffer(b64decode(src));
-      // latin1/binary: low-byte of each code point (NOT utf-8). This is the
-      // extractor's write path: Buffer.from(latin1Text, 'latin1') must map
-      // 1 char -> 1 byte or bytes >= 0x80 corrupt.
-      if (enc === 'latin1' || enc === 'binary') return new Buffer(Uint8Array.from({ length: src.length }, (_, i) => src.charCodeAt(i) & 0xff));
+      const e = encodingOf(enc);
+      if (e === 'hex') return new Buffer(hexdecode(src));
+      if (e === 'base64' || e === 'base64url') return new Buffer(b64decode(src));
+      // latin1/binary (and ascii, which node writes the same way): low-byte of each code
+      // unit (NOT utf-8). This is the extractor's write path: Buffer.from(latin1Text,
+      // 'latin1') must map 1 char -> 1 byte or bytes >= 0x80 corrupt.
+      if (e === 'latin1' || e === 'ascii') return new Buffer(Uint8Array.from({ length: src.length }, (_, i) => src.charCodeAt(i) & 0xff));
+      // utf16le/ucs2: each UTF-16 code unit, low byte first.
+      if (e === 'utf16le') {
+        const b = new Buffer(src.length * 2);
+        for (let i = 0; i < src.length; i++) { const u = src.charCodeAt(i); b[2 * i] = u & 0xff; b[2 * i + 1] = u >> 8; }
+        return b;
+      }
       return new Buffer(te.encode(src));
     }
     if (src instanceof ArrayBuffer) return new Buffer(new Uint8Array(src));
@@ -44,7 +74,22 @@ class Buffer extends Uint8Array {
   }
   static alloc(n) { return new Buffer(n); }
   static isBuffer(v) { return v instanceof Buffer; }
-  static byteLength(s) { return te.encode(String(s)).length; }
+  // node: the bytes `s` takes in `enc` (a Buffer, a view or an ArrayBuffer: its own byteLength).
+  static byteLength(s, enc) {
+    if (ArrayBuffer.isView(s) || s instanceof ArrayBuffer) return s.byteLength;
+    const str = String(s);
+    const e = encodingOf(enc);
+    if (e === 'latin1' || e === 'ascii') return str.length;
+    if (e === 'utf16le') return str.length * 2;
+    if (e === 'hex') return str.length >>> 1;
+    if (e === 'base64' || e === 'base64url') {
+      let n = str.length;
+      if (n > 0 && str.charCodeAt(n - 1) === 0x3d) n--;
+      if (n > 1 && str.charCodeAt(n - 1) === 0x3d) n--;
+      return (n * 3) >>> 2;
+    }
+    return te.encode(str).length;
+  }
   // node: concat(list[, totalLength]) — totalLength TRUNCATES or zero-pads. Ignoring it
   // returned a differently-sized buffer than the caller asked for.
   static concat(list, totalLength) {
@@ -68,12 +113,21 @@ class Buffer extends Uint8Array {
     const e0 = end === undefined ? len : Math.max(0, Math.min(len, Math.trunc(Number(end)) || 0));
     if (e0 <= s0) return '';
     const v = s0 === 0 && e0 === len ? this : this.subarray(s0, e0);
-    if (enc === 'hex') return [...v].map((x) => x.toString(16).padStart(2, '0')).join('');
-    if (enc === 'base64') return b64encode(v);
-    if (enc === 'latin1' || enc === 'binary') {
-      let s = ''; const CH = 0x8000;
-      for (let i = 0; i < v.length; i += CH) s += String.fromCharCode.apply(null, v.subarray(i, Math.min(i + CH, v.length)));
-      return s;
+    const e = encodingOf(enc);
+    if (e === 'hex') return [...v].map((x) => x.toString(16).padStart(2, '0')).join('');
+    if (e === 'base64') return b64encode(v);
+    // base64url: the url-safe alphabet, unpadded.
+    if (e === 'base64url') return b64encode(v).replace(/=+$/, '').replace(/\+/g, '-').replace(/\//g, '_');
+    const CH = 0x8000;
+    const chars = (units) => { let s = ''; for (let i = 0; i < units.length; i += CH) s += String.fromCharCode.apply(null, units.subarray(i, Math.min(i + CH, units.length))); return s; };
+    if (e === 'latin1') return chars(v);
+    // ascii: each byte's low seven bits.
+    if (e === 'ascii') return chars(Uint8Array.from(v, (x) => x & 0x7f));
+    // utf16le/ucs2: little-endian code units; an odd last byte is dropped.
+    if (e === 'utf16le') {
+      const u = new Uint16Array(v.length >> 1);
+      for (let i = 0; i < u.length; i++) u[i] = v[2 * i] | (v[2 * i + 1] << 8);
+      return chars(u);
     }
     return td.decode(v);
   }

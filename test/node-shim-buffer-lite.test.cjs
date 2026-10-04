@@ -38,3 +38,33 @@ test('rg-native\'s ugrep record parser answers under buffer-lite', () => {
     if (cached) require.cache[key] = cached;
   }
 });
+
+// Every encoding node names, each in the spellings node accepts (Task 8 Step 0; ruling G19, from Task 7's
+// re-review): buffer-lite read ascii, ucs2/utf16le and base64url as utf8 (and base64url's url-safe
+// alphabet as nothing), so toString, from and byteLength all answered differently from node (230 of these
+// 462 answers before). Strings are built from code points (the \u tool hazard).
+test('buffer-lite answers every node encoding as node does: toString, from and byteLength', () => {
+  const encs = ['utf8', 'utf-8', 'UTF8', 'ascii', 'ASCII', 'latin1', 'binary', 'ucs2', 'ucs-2', 'utf16le', 'utf-16le', 'UTF16LE',
+    'base64', 'base64url', 'hex'];
+  const bufs = [[], [0x41], [0x41, 0x42, 0x43], [0xe9, 0x80, 0xff, 0x00, 0x7f], [0x3d, 0xd8, 0x00, 0xde, 0x41], [0xfb, 0xff, 0xbe, 0x01],
+    [0xc3, 0xa9, 0x62, 0x0a], Array.from({ length: 300 }, (_, i) => (i * 37) & 0xff)];
+  const cp = (...c) => String.fromCodePoint(...c);
+  const strs = ['', 'A', `h${cp(0xe9)}llo`, `${cp(0x1f600)}x`, 'a-b_c', '+/+/', 'aGk', 'aGk=', 'aG k=\n', 'QUJD', 'zz12', '12z4', '123',
+    String.fromCharCode(0xd800), '12345', 'a b\nc', `${cp(0x4e2d)}${cp(0x6587)}`];
+  const diffs = [];
+  for (const e of encs) {
+    for (const b of bufs) {
+      const n = Buffer.from(b).toString(e), l = Lite.from(b).toString(e);
+      if (n !== l) diffs.push(`toString ${e} ${JSON.stringify(b.slice(0, 8))}: node ${JSON.stringify(n.slice(0, 40))}, lite ${JSON.stringify(l.slice(0, 40))}`);
+    }
+    for (const s of strs) {
+      const n = [...Buffer.from(s, e)].join(), l = [...Lite.from(s, e)].join();
+      if (n !== l) diffs.push(`from ${JSON.stringify(s)} ${e}: node [${n}], lite [${l}]`);
+      if (Buffer.byteLength(s, e) !== Lite.byteLength(s, e)) diffs.push(`byteLength ${JSON.stringify(s)} ${e}: node ${Buffer.byteLength(s, e)}, lite ${Lite.byteLength(s, e)}`);
+    }
+  }
+  for (const v of [Lite.from([1, 2, 3]), new Uint8Array(5), new ArrayBuffer(7)]) {
+    if (Lite.byteLength(v) !== Buffer.byteLength(v)) diffs.push(`byteLength of a ${v.constructor.name}: node ${Buffer.byteLength(v)}, lite ${Lite.byteLength(v)}`);
+  }
+  assert.deepStrictEqual(diffs, []);
+});
