@@ -204,15 +204,30 @@ const _rawSpawnSync = cp.spawnSync;
 // every one of those surfaces routes to the same place: rg-native.cjs, whose answer comes
 // back as a child of the shape that surface returns (no rg process ever starts).
 //
-// BY BASENAME (isRgExe). The bundle finds rg as `Bun.which('rg') ?? 'rg'`, an ABSOLUTE
-// path whenever the host has ripgrep installed; this used to match only `file === 'rg'`,
-// so on such a host every Grep and Glob call ran the HOST's rg (measured 2026-09-27).
+// BY BASENAME (isRgExe). The bundle finds rg as `Bun.which('rg') ?? 'rg'`, which was an
+// ABSOLUTE host path whenever the host had ripgrep installed; this used to match only
+// `file === 'rg'`, so on such a host every Grep and Glob call ran the HOST's rg (measured
+// 2026-09-27). Bun.which('rg') now always answers quaude's own path (RG_PATH, below), and a
+// caller may still spell rg any way it likes: the basename decides.
 //
 // Applies to quaude AND naude, which is the point: bun-shim is baked into both, and it
 // wraps whichever object `require('child_process')` is (node-shim's module under quaude,
 // node's under naude). Wiring this into node-shim would have made quaude answer rg while
 // naude did not — inventing the divergence this project exists to remove.
 const _rgNative = require(__dirname + '/rg-native.cjs');
+
+// QUAUDE'S OWN rg PATH: what Bun.which('rg') answers, always, whatever PATH holds (grep-native Task 10b; user ruling
+// 2026-10-03: a PATH STRING ONLY, no file is ever created there). `rg` beside the binary running the bundle (the
+// quaude or naude executable; tjs or node under a test). WHY: the bundle resolves rg as `Bun.which('rg') ?? 'rg'`
+// (2.1.283's nm/bQ), and its Grep tool (djn) refuses a target outside the working directory when that is not an
+// absolute path, telling the model to "Install ripgrep at an absolute path"; with a host rg on PATH it got that rg's
+// absolute path and searched, so quaude answered differently by whether the host had ripgrep. With one absolute path
+// the bundle takes native's route everywhere: target `.`, the directory as cwd, output made relative, as native's
+// embedded rg (an absolute process.execPath) gets. Every rg spawn is answered by quaude's rg by BASENAME (below), so
+// nothing ever needs a file there, and anything that execs the path for real meets ENOENT, never a host rg.
+// WINDOWS: `rg.exe`, the spelling Bun.which answers there for an installed rg (it keeps the PATHEXT extension; see
+// which() below), so the bundle's Windows paths see the shape they see with a host rg, and isRgExe reads it as rg.
+const RG_PATH = path.join(path.dirname(process.execPath), process.platform === 'win32' ? 'rg.exe' : 'rg');
 
 // The UNWRAPPED asynchronous spawn the async rg surfaces run their applet with, taken before
 // the wrapping below (as _rawSpawnSync is for the synchronous ones).
@@ -651,9 +666,8 @@ function rewriteSnapshot(text, findings){
   // ugrep-translating rg shadow, spliced right after the last rewritten shadow. It
   // takes the name back from an alias first, as upstream does before its find and
   // grep shadows: quaude's snapshot writer (no argv0) spells rg `alias rg='<path>'`
-  // when the host has none, and zsh expands that alias over the function, running
-  // whatever the path names (a bare `rg` today; quaude's own path, with no file
-  // there, once Bun.which('rg') answers one).
+  // when the host has none, the path being Bun.which('rg')'s (RG_PATH: no file), and
+  // zsh expands that alias over the function, running a missing file.
   if (sawAny && !sawRg) out = out.slice(0, lastEnd) + '\nunalias rg 2>/dev/null || true\n' + rgShadowBody() + out.slice(lastEnd);
   return out;
 }
@@ -1000,6 +1014,9 @@ function _exeIsPathed(exe, isWin){
 // are how the win32 behaviour is tested from a Mac (test/bun-shim-which.test.cjs),
 // the same shape clode-hosttools.findTool uses.
 function which(bin, opts){
+  // rg is quaude's own, never the host's: one absolute path (RG_PATH, above), and that path answers itself (the
+  // sandbox's dependency check asks Bun.which(<its rg command>)).
+  if (bin === 'rg' || bin === RG_PATH) return RG_PATH;
   const o = opts || {};
   const isWin = (o.isWin === undefined) ? (process.platform === 'win32') : !!o.isWin;
   const PATH = o.PATH || process.env.PATH || '';
@@ -1962,6 +1979,7 @@ module.exports.CLODE_SHADOWS = CLODE_SHADOWS;
 module.exports.rgToUgrep = rgToUgrep;
 module.exports.RgTranslateError = RgTranslateError;
 module.exports.rgShadowBody = rgShadowBody;
+module.exports.RG_PATH = RG_PATH;               // quaude's own rg path, stated once above (test/bun-shim-which.test.cjs, rg-differential)
 module.exports._whichLeaves = _whichLeaves;     // exported for test/bun-shim-which.test.cjs
 module.exports._exeIsPathed = _exeIsPathed;     //   (the win32 seams, driven from a Mac)
 globalThis.Bun = globalThis.Bun || module.exports;   // ensure global even if required directly

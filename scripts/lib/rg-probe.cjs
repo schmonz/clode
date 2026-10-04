@@ -674,7 +674,8 @@ function nativeRgVersion(bin) {
 // One tjs process runs a whole batch, one call after another.
 const OURS_SOURCE = String.raw`
   const cp = require('child_process');
-  // the bundle's resolution, over the PATH ours runs with (the tripwire's, in the gate)
+  // the bundle's resolution, over the PATH ours runs with (the tripwire's, in the gate): quaude's own absolute rg
+  // path (bun-shim RG_PATH, grep-native Task 10b), whatever that PATH holds
   const rgPath = Bun.which('rg', input.env && input.env.PATH ? { PATH: input.env.PATH } : undefined) || 'rg';
   const b64 = (b) => Buffer.from(b == null ? '' : b).toString('base64');
   const run = (c) => new Promise((resolve) => {
@@ -691,7 +692,7 @@ const OURS_SOURCE = String.raw`
   return (async () => {
     const results = [];
     for (const c of input.cells) results.push(await run(c));
-    return { rgPath, results };
+    return { rgPath, ownRgPath: Bun.RG_PATH, results };
   })();
 `;
 
@@ -704,7 +705,7 @@ function runOursRgBatch(cells, { env } = {}) {
   }
   return got.results.map((r, i) => {
     if (r.error) throw new Error(`ours did not run for ${JSON.stringify(cells[i].argv)}: ${r.error}`);
-    return { argv: cells[i].argv, status: r.status, signal: r.signal, rgPath: got.rgPath,
+    return { argv: cells[i].argv, status: r.status, signal: r.signal, rgPath: got.rgPath, ownRgPath: got.ownRgPath,
       stdout: Buffer.from(r.stdout, 'base64'), stderr: Buffer.from(r.stderr, 'base64') };
   });
 }

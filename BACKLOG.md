@@ -148,6 +148,27 @@ Bash tool instead".
     Task 4, and no task of that plan names it: the bundle's own `djn` refuses whenever its
     rgPath (`Bun.which('rg') ?? 'rg'`) is not absolute, before anything is spawned, so the
     model is still told to install ripgrep on a host without one.
+    FIXED (grep-native Task 10b, user ruling 2026-10-03: a path string only, no file created):
+    bun-shim's Bun.which('rg') answers ONE absolute path whatever PATH holds, RG_PATH = `rg`
+    beside the binary running the bundle (`rg.exe` on Windows, the spelling Bun.which answers
+    there), and Bun.which(RG_PATH) answers itself (the sandbox's dependency check). The bundle
+    takes native's route on every host: a directory target is searched as `.` from that
+    directory, output made relative (the inside-cwd form changed from absolute to that too, its
+    tool_results unchanged). Measured end to end, the real 2.1.283 bundle under tjs vs native,
+    one canned mock: 8 Grep calls (dir, sub dir, file and -U targets outside cwd; dir, sub dir and
+    no-path inside), on a PATH with no rg and with a tripwire rg first: 16 of 16 tool_results
+    byte-equal (4 of the 8 no-rg ones refused before). The first-use probe (`rg --version`) and
+    the file count reach quaude's rg as before. test/fidelity/agentic-tools.test.cjs drives 3 of
+    those against native literals; rg-differential holds Bun.which('rg') to RG_PATH (never the
+    tripwire's) with no file there. The injected rg shadow now unaliases rg first: quaude's
+    snapshot writer spells rg `alias rg='<RG_PATH>'` on a host with none, and zsh would run that
+    missing file instead of the shadow.
+    Left open: (1) a host rg that sits AT RG_PATH (ripgrep installed in the very directory the
+    quaude or naude binary is in) is what a route that execs the path for real would run; every
+    spawn is answered by basename, and the snapshot's alias, the one shell route, is written only
+    when no rg is on PATH and is unaliased whenever the shadows are injected, so no known route
+    reaches it. (2) Such a route that does meet ENOENT is worded by the bundle's own YE as
+    "ripgrep not found on PATH. Install it ..." in system mode; no route is known to reach it.
   - FIXED in part (grep-native Task 6): files_with_matches and count are quaude's rg's own now
     (libexec/rg-native.cjs: -l, -c and the standard printer, as native prints them; --max-columns
     a no-op there, as native's is). In rg-differential, 28 of the 90 files/count cells are equal

@@ -49,9 +49,10 @@ const rgWalkModule = () => _rgWalk || (_rgWalk = require(__dirname + '/rg-walk.c
 const rgTypesModule = () => _rgTypes || (_rgTypes = require(__dirname + '/rg-types.cjs'));
 
 // Is this executable rg? By BASENAME, never by the exact string `rg`: the bundle resolves
-// rg as `Bun.which('rg') ?? 'rg'`, which is an absolute path whenever the host has an rg
+// rg as `Bun.which('rg') ?? 'rg'`, which was an absolute path whenever the host had an rg
 // installed, and matching only `rg` let that host rg answer every Grep and Glob call
-// (measured 2026-09-27, report-grep.md). On Windows Bun.which answers whichever PATHEXT
+// (measured 2026-09-27, report-grep.md). bun-shim's Bun.which('rg') now answers quaude's own
+// absolute path (RG_PATH, grep-native Task 10b), a path no file is ever written at. On Windows Bun.which answers whichever PATHEXT
 // spelling it found (`rg.exe`, or a `rg.cmd`/`rg.bat` shim a package manager installed), so
 // every one of those is rg too, in any case.
 function isRgExe(file) {

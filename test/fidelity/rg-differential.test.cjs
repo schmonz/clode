@@ -58,8 +58,10 @@
 // written; a kind under its floor makes the gate BROKEN naming the kind, because a verdict
 // over a matrix missing a tree says nothing about what that tree is in it to judge. And cells
 // NATIVE ANSWERED per kind (ANSWERED_FLOORS): a cell native leaves unanswered judges little.
-// TRIPWIRE: an rg first on the PATH ours sees; a cell it answered is a finding of its own, and
-// ours must have resolved rg to it (the absolute-path route).
+// TRIPWIRE: an rg first on the PATH ours sees; a cell it answered is a finding of its own. And
+// Bun.which('rg') must answer quaude's OWN absolute rg path (bun-shim RG_PATH, grep-native Task 10b),
+// never the tripwire's, with no file there: the bundle then takes native's route (an absolute rg:
+// target `.`, the directory as cwd), whatever the host's PATH holds.
 // CONTROL: the full matrix, every pair equal, with ONE planted differing byte and ONE cell the
 // tripwire answered.
 const { test } = require('node:test');
@@ -91,10 +93,11 @@ const FLOOR = Object.values(KIND_FLOORS).reduce((a, b) => a + b, 0);
 // With the -U variants (Task 10 fix round, 2026-10-04): 182 of 253.
 const ANSWERED_FLOORS = { root: 73, nogit: 56, bin2: 53 };
 
-// THE TRIPWIRE: an `rg` placed FIRST on the PATH ours sees, which prints this and exits 99.
-// Bun.which('rg') then answers its absolute path, which is exactly the route on a host with
-// ripgrep installed; if any call escaped quaude's rg, this mark shows. Native is the claude
-// binary run by its own path, so the PATH entry never reaches it.
+// THE TRIPWIRE: an `rg` placed FIRST on the PATH ours sees, which prints this and exits 99. Until
+// grep-native Task 10b, Bun.which('rg') then answered ITS absolute path (the route a host with
+// ripgrep took); now it answers quaude's own path whatever PATH holds, and the gate holds it to
+// that. Either way, if any call escaped quaude's rg, this mark shows. Native is the claude binary
+// run by its own path, so the PATH entry never reaches it.
 const TRIPWIRE_MARK = 'RG-DIFFERENTIAL-TRIPWIRE-HOST-RG-RAN';
 const TRIPWIRE_RC = 99;
 
@@ -226,6 +229,7 @@ function readCells() {
       cells: cells.map((c, i) => ({ id: c.id, kind: c.kind, tree: c.cwd, argv: c.argv, native: native[i], ours: ours[i] })),
       platform: process.platform,
       floors: KIND_FLOORS, answeredFloors: ANSWERED_FLOORS, tripwire: tripRg, rgPath: ours.length ? ours[0].rgPath : null,
+      ownRgPath: ours.length ? ours[0].ownRgPath : null, rgPathExists: !!(ours.length && ours[0].ownRgPath && fs.existsSync(ours[0].ownRgPath)),
       what: `native ${bin} (${version.split('\n')[0]}) vs ours under tjs over ${ugrep}`,
     };
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
@@ -246,7 +250,7 @@ function refusalTally(cells) {
   return [...t].sort((a, b) => b[1] - a[1]).map(([k, n]) => `${k} x${n}`).join(', ') || 'none';
 }
 
-function scanCells({ cells, floors, answeredFloors, tripwire, rgPath, what, platform }) {
+function scanCells({ cells, floors, answeredFloors, tripwire, rgPath, ownRgPath, rgPathExists, what, platform }) {
   const per = {}, answered = {};
   for (const c of cells) {
     per[c.kind] = (per[c.kind] || 0) + 1;
@@ -260,10 +264,14 @@ function scanCells({ cells, floors, answeredFloors, tripwire, rgPath, what, plat
   ];
   if (short.length) return { examined: 0, findings: short, note: `${what}; ${short.join('; ')}` };
   const findings = [];
-  if (rgPath !== tripwire) {
-    findings.push(`Bun.which('rg') answered ${JSON.stringify(rgPath)}, not the tripwire ${tripwire}: the absolute-path route a `
-      + 'host with ripgrep takes went unexercised');
+  // quaude's own rg (grep-native Task 10b): absolute, named rg, the path bun-shim states (RG_PATH), never the tripwire's, and
+  // no file there. A bare `rg` sends the bundle's Grep tool down the refusing route outside the working directory.
+  const ownSpelled = typeof rgPath === 'string' && /^\//.test(rgPath.replace(/^[A-Za-z]:[\\/]/, '/')) && /^rg(?:\.exe)?$/.test(rgPath.split(/[\\/]/).pop());
+  if (rgPath !== ownRgPath || !ownSpelled || rgPath === tripwire) {
+    findings.push(`Bun.which('rg') answered ${JSON.stringify(rgPath)}, not quaude's own absolute rg ${JSON.stringify(ownRgPath)}: the bundle `
+      + 'then takes a host-dependent route (a bare name refuses outside the working directory; a host rg\'s path is the host\'s)');
   }
+  if (rgPathExists) findings.push(`a file exists at quaude's own rg path ${ownRgPath}: nothing is ever written there, and a route that execs it must meet ENOENT`);
   for (const c of cells) {
     const said = Buffer.concat([c.ours.stdout || Buffer.alloc(0), c.ours.stderr || Buffer.alloc(0)]).toString('latin1');
     if (said.includes(TRIPWIRE_MARK) || c.ours.status === TRIPWIRE_RC) {
@@ -297,7 +305,8 @@ function controlCells({ defects = true } = {}) {
     const r = res(argv, 'a.txt\0');
     return { id: c.id, kind: c.kind, tree: '/tree', argv, native: r, ours: { ...r } };
   });
-  const base = { cells, floors: KIND_FLOORS, answeredFloors: ANSWERED_FLOORS, tripwire: '/trip/rg', rgPath: '/trip/rg', what: 'synthetic control', platform: 'darwin' };
+  const base = { cells, floors: KIND_FLOORS, answeredFloors: ANSWERED_FLOORS, tripwire: '/trip/rg', rgPath: '/quaude/bin/rg', ownRgPath: '/quaude/bin/rg',
+    rgPathExists: false, what: 'synthetic control', platform: 'darwin' };
   if (!defects) return base;
   const plain = cells.filter((x) => !P.MMAP_EVERYWHERE.cells[x.id]);
   const k = plain[Math.floor(plain.length / 2)];
@@ -342,11 +351,19 @@ test('a cell where the tripwire rg ran is a finding naming it, even when the byt
   assert.deepStrictEqual(r.findings, [`${c.cells[k].id}: ours ran a HOST rg (the tripwire answered, rc 99), not quaude's rg`]);
 });
 
-test('ours that did not resolve rg to the tripwire is a finding: the absolute-path route went unexercised', () => {
+test('ours whose Bun.which(\'rg\') is not quaude\'s own absolute rg is a finding: a bare rg, the tripwire, another path', () => {
+  for (const [rgPath, ownRgPath] of [['rg', 'rg'], ['/trip/rg', '/trip/rg'], ['/elsewhere/rg', '/quaude/bin/rg'], ['/quaude/bin/rgx', '/quaude/bin/rgx']]) {
+    const c = controlCells({ defects: false });
+    Object.assign(c, { rgPath, ownRgPath });
+    const r = scanCells(c);
+    assert.deepStrictEqual(r.findings.map((f) => /^Bun\.which\('rg'\) answered .*, not quaude's own absolute rg/.test(f)), [true], `${rgPath}: ${r.findings.join('\n')}`);
+  }
+  assert.deepStrictEqual(scanCells(controlCells({ defects: false })).findings, []);
+});
+test('a file at quaude\'s own rg path is a finding: nothing is ever written there', () => {
   const c = controlCells({ defects: false });
-  c.rgPath = 'rg';
-  const r = scanCells(c);
-  assert.ok(r.findings.some((f) => /Bun\.which\('rg'\) answered "rg", not the tripwire/.test(f)), r.findings.join('\n'));
+  c.rgPathExists = true;
+  assert.deepStrictEqual(scanCells(c).findings, ['a file exists at quaude\'s own rg path /quaude/bin/rg: nothing is ever written there, and a route that execs it must meet ENOENT']);
 });
 
 test('the control plants one differing byte AND one tripwire hit, and the gate names both', () => {

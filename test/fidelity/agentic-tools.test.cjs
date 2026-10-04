@@ -121,6 +121,66 @@ test('agentic Grep round-trip under tjs: search-applet path returns the match', 
   } finally { await mock.close(); }
 });
 
+// grep-native Task 10b: the Grep tool on a path OUTSIDE the working directory. The bundle resolves rg as
+// `Bun.which('rg') ?? 'rg'`, and its Grep tool refuses a target outside cwd when that is not absolute ("...ripgrep
+// was found only by name on PATH... Install ripgrep at an absolute path or search under the working directory."):
+// on a host with no rg, quaude said exactly that, and a host rg on PATH changed the route. bun-shim's Bun.which('rg')
+// now answers quaude's own absolute path (RG_PATH) whatever PATH holds, so both hosts take native's route. Each
+// tool_result is judged against native 2.1.283 (darwin-arm64, measured 2026-10-04 with the same canned mock, tree,
+// mtimes and --add-dir; <O> is the outside tree, the inside call's paths are cwd-relative), on a PATH with no rg and
+// on one whose first entry is a tripwire rg.
+const OUTSIDE_NATIVE = {
+  toolu_out_files: 'Found 3 files\n<O>/a.txt\n<O>/sub/b.txt\n<O>/.h.txt',
+  toolu_out_content: '<O>/sub/b.txt:2:beta sub/b.txt',
+  toolu_in_files: 'Found 2 files\nin/c.txt\nin/deep/d.txt',
+};
+test('agentic Grep outside cwd under tjs: tool_results equal native\'s (never "Install ripgrep"), with no rg on PATH and with a tripwire rg', async (t) => {
+  if (skipUnlessTjs(t)) return;
+  if (process.platform === 'win32') { t.skip('native literals measured on POSIX; the tripwire is a shell script'); return; }
+  const bin = providerBin(); if (!bin) { t.skip('no CLODE_PROVIDER_BIN'); return; }
+  const { cli, dir } = stageBundle(bin);
+  const base = fs.realpathSync(dir), work = path.join(base, 'work'), out = path.join(base, 'outside', 'tree'), home = path.join(base, 'home');
+  const T0 = 1700000000;
+  for (const [root, files] of [[out, [['a.txt', 7.5], ['sub/b.txt', 3.1], ['.h.txt', 1.2]]], [work, [['in/c.txt', 5.5], ['in/deep/d.txt', 2.5]]]]) {
+    for (const [f, dt] of files) { const p = path.join(root, f); fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, `one\nbeta ${f}\n`); fs.utimesSync(p, T0 + dt, T0 + dt); }
+  }
+  fs.mkdirSync(home);
+  const trip = path.join(base, 'trip');
+  fs.mkdirSync(trip);
+  fs.writeFileSync(path.join(trip, 'rg'), '#!/bin/sh\necho TRIPWIRE-HOST-RG-RAN "$@"\nexit 99\n', { mode: 0o755 });
+  const noRg = (process.env.PATH || '').split(path.delimiter).filter((d) => d && !fs.existsSync(path.join(d, 'rg'))).join(path.delimiter);
+  const CALLS = [
+    { name: 'Grep', input: { pattern: 'beta', path: out, output_mode: 'files_with_matches' }, id: 'toolu_out_files' },
+    { name: 'Grep', input: { pattern: 'beta', path: path.join(out, 'sub'), output_mode: 'content' }, id: 'toolu_out_content' },
+    { name: 'Grep', input: { pattern: 'beta', path: work, output_mode: 'files_with_matches' }, id: 'toolu_in_files' },
+  ];
+  const want = (c) => OUTSIDE_NATIVE[c.id].split('<O>').join(out);
+  const [OUT_FILES, OUT_CONTENT, IN_FILES] = CALLS;
+  const outFilesNative = (m) => toolResultText(m, OUT_FILES.id) === want(OUT_FILES);
+  const outContentNative = (m) => toolResultText(m, OUT_CONTENT.id) === want(OUT_CONTENT);
+  const inFilesNative = (m) => toolResultText(m, IN_FILES.id) === want(IN_FILES);
+  assertFailsOnMissingOutput(outFilesNative, OUT_FILES);
+  assertFailsOnMissingOutput(outContentNative, OUT_CONTENT);
+  assertFailsOnMissingOutput(inFilesNative, IN_FILES);
+  for (const [label, PATH] of [['no rg on PATH', noRg], ['a tripwire rg first on PATH', `${trip}${path.delimiter}${noRg}`]]) {
+    const mock = await startMockAnthropic({
+      respond: (body) => {
+        const next = CALLS.find((c) => !body.includes(c.id));
+        return next ? cannedToolUseSSE(next.name, next.input, next.id) : cannedSSE('OUTSIDE-DONE');
+      },
+    });
+    try {
+      const r = await bootP(cli, work, ['-p', 'search', '--allowedTools', 'Grep', '--add-dir', path.dirname(out)],
+        { ...mockEnv(work, mock.url), HOME: home, PATH }, 180000);
+      assert.strictEqual(r.status, 0, `${label}: stderr:\n${r.stderr}`);
+      const said = (c) => `${label}: ${c.id}: ${JSON.stringify(toolResultText(mock, c.id))}`;
+      assert.ok(outFilesNative(mock), said(OUT_FILES));
+      assert.ok(outContentNative(mock), said(OUT_CONTENT));
+      assert.ok(inFilesNative(mock), said(IN_FILES));
+    } finally { await mock.close(); }
+  }
+});
+
 // H1 — multi-turn coherence: a 2-tool conversation loop (Bash echo A -> result
 // -> Bash echo B -> result -> final). Both tool_results must carry their own
 // stdout, in order — the turn loop stays coherent across turns under quaude.

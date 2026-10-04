@@ -252,3 +252,65 @@ test('spawn (posix): a pathed non-executable throws the pathed message', posixOn
   fs.writeFileSync(p, 'x\n', { mode: 0o644 });
   assert.throws(() => bun.spawn([p]), /Executable not found: /);
 });
+
+// ------------------------------------------------ rg: quaude's own path ----
+// grep-native Task 10b (user ruling 2026-10-03: a PATH STRING ONLY, no file created). The bundle resolves rg as
+// `Bun.which('rg') ?? 'rg'` (2.1.283's nm/bQ), and its Grep tool (djn) refuses a target outside the working directory
+// when that is not absolute: "...ripgrep was found only by name on PATH... Install ripgrep at an absolute path or
+// search under the working directory." With a host rg on PATH the bundle got its absolute path and searched; without
+// one it refused. So quaude was host-dependent, and told the model to install ripgrep. Bun.which('rg') now answers
+// ONE absolute path whatever PATH holds: `rg` beside the binary that runs the bundle (rg.exe on Windows). Nothing is
+// ever written there: every rg spawn is answered by quaude's rg by basename (libexec/rg-native.cjs isRgExe), and
+// anything that execs the path for real meets ENOENT, never a host rg.
+const QUAUDE_RG = path.join(path.dirname(process.execPath), process.platform === 'win32' ? 'rg.exe' : 'rg');
+const tripwireDir = () => {
+  const dir = tmpbin();
+  fs.writeFileSync(path.join(dir, 'rg'), '#!/bin/sh\necho TRIPWIRE-HOST-RG-RAN\nexit 99\n', { mode: 0o755 });
+  fs.writeFileSync(path.join(dir, 'rg.exe'), 'TRIPWIRE\n');
+  return dir;
+};
+
+test('rg: Bun.which(\'rg\') answers quaude\'s own absolute path beside the binary, on a host with no rg', () => {
+  assert.strictEqual(bun.RG_PATH, QUAUDE_RG, 'stated once, in bun-shim');
+  assert.strictEqual(which('rg', { PATH: tmpbin() }), QUAUDE_RG);
+  assert.ok(path.isAbsolute(QUAUDE_RG));
+  assert.strictEqual(path.basename(QUAUDE_RG), process.platform === 'win32' ? 'rg.exe' : 'rg');
+  assert.ok(!fs.existsSync(QUAUDE_RG), `nothing is written at ${QUAUDE_RG}`);
+});
+
+test('rg: with a tripwire rg first on PATH, Bun.which(\'rg\') still answers quaude\'s own path, never the host\'s', () => {
+  const trip = tripwireDir();
+  assert.strictEqual(which('rg', { PATH: trip }), QUAUDE_RG);
+  const prev = process.env.PATH;
+  process.env.PATH = `${trip}${path.delimiter}${prev}`;
+  try { assert.strictEqual(bun.which('rg'), QUAUDE_RG); } finally { process.env.PATH = prev; }
+});
+
+test('rg: Bun.which of quaude\'s own path answers itself (the sandbox asks Bun.which(<its rg command>))', () => {
+  assert.strictEqual(which(QUAUDE_RG, { PATH: tmpbin() }), QUAUDE_RG);
+});
+
+test('rg: a route that execs quaude\'s own path for real meets ENOENT, never a host rg', posixOnly, () => {
+  const trip = tripwireDir();
+  const r = require('node:child_process').spawnSync('/bin/sh', ['-c', 'exec "$0"', QUAUDE_RG], { encoding: 'utf8', env: { PATH: trip } });
+  // the shell's `exec` of a missing file: 127 (dash, zsh), 126 (bash as /bin/sh); ENOENT's own words either way
+  assert.ok(r.status === 126 || r.status === 127, `${r.status}: ${r.stdout}${r.stderr}`);
+  assert.match(r.stderr, /No such file or directory|not found/);
+  assert.doesNotMatch(r.stdout + r.stderr, /TRIPWIRE/);
+});
+
+test('rg: under tjs, Bun.which(\'rg\') answers the engine\'s own path, with or without a tripwire rg on PATH', (t) => {
+  const { tjsPath, runLoader } = require('./node-shim-helper.cjs');
+  if (!tjsPath()) { t.skip('no tjs engine'); return; }
+  const trip = tripwireDir();
+  const probe = path.join(tmpbin(), 'probe.cjs');
+  fs.writeFileSync(probe, `const Bun = require(${JSON.stringify(path.join(__dirname, '..', 'libexec', 'bun-shim.cjs'))});
+    process.stdout.write(JSON.stringify({ execPath: process.execPath, RG_PATH: Bun.RG_PATH, none: Bun.which('rg', { PATH: ${JSON.stringify(tmpbin())} }),
+      trip: Bun.which('rg', { PATH: ${JSON.stringify(trip)} }), env: Bun.which('rg'), self: Bun.which(Bun.RG_PATH) }));`);
+  const r = runLoader(probe, [], { env: { PATH: `${trip}${path.delimiter}${process.env.PATH}` } });
+  assert.strictEqual(r.status, 0, r.stderr);
+  const o = JSON.parse(r.stdout);
+  const want = path.join(path.dirname(o.execPath), process.platform === 'win32' ? 'rg.exe' : 'rg');
+  assert.deepStrictEqual(o, { execPath: o.execPath, RG_PATH: want, none: want, trip: want, env: want, self: want });
+  assert.ok(!fs.existsSync(want), `nothing is written at ${want}`);
+});
