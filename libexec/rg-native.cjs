@@ -424,12 +424,16 @@ function rgText(bytes) { return rgTextRead(bytes).text; }
 // `stdin`: rg reads its stdin through std's 8 KiB BufReader, which the 3-byte peek fills first: the
 // next read is the rest of those 8 KiB, then (RG-STDIN-ALL-THERE) as long as there is room, as when the
 // caller's whole input has already arrived (the UTF-16 decoder's 8 KiB reads then start at byte 8192).
-// RG-STDIN-ALL-THERE is a choice, not rg's rule: a read from a pipe hands over what has arrived, so
-// native's fills follow the WRITER's timing (measured 2026-10-04, `-n -C 1` over 65,547 bytes whose NUL
-// is at 65536, 10 runs per writer: one write on Linux, the whole input every time; on macOS, 64 KiB
-// first in 9-10 of 10; a write of 65,537 bytes then a pause, macOS 8 of 10 one way and 2 the other).
-// A race has no answer to match; this is the answer when nothing races. Only the standard printer's
-// RG-BINARY-CONVERT stop over more than 8 KiB of stdin depends on it.
+// RG-STDIN-ALL-THERE is ONE behaviour everywhere (the user's doctrine: an I/O-chunking artifact, like
+// RG-MMAP-EVERYWHERE), and a NAMED macOS PIPE-CAPACITY DIVERGENCE: a read from a pipe hands over what the
+// pipe holds, and a macOS pipe holds 64 KiB, so there native's first fill past the BufReader's 8 KiB
+// ends at the pipe's capacity when one writer fills it at once (`-n -C 1` over 65,547 bytes whose NUL is
+// at 65536: macOS one-shot writers 64 KiB first 20 of 20 in Task 8's re-review (spawnSync, spawn, 4 KiB
+// chunks, `cat |`), 15 and 18 of 20 under spawnSync re-measured 2026-10-04, the rest whole; a file
+// descriptor as stdin whole 10 of 10; only a writer that pauses varies). Linux reads the whole input,
+// 40 of 40. Only the standard printer's RG-BINARY-CONVERT stop over more than 8 KiB of stdin depends
+// on it; test/rg-native.test.cjs P8_MACOS_PIPE_DIVERGENCE keeps macOS native's literal beside Linux's,
+// and requires macOS native still to print it.
 const STDIN_BUF = 8 * 1024;
 function rgTextRead(bytes, { stdin = false } = {}) {
   if (bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) {

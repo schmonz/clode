@@ -371,11 +371,15 @@ Bash tool instead".
     record, and both are named. The P8 rows keep the 7 darwin rows that differ as P8_MACOS_DIVERGENCE.
     The 10-path cap is pinned by Linux-native rows for 10 and 11 named files.
   - RG-STDIN-ALL-THERE: stdin is read as if all of it had arrived (the BufReader's 8 KiB, then as much
-    as fits). Native's own fills over a pipe follow the writer's timing, not an OS rule (measured
-    2026-10-04, 10 runs per writer, a NUL at byte 65536 of 65,547: one write, Linux whole every time,
-    macOS 64 KiB first 9-10 of 10; 65,537 bytes then a pause, macOS 8 to 2). A race has no answer; only
-    the standard printer's stop over more than 8 KiB of stdin depends on it. NetBSD, Windows and Haiku
-    unmeasured, and need not be: the choice holds wherever the writer races.
+    as fits), ONE behaviour everywhere, and a NAMED macOS PIPE-CAPACITY DIVERGENCE (corrected 2026-10-04,
+    Task 8 re-review; it was first written up as "a race"): a macOS pipe holds 64 KiB, so a one-shot
+    writer's data reaches native there 64 KiB first (20 of 20 in the re-review across spawnSync, spawn,
+    4 KiB chunks and `cat |`; 15 and 18 of 20 re-measured under spawnSync, the rest whole), a file
+    descriptor as stdin reads whole (10 of 10), and only a writer that pauses varies; Linux reads it whole
+    (40 of 40). test/rg-native.test.cjs P8_MACOS_PIPE_DIVERGENCE keeps macOS native's literal beside the
+    Linux row, and a darwin test requires macOS native still to print it, so a change there is noticed.
+    Only the standard printer's stop over more than 8 KiB of stdin depends on it. NetBSD, Windows and
+    Haiku pipe capacities unmeasured.
   - The fills scan back with the engine's lastIndexOf (a JS byte loop over a 55 MB minified bundle held
     the event loop 761-1011 ms under tjs: review I-2); each byte is stepped over at most max(-A, -B) + 2
     times (worst measured 1.98).

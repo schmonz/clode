@@ -1461,7 +1461,6 @@ const P8_NATIVE_LINUX = [
   ['RG-BINARY-MMAP', ["-j1","-n","needle","m/f0.dat","m/f1.dat","m/f2.dat","m/f3.dat","m/f4.dat","m/f5.dat","m/f6.dat","m/f7.dat","m/f8.dat","m/f9.dat"], null, 0, 'm/f0.dat:1:first needle line\nm/f0.dat:10002:near needle\nm/f0.dat:10004:after needle\n'],
   ['RG-BINARY-CONVERT', ["-j1","-n","needle","m/f0.dat","m/f1.dat","m/f2.dat","m/f3.dat","m/f4.dat","m/f5.dat","m/f6.dat","m/f7.dat","m/f8.dat","m/f9.dat","m/f10.dat"], null, 0, 'm/f0.dat:1:first needle line\nm/f0.dat: binary file matches (found "\\0" byte around offset 120030)\n'],
   ['RG-BINARY-CONVERT', ["-j1","-n","needle","late.dat","-"], null, 0, 'late.dat:1:first needle line\nlate.dat: binary file matches (found "\\0" byte around offset 120030)\n'],
-  ['RG-STDIN-ALL-THERE', ["-n","-C","1","needle","-"], 'b64k.dat', 0, '1:needle\nbinary file matches (found "\\0" byte around offset 65536)\n'],
 ];
 const P8_MACOS_DIVERGENCE = [
   ['RG-MMAP-EVERYWHERE', ["--json","needle","early.dat"], null, 0, '{"type":"begin","data":{"path":{"text":"early.dat"}}}\n{"type":"match","data":{"path":{"text":"early.dat"},"lines":{"text":"text needle before\\n"},"line_number":1,"absolute_offset":0,"submatches":[{"match":{"text":"needle"},"start":5,"end":11}]}}\n{"type":"match","data":{"path":{"text":"early.dat"},"lines":{"text":"needle after nul\\n"},"line_number":4,"absolute_offset":23,"submatches":[{"match":{"text":"needle"},"start":0,"end":6}]}}\n{"type":"end","data":{"path":{"text":"early.dat"},"binary_offset":19,"stats":{"elapsed":{},"searches":1,"searches_with_match":1,"bytes_searched":40,"bytes_printed":436,"matched_lines":2,"matches":2}}}\n{"data":{"elapsed_total":{},"stats":{"bytes_printed":436,"bytes_searched":40,"elapsed":{},"matched_lines":2,"matches":2,"searches":1,"searches_with_match":1}},"type":"summary"}\n', 0, '{"type":"begin","data":{"path":{"text":"early.dat"}}}\n{"type":"match","data":{"path":{"text":"early.dat"},"lines":{"text":"text needle before\\n"},"line_number":1,"absolute_offset":0,"submatches":[{"match":{"text":"needle"},"start":5,"end":11}]}}\n{"type":"match","data":{"path":{"text":"early.dat"},"lines":{"text":"needle after nul\\n"},"line_number":3,"absolute_offset":23,"submatches":[{"match":{"text":"needle"},"start":0,"end":6}]}}\n{"type":"end","data":{"path":{"text":"early.dat"},"binary_offset":19,"stats":{"elapsed":{},"searches":1,"searches_with_match":1,"bytes_searched":19,"bytes_printed":436,"matched_lines":2,"matches":2}}}\n{"data":{"elapsed_total":{},"stats":{"bytes_printed":436,"bytes_searched":19,"elapsed":{},"matched_lines":2,"matches":2,"searches":1,"searches_with_match":1}},"type":"summary"}\n'],
@@ -1472,8 +1471,19 @@ const P8_MACOS_DIVERGENCE = [
   ['RG-MMAP-EVERYWHERE', ["-j1","-n","needle","early.dat","late.dat"], null, 0, 'early.dat: binary file matches (found "\\0" byte around offset 19)\nlate.dat:1:first needle line\nlate.dat: binary file matches (found "\\0" byte around offset 120030)\n', 0, 'early.dat: binary file matches (found "\\0" byte around offset 19)\nlate.dat:1:first needle line\nlate.dat:10002:near needle\nlate.dat:10004:after needle\n'],
   ['RG-MMAP-EVERYWHERE', ["-n","needle","grow.dat"], null, 0, '1:needle\nbinary file matches (found "\\0" byte around offset 200017)\n', 0, '1:needle\n3:needle 2\n'],
 ];
-// Every row, as one host answers it now (RG-MMAP-EVERYWHERE: a divergence row expects Linux native's).
-const P8_ROWS = [...P8_NATIVE, ...P8_NATIVE_LINUX, ...P8_MACOS_DIVERGENCE.map(([rule, argv, input, , , rc, out]) => [rule, argv, input, rc, out])]
+// RG-STDIN-ALL-THERE's named macOS PIPE-CAPACITY divergence (libexec/rg-native.cjs states it): quaude's rg
+// reads stdin as if all of it had arrived, which is Linux native's answer (40 of 40), where a macOS pipe
+// holds 64 KiB and native's first fill there ends at it (one-shot writers: 20 of 20 in Task 8's re-review,
+// 15 and 18 of 20 re-measured 2026-10-04 under spawnSync, the rest whole). [rule, argv, input, macOS rc,
+// macOS stdout (the record of the divergence: its modal answer), Linux rc, Linux stdout (the expectation)].
+const P8_MACOS_PIPE_DIVERGENCE = [
+  ['RG-STDIN-ALL-THERE', ["-n","-C","1","needle","-"], 'b64k.dat',
+    0, `1:needle\n2-${'f'.repeat(65528)}\n--\nbinary file matches (found "\\0" byte around offset 65536)\n`,
+    0, '1:needle\nbinary file matches (found "\\0" byte around offset 65536)\n'],
+];
+// Every row, as one host answers it now (RG-MMAP-EVERYWHERE and RG-STDIN-ALL-THERE: a divergence row
+// expects Linux native's).
+const P8_ROWS = [...P8_NATIVE, ...P8_NATIVE_LINUX, ...[...P8_MACOS_DIVERGENCE, ...P8_MACOS_PIPE_DIVERGENCE].map(([rule, argv, input, , , rc, out]) => [rule, argv, input, rc, out])]
   .map((r) => [r]);
 async function withP8(fn) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'rg-native-p8-')));
@@ -1515,6 +1525,34 @@ test('RG-MMAP-EVERYWHERE: a divergence row is one where macOS and Linux native d
     assert.ok(!input && !argv.includes('-') && argv.filter((a) => /\.dat$/.test(a)).length <= 10, `${argv.join(' ')}: not a mapped named file`);
   }
 });
+// RG-STDIN-ALL-THERE's macOS pipe-capacity divergence is its own named record: stdin rows only, each one
+// where macOS and Linux native differ.
+test('RG-STDIN-ALL-THERE: a pipe-capacity divergence row reads stdin, and macOS and Linux native differ there', () => {
+  assert.ok(P8_MACOS_PIPE_DIVERGENCE.length >= 1);
+  for (const [rule, argv, input, mrc, mout, lrc, lout] of P8_MACOS_PIPE_DIVERGENCE) {
+    assert.strictEqual(rule, 'RG-STDIN-ALL-THERE');
+    assert.ok(input && argv.includes('-'), `${argv.join(' ')}: not a stdin row`);
+    assert.ok(mrc !== lrc || mout !== lout, `${argv.join(' ')}: macOS and Linux agree, so it needs no record`);
+  }
+});
+// The record is kept honest where it can be measured: on macOS, native fed by one write (spawnSync's)
+// prints only its recorded macOS answer or Linux's, and its recorded one at least once in 10 runs. A
+// change in macOS native (or in macOS pipes) fails here, naming the record to re-measure.
+const NATIVE_BIN = require('./provider-resolve.cjs').providerBin(process.env);
+test('RG-STDIN-ALL-THERE: macOS native still prints its recorded pipe-capacity answer (native, macOS)',
+  { skip: process.platform !== 'darwin' ? 'macOS only' : !NATIVE_BIN ? 'no native provider' : false }, () => withP8((root) => {
+    for (const [, argv, input, mrc, mout, lrc, lout] of P8_MACOS_PIPE_DIVERGENCE) {
+      let recorded = 0;
+      for (let i = 0; i < 10; i++) {
+        const r = cp.spawnSync(NATIVE_BIN, ['--no-config', ...argv], { cwd: root, argv0: 'rg', input: P8_INPUT(input), env: { HOME: root }, maxBuffer: 1 << 24 });
+        const out = Buffer.from(r.stdout).toString('latin1');
+        const isMac = r.status === mrc && out === mout, isLinux = r.status === lrc && out === lout;
+        assert.ok(isMac || isLinux, `${argv.join(' ')}: macOS native printed neither recorded answer (rc ${r.status}, ${out.length} bytes): re-measure RG-STDIN-ALL-THERE`);
+        if (isMac) recorded++;
+      }
+      assert.ok(recorded >= 1, `${argv.join(' ')}: macOS native never printed its recorded pipe-capacity answer in 10 runs: re-measure RG-STDIN-ALL-THERE`);
+    }
+  }));
 test('RG-BINARY-*: with the matcher alone deciding every file, native\'s rows that name no directory', () => withP8((root) => {
   let n = 0;
   for (const [row] of P8_ROWS.filter(([r]) => !P8_NAMES_DIR(r[1]))) { p6Check(root, row, p8Sync(root, row, { alone: true }), false); n++; }
