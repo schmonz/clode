@@ -211,7 +211,7 @@ test('rewriteSnapshot replaces only quaude\'s own rg alias line, in the file and
   const gen = `SNAPSHOT_FILE=/x\n      echo '  alias rg='"'${bunShim.RG_PATH}'" >> "$SNAPSHOT_FILE"\n`;
   const g = rewriteSnapshot(gen);
   assert.doesNotMatch(g, /alias rg=/);
-  assert.match(g, /cat >> "\$SNAPSHOT_FILE" << 'CLODE_RG_FUNC_END'\nfunction rg \{[\s\S]*\nCLODE_RG_FUNC_END\n/);
+  assert.match(g, /cat >> "\$SNAPSHOT_FILE" << 'QUAUDE_RG_FUNC_END'\nfunction rg \{[\s\S]*\nQUAUDE_RG_FUNC_END\n/);
 });
 // The generator itself, through the real interception: the bundle hands child_process a shell command that writes
 // the snapshot; with only the rg block in it (no ARGV0 shadow), bun-shim must still rewrite it.

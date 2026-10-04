@@ -691,7 +691,7 @@ function _rewriteRgOwnAlias(text) {
     const m = a.slice(0, 4);
     if (_rgAliasValue(m) !== RG_PATH) return a[0];
     return m[2] !== undefined
-      ? `${m[1]}cat >> "$SNAPSHOT_FILE" << 'CLODE_RG_FUNC_END'\n${rgShadowBody()}\nCLODE_RG_FUNC_END`
+      ? `${m[1]}cat >> "$SNAPSHOT_FILE" << 'QUAUDE_RG_FUNC_END'\n${rgShadowBody()}\nQUAUDE_RG_FUNC_END`
       : rgShadowBody();
   });
 }
