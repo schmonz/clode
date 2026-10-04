@@ -254,6 +254,99 @@ function refusalDrift(text) {
   return findings;
 }
 
+// ---- every rg argv the carve builds (grep-native Task 10 fix round, review I-1) --------------------------
+// THE RATCHET for "a production flag refused": Task 10 refused --max-depth, which 2.1.283 passes in production
+// (the orphaned-plugin-version listing, rt, the sandbox scan), and --follow (the FileIndex fallback) had been
+// refused all along; nothing judged the argv the bundle builds OUTSIDE the Grep and Glob tools. This reads
+// them from the carve BY STRUCTURE, never by minified names:
+//   - every array literal that starts `["--files"` (each rg listing the bundle builds: the Glob tool, the
+//     orphaned versions, rt, the sandbox scan, the file count, the FileIndex fallback, the markdown loader),
+//     with the flags pushed onto it before it is handed to the runner (the code up to the next `await`,
+//     `return` or `catch`);
+//   - the Grep tool's builder, through grepArgv (matrixDrift holds it equal to the carve's), every mode;
+//   - the first-use probe: `"--version"]` within 400 bytes before `.startsWith("ripgrep ")`;
+//   - each of those again with `-j 1` first, where the runner's EAGAIN retry prepends it (`?["-j","1"]:[]`).
+// A flag's value that is a string or template literal in the carve is taken (`${...}` as `x`); any other
+// expression (`String(r)`, a variable) stands as a placeholder of the flag's kind. The argv ends with `.`.
+// Returns [{ where, argv }]: `where` names the shape by its offset and first flags (stable to read, not a name).
+const RG_VALUE_FLAGS = new Map([['--glob', 'x*'], ['-g', 'x*'], ['--iglob', 'x*'], ['--max-depth', '4'], ['--maxdepth', '4'], ['-d', '4'],
+  ['-j', '1'], ['--threads', '1'], ['--type', 'ts'], ['-t', 'ts'], ['--type-not', 'ts'], ['-T', 'ts'], ['--sort', 'modified'],
+  ['--sortr', 'modified'], ['-e', 'x'], ['--regexp', 'x'], ['-A', '1'], ['-B', '1'], ['-C', '1'], ['-M', '500'], ['--max-columns', '500']]);
+// The string and template literals of a stretch of carve text, in order: [{ value, start, end, template }].
+function jsLiterals(src) {
+  const out = [];
+  for (let i = 0; i < src.length; i++) {
+    const q = src[i];
+    if (q !== '"' && q !== '\'' && q !== '`') continue;
+    let j = i + 1, v = '';
+    while (j < src.length && src[j] !== q) {
+      if (src[j] === '\\') { v += src[j + 1]; j += 2; continue; }
+      if (q === '`' && src[j] === '$' && src[j + 1] === '{') {
+        let depth = 1; j += 2;
+        while (j < src.length && depth) { if (src[j] === '{') depth++; else if (src[j] === '}') depth--; j++; }
+        v += 'x';
+        continue;
+      }
+      v += src[j++];
+    }
+    out.push({ value: v, start: i, end: j + 1, template: q === '`' });
+    i = j;
+  }
+  return out;
+}
+// The end of the array literal that opens at `open` (its `[`), skipping strings: the index after its `]`.
+function arrayEnd(t, open) {
+  let depth = 0;
+  for (let i = open; i < t.length; i++) {
+    const c = t[i];
+    if (c === '"' || c === '\'' || c === '`') {
+      for (i++; i < t.length && t[i] !== c; i++) if (t[i] === '\\') i++;
+      continue;
+    }
+    if (c === '[') depth++;
+    else if (c === ']' && --depth === 0) return i + 1;
+  }
+  return -1;
+}
+function argvOfRegion(region) {
+  const lits = jsLiterals(region), argv = [];
+  for (let k = 0; k < lits.length; k++) {
+    const L = lits[k];
+    if (!L.value.startsWith('-') || L.value === '-') continue;
+    argv.push(L.value);
+    if (!RG_VALUE_FLAGS.has(L.value)) continue;
+    const next = lits[k + 1];
+    const between = next ? region.slice(L.end, next.start) : '';
+    if (next && /^\s*,\s*$/.test(between)) { argv.push(next.value); k++; } else argv.push(RG_VALUE_FLAGS.get(L.value));
+  }
+  return argv;
+}
+function carveRgArgvShapes(text) {
+  const t = String(text);
+  const shapes = [];
+  for (let i = t.indexOf('["--files"'); i !== -1; i = t.indexOf('["--files"', i + 1)) {
+    const end = arrayEnd(t, i);
+    if (end === -1) continue;
+    const rest = t.slice(end, end + 600);
+    const stop = Math.min(...['await ', 'return ', 'catch', 'return}'].map((w) => { const j = rest.indexOf(w); return j === -1 ? rest.length : j; }));
+    const argv = [...argvOfRegion(t.slice(i, end) + rest.slice(0, stop)), '.'];
+    shapes.push({ where: `@${i} ${argv.slice(0, 4).join(' ')}`, argv });
+  }
+  for (const mode of ['files_with_matches', 'count', 'content']) {
+    for (const p of [{}, { multiline: true, i: true }, { glob: '*.txt', type: 'ts' }, { o: true, C: 1 }, { B: 1, A: 2 }]) {
+      const argv = grepArgv({ pattern: 'needle', mode, ...p }, '.');
+      shapes.push({ where: `the Grep builder ${mode} ${JSON.stringify(p)}`, argv });
+    }
+  }
+  for (let i = t.indexOf('.startsWith("ripgrep ")'); i !== -1; i = t.indexOf('.startsWith("ripgrep ")', i + 1)) {
+    if (t.slice(Math.max(0, i - 400), i).includes('"--version"]')) { shapes.push({ where: `@${i} the first-use probe`, argv: ['--version'] }); break; }
+  }
+  // The runner's retry after EAGAIN prepends `-j 1` to whatever it runs (`?["-j","1"]:[]`): each shape again so.
+  if (t.includes('?["-j","1"]:[]')) for (const s of shapes.slice()) shapes.push({ where: `${s.where} (retried: -j 1)`, argv: ['-j', '1', ...s.argv] });
+  const seen = new Set();
+  return shapes.filter((s) => { const k = JSON.stringify(s.argv); if (seen.has(k)) return false; seen.add(k); return true; });
+}
+
 // The variants report-grep measured, and the content-only flags. Patterns come from the regex
 // dialect Rust regex and ugrep read the same way (the written divergence).
 const GREP_VARIANTS = [
@@ -556,5 +649,5 @@ function mmapEverywhere(id, native, argv, tree, platform) {
 }
 
 module.exports = { RG_TREE_KINDS, makeRgTree, treeEntries, RG_MATRIX, cellArgv, grepArgv, globArgv, VCS_DIRS, flagLiterals, builderFlagLiterals, matrixDrift,
-  consumerUsageErrorRegex, refusalDrift,
+  consumerUsageErrorRegex, refusalDrift, carveRgArgvShapes,
   runNativeRg, nativeRgVersion, runOursRg, cellInput, assertNoAncestorRules, runOursRgBatch, compareRg, normalizeRg, rgOneThread, MMAP_EVERYWHERE, mmapEverywhere, inTree };
