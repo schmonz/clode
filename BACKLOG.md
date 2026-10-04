@@ -153,7 +153,7 @@ Bash tool instead".
     a no-op there, as native's is). In rg-differential, 28 of the 90 files/count cells are equal
     (none were); every one of the other 62 is in a class below that a later task of that plan owns
     (.git, ignore precedence, whitelist and brace globs, --type: Task 9; -U: Task 10; a binary's
-    NUL past rg's first read: Task 8).
+    NUL past rg's first read: Task 8, done 2026-10-04).
   - With `--max-columns` dropped, 44 of the 60 files/count argv x tree cells still differ from
     native (the other 16 are empty on both sides): `--glob '!.git'` excludes no directory in
     ugrep (.git/HEAD is searched); ugrep -I drops invalid-UTF-8 files; `-c` prints zero counts;
@@ -257,8 +257,9 @@ Bash tool instead".
     selects line 2 and prints submatches []); rg's printers do not print that match. And
     RG-TEXT-BOM: offsets are into rg's decoding of a file with a BOM (UTF-8 stripped, UTF-16
     transcoded the WHATWG way, `rgText`); the printers must slice lines from that same text;
-  - FOR BINARY RULES (Task 8): the matcher splits lines at `\n` only, so a file rg reads in convert
-    mode (a NUL as a line break) has its lines from Task 8;
+  - FOR BINARY RULES (Task 8, DONE): the matcher splits lines at `\n` only, so a file rg reads in
+    convert mode (a NUL as a line break) is decided again over rg's converted text (a plain literal's
+    ugrep ranges stand: they are the same in both);
   - SPEED under tjs (this Mac, 2026-10-03), over this repo's 816 files, against native's counts:
     `function` 100 ms (native 57), `const` 118 ms (54), `require\(` 63 ms (29), `(?i)error` 148 ms
     (107), `a` (446,198 matches) 1.3 s (289 ms), `\w+` (1,538,276 matches) 11.5 s (658 ms). A plain
@@ -306,11 +307,8 @@ Bash tool instead".
     strerror, not a table here.
   - THE SYNC TWIN'S BOUND reaches every spawn (ugrep --version included) and is checked before each
     file is read; one read, once started, runs to its end (review M-2).
-  - RG-BINARY-QUIT-FIRST-READ IS INTERIM: a WALKED file whose first 64 KiB of text hold a NUL
-    prints nothing; native agrees for a NUL there, not for one later (late.dat: -l lists it, -c
-    prints nothing; ours counts it). A named file and stdin are searched as text: native's convert
-    mode for them (stdin `needle one\n\0x\nneedle two\n`: -l `<stdin>`, -c 2) agrees for -l and
-    -c, not for the standard printer (Task 8). Task 8 replaces all of it with rg's LineBuffer.
+  - BINARY FILES ARE rg's LINE BUFFER'S (grep-native Task 8; RG-BINARY-QUIT, RG-BINARY-CONVERT,
+    RG-BINARY-MMAP replace the interim RG-BINARY-QUIT-FIRST-READ): see the entry for Task 8 below.
   - REFUSED BY NAME, never passed to ugrep: every flag outside the set a search reads (-l -c -i -s
     -n -N -H -I -0 -o -. -A -B -C -M -e -g -j, their long names, --iglob --no-ignore --no-hidden
     --case-sensitive), so -U (Task 10), -S/--smart-case, -w, -F, -v and the rest; more than one -e;
@@ -331,9 +329,8 @@ Bash tool instead".
   The Grep tool's content mode is answered, message for message (RG-JSON and its siblings in
   libexec/rg-native.cjs); driven end to end through the real 2.1.283 bundle under tjs, its
   tool_results equal native's up to rg's own (nondeterministic) file order. Left:
-  - `binary_offset` is always null and a NAMED binary is printed as text: native's convert mode (a
-    NUL is a line break, so later line numbers shift; `binary_offset` set) and a walked file's quit
-    after its first 64 KiB are Task 8's (rg-differential: early.dat 7 cells, late.dat 10).
+  - (DONE, Task 8) `binary_offset`, a named binary's line breaks at NUL and a walked file's quit:
+    RG-BINARY-*, the entry below.
   - A path that is not UTF-8 would be `{"bytes": ...}` in native's JSON; the interim walk reads
     ugrep's listing as UTF-8 (lossy), so such a name cannot reach the printer as its bytes. Task 9's
     walk must carry names as bytes. `--type` beside `--json` refuses naming `--type` (Task 9).
@@ -344,6 +341,34 @@ Bash tool instead".
     over 200,000 lines blocked 20.3 s (the 20 s timeout could not fire). Still slow beside native
     (~100 ms each): that case takes 12.9 s with a 138 ms longest gap; every match of a 5 MB line
     3.4 s (32 ms); `--json -n e .` over this repo 7.0 s (77 ms); `-o -n e .` 9.4 s (44 ms).
+- **quaude's rg's binary detection is rg's line buffer (grep-native Task 8, 2026-10-04).** Read from
+  grep-searcher 0.1.14, encoding_rs_io 0.1.7, grep-printer 0.2.2 and ripgrep 14.1.1's hiargs.rs, every
+  rule measured against native 2.1.283 on darwin-arm64 and linux-x64 (test/rg-native.test.cjs P8 rows;
+  a scratch differential of 561 darwin and 374 linux cells over NUL positions, peeks, BOMs, UTF-16
+  chunks, buffer growth and context: 0 differ; 334 of the 561 differed before). rg-differential's binary
+  cells (late.dat 10 content + 4 count, early.dat 7 content) are equal now (139 -> 118 findings).
+  - RG-BINARY-QUIT (a walked file): the 64 KiB fills (the 3-byte BOM peek as the first read; the
+    UTF-16 decoder's 8 KiB reads; the buffer tripling for a long line; the roll keeping context lines)
+    and the fill that meets the first NUL ending the search. -c prints nothing for a file with a NUL;
+    -l now reads a walked file whole (it read 64 KiB) to place its NUL against its first match.
+  - RG-BINARY-CONVERT (a named file or stdin): NUL as a line break. A pattern that is not a plain
+    literal is decided again over that text with the matcher alone (every line): about a microsecond a
+    byte under tjs, for a named file with a NUL only.
+  - RG-BINARY-MMAP: **native differs by platform here, by rg's own rule** (mmap.rs: never on macOS):
+    on every other host rg memory-maps up to 10 named regular files, and a NUL stays inside its line
+    (linux-x64 native, measured: early.dat's lines 1 and 3, bytes_searched 19, where darwin says 1 and
+    4 and 40). quaude's rg follows the host's platform, so the Linux CI gate (Task 11) judges this
+    branch and the Mac gate the other; the P8 rows pin both on any host (runRg's `platform`).
+  - NOT MODELLED, named: (1) rg's line buffer belongs to a searching thread and keeps its grown size
+    for the next file that thread searches (measured: under -j1, a file with a 100 KB line before a
+    file whose NUL lies at 70 KB hides the second from -l; alone, it is listed); quaude's rg starts
+    every file at 64 KiB. In the parallel walk which thread searches what is native's own
+    nondeterminism; under -j1 it is rg's walk order, Task 9's (ruling G15), after which a sequential
+    search can carry the size across files. (2) A UTF-16 read that the line buffer's room cuts short
+    (a line longer than about 52 KB of text) is taken to end on a whole character; encoding_rs's
+    exact cut is unmeasured. (3) stdin's reads are the BufReader's 8 KiB, then what the pipe holds:
+    64 KiB at a time on macOS (native 19 of 20 runs), all of it on Linux (40 of 40); a caller writing
+    in pieces makes native's own fills vary. Only the standard printer's stop point depends on it.
 - **node-shim's sync stat has no dev, ino or rdev: an engine gap. FIXED** (6d43ee6 engine, 3008358
   bigint; ruling G18, 2026-10-04). The sync stat/lstat/fstat (txiki-sync-stat-identity.patch) now
   answer from libuv's uv_stat_t, as the async tjs.stat and node's statSync do, and hand JS every
