@@ -15,7 +15,8 @@
 // exits other than 0 or 1. (Fix round 2, review N2: reading only `["--files"` arrays missed the environment
 // scan eo(), `dTo(["-o","-H",...,"--no-messages",...,"--max-filesize",...,"-e",...])`, which quaude's rg refused.)
 //
-// FLOOR: the shapes the 2.1.283 carve gives (44, measured 2026-10-04: 9 runner calls (7 listings, eo()'s scan,
+// FLOOR: the shapes the 2.1.283 carve gives (46 since Task 10b's fix round: the 44 below plus betaAgentToolset's grep,
+// whose rg is found by a PATH scan of its own, `-n --no-heading -e PAT -- DIR`, and its -j 1 copy; 44, measured 2026-10-04: 9 runner calls (7 listings, eo()'s scan,
 // the Grep tool's own builder), the Glob builder's array before its pushes, 11 Grep shapes from grepArgv, the
 // version probe, and each again under -j 1). CONTROL: the 2.1.283 snippets verbatim plus one planted `["--files",
 // "--frobnicate"]` array, through the same extraction and the same runRg: it must be named.
@@ -35,7 +36,7 @@ const { decodeGraphRunner } = require('../../libexec/inspect-claude-bundle.cjs')
 
 const REPO = path.resolve(__dirname, '..', '..');
 const EXTRACT = path.join(REPO, 'libexec', 'extract-claude-js.cjs');
-const FLOOR = 44;
+const FLOOR = 46;
 
 // VERBATIM from the 2.1.283 darwin-arm64 carve (decoded graph.json, 2026-10-04): each `["--files"` array with
 // what follows it (the sandbox scan, the file count, the markdown loader, the orphaned versions, the Glob tool,
@@ -150,7 +151,7 @@ test('the control names the planted refused listing, by its argv', () => {
 // advice, the status, the first-use probe) + 11 runner calls (9 shapes, oX's 2 forwards to bD)).
 // CONTROL: the 2.1.283 snippets verbatim plus a planted reader of `Q4().rgPath` that spawns it, and a planted call of
 // oX whose argv is computed: both must be named.
-const RESOLUTION_FLOOR = 29;
+const RESOLUTION_FLOOR = 30;   // + betaAgentToolset's PATH scan for rg (Task 10b fix round, review M3b)
 // VERBATIM from the 2.1.283 darwin-arm64 carve (decoded graph.json, 2026-10-04): every non-runner reference (the status,
 // uTo, rides in the file-count snippet above).
 const RESOLUTION_SNIPPETS_2_1_283 = [
@@ -164,9 +165,17 @@ const RESOLUTION_SNIPPETS_2_1_283 = [
   " r;let n=e.dependencyProbeGeneration,{rgPath:s,rgArgs:h}=Q4(),g=await Qt.checkDependenciesAsync({command:s,args:h}),y=mO(g);if(n===e.depende",
   "let e=gO();if(e)return e;let{rgPath:r,rgArgs:n}=Q4(),s=Qt.checkDependencies({command:r,args:n});return mO(s)}f",
   "function aAn(){let e=Q4();if(e.argv0)return{type:\"function\",snippet:dbe(\"rg\",e.argv0)};let n=qr([e.rgPath]),r=e.rgArgs.map((g)=>qr([g]));return{type:\"alias\",snippet:n}}",
+  // hc itself (review M3a: the spawn-cwd class is pinned to it, found by its body)
+  "function hc(e,r){let n=fg();if(n===null){if(!jr.isAbsolute(e)||!jr.isAbsolute(r))throw new Ok;return jr.parse(jr.resolve(e)).root}",
   "async function DQ(){let e=ko();if(e.status!==null)return;let r=am();try{let n;if(r.argv0){let h=Bun.spawn([r.command,\"--version\"],{argv0:r.argv0}),[g,y]=await Promise.all([h.stdout.text(),h.exited]);n={code:y,stdout:g}}else n=await Ke(r.command,[...r.args,\"--version\"],{timeout:5000});",
 ];
-const RESOLUTION_2_1_283 = [CARVE_2_1_283, ...RESOLUTION_SNIPPETS_2_1_283].join(';');
+// VERBATIM (chunk-s6nd8vdm, betaAgentToolset20260401): rg found WITHOUT the resolution, by a PATH scan of its own (It), and
+// the runner its answer is handed to (Et) (review M3b).
+const PATH_SCAN_2_1_283 = [
+  "run:async({pattern:t,path:e},i)=>{if(!t)throw new Rf(\"grep: pattern is required\");let n=u.resolve(r.workdir);if(e)n=await x(r,e);let a=await It();return a?Et(a,t,n,i?.signal):Ot(t,n,i?.signal)}})}function Et(r,t,e,i){return new Promise((n,a)=>{let s=W.spawn(r,[\"-n\",\"--no-heading\",\"-e\",t,\"--\",e],{...i?{signal:i}:{}}),o=\"\",c=\"\",l=!1;",
+  "async function It(){let r=(process.env.PATH??\"\").split(u.delimiter);for(let t of r){let e=u.join(t,\"rg\");try{return await d.access(e,R.constants.X_OK),e}catch{}}return null}",
+].join('');
+const RESOLUTION_2_1_283 = [CARVE_2_1_283, ...RESOLUTION_SNIPPETS_2_1_283, PATH_SCAN_2_1_283].join(';');
 function scanResolution({ refs, calls, what }) {
   const findings = [];
   for (const r of refs) if (!r.cls) findings.push(`@${r.at}: ${r.what} is read where no runner destructures it and no named non-runner matches: ${r.context}`);
@@ -179,7 +188,9 @@ function readResolution() {
   if (c.skip) return { skip: c.skip };
   return resolutionOf(c.text, `the carve of ${c.bin}`);
 }
-const PLANTS = 'function zQ(e,r){let c=Q4();return qE(c.rgPath,[...c.rgArgs,...e],{cwd:r})};async function pZ(e,r,n){return oX(Zq(e),r,n)}';
+const PLANTS = 'function zQ(e,r){let c=Q4();return qE(c.rgPath,[...c.rgArgs,...e],{cwd:r})};async function pZ(e,r,n){return oX(Zq(e),r,n)}'
+  // review M3a: a spawn handed Q4().rgPath in the spawn-cwd's own shape; M3b: a PATH scan whose answer reaches no readable spawn
+  + ';function yQ(e){return qE(e,Q4().rgPath)};async function sZ(){for(let t of p){let e=u.join(t,"rg");if(await ok(e))return e}return null}';
 const resolutionControl = () => resolutionOf(`${RESOLUTION_2_1_283};${PLANTS}`, 'the 2.1.283 snippets plus a planted rgPath reader and a planted computed-argv call');
 
 guardTests(defineGuard({ name: 'rg-resolution-accounted', floor: RESOLUTION_FLOOR, read: readResolution, scan: scanResolution, control: resolutionControl }));
@@ -191,17 +202,25 @@ test('every reference to the resolution in 2.1.283\'s snippets is a runner\'s or
     'the ENOENT advice (YE)': 1, 'the resolution (Q4)': 2, 'the Grep target form (djn)': 2, 'the spawn cwd (hc)': 4,
     'the runner bD': 1, 'the runner NQ': 1, 'the runner dTo': 1, 'the sandbox\'s ripgrep command': 1, 'the sandbox\'s dependency check': 2,
     'the shell snapshot\'s rg (aAn)': 1, 'the status (uTo)': 1, 'the first-use probe (DQ)': 1,
+    'the PATH scan in It, read through its runner Et': 1,
   });
-  assert.deepStrictEqual(count(refs, 'what'), { rgPath: 14, 'am()': 4 });
+  assert.deepStrictEqual(count(refs, 'what'), { rgPath: 14, 'am()': 4, 'a PATH scan for rg': 1 });
   assert.deepStrictEqual(calls.map((c) => `${c.runner}:${c.kind}`).sort(), [
     'NQ:shape', 'bD:forward (oX hands its argv on)', 'dTo:shape', 'jv:shape', 'oX:shape', 'oX:shape', 'oX:shape', 'oX:shape', 'oX:shape']);
   assert.deepStrictEqual(scanResolution(resolutionOf(RESOLUTION_2_1_283, 'snippets')).findings, []);
 });
-test('the resolution control names the planted rgPath reader and the planted computed-argv call', () => {
+test('the resolution control names each plant: an rgPath reader, a computed-argv call, a spawn in hc\'s shape, a PATH scan', () => {
   const r = scanResolution(resolutionControl());
-  assert.strictEqual(r.findings.length, 2, r.findings.join('\n'));
-  assert.match(r.findings[0], /rgPath is read where no runner destructures it .*qE\(c\.rgPath/);
-  assert.match(r.findings[1], /oX\(\.\.\.\) calls the runner oX with an argv the extraction cannot read.*oX\(Zq\(e\)/);
+  assert.strictEqual(r.findings.length, 4, r.findings.join('\n'));
+  assert.ok(r.findings.some((f) => /rgPath is read where no runner destructures it .*qE\(c\.rgPath/.test(f)), r.findings.join('\n'));
+  assert.ok(r.findings.some((f) => /oX\(\.\.\.\) calls the runner oX with an argv the extraction cannot read.*oX\(Zq\(e\)/.test(f)), r.findings.join('\n'));
+  assert.ok(r.findings.some((f) => /rgPath is read where no runner destructures it .*qE\(e,Q4\(\)\.rgPath\)/.test(f)), r.findings.join('\n'));
+  assert.ok(r.findings.some((f) => /a PATH scan for rg is read where .*u\.join\(t,\\"rg\\"\)/.test(f)), r.findings.join('\n'));
+});
+test('betaAgentToolset\'s grep: rg found by its own PATH scan, its runner\'s argv read and answered', () => {
+  const shapes = P.carveRgArgvShapes(PATH_SCAN_2_1_283).filter((x) => /PATH scan/.test(x.where));
+  assert.deepStrictEqual(shapes.map((x) => x.argv), [['-n', '--no-heading', '-e', 'x', '--', '.']]);
+  assert.deepStrictEqual(scan({ results: answer(shapes), what: 'betaAgentToolset' }).findings, []);
 });
 test('runner calls are scoped to the runner\'s chunk and the chunks importing it, by their local name', () => {
   const mark = (n) => `\nimport.meta.require = globalThis.__quaudeRequire; import.meta.url = "file:///$bunfs/root/chunk-${n}.js";\n`;

@@ -440,6 +440,8 @@ function carveRgArgvShapes(text) {
   for (let i = t.indexOf('.startsWith("ripgrep ")'); i !== -1; i = t.indexOf('.startsWith("ripgrep ")', i + 1)) {
     if (t.slice(Math.max(0, i - 400), i).includes('"--version"]')) { shapes.push({ where: `@${i} the first-use probe`, argv: ['--version'] }); break; }
   }
+  // rg found by a PATH scan of its own (pathScannedRunners, review M3b): the argv its runner spawns
+  for (const r of pathScannedRunners(t)) if (r.argv) shapes.push({ where: `@${r.spawnAt} ${r.runner} (rg found by ${r.finder}'s PATH scan)`, argv: r.argv });
   // The runner's retry after EAGAIN prepends `-j 1` to whatever it runs (`?["-j","1"]:[]`): each shape again so.
   if (t.includes('?["-j","1"]:[]')) for (const s of shapes.slice()) shapes.push({ where: `${s.where} (retried: -j 1)`, argv: ['-j', '1', ...s.argv] });
   const seen = new Set();
@@ -457,13 +459,54 @@ function carveRgArgvShapes(text) {
 //     by its local name) is read as an argv shape (runnerCallArgv) or FORWARDS: it passes the enclosing
 //     function's own first parameter, and that function is a runner too (oX hands its argv to bD).
 // Anything else is a finding: a new runner, or a new reader of the resolution, must be classified by hand.
+// The spawn-cwd function (2.1.283's hc), by its body: two parameters, and with no session root it refuses unless BOTH
+// the target and rgPath are absolute: `function hc(e,r){let n=fg();if(n===null){if(!jr.isAbsolute(e)||!jr.isAbsolute(r))throw`.
+function spawnCwdName(t) {
+  const m = new RegExp(`function (${ID})\\((${ID}),(${ID})\\)\\{let (${ID})=${ID}\\(\\);if\\(\\4===null\\)\\{if\\(!${ID}\\.isAbsolute\\(\\2\\)\\|\\|!${ID}\\.isAbsolute\\(\\3\\)\\)throw`).exec(t);
+  return m ? m[1] : null;
+}
+// RG FOUND WITHOUT THE RESOLUTION (review M3b): a function that walks PATH for an `rg` itself (2.1.283's
+// betaAgentToolset: `It(){...for(let t of r){let e=u.join(t,"rg");try{return await d.access(e,X_OK),e}...}}`) and the
+// runner its answer is handed to (`let a=await It();return a?Et(a,...)`, Et spawning `W.spawn(r,["-n","--no-heading",
+// "-e",t,"--",e])`). Each `.join(X,"rg")` is a PATH scan; it is ACCOUNTED when its function's answer reaches a function
+// that spawns its first parameter with an array literal, whose flags become a shape. Returns [{ at, finder, runner,
+// spawnAt, argv }], `runner` null when the scan's answer could not be followed to such a spawn.
+function pathScannedRunners(text) {
+  const t = String(text), out = [];
+  for (const m of t.matchAll(new RegExp(`\\.join\\(${ID},"rg(?:\\.exe)?"\\)`, 'g'))) {
+    const f = enclosingFunction(t, m.index);
+    const rec = { at: m.index, finder: f ? f.name : null, runner: null, spawnAt: null, argv: null };
+    out.push(rec);
+    if (!f) continue;
+    const esc = (n) => n.replace(/\$/g, '\\$');
+    for (const c of t.matchAll(new RegExp(`(?<![\\w$.])(${ID})=await ${esc(f.name)}\\(\\)`, 'g'))) {
+      if (Math.abs(c.index - m.index) > 50000) continue;
+      const after = t.slice(c.index, c.index + 400);
+      const call = new RegExp(`(?<![\\w$.])(${ID})\\(${esc(c[1])},`).exec(after.slice(c[0].length));
+      if (!call) continue;
+      const G = call[1];
+      const def = new RegExp(`function ${esc(G)}\\((${ID})[,)]`).exec(t.slice(Math.max(0, m.index - 50000), m.index + 50000));
+      if (!def) continue;
+      const defAt = Math.max(0, m.index - 50000) + def.index;
+      const body = t.slice(defAt, defAt + 3000);
+      const sp = new RegExp(`\\.spawn\\(${esc(def[1])},\\[`).exec(body);
+      if (!sp) continue;
+      const open = defAt + sp.index + sp[0].length - 1, end = arrayEnd(t, open);
+      if (end === -1) continue;
+      Object.assign(rec, { runner: G, spawnAt: open, argv: [...argvOfRegion(t.slice(open, end)), '.'] });
+      break;
+    }
+  }
+  return out;
+}
 const RG_RESOLUTION_NON_RUNNERS = [
   { name: 'the resolution (Q4)', why: 'returns {rgPath,rgArgs,argv0} from the accessor; it runs nothing',
     re: `function ${ID}\\(\\)\\{let ${ID}=(${ID})\\(\\);return\\{rgPath:${ID}\\.command,rgArgs:${ID}\\.args,argv0:${ID}\\.argv0\\}\\}` },
   { name: 'the Grep target form (djn)', why: 'whether rgPath is absolute picks `.` + cwd or the absolute target, and refuses outside cwd for a bare name; a string test',
     re: `${ID}\\.isAbsolute\\(${ID}\\(\\)\\.rgPath\\)` },
+  // hc ITSELF, found by its own body (review M3a: `X(a,Q4().rgPath)` for any X classified a planted spawn as this)
   { name: 'the spawn cwd (hc)', why: 'hc(target, rgPath) picks the directory a runner spawns in; a string test',
-    re: `(?<![\\w$.])${ID}\\(${ID},${ID}\\(\\)\\.rgPath\\)` },
+    re: (t) => { const n = spawnCwdName(t); return n ? `(?<![\\w$.])${n.replace(/\$/g, '\\$')}\\(${ID},${ID}\\(\\)\\.rgPath\\)` : null; } },
   { name: 'the sandbox\'s ripgrep command', why: 'hands {command,args,argv0} to the sandbox, whose runner (jv, by its {command:"rg"} default) carveRunners finds',
     re: `\\{rgPath:${ID},rgArgs:${ID},argv0:${ID}\\}=${ID}\\(\\),${ID}=${ID}\\(\\)\\.map\\(\\(${ID}\\)=>${ID}\\?\\.sandbox\\?\\.ripgrep\\)` },
   { name: 'the sandbox\'s dependency check', why: 'checkDependencies({command}) asks Bun.which(command) on Linux and srt-win on Windows; it never runs rg',
@@ -525,7 +568,9 @@ function rgResolutionReferences(text) {
   }
   let accessor = null;
   for (const N of RG_RESOLUTION_NON_RUNNERS) {
-    for (const m of t.matchAll(new RegExp(N.re, 'g'))) {
+    const re = typeof N.re === 'function' ? N.re(t) : N.re;
+    if (!re) continue;
+    for (const m of t.matchAll(new RegExp(re, 'g'))) {
       spans.push({ start: m.index, end: m.index + m[0].length, cls: N.name });
       if (N.name === 'the resolution (Q4)') accessor = accessor || { name: m[1], at: m.index };
     }
@@ -538,6 +583,9 @@ function rgResolutionReferences(text) {
     for (const { chunk, local } of scopesOf(t, chunks, home, accessor.name)) {
       for (const i of callsIn(t, chunk, local)) refs.push({ at: i, what: `${local}()`, cls: classify(i, local.length + 2), context: around(t, i) });
     }
+  }
+  for (const r of pathScannedRunners(t)) {
+    refs.push({ at: r.at, what: 'a PATH scan for rg', cls: r.runner ? `the PATH scan in ${r.finder}, read through its runner ${r.runner}` : null, context: around(t, r.at) });
   }
   return refs.sort((a, b) => a.at - b.at);
 }
@@ -868,5 +916,5 @@ function mmapEverywhere(id, native, argv, tree, platform) {
 }
 
 module.exports = { RG_TREE_KINDS, makeRgTree, treeEntries, RG_MATRIX, cellArgv, grepArgv, globArgv, VCS_DIRS, flagLiterals, builderFlagLiterals, matrixDrift,
-  consumerUsageErrorRegex, refusalDrift, carveRgArgvShapes, carveRunners, rgResolutionReferences, rgRunnerCalls, RG_RESOLUTION_NON_RUNNERS,
+  consumerUsageErrorRegex, refusalDrift, carveRgArgvShapes, carveRunners, rgResolutionReferences, rgRunnerCalls, RG_RESOLUTION_NON_RUNNERS, pathScannedRunners,
   runNativeRg, nativeRgVersion, runOursRg, cellInput, assertNoAncestorRules, runOursRgBatch, compareRg, normalizeRg, rgOneThread, MMAP_EVERYWHERE, mmapEverywhere, inTree };
