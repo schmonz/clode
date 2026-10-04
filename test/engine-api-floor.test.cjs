@@ -79,6 +79,11 @@ test('the floor names moduleMeta, and says which patch provides it', async () =>
   const names = ENGINE_API_FLOOR.map((b) => b.name);
   assert.ok(names.includes('__tjs_fs_sync'));
   assert.ok(names.includes('__tjs_spawn_sync'));
+  // An engine whose sync stat has no identity boots fine and gives every file ino 0.
+  const id = ENGINE_API_FLOOR.find((b) => b.name === '__tjs_fs_sync.stat identity');
+  assert.ok(id, 'the sync stat\'s file identity is not in the floor');
+  assert.strictEqual(id.kind, 'bigint');
+  assert.match(id.from, /txiki-sync-stat-identity\.patch/);
 });
 
 test('the generated check reports OK, and on a miss names the binding AND exits nonzero', async () => {

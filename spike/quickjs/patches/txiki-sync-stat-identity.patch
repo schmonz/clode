@@ -1,0 +1,161 @@
+# SYNC-STAT-IDENTITY: __tjs_fs_sync.stat/lstat/fstat answer from libuv's uv_stat_t (uv_fs_stat,
+# uv_fs_lstat, uv_fs_fstat run with no callback, so synchronously), the same struct the engine's
+# async tjs.stat and node's own fs.statSync read, and hand JS every field node reports.
+#
+# WHY. txiki-sync-fs.patch called stat(2) and passed on only size, mode, uid, gid, a whole-second
+# mtime and a kind. node-shim reported dev, ino and rdev as 0, nlink 1, every time as that mtime,
+# and could not build a BigIntStats at all. Two different files compared equal on (dev, ino), so
+# the 2.1.283 bundle's identity checks judged nothing (git worktree commondir, the approval-bound
+# reopen, the staging-dir checks), and its rdev comparison with /dev/null took every character
+# device for /dev/null (AWS_SHARED_CREDENTIALS_FILE=/dev/zero read as silently empty). The engine
+# had the values all along: its async tjs.stat answered them. BACKLOG "node-shim's sync stat has
+# no dev, ino or rdev: an engine gap".
+#
+# ONE IMPLEMENTATION. libuv's rules hold on every leg, as they do for node: on Windows ino is the
+# FileId, dev the volume serial number, lstat sees a reparse point (stat(2) from the CRT had been
+# standing in for lstat there); birthtime from statx on Linux and st_birthtim on the BSDs and
+# Darwin; the old-Darwin and other libuv fixups in scripts/build-tjs.cjs apply here too.
+#
+# THE SHAPE. size, mode, uid, gid (numbers, uid/gid now unsigned as node has them) and kind stay
+# for the callers that read them directly. New, as BigInt and exact: dev, ino, nlink, rdev,
+# blksize, blocks, size64, and atime/mtime/ctime/birthtime as <name>Sec and <name>Nsec.
+# node-shim (libexec/node-shim/modules/fs.cjs) does node's arithmetic on them in JS. The
+# whole-second mtimeMs is gone: nothing but node-shim's Stats read it.
+#
+# Guarded by test/node-shim-fs-stat-identity.test.cjs (host node is the oracle; red on the
+# engine without this patch: 2466 of 3450 answers differed) and by the engine-api-floor entry
+# that refuses an engine whose sync stat has no BigInt ino.
+diff --git a/src/mod_fs_sync.c b/src/mod_fs_sync.c
+--- a/src/mod_fs_sync.c
++++ b/src/mod_fs_sync.c
+@@ -160,47 +160,105 @@
+     return JS_UNDEFINED;
+ }
+ 
+-static JSValue stat_to_js(JSContext *ctx, struct stat *st) {
++/* The sync stat answers from libuv's own stat (uv_fs_stat/uv_fs_lstat/uv_fs_fstat run without a
++ * callback, so synchronously, on this thread), the call the engine's async tjs.stat and node's
++ * fs.statSync both make. One uv_stat_t on every platform, with libuv's rules for it: on Windows
++ * ino is the FileId, dev the volume serial number and lstat does not follow a reparse point;
++ * birthtime comes from statx on Linux and st_birthtim on the BSDs and Darwin; nanoseconds where
++ * the OS has them. stat(2) used to be called here directly, and only size, mode, uid, gid and a
++ * whole-second mtime reached JS: node-shim then reported dev, ino and rdev as 0, so two
++ * different files compared equal on (dev, ino), and every character device's rdev was /dev/null's.
++ *
++ * Every 64-bit field node reports is handed over EXACTLY, as a BigInt: dev, ino, nlink, rdev,
++ * blksize, blocks, size64, and each time as its seconds and nanoseconds (atimeSec, atimeNsec, ...).
++ * node-shim builds Stats (numbers) or BigIntStats from them with node's own arithmetic, in JS, so
++ * a millisecond value is the same double node computes (a C compiler may fuse sec*1e3+nsec/1e6
++ * into one FMA; V8 never does). size, mode, uid and gid stay numbers too, for the callers that
++ * read them directly (readAll, readdir's types, the terminal-fd check), and kind stays. */
++static int uv_to_errno(int r) {
++    /* throw_errno speaks errno. On POSIX a libuv error is -errno already; on Windows libuv has its
++     * own numbering, so map the codes errno_code() names back to the CRT's. */
++    switch (r) {
++    case UV_ENOENT:  return ENOENT;
++    case UV_EACCES:  return EACCES;
++    case UV_EEXIST:  return EEXIST;
++    case UV_EISDIR:  return EISDIR;
++    case UV_ENOTDIR: return ENOTDIR;
++    case UV_EAGAIN:  return EAGAIN;
++    case UV_EINVAL:  return EINVAL;
++    case UV_EBADF:   return EBADF;
++    case UV_ELOOP:   return ELOOP;
++    case UV_ENOSPC:  return ENOSPC;
++    case UV_EPERM:   return EPERM;
++    case UV_ENOSYS:  return ENOSYS;
++    default:         return -r;
++    }
++}
++
++#define FSS_BIG(NAME, V) JS_DefinePropertyValueStr(ctx, o, NAME, JS_NewBigUint64(ctx, (uint64_t)(V)), JS_PROP_C_W_E)
++#define FSS_TIME(NAME, TS)                                                                       \
++    JS_DefinePropertyValueStr(ctx, o, NAME "Sec", JS_NewBigInt64(ctx, (int64_t)(TS).tv_sec), JS_PROP_C_W_E); \
++    JS_DefinePropertyValueStr(ctx, o, NAME "Nsec", JS_NewBigInt64(ctx, (int64_t)(TS).tv_nsec), JS_PROP_C_W_E)
++
++static JSValue stat_to_js(JSContext *ctx, const uv_stat_t *st) {
+     JSValue o = JS_NewObject(ctx);
+-    JS_DefinePropertyValueStr(ctx, o, "size", JS_NewInt64(ctx, st->st_size), JS_PROP_C_W_E);
+-    JS_DefinePropertyValueStr(ctx, o, "mode", JS_NewInt32(ctx, st->st_mode), JS_PROP_C_W_E);
+-    /* uid/gid: st_uid/st_gid exist in POSIX struct stat AND in MSVC's struct
+-     * stat/_stat (<sys/stat.h>, always 0 there — matches Windows Node's own
+-     * fs.statSync().uid/gid, which report 0). No #ifdef needed: both sides
+-     * already have the field, just with a narrower (short) type on MSVC,
+-     * which JS_NewInt32's implicit promotion handles for free. */
+-    JS_DefinePropertyValueStr(ctx, o, "uid", JS_NewInt32(ctx, st->st_uid), JS_PROP_C_W_E);
+-    JS_DefinePropertyValueStr(ctx, o, "gid", JS_NewInt32(ctx, st->st_gid), JS_PROP_C_W_E);
+-    JS_DefinePropertyValueStr(ctx, o, "mtimeMs", JS_NewFloat64(ctx, (double)st->st_mtime * 1000.0), JS_PROP_C_W_E);
+-    const char *kind = S_ISREG(st->st_mode) ? "file" : S_ISDIR(st->st_mode) ? "dir"
+-                     : S_ISLNK(st->st_mode) ? "symlink" : "other";
++    JS_DefinePropertyValueStr(ctx, o, "size", JS_NewInt64(ctx, (int64_t)st->st_size), JS_PROP_C_W_E);
++    JS_DefinePropertyValueStr(ctx, o, "mode", JS_NewInt64(ctx, (int64_t)st->st_mode), JS_PROP_C_W_E);
++    /* uid/gid unsigned, as node reports them (macOS's nobody is 4294967294, not -2); 0 on Windows. */
++    JS_DefinePropertyValueStr(ctx, o, "uid", JS_NewInt64(ctx, (int64_t)st->st_uid), JS_PROP_C_W_E);
++    JS_DefinePropertyValueStr(ctx, o, "gid", JS_NewInt64(ctx, (int64_t)st->st_gid), JS_PROP_C_W_E);
++    FSS_BIG("dev", st->st_dev);
++    FSS_BIG("ino", st->st_ino);
++    FSS_BIG("nlink", st->st_nlink);
++    FSS_BIG("rdev", st->st_rdev);
++    FSS_BIG("blksize", st->st_blksize);
++    FSS_BIG("blocks", st->st_blocks);
++    FSS_BIG("size64", st->st_size);
++    FSS_TIME("atime", st->st_atim);
++    FSS_TIME("mtime", st->st_mtim);
++    FSS_TIME("ctime", st->st_ctim);
++    FSS_TIME("birthtime", st->st_birthtim);
++    /* The type from the POSIX S_IFMT values, which libuv's uv_stat_t uses on Windows too. */
++    unsigned fmt = (unsigned)(st->st_mode & 0170000);
++    const char *kind = fmt == 0100000 ? "file" : fmt == 0040000 ? "dir" : fmt == 0120000 ? "symlink" : "other";
+     JS_DefinePropertyValueStr(ctx, o, "kind", JS_NewString(ctx, kind), JS_PROP_C_W_E);
+     return o;
+ }
++#undef FSS_BIG
++#undef FSS_TIME
+ 
++/* One synchronous libuv stat: CALL fills req.statbuf, or answers a negative libuv error. */
++static JSValue fss_stat_result(JSContext *ctx, uv_fs_t *req, int r, const char *op, const char *path) {
++    JSValue ret;
++    if (r < 0) {
++        errno = uv_to_errno(r);
++        ret = throw_errno(ctx, op, path);
++    } else {
++        ret = stat_to_js(ctx, &req->statbuf);
++    }
++    uv_fs_req_cleanup(req);
++    return ret;
++}
++
+ #define FSS_PATH_STAT(NAME, CALL)                                                        \
+ static JSValue js_fss_##NAME(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv) { \
+     const char *path = JS_ToCString(ctx, argv[0]);                                       \
+     if (!path) return JS_EXCEPTION;                                                      \
+-    struct stat st;                                                                      \
+-    int r = CALL(path, &st);                                                             \
+-    JSValue ret = (r < 0) ? throw_errno(ctx, #NAME, path) : stat_to_js(ctx, &st);        \
++    uv_fs_t req;                                                                         \
++    int r = CALL(tjs_get_loop(ctx), &req, path, NULL);                                   \
++    JSValue ret = fss_stat_result(ctx, &req, r, #NAME, path);                            \
+     JS_FreeCString(ctx, path);                                                           \
+     return ret;                                                                          \
+ }
+-FSS_PATH_STAT(stat, stat)
+-#if defined(_WIN32)
+-FSS_PATH_STAT(lstat, stat)
+-#else
+-FSS_PATH_STAT(lstat, lstat)
+-#endif
++FSS_PATH_STAT(stat, uv_fs_stat)
++FSS_PATH_STAT(lstat, uv_fs_lstat)
+ 
+ static JSValue js_fss_fstat(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv) {
+     int fd;
+     if (JS_ToInt32(ctx, &fd, argv[0])) return JS_EXCEPTION;
+-    struct stat st;
+-    if (fstat(fd, &st) < 0) return throw_errno(ctx, "fstat", NULL);
+-    return stat_to_js(ctx, &st);
++    uv_fs_t req;
++    int r = uv_fs_fstat(tjs_get_loop(ctx), &req, fd, NULL);
++    return fss_stat_result(ctx, &req, r, "fstat", NULL);
+ }
+ 
+ static JSValue js_fss_realpath(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv) {

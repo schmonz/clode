@@ -9,9 +9,11 @@
 //   - write(fd, ab, pos): ab MUST be an ArrayBuffer (JS_GetArrayBuffer
 //     requires the ArrayBuffer class, not a typed-array view) — pos<0
 //     uses write() (advances offset), pos>=0 uses pwrite().
-//   - stat/lstat/fstat return {size, mode, mtimeMs, kind} where kind is
-//     'file'|'dir'|'symlink'|'other'; mtimeMs is whole-second resolution
-//     (st_mtime * 1000) — do not compare across independently-created files.
+//   - stat/lstat/fstat return libuv's uv_stat_t (txiki-sync-stat-identity.patch):
+//     size, mode, uid, gid as numbers; kind 'file'|'dir'|'symlink'|'other';
+//     dev, ino, nlink, rdev, blksize, blocks, size64 as exact BigInts; and
+//     atime/mtime/ctime/birthtime as <name>Sec + <name>Nsec BigInts. Stats
+//     below is built from that, as node builds it.
 //   - symlink(target, linkpath) — same arg order as POSIX symlink(2) and
 //     as node's fs.symlinkSync(target, path).
 //   - errors are real Error instances with .code/.errno/.syscall set by the
@@ -248,34 +250,29 @@ function latin1Encode(str) {
 // socket"). The S_IF* values are POSIX's, and MSVC's struct stat uses the same ones.
 const S_IFMT = 0o170000;
 const S_IF = { file: 0o100000, dir: 0o040000, symlink: 0o120000, fifo: 0o010000, socket: 0o140000, char: 0o020000, block: 0o060000 };
-const typeIs = (mode, t) => ((mode >>> 0) & S_IFMT) === S_IF[t];
-class Stats {
-  constructor(raw) {
-    this.size = raw.size;
-    this.mode = raw.mode;
-    // FSS.stat exposes only mtimeMs (second-resolution: st_mtime*1000). Node's
-    // Stats carries atime/mtime/ctime/birthtime as both Date and *Ms/*Ns.
-    // DIVERGENCE (documented): this build reads only the whole-second mtime, so
-    // atime/ctime/birthtime are approximated as mtime, and sub-second precision
-    // is not observable (an mtime-precision probe will read "second" resolution).
-    // The Date accessors must exist regardless — deps do stat().mtime.getTime().
-    const ms = raw.mtimeMs;
-    this.mtimeMs = ms; this.atimeMs = ms; this.ctimeMs = ms; this.birthtimeMs = ms;
-    this.mtime = new Date(ms); this.atime = new Date(ms);
-    this.ctime = new Date(ms); this.birthtime = new Date(ms);
-    // Numeric fields Node always provides; not surfaced by FSS.stat → 0 defaults
-    // so property reads (e.g. dev/ino identity checks) don't throw.
-    // uid/gid ARE surfaced by FSS.stat (engine >= the uid/gid patch rev) — use the
-    // real value. `raw.uid === undefined` guards only an OLDER engine binary that
-    // predates the patch (never omit-vs-genuinely-0 ambiguity: FSS.stat always sets
-    // the property when present, so `undefined` unambiguously means "not surfaced").
-    // A wrong uid here is exactly what broke the bundle's tmpdir-ownership guard
-    // (getuid() real, stat().uid hardcoded 0) — do not reintroduce a guessed default.
-    this.dev = 0; this.ino = 0; this.nlink = 1;
-    this.uid = raw.uid === undefined ? 0 : raw.uid;
-    this.gid = raw.gid === undefined ? 0 : raw.gid;
-    this.rdev = 0; this.blksize = 4096; this.blocks = Math.ceil((raw.size || 0) / 512);
+const typeIs = (mode, t) => ((Number(mode) >>> 0) & S_IFMT) === S_IF[t];
+
+// fs.Stats, built as node builds it (lib/internal/fs/utils.js) from what the
+// engine's sync stat hands over (spike/quickjs/patches/txiki-sync-stat-identity.patch): libuv's
+// uv_stat_t, with every 64-bit field as an exact BigInt and each time as seconds + nanoseconds.
+// node fills a Float64Array from that same struct, so a number here is the BigInt's nearest double;
+// the times are node's own arithmetic, msFromTimeSpec (sec * 1e3 + nsec / 1e6). The four Dates are node's lazy getters
+// on the prototype: computed on first read from the *Ms field, rounded, then an own property, so
+// the own keys (and JSON.stringify) are node's. Until this engine fix dev, ino and rdev were 0,
+// nlink 1 and every time the whole-second mtime: two different files had one identity, and every
+// character device was /dev/null (BACKLOG).
+const STAT_INTS = ['dev', 'mode', 'nlink', 'uid', 'gid', 'rdev', 'blksize', 'ino', 'size', 'blocks'];
+const STAT_TIMES = ['atime', 'mtime', 'ctime', 'birthtime'];
+function requireIdentity(raw) {
+  if (typeof raw.ino !== 'bigint') {
+    const e = new Error('node-shim: this engine\'s sync stat carries no dev or ino (it predates '
+      + 'txiki-sync-stat-identity.patch); rebuild it: node scripts/build-tjs.cjs');
+    e.code = 'ERR_CLODE_ENGINE_FLOOR';
+    throw e;
   }
+}
+function rawInt(raw, f) { return f === 'size' ? raw.size64 : raw[f]; }
+class StatsBase {
   isFile() { return typeIs(this.mode, 'file'); }
   isDirectory() { return typeIs(this.mode, 'dir'); }
   isSymbolicLink() { return typeIs(this.mode, 'symlink'); }
@@ -283,6 +280,24 @@ class Stats {
   isCharacterDevice() { return typeIs(this.mode, 'char'); }
   isFIFO() { return typeIs(this.mode, 'fifo'); }
   isSocket() { return typeIs(this.mode, 'socket'); }
+}
+class Stats extends StatsBase {
+  constructor(raw) {
+    super();
+    requireIdentity(raw);
+    for (const f of STAT_INTS) this[f] = Number(rawInt(raw, f));
+    for (const t of STAT_TIMES) this[t + 'Ms'] = Number(raw[t + 'Sec']) * 1000 + Number(raw[t + 'Nsec']) / 1000000;
+  }
+}
+for (const C of [Stats]) {
+  for (const t of STAT_TIMES) {
+    Object.defineProperty(C.prototype, t, {
+      enumerable: true,
+      configurable: true,
+      get() { const d = new Date(Math.round(Number(this[t + 'Ms']))); Object.defineProperty(this, t, { value: d, writable: true, enumerable: true, configurable: true }); return d; },
+      set(v) { Object.defineProperty(this, t, { value: v, writable: true, enumerable: true, configurable: true }); },
+    });
+  }
 }
 
 // fs.Dirent — the shape readdir(withFileTypes) yields. FSS.readdir returns NAMES
@@ -975,8 +990,12 @@ const _watchers = new Map();
 // A watched path that doesn't exist reads back as Node's zeroed Stats
 // (mtimeMs === 0 is the tell consumers key off of) rather than throwing.
 // Built through the real Stats constructor so every accessor (isFile() etc,
-// all false for kind 'other') matches a real stat's shape.
-function _zeroStats() { return new Stats({ size: 0, mode: 0, kind: 'other', mtimeMs: 0 }); }
+// all false for mode 0) matches a real stat's shape: node's StatWatcher hands
+// over an all-zero binding array, so every field is 0, nlink and blksize too.
+const _ZERO_RAW = { size: 0, mode: 0, uid: 0, gid: 0, kind: 'other', dev: 0n, ino: 0n, nlink: 0n, rdev: 0n,
+  blksize: 0n, blocks: 0n, size64: 0n, atimeSec: 0n, atimeNsec: 0n, mtimeSec: 0n, mtimeNsec: 0n, ctimeSec: 0n,
+  ctimeNsec: 0n, birthtimeSec: 0n, birthtimeNsec: 0n };
+function _zeroStats() { return new Stats(_ZERO_RAW); }
 // Any stat failure (ENOENT or otherwise — permission trouble, a symlink
 // loop, an unmounted path) is treated as "currently absent", never thrown:
 // this runs on a bare timer callback with no caller try/catch, so a throw

@@ -47,6 +47,16 @@ const ENGINE_API_FLOOR = [
     why: 'node-shim fs.*Sync — every synchronous file read the bundle makes',
   },
   {
+    // An engine without it boots and runs, and node-shim's Stats then had dev, ino and rdev 0
+    // for every path: two files with one identity, every character device /dev/null. Now
+    // node-shim refuses such an engine at its first stat, and this refuses it at build time.
+    name: '__tjs_fs_sync.stat identity',
+    expr: 'globalThis.__tjs_fs_sync.stat(".").ino',
+    kind: 'bigint',
+    from: 'txiki-sync-stat-identity.patch',
+    why: 'node-shim Stats/BigIntStats: dev, ino, rdev, nlink and nanosecond times from libuv\'s uv_stat_t (file identity)',
+  },
+  {
     name: '__tjs_spawn_sync',
     expr: 'globalThis.__tjs_spawn_sync',
     kind: 'function',
