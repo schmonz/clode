@@ -218,12 +218,12 @@ const _rgNative = require(__dirname + '/rg-native.cjs');
 // the wrapping below (as _rawSpawnSync is for the synchronous ones).
 const _rawSpawn = cp.spawn;
 
-// How quaude's rg reaches the applets: the ugrep it searches with (resolved per call, as the
-// translation resolves it), the unwrapped spawns, today's translation (_rgTranslate, below) for what
-// the emulation does not answer yet, the refusal when this host has no ugrep, the operator-side
-// surfacing when an applet rejects a search, and the CLODE_RG_DEBUG line every call gets.
+// How quaude's rg reaches its applet: the ugrep it searches with (resolved per call), the unwrapped
+// spawns, the refusal when this host has no ugrep, the operator-side surfacing when ugrep fails a search,
+// and the CLODE_RG_DEBUG line every call gets. Nothing goes to the old translation (_rgTranslate) any more:
+// quaude's rg answers every search and listing itself, or refuses (grep-native Task 10).
 const _rgCtx = {
-  translate: (a) => _rgTranslate(a), spawn: _rawSpawn, spawnSync: _rawSpawnSync,
+  spawn: _rawSpawn, spawnSync: _rawSpawnSync,
   ugrep: () => process.env.CLODE_UGREP || which('ugrep'),
   missing: () => _rgNative.rgRefusal(_rgAppletMissing(null, 'ugrep', { debug: false }).refuse),
   debug: (args, verdict) => _rgDebug(['rg', ...args], verdict),

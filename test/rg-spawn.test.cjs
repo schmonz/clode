@@ -66,16 +66,24 @@ test('_rgTranslate: applet absent is a refusal naming the applet, never a host r
 // run everywhere.
 const posixExec = { skip: process.platform === 'win32' ? 'needs an executable /bin/sh ugrep stub' : false };
 
+// A ugrep at quaude's floor for --version, doing BODY for anything else (its match pass): a SEARCH is
+// what reaches ugrep since grep-native Task 10 (a listing never does, and nothing goes to the old
+// translation), so the operator-side claims are made of a search's match pass.
+function versionedUgrep(dir, body) {
+  const ugrep = path.join(dir, 'ugrep');
+  fs.writeFileSync(ugrep, `#!/bin/sh\ncase "$1" in --version) echo "ugrep 7.8.2"; exit 0;; esac\n${body}\n`, { mode: 0o755 });
+  fs.mkdirSync(path.join(dir, 'tree'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'tree', 'a.txt'), 'x needle\n');
+  return ugrep;
+}
 test('rg spawn.sync: ugrep usage error (exit >=2) surfaces a clode diagnostic + /doctor', posixExec, () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-skew-'));
-  const ugrep = path.join(dir, 'ugrep');
-  fs.writeFileSync(ugrep, '#!/bin/sh\necho "ugrep: unknown option" >&2\nexit 2\n', { mode: 0o755 });
+  const ugrep = versionedUgrep(dir, 'echo "ugrep: unknown option" >&2\nexit 2');
   const prev = process.env.CLODE_UGREP; process.env.CLODE_UGREP = ugrep;
   const origErr = process.stderr.write; let buf = '';
   process.stderr.write = (s) => { buf += s; return true; };
   try {
-    // rg --files still goes through today's translation (the plan's Task 10 takes it over)
-    bun.spawnSync(['rg', '--files', '--glob', 'surface-unique-xyz', '.']);
+    bun.spawnSync(['rg', 'surface-unique-xyz', path.join(dir, 'tree')]);
   } finally {
     process.stderr.write = origErr;
     if (prev === undefined) delete process.env.CLODE_UGREP; else process.env.CLODE_UGREP = prev;
@@ -87,17 +95,18 @@ test('rg spawn.sync: ugrep usage error (exit >=2) surfaces a clode diagnostic + 
 
 test('rg spawn.sync: ugrep exit 1 (no match) does NOT surface', posixExec, () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-nomatch-'));
-  const ugrep = path.join(dir, 'ugrep');
-  fs.writeFileSync(ugrep, '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+  const ugrep = versionedUgrep(dir, 'exit 1');
   const prev = process.env.CLODE_UGREP; process.env.CLODE_UGREP = ugrep;
   const origErr = process.stderr.write; let buf = '';
   process.stderr.write = (s) => { buf += s; return true; };
-  try { bun.spawnSync(['rg', '--files', '--glob', 'nomatch-unique-xyz', '.']); }
+  let r;
+  try { r = bun.spawnSync(['rg', 'nomatch-unique-xyz', path.join(dir, 'tree')]); }
   finally {
     process.stderr.write = origErr;
     if (prev === undefined) delete process.env.CLODE_UGREP; else process.env.CLODE_UGREP = prev;
   }
-  assert.doesNotMatch(buf, /surface/);
+  assert.strictEqual(r.exitCode, 1, 'ugrep proposing nothing is rg finding nothing');
+  assert.strictEqual(buf, '', 'nothing reaches the operator');
 });
 
 test('_rgTranslate: CLODE_RG_DEBUG logs the rewrite; unset is silent', () => {
@@ -312,20 +321,19 @@ test('no ugrep on this host: every rg is refused naming ugrep, and the host rg s
   fs.rmSync(s.dir, { recursive: true, force: true });
 });
 
-// ugrep rejecting a translated call (rc >= 2, nothing printed) is a refusal too: the Grep
-// tool's `--max-columns 500` made ugrep do exactly that, and the model read the rc 2 as "No
-// files found" in every files and count call (report-grep.md). A search is quaude's rg's own now
-// (--max-columns: RG-MAX-COLUMNS, test/rg-native.test.cjs); `rg --files` still goes through the
-// translation until the plan's Task 10, so it carries the claim.
-test('ugrep rejecting the translation reaches the caller as a refusal naming what ugrep said', posixExec, () => {
+// ugrep rejecting what it was asked (rc >= 2, nothing printed) is a refusal too: the Grep tool's
+// `--max-columns 500` made ugrep do exactly that under the old translation, and the model read the rc 2 as
+// "No files found" in every files and count call (report-grep.md). A search is quaude's rg's own now
+// (--max-columns: RG-MAX-COLUMNS, test/rg-native.test.cjs), and ugrep runs only its match pass, so the
+// claim is made of that pass.
+test('ugrep rejecting the match pass reaches the caller as a refusal naming what ugrep said', posixExec, () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-rejected-'));
-  const ugrep = path.join(dir, 'ugrep');
-  fs.writeFileSync(ugrep, '#!/bin/sh\necho "ugrep: invalid option --frobnicate" >&2\nexit 2\n', { mode: 0o755 });
+  const ugrep = versionedUgrep(dir, 'echo "ugrep: invalid option --frobnicate" >&2\nexit 2');
   const prev = process.env.CLODE_UGREP; process.env.CLODE_UGREP = ugrep;
   const origErr = process.stderr.write;
   process.stderr.write = () => true;
   let r;
-  try { r = cp.spawnSync('rg', ['--files', '--glob', 'rejected-unique', '.'], { encoding: 'utf8' }); }
+  try { r = cp.spawnSync('rg', ['rejected-unique', path.join(dir, 'tree')], { encoding: 'utf8' }); }
   finally {
     process.stderr.write = origErr;
     if (prev === undefined) delete process.env.CLODE_UGREP; else process.env.CLODE_UGREP = prev;
@@ -355,16 +363,16 @@ test('rgRefusal: rc 2, nothing on stdout, the flag and reason on stderr; parseRg
 // "output passed the limit" (any kill it reads as "timed out after 20 seconds"). A search run
 // synchronously inside the shim (as quaude's rg first did) honours none of them.
 //
-// BOTH ROUTES are held to it: a SEARCH, which quaude's rg answers itself over ugrep children
-// (`rg needle tree`: the fake ugrep, test/rg-fake-ugrep.cjs, sleeping in its walk), and what still
-// goes through today's translation to an applet (`rg --files .`: a stand-in that sleeps). Each bound
+// A SEARCH is held to it, which quaude's rg answers itself over ugrep children (`rg needle tree`: the
+// fake ugrep, test/rg-fake-ugrep.cjs, sleeping in its match pass). (Until grep-native Task 10 a second
+// route, the old translation's applet child, was held to it too; nothing reaches it now.) Each bound
 // must end the search in well under the sleep, and a 20 ms interval must keep ticking meanwhile.
 // Target `-` (the bundle pipes a task-output file into rg's stdin) is a search: what the caller
 // writes reaches it, and rg's answer for it comes back. A third stand-in, and a big tree, print more
 // than a small maxBuffer.
 const SLOW_S = 6;
-const ROUTES = { search: ['needle', 'tree'], translated: ['--files', '.'] };
-const BIG_ARGS = { search: ['needle', 'big'], translated: ['--files', '.'] };
+const ROUTES = { search: ['needle', 'tree'] };
+const BIG_ARGS = { search: ['needle', 'big'] };
 function asyncProbe() {
   return `
     process.chdir(__dirname);   // the engine's loader is not handed a cwd (node-shim-helper runLoader)
@@ -377,10 +385,10 @@ function asyncProbe() {
     // quaude's rg picks its ugrep from THIS process's CLODE_UGREP when the call is made.
     const env = (u) => { process.env.CLODE_UGREP = u; return process.env; };
     const ROUTES = ${JSON.stringify(ROUTES)}, BIG_ARGS = ${JSON.stringify(BIG_ARGS)};
-    const slowUgrep = { search: process.env.FAKE, translated: process.env.SLOW };
-    const bigUgrep = { search: process.env.FAKE, translated: process.env.BIG };
+    const slowUgrep = { search: process.env.FAKE };
+    const bigUgrep = { search: process.env.FAKE };
     (async () => {
-      for (const route of ['search', 'translated']) {
+      for (const route of Object.keys(ROUTES)) {
         const A = ROUTES[route], U = slowUgrep[route];
         process.env.FAKE_UGREP_SLOW_MS = String(${SLOW_S * 1000});
         await timed(route + ' execFile+AbortSignal', () => new Promise((res) => {
@@ -422,18 +430,16 @@ function asyncProbe() {
 
 function asyncStubs() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-async-'));
-  const w = (n, body) => { const p = path.join(dir, n); fs.writeFileSync(p, `#!/bin/sh\n${body}\n`, { mode: 0o755 }); return p; };
   fs.mkdirSync(path.join(dir, 'tree'));
   fs.writeFileSync(path.join(dir, 'tree', 'a.txt'), 'x needle\n');
   fs.mkdirSync(path.join(dir, 'big'));
   fs.writeFileSync(path.join(dir, 'big', 'b.txt'), 'aaaaaaaaaaaaaaaaaaaa needle\n'.repeat(2000));
-  return { dir, env: { ...process.env, SLOW: w('slow-ugrep', `exec sleep ${SLOW_S}`), FAKE: writeFakeUgrep(dir, 'fake-ugrep'),
-    BIG: w('big-ugrep', 'i=0; while [ $i -lt 2000 ]; do echo "aaaaaaaaaaaaaaaaaaaa needle"; i=$((i+1)); done') } };
+  return { dir, env: { ...process.env, FAKE: writeFakeUgrep(dir, 'fake-ugrep') } };
 }
 
 function assertAsyncSurfaces(got) {
   const quick = SLOW_S * 1000 / 2;
-  for (const route of ['search', 'translated']) {
+  for (const route of Object.keys(ROUTES)) {
     for (const k of ['execFile+AbortSignal', 'execFile+timeout', 'spawn+kill', 'Bun.spawn+kill'].map((x) => `${route} ${x}`)) {
       const a = got[k];
       assert.ok(a, `${k}: no answer`);
@@ -479,17 +485,15 @@ test('the async rg surfaces do not block the loop, and abort/kill/timeout/maxBuf
 // call (each closure holding its child and its buffered stdout, up to the 20 MB maxBuffer) is
 // a leak that grows with every search of a session. N searches on one signal must leave none.
 // N2: node sets child.killed only when kill() actually delivered the signal. A kill() after
-// the applet exited (before 'close') delivers nothing, so the child must not read as killed,
-// and the applet's rc-2 rejection must still become quaude's refusal.
+// the child exited (before 'close') delivers nothing, so the child must not read as killed,
+// and its rc-2 refusal (here: its ugrep failed the match pass) must still be what the caller gets.
 const N_CALLS = 15;
 function bookkeepingProbe() {
   return `
     process.chdir(__dirname);   // the engine's loader is not handed a cwd (node-shim-helper runLoader)
     const Bun = require(${JSON.stringify(SHIM)});
     const cp = require('child_process');
-    const { rgSpawn, parseRgRefusal } = require(${JSON.stringify(path.join(REPO, 'libexec', 'rg-native.cjs'))});
-    const { EventEmitter } = require('events');
-    const { Readable } = require('stream');
+    const { parseRgRefusal } = require(${JSON.stringify(path.join(REPO, 'libexec', 'rg-native.cjs'))});
     const out = {};
     const tick = () => new Promise((r) => setTimeout(r, 5));
     (async () => {
@@ -505,45 +509,46 @@ function bookkeepingProbe() {
       for (let i = 0; i < 3; i++) answers.push(await run(['--pcre2', 'needle', '.']));   // refused: no process
       await tick();
       out.n1 = { calls: answers.length, listeners: held.size, answered: answers.filter((a) => /needle/.test(String(a.so))).length };
-      // N2: a fake applet that has EXITED (rc 2, nothing printed) when kill() arrives.
-      const applet = new EventEmitter();
-      applet.stdout = new Readable({ read() {} }); applet.stderr = new Readable({ read() {} });
-      applet.stdin = null; applet.pid = 4242;
-      let gone = false; applet.kill = () => !gone;   // a process that is gone cannot be killed
-      const child = rgSpawn(['--files', '.'], {}, { translate: () => ({ argv: ['ugrep', 'needle', '.'] }), spawn: () => applet });
+      // N2: a search child that has EXITED (rc 2: quaude's refusal, its ugrep having failed the match pass)
+      // when kill() arrives, between its 'exit' and its 'close'.
+      process.env.CLODE_UGREP = process.env.FAILING;
+      const child = cp.spawn('rg', ['needle', 'tree']);
       let err = '';
       child.stderr.on('data', (d) => { err += d; });
+      child.stdout.resume();
+      const exited = new Promise((res) => child.on('exit', () => res()));
       const closed = new Promise((res) => child.on('close', (code, signal) => res({ code, signal })));
-      applet.stderr.push('ugrep: rejected\\n'); applet.stderr.push(null); applet.stdout.push(null);
-      await tick();
-      gone = true; applet.emit('exit', 2, null);
+      await exited;
       const killRet = child.kill('SIGTERM');          // after exit, before close: delivers nothing
-      applet.emit('close', 2, null);
       const c = await closed;
       out.n2 = { killRet, killed: child.killed, code: c.code, refusal: parseRgRefusal(err) };
-      // ...and a kill that IS delivered marks the child killed, as node's does.
-      const live = new EventEmitter();
-      live.stdout = new Readable({ read() {} }); live.stderr = new Readable({ read() {} }); live.stdin = null; live.pid = 4243;
-      live.kill = (s) => { setTimeout(() => { live.stdout.push(null); live.stderr.push(null); live.emit('exit', null, s); live.emit('close', null, s); }, 0); return true; };
-      const c2 = rgSpawn(['--files', '.'], {}, { translate: () => ({ argv: ['ugrep', 'needle', '.'] }), spawn: () => live });
+      // ...and a kill that IS delivered (the search still running: its ugrep sleeps) marks the child
+      // killed, as node's does.
+      process.env.CLODE_UGREP = process.env.FAST;
+      process.env.FAKE_UGREP_SLOW_MS = '5000';
+      const c2 = cp.spawn('rg', ['needle', 'tree']);
       c2.stdout.resume(); c2.stderr.resume();
       const closed2 = new Promise((res) => c2.on('close', (code, signal) => res({ code, signal })));
+      await tick();
       const killRet2 = c2.kill('SIGKILL');
       out.n2live = { killRet: killRet2, killed: c2.killed, ...(await closed2) };
+      delete process.env.FAKE_UGREP_SLOW_MS;
       process.stdout.write('PROBE:' + JSON.stringify(out) + '\\n');
     })();
   `;
 }
 function bookkeepingStubs() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-book-'));
-  // N1 searches (quaude's rg over the fake ugrep); N2 drives the translation's applet child, which
-  // `rg --files` still takes (its stand-in applets are the probe's own).
+  // N1 and N2 search (quaude's rg over the fake ugrep, and over one at quaude's floor that fails the
+  // match pass).
   const fast = writeFakeUgrep(dir, 'fast-ugrep');
+  const failing = path.join(dir, 'failing-ugrep');
+  fs.writeFileSync(failing, '#!/bin/sh\ncase "$1" in --version) echo "ugrep 7.8.2"; exit 0;; esac\necho "ugrep: rejected" >&2\nexit 2\n', { mode: 0o755 });
   fs.mkdirSync(path.join(dir, 'tree'));
   fs.writeFileSync(path.join(dir, 'tree', 'a.txt'), 'x needle\n');
   const prog = path.join(dir, 'probe.cjs');
   fs.writeFileSync(prog, bookkeepingProbe());
-  return { dir, prog, env: { ...process.env, FAST: fast } };
+  return { dir, prog, env: { ...process.env, FAST: fast, FAILING: failing } };
 }
 function assertNoListenerLeft(got) {
   assert.strictEqual(got.n1.calls, N_CALLS + 3);
@@ -551,10 +556,10 @@ function assertNoListenerLeft(got) {
   assert.strictEqual(got.n1.listeners, 0, `${got.n1.calls} rg calls on one AbortSignal left ${got.n1.listeners} 'abort' listener(s) behind (node's spawn leaves none)`);
 }
 function assertKilledOnlyWhenDelivered(got) {
-  assert.strictEqual(got.n2.killRet, false, 'kill() after the applet exited delivered nothing, so it must answer false');
+  assert.strictEqual(got.n2.killRet, false, 'kill() after the child exited delivered nothing, so it must answer false');
   assert.strictEqual(got.n2.killed, false, 'a kill that delivered nothing must not mark the child killed (node sets killed only on success)');
   assert.strictEqual(got.n2.code, 2);
-  assert.ok(got.n2.refusal, `the applet's rc-2 rejection must still become quaude's refusal: ${JSON.stringify(got.n2)}`);
+  assert.ok(got.n2.refusal, `the child's rc-2 refusal must still be what the caller gets: ${JSON.stringify(got.n2)}`);
   assert.deepStrictEqual(got.n2live, { killRet: true, killed: true, code: null, signal: 'SIGKILL' });
 }
 function runBookkeeping(engine) {
@@ -605,7 +610,7 @@ test('CLODE_RG_DEBUG: a search quaude\'s rg answers, and one it refuses, each pr
   process.stderr.write = (s) => { buf += s; return true; };
   try {
     bun.spawnSync(['rg', '-l', 'needle', dir]);
-    bun.spawnSync(['rg', '-U', 'needle', dir]);
+    bun.spawnSync(['rg', '--pcre2', 'needle', dir]);
   } finally {
     process.stderr.write = origErr;
     for (const [k, v] of [['CLODE_UGREP', prev.u], ['CLODE_RG_DEBUG', prev.d]]) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
@@ -613,7 +618,7 @@ test('CLODE_RG_DEBUG: a search quaude\'s rg answers, and one it refuses, each pr
   }
   // the shape rg-inventory.mjs parses: /^clode rg-debug: (rg .*?) (?:=>|!! needs (\S+)|!! untranslatable (\S+))(?:\s|$)/
   assert.ok(buf.split('\n').includes(`clode rg-debug: rg -l needle ${dir} => quaude's rg over ${ugrep}`), buf);
-  assert.ok(buf.split('\n').includes(`clode rg-debug: rg -U needle ${dir} !! untranslatable -U`), buf);
+  assert.ok(buf.split('\n').includes(`clode rg-debug: rg --pcre2 needle ${dir} !! untranslatable --pcre2`), buf);
 });
 
 // WHEN UGREP FAILS UNDER A SEARCH (Task 6 review I-2, I-3, M-3). quaude's rg walks in JS (grep-native

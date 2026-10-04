@@ -27,7 +27,7 @@
 // same way. A pattern the emulation can tell they would read differently is refused honestly
 // (rc 2, the reason on stderr), never answered differently.
 //
-// RED BY DESIGN until the plan's Tasks 7-10 land. Task 4's baseline (2026-10-03, native 2.1.283 /
+// RED BY DESIGN until the plan's Tasks 7-10 landed (green since Task 10, below). Task 4's baseline (2026-10-03, native 2.1.283 /
 // ripgrep 14.1.1, darwin-arm64, ugrep 7.8.2): all 178 cells differed, 177 of them refused (--max-columns
 // 76, --json 69, Glob's --null 18, --type 14) and rg --version answered by ugrep's own version.
 // After Task 6 (quaude's rg answers -l, -c and the standard printer itself), measured the same way:
@@ -45,6 +45,10 @@
 // dialect, --type, order; --version from native), measured the same way: 42 of 184 differ (the six new
 // cells are the -j1 walk cells, all equal), and every one is Task 10's: -U refused (8 files, 8 count, 8
 // content) and Glob's --null refused (18). files 29 -> 8, count 29 -> 8, content 41 -> 8, --version 1 -> 0.
+// After Task 10 (rg's multi-line searcher under -U, rg's own error for a \n without it, and --files with
+// --sort=modified through rg's walk), measured the same way: 0 of 184 differ, ours refused none: GREEN, with only
+// the named normalizations. Proved to bite (in place, restored byte for byte): a listing left unsorted names the
+// 10 Glob cells whose order the sort decides; --multiline-dotall ignored names the 9 -U cells.
 // The note tallies what ours refused, so each task's progress is visible in the verdict itself.
 //
 // WHERE IT RUNS: wherever a native provider, tjs and ugrep all exist. Otherwise it SKIPS

@@ -970,28 +970,21 @@ test('RG-EXIT: an unreadable path is rg\'s error on stderr, the rest answered, e
   } finally { try { fs.chmodSync(path.join(root, 'sub'), 0o755); } catch { /* gone */ } fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-// What the emulation does not answer yet goes to its own task, refused by name (never answered
-// differently): -U (Task 10); --files stays with today's translation (Task 10). --json is the printers'
-// own since Task 7, and --type, --type-not, --type-list and --version quaude's rg's since Task 9 (none
-// reaches the translation: NOT_TRANSLATED throws); --type-add and --type-clear are refused by name.
-test('a search flag the printers do not answer is refused by name; --files goes to the translation, --json/--type/--version do not', () => {
-  const seen = [];
-  const r = rgn.runRg(['-U', '--multiline-dotall', '-l', 'needle', '.'], { translate: NOT_TRANSLATED, spawnSync: cp.spawnSync, ugrep: () => UGREP });
-  assert.strictEqual(r.status, 2);
-  assert.deepStrictEqual(rgn.parseRgRefusal(r.stderr) && rgn.parseRgRefusal(r.stderr).flag, '-U');
+// What the emulation does not answer is refused by name (never answered differently), and nothing reaches
+// the old rg -> ugrep translation (NOT_TRANSLATED throws; none is reachable since Task 10). --json is the
+// printers' own since Task 7, --type, --type-not, --type-list and --version quaude's rg's since Task 9, -U
+// and --files since Task 10 (test/rg-multiline.test.cjs); --type-add and --type-clear are refused by name.
+test('a search flag the printers do not answer is refused by name; -U, --files, --json, --type and --version are answered', () => {
   const nope = rgn.runRg(['--frobnicate', 'needle', '.'], { translate: NOT_TRANSLATED, spawnSync: cp.spawnSync, ugrep: () => UGREP });
   assert.strictEqual(rgn.parseRgRefusal(nope.stderr).flag, '--frobnicate');
   for (const flag of ['--type-add', '--type-clear']) {
     assert.strictEqual(rgn.parseRgRefusal(rgn.runRg([flag, 'x:*.x', 'needle', '.'], { translate: NOT_TRANSLATED, spawnSync: cp.spawnSync }).stderr).flag, flag);
   }
-  for (const argv of [['--files', '.']]) {
-    rgn.runRg(argv, { translate: (a) => { seen.push(a); return { refuse: 'stand-in' }; }, spawnSync: cp.spawnSync, ugrep: () => UGREP });
-  }
-  assert.strictEqual(seen.length, 1);
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'rg-native-flags-')));
   try {
     fs.writeFileSync(path.join(dir, 'a.ts'), 'needle\n');
-    for (const argv of [['--json', '--type', 'ts', 'needle', '.'], ['-t', 'ts', '--json', 'needle', '.'], ['--version'], ['-V'], ['--type-list']]) {
+    for (const argv of [['--json', '--type', 'ts', 'needle', '.'], ['-t', 'ts', '--json', 'needle', '.'], ['--version'], ['-V'], ['--type-list'],
+      ['-U', '--multiline-dotall', '-l', 'needle', '.'], ['--files', '.'], ['--files', '--null', '--sort=modified', '.']]) {
       const a = rgn.runRg(argv, { translate: NOT_TRANSLATED, spawnSync: cp.spawnSync, ugrep: () => UGREP, matchFiles: UGREP ? undefined : rgn.matchFilesAlone, cwd: dir });
       assert.strictEqual(a.status, 0, `${argv.join(' ')}: ${a.status} ${a.stderr}`);
     }

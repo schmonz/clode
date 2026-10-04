@@ -108,7 +108,13 @@ function data() {
   }
   const posix = {};
   for (const k of Object.keys(RG_REGEX_DATA.posix)) posix[k] = ranges(RG_REGEX_DATA.posix[k]);
-  _data = { word: ranges(RG_REGEX_DATA.word), digit: ranges(RG_REGEX_DATA.digit), space: ranges(RG_REGEX_DATA.space), posix, fold };
+  // RG-MULTILINE: the tables were measured through rg's LINE searcher, which strips \n from every class,
+  // so the classes that hold U+000A (\s, [[:space:]], [[:cntrl:]], [[:ascii:]]: Unicode White_Space and
+  // the ASCII ranges) come without it; under -U nothing is stripped, so it is put back here (without -U
+  // stripHir takes it out again, as before). Measured: -U '\s+' matches each \n, as native's does.
+  const withNl = (set) => norm(set.concat([0x0a, 0x0a]));
+  for (const k of ['space', 'cntrl', 'ascii']) posix[k] = withNl(posix[k]);
+  _data = { word: ranges(RG_REGEX_DATA.word), digit: ranges(RG_REGEX_DATA.digit), space: withNl(ranges(RG_REGEX_DATA.space)), posix, fold };
   return _data;
 }
 
@@ -225,10 +231,12 @@ const ASCII_NAMES = new Set(['alnum', 'alpha', 'ascii', 'blank', 'cntrl', 'digit
 const ch = (s) => s.codePointAt(0);
 
 class Parser {
-  constructor(pattern, ignoreCase) {
+  constructor(pattern, ignoreCase, dotall) {
     this.p = Array.from(pattern, (s) => s.codePointAt(0));
     this.i = 0;
-    this.flags = { i: !!ignoreCase, U: false };
+    // s: `.` matches \n too (RG-MULTILINE: --multiline-dotall sets it, as rg's dot_matches_new_line does
+    // under -U; without -U rg strips \n from every class, so it changes nothing there)
+    this.flags = { i: !!ignoreCase, U: false, s: !!dotall };
     this.depth = 0;
     this.names = new Set();
   }
@@ -345,11 +353,12 @@ class Parser {
     for (const { flag, on } of f) {
       if (flag === 'i') this.flags.i = on;
       else if (flag === 'U') this.flags.U = on;
+      else if (flag === 's') this.flags.s = on;
       else if (flag === 'x' && on) refuse('RG-RE-REFUSE-VERBOSE', '(?x)');
       else if (flag === 'R' && on) refuse('RG-RE-REFUSE-CRLF', '(?R)');
       else if (flag === 'u' && !on) refuse('RG-RE-REFUSE-BYTES', '(?-u)');
       else if (flag === 'm' && !on) refuse('RG-RE-REFUSE-TEXT-ANCHOR', '(?-m)');
-      // m on, s either way (no line holds a \n), u on, x/R off: nothing changes
+      // m on, u on, x/R off: nothing changes
     }
   }
 
@@ -420,7 +429,7 @@ class Parser {
     const c = this.c();
     if (c === ch('\\')) return this.parseEscape(false);
     this.i++;
-    if (c === ch('.')) return { k: 'cls', set: negate(single(0x0a)) };
+    if (c === ch('.')) return { k: 'cls', set: this.flags.s ? negate([]) : negate(single(0x0a)) };
     if (c === ch('^')) return { k: 'look', look: 'startLF' };
     if (c === ch('$')) return { k: 'look', look: 'endLF' };
     return this.literal(c);
@@ -720,15 +729,29 @@ function stripHir(n) {
 // rg's two refusals of a translated pattern, applied to the HIR as rg applies them, after
 // RG-RE-ALT-MERGE: ban.rs first (a literal NUL, or a class of NUL alone: binary detection is on),
 // then strip.rs (a literal \n, or a class of \n alone: no -U). A one-character class is a literal.
-function checkHir(n) {
+// Under -U (multiline) rg sets no line terminator, so only the NUL ban applies and nothing is stripped.
+function checkHir(n, multiline = false) {
   switch (n.k) {
     case 'cls':
       if (n.set.length === 2 && n.set[0] === 0 && n.set[1] === 0) refuse('RG-RE-REFUSE-NUL', 'a NUL');
-      if (n.set.length && !withoutNewline(n.set).length) refuse('RG-RE-REFUSE-NEWLINE', 'a \\n');
+      if (!multiline && n.set.length && !withoutNewline(n.set).length) refuse('RG-RE-REFUSE-NEWLINE', 'a \\n');
       return;
-    case 'cat': case 'alt': for (const s of n.subs) checkHir(s); return;
-    case 'rep': case 'cap': checkHir(n.sub); return;
+    case 'cat': case 'alt': for (const s of n.subs) checkHir(s, multiline); return;
+    case 'rep': case 'cap': checkHir(n.sub, multiline); return;
     default: return;
+  }
+}
+// RG-MULTILINE's searcher choice (grep-searcher's multi_line_with_matcher over grep-regex's
+// non_matching_bytes): under -U rg searches with its multi-line searcher only when the pattern can
+// match a \n byte (a class holding U+000A) or holds ^ or $ (StartLF/EndLF remove \n from the
+// non-matching set); any other pattern is searched line by line, as without -U.
+function canMatchNewline(n) {
+  switch (n.k) {
+    case 'cls': return has(n.set, 0x0a);
+    case 'look': return n.look === 'startLF' || n.look === 'endLF';
+    case 'cat': case 'alt': return n.subs.some(canMatchNewline);
+    case 'rep': case 'cap': return canMatchNewline(n.sub);
+    default: return false;
   }
 }
 
@@ -999,11 +1022,12 @@ function decodeLast(buf, from, at) {
 }
 const isWord = (c) => c >= 0 && (c < 128 ? (c >= 0x30 && c <= 0x39) || (c >= 0x41 && c <= 0x5a) || c === 0x5f || (c >= 0x61 && c <= 0x7a) : has(data().word, c));
 
-// The look-arounds at `at`, the haystack being the line [from, end) (look.rs).
+// The look-arounds at `at`, the haystack being [from, end) (look.rs): a line, or under -U (RG-MULTILINE)
+// the rest of a file, where ^ and $ also match after and before each \n (a line's haystack holds none).
 function lookAt(kind, buf, from, end, at) {
   switch (kind) {
-    case 0: return at === from;                                          // ^ (StartLF)
-    case 1: return at === end;                                           // $ (EndLF)
+    case 0: return at === from || buf[at - 1] === 0x0a;                 // ^ (StartLF)
+    case 1: return at === end || buf[at] === 0x0a;                       // $ (EndLF)
     default: break;
   }
   const before = decodeLast(buf, from, at);
@@ -1156,40 +1180,56 @@ function lineVerifier(buf, start, end, compiled, { first = false } = {}) {
   if (prog.lookbehind && start < end && (buf[start] & 0xc0) === 0x80) {
     throw new RgRegexRefusal('RG-RE-REFUSE-LOOKBEHIND', `a line at byte ${start} starts with a continuation byte`);
   }
+  return matchIter(buf, start, end, compiled, { first });
+}
+// matchIter(buf, from, end, compiled, opts) -> { run(maxSteps) }: rg's find_iter_at over the haystack
+// [from, end) (grep-matcher's try_find_iter_at), every match from opts.at on (default `from`), as
+// lineVerifier describes; run() returns null while paused. opts:
+//   at       where the first search starts (the haystack, and so every look-behind, still starts at from)
+//   stopAt   the iteration ends at the first match starting at or past it, which is not reported (grep-
+//            printer's find_iter_at_in_context, under -U: RG-MULTILINE)
+//   once     only the first match: one leftmost-first search (grep-searcher's multi-line find)
+//   first    RG-RE-EARLIEST (whether there is a match, its span not rg's)
+//   budget   { left, total, what }: RG-RE-REFUSE-COST's steps, shared by every search it is given to (a
+//            file's under -U); default, the haystack's own lineStepBudget
+function matchIter(buf, from, end, compiled, { at = from, stopAt = Infinity, once = false, first = false, budget = null } = {}) {
+  const prog = compiled.prog || compiled;
   const out = [];
   // RG-RE-LITERAL: a pattern that is one case-sensitive literal (no class, no assertion, never
   // empty) matches where its UTF-8 bytes occur, leftmost and without overlap, which is what the
   // Pike VM would find, found by search for the bytes instead. A literal's first byte is never a
   // continuation byte, so an occurrence always starts on a character.
   if (prog.lit) {
-    const line = buf.subarray(start, end), lit = prog.lit;
-    for (let i = line.indexOf(lit); i !== -1; i = line.indexOf(lit, i + lit.length)) {
-      out.push({ start: start + i, end: start + i + lit.length });
-      if (first) break;
+    const hay = buf.subarray(0, end), lit = prog.lit;
+    for (let i = hay.indexOf(lit, at); i !== -1 && i < stopAt; i = hay.indexOf(lit, i + lit.length)) {
+      out.push({ start: i, end: i + lit.length });
+      if (first || once) break;
     }
     return { run: () => out };
   }
-  let lastEnd = start, lastMatch = -1, searching = false, spent = 0, done = false;
-  const budget = lineStepBudget(end - start);
+  let lastEnd = at, lastMatch = -1, searching = false, done = false;
+  if (!budget) { const total = lineStepBudget(end - from); budget = { left: total, total, what: `a line at byte ${from} (${end - from} bytes)` }; }
   const run = (maxSteps) => {
     if (done) return out;
     let left = maxSteps;
     for (;;) {
       if (!searching) {
         if (lastEnd > end) { done = true; return out; }
-        searchStart(prog, buf, start, end, lastEnd, first);
+        searchStart(prog, buf, from, end, lastEnd, first);
         searching = true;
       }
-      const r = searchRun(prog, Math.min(left, budget - spent + 1));
-      spent += r.used; left -= r.used;
-      if (spent > budget) {
+      const r = searchRun(prog, Math.min(left, budget.left + 1));
+      budget.left -= r.used; left -= r.used;
+      if (budget.left < 0) {
         prog.cur = null;
-        throw new RgRegexRefusal('RG-RE-REFUSE-COST', `a line at byte ${start} (${end - start} bytes) needs more than ${budget} steps`);
+        throw new RgRegexRefusal('RG-RE-REFUSE-COST', `${budget.what} needs more than ${budget.total} steps`);
       }
       if (r.state === -1) return null;                          // paused, run again
       searching = false;
       if (r.state === 0) { done = true; return out; }
       const m = { start: prog.mStart, end: prog.mEnd };
+      if (m.start >= stopAt) { done = true; return out; }
+      if (once) { out.push(m); done = true; return out; }
       if (m.start === m.end) {
         lastEnd = m.end + 1;
         if (m.end === lastMatch) continue;
@@ -1274,11 +1314,18 @@ function altExact(list) {
 }
 // An exact summary also serves as its own head, tail and best.
 const asExact = (e) => ({ exact: e, head: e, tail: e, best: e });
+// RG-MULTILINE's prefilter (-U, a pattern rg searches with its multi-line searcher): ugrep still reads
+// LINES, so a class that can match \n ends a piece (nothing on either side of it is joined across it)
+// and every piece left lies inside one line of every match; ugrep proposing a line holding the best piece
+// proposes every FILE holding a match. Set by pre() for the one summary it makes.
+let _mlPre = false;
+const BREAK = { exact: null, head: NOTHING, tail: NOTHING, best: NOTHING };
 function summary(n) {
   switch (n.k) {
     case 'empty': case 'look': return asExact(NOTHING);
     // a literal character narrows most, a class less, `.` not at all
     case 'cls': {
+      if (_mlPre && has(n.set, 0x0a)) return BREAK;
       const p = clsPre(n.set);
       return asExact({ pat: p, score: p === '.' ? 0 : count(withoutNewline(n.set)) === 1 ? 2 : 1, weight: 1, reps: false });
     }
@@ -1326,31 +1373,36 @@ function summary(n) {
     default: throw new Error(`rg-regex: no prefilter for ${n.k}`);
   }
 }
-// -> a ugrep pattern string, '' for "every line".
-function pre(n) {
-  return summary(n).best.pat;
+// -> a ugrep pattern string, '' for "every line". ml: RG-MULTILINE's (a FILE filter, above).
+function pre(n, ml = false) {
+  _mlPre = ml;
+  try { return summary(n).best.pat; } finally { _mlPre = false; }
 }
 
 // ---- the entry point ------------------------------------------------------------------------------
-// translateRgRegex(pattern, { ignoreCase }) -> { prog, prefilter } | { refuse, rule }.
+// translateRgRegex(pattern, { ignoreCase, multiline, dotall }) -> { prog, prefilter, multiLine } | { refuse, rule }.
 // `prog` is the compiled matcher verifyLine runs; `prefilter` the ugrep pattern ('' = every line).
 // rg wraps each pattern as `(?:PATTERN)` before parsing (grep-regex config.rs), so `a)(b` is
-// `(?:a)(b)` there and here.
+// `(?:a)(b)` there and here. multiline (-U) and dotall (--multiline-dotall, which counts only under -U)
+// configure it as hiargs.rs's matcher_rust does (RG-MULTILINE); `multiLine` says whether rg then searches
+// with its multi-line searcher (canMatchNewline), and if so `prefilter` is a FILE filter.
 function translateRgRegex(pattern, opts = {}) {
   try {
-    const ps = new Parser(`(?:${pattern})`, opts.ignoreCase);
+    const multiline = !!opts.multiline;
+    const ps = new Parser(`(?:${pattern})`, opts.ignoreCase, multiline && !!opts.dotall);
     const ast = ps.parseGroupBody();
     if (!ps.eof()) ps.syntax('unopened group');
     const bound = sizeBound(ast) + SIZE_OVERHEAD;
     if (bound > NFA_SIZE_LIMIT) refuse('RG-RE-REFUSE-SIZE-LIMIT', `an NFA of up to ${bound > 1e15 ? 'more than 1e15' : Math.ceil(bound)} bytes`);
     let node = hir(ast);
-    checkHir(node);
-    node = stripHir(node);
-    return { prog: program(node), prefilter: pre(node) };
+    checkHir(node, multiline);
+    if (!multiline) node = stripHir(node);
+    const multiLine = multiline && canMatchNewline(node);
+    return { prog: program(node), prefilter: pre(node, multiLine), multiLine };
   } catch (e) {
     if (e instanceof RgRegexRefusal) return { refuse: refusalReason(e), rule: e.rule };
     throw e;
   }
 }
 
-module.exports = { translateRgRegex, verifyLine, lineVerifier, lineStepBudget, REFUSALS, RgRegexRefusal, refusalReason };
+module.exports = { translateRgRegex, verifyLine, lineVerifier, matchIter, lineStepBudget, REFUSALS, RgRegexRefusal, refusalReason };

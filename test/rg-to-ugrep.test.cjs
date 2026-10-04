@@ -92,45 +92,31 @@ function runRoutes(dir, rgArgs, env) {
   return JSON.parse(r.trim());
 }
 
-// THE FIXTURE, and why it is shaped this way.
-//
-// The stand-in applet has to be something the OS will really run, and Windows
-// runs exactly one kind of thing: a real PE image. libuv's search_path() ->
-// path_search_walk_ext() tries only `<name>.com` and `<name>.exe` when the path
-// carries no extension (deps/libuv/src/win/process.c), so an extensionless
-// `#!/bin/sh` stand-in is never even handed to CreateProcess — uv_spawn reports
-// ENOENT. That is how the earlier version of this row failed on windows-latest
-// from the day it was written: the FIXTURE was unrunnable there, while the claim
-// it defends is as true on Windows as anywhere.
-//
-// The one PE guaranteed to be present is the node running this test. It is also
-// a perfectly good stand-in applet, because `rg --files` translates to
-// `<applet> <path> -type f ...` — the search PATH comes FIRST, which is exactly
-// where node expects a script. So point CLODE_BFS at process.execPath and hand rg
-// a search path that IS a print-my-argv script: one fixture, no platform branch,
-// a real child process on all three OSes, reporting the argv it was handed.
-//
-// (The ugrep/search branch cannot use this trick — its translation starts with
-// `-r --ignore-files -I`, and node rejects `-I` as a bad option before it ever
-// reaches a script. That branch gets its own row below.)
-test('both spawn routes translate rg identically (child_process and Bun.spawn)', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-routes-'));
-  const printer = path.join(dir, 'print-argv.cjs');
-  fs.writeFileSync(printer, 'for (const a of process.argv.slice(2)) console.log(a);\n');
+// THE LISTING, on every OS. `rg --files` was the claim's carrier while it went through the old translation
+// (a print-my-argv script stood in for bfs, so the claim ran on Windows too). Since grep-native Task 10
+// quaude's rg lists itself, through rg's walk (libexec/rg-walk.cjs), with no applet at all, so the claim is
+// that both routes ANSWER it identically, on every OS, with nothing to stand in for. The answer is pinned
+// to native's where rg's path spelling is measured (POSIX: `/` joins; Windows' `\` joins are unmeasured,
+// BACKLOG, so there only the two routes are compared).
+test('both spawn routes answer rg --files identically (child_process and Bun.spawn)', () => {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'rg-routes-')));
+  const tree = path.join(dir, 'tree');
+  fs.mkdirSync(path.join(tree, 'sub'), { recursive: true });
+  fs.writeFileSync(path.join(tree, '.orphaned_at'), '');
+  fs.writeFileSync(path.join(tree, 'sub', '.orphaned_at'), '');
+  fs.writeFileSync(path.join(tree, 'other.txt'), 'x\n');
+  fs.utimesSync(path.join(tree, 'sub', '.orphaned_at'), 1700000060, 1700000060);   // the newer: listed last
+  fs.utimesSync(path.join(tree, '.orphaned_at'), 1700000000, 1700000000);
 
-  const got = runRoutes(dir, ['--files', '--no-ignore', '--hidden', '--max-depth', '4',
-    '--glob', '.orphaned_at', printer],
-  { ...process.env, CLODE_BFS: process.execPath, CLODE_UGREP: '' });
+  const got = runRoutes(dir, ['--files', '--no-ignore', '--hidden', '--glob', '.orphaned_at', '--sort=modified', tree],
+    { ...process.env, CLODE_BFS: '', CLODE_UGREP: '' });
 
   assert.strictEqual(got.cpErr, null,
     'child_process spawn of rg must not fail — before the fix this was ENOENT');
-  assert.ok(got.cp.length > 0, `child_process route produced no argv: ${JSON.stringify(got)}`);
-  assert.deepStrictEqual(got.cp, got.bun,
-    'the two spawn routes must hand the applet the SAME argv');
-  // Pin the argv itself, not just that the two routes agree: two routes that both
-  // stopped translating would agree on the wrong thing.
-  assert.deepStrictEqual(got.cp, ['-maxdepth', '4', '-type', 'f', '-name', '.orphaned_at'],
-    'the applet was handed something other than the translated rg --files argv');
+  assert.ok(got.cp.length > 0, `child_process route produced nothing: ${JSON.stringify(got)}`);
+  assert.deepStrictEqual(got.cp, got.bun, 'the two spawn routes must answer the SAME');
+  // native 2.1.283's embedded rg over this tree: both empty marker files, oldest first, nothing else
+  if (process.platform !== 'win32') assert.deepStrictEqual(got.cp, [`${tree}/.orphaned_at`, `${tree}/sub/.orphaned_at`]);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -138,9 +124,9 @@ test('both spawn routes translate rg identically (child_process and Bun.spawn)',
 // translated: quaude's rg answers it itself over ugrep (libexec/rg-native.cjs, grep-native Task 6),
 // so the claim is that both routes ANSWER it, identically and as rg does. ugrep is the stand-in
 // test/rg-fake-ugrep.cjs (a shebang script), which Windows cannot execute: libuv never hands an
-// extensionless path to CreateProcess (see the note above). So this row skips there, and ONLY
-// there, on that one named ground; the ROUTE-IDENTITY claim itself is still asserted on Windows by
-// the row above.
+// extensionless path to CreateProcess (libuv tries only `<name>.com` and `<name>.exe` for a path with no
+// extension). So this row skips there, and ONLY there, on that one named ground; the ROUTE-IDENTITY claim
+// itself is still asserted on Windows by the row above.
 test('both spawn routes answer an rg SEARCH identically, as rg does', {
   skip: process.platform === 'win32'
     ? 'needs an executable shebang ugrep stand-in; libuv only execs .com/.exe'
@@ -288,7 +274,7 @@ test('rg --files: the bfs branch finds a zero-length marker file', { skip: NO_BF
 // The shell path already refuses (127, "clode: rg needs 'ugrep'"). This pins the
 // spawn path to the same answer.
 test('a host rg is never called, even when present, if the applet is missing', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-hostrg-'));
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'rg-hostrg-')));
   fs.writeFileSync(path.join(dir, 'rg'), '#!/bin/sh\necho REAL-RG-CALLED\n');
   fs.chmodSync(path.join(dir, 'rg'), 0o755);
 
@@ -298,8 +284,10 @@ test('a host rg is never called, even when present, if the applet is missing', (
     const cp = require('node:child_process');
     const one = (args) => { const r = cp.spawnSync('rg', args, { encoding: 'utf8' });
       return { status: r.status, out: r.stdout, err: r.stderr }; };
-    console.log(JSON.stringify({ search: one(['-n', 'x', '.']), files: one(['--files', '/r']) }));
+    console.log(JSON.stringify({ search: one(['-n', 'x', '.']), files: one(['--files', ${JSON.stringify(path.join('<DIR>', 'tree'))}.replace('<DIR>', __dirname)]) }));
   `);
+  fs.mkdirSync(path.join(dir, 'tree'));
+  fs.writeFileSync(path.join(dir, 'tree', 'f.txt'), 'x\n');
   const r = require('node:child_process').spawnSync(process.execPath, [probe], {
     encoding: 'utf8',
     // A real rg on PATH, and deliberately no ugrep/bfs.
@@ -308,12 +296,15 @@ test('a host rg is never called, even when present, if the applet is missing', (
   const got = JSON.parse(r.stdout.trim());
   for (const [what, a] of Object.entries(got)) {
     assert.doesNotMatch(a.out + a.err, /REAL-RG-CALLED/, `a present host rg must NOT be used for the ${what} call`);
-    // A refusal: rc 2, nothing printed, the missing applet named (rg-native.cjs rgRefusal).
-    assert.strictEqual(a.status, 2, `${what}: ${JSON.stringify(a)}`);
-    assert.strictEqual(a.out, '');
-    const refused = require('../libexec/rg-native.cjs').parseRgRefusal(a.err);
-    assert.ok(refused && refused.flag === null && /^quaude answers rg with ugrep/.test(refused.reason), a.err);
   }
+  // The search: a refusal, rc 2, nothing printed, the missing applet named (rg-native.cjs rgRefusal).
+  assert.strictEqual(got.search.status, 2, `search: ${JSON.stringify(got.search)}`);
+  assert.strictEqual(got.search.out, '');
+  const refused = require('../libexec/rg-native.cjs').parseRgRefusal(got.search.err);
+  assert.ok(refused && refused.flag === null && /^quaude answers rg with ugrep/.test(refused.reason), got.search.err);
+  // The listing needs no applet (grep-native Task 10: rg's walk is quaude's own), so it is ANSWERED, as
+  // native answers it, and still never by the host rg.
+  assert.deepStrictEqual([got.files.status, got.files.out], [0, `${path.join(dir, 'tree')}/f.txt\n`], JSON.stringify(got.files));
   // The operator's trace has to say so too, and name the remedy — silence here would read
   // as "rg is missing" when rg is in fact right there and deliberately declined.
   assert.match(r.stderr, /not falling back to a host rg/);
