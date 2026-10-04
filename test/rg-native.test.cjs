@@ -422,7 +422,8 @@ test('a prefilter never stalls ugrep on a 5 MB line: `.{0,100}needle` and `x.*ne
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-native-stall-'));
   try {
     fs.writeFileSync(path.join(dir, 'bundle.js'), bundleLine());
-    for (const pattern of ['.{0,100}needle', 'x.*needle', '[a-z]+.*Zebra']) {
+    // nested counts (review round 3): `(?:[^a]{0,16}b){16}` became `(?:(?:.){0,16}b){16}`, over 30 s
+    for (const pattern of ['.{0,100}needle', 'x.*needle', '[a-z]+.*Zebra', '(?:[^a]{0,16}b){16}', '(?:[^,]{0,16},){16}', '(?:.{0,16}){16}needle']) {
       let child = null, timer = null;
       const t0 = Date.now();
       const run = rgn.ugrepMatchesAsync(['bundle.js'], pattern, { ugrep: UGREP, cwd: dir, onChild: (c) => { child = c; } })
@@ -431,7 +432,7 @@ test('a prefilter never stalls ugrep on a 5 MB line: `.{0,100}needle` and `x.*ne
       clearTimeout(timer);
       if (out === 'TIMEOUT' && child) child.kill('SIGKILL');
       assert.notStrictEqual(out, 'TIMEOUT', `${pattern}: still searching after ${Date.now() - t0} ms`);
-      assert.strictEqual(out, 'answered 0', pattern);
+      assert.match(out, /^answered \d+$|^refused RG-RE-REFUSE-COST$/, pattern);
     }
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

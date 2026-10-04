@@ -1133,77 +1133,103 @@ function clsPre(fullSet) {
   }
   return '.';
 }
-// THE PIECES RULE: no prefilter holds an unbounded repetition, because ugrep is slow on one over a
-// long line (measured, ugrep 7.8.2, a 5 MB line with no match: `needle` 46 ms, `(?:.)*needle` over
-// 20 minutes, `x(?:.)*needle` and `(?:.)+needle` past 20 s, `(?:.){0,100}needle` 1.8 s). A node is
-// summarised as EXACT (a pattern, repetition-bounded, matching every string the node matches), or
-// else as HEAD / TAIL (what every match of it starts / ends with) and BEST (a piece every match of
-// it contains). A concatenation joins exact parts into pieces and breaks a piece at a part that is
-// not exact, keeping that part's head on the left and its tail on the right; an unbounded (or more
-// than SMALL_REP) repetition is not exact, and its head, tail and best are one copy of its sub, or
-// nothing when it may repeat zero times. Every match of the whole contains every piece, so the
-// highest-scoring piece (literal characters 2, other classes 1, `.` 0) is a superset filter.
-const SMALL_REP = 16;
-const NOTHING = { pat: '', score: 0 };
-const pieceOf = (parts) => ({ pat: parts.map((x) => x.pat).join(''), score: parts.reduce((a, x) => a + x.score, 0) });
+// THE PIECES RULE: no prefilter holds an unbounded repetition, a counted repetition inside
+// another, or an exact part heavier than PREFILTER_WEIGHT, because ugrep is slow on each over a long
+// line. Measured on ugrep 7.8.2 over a 5 MB minified line with no match (2026-10-03):
+//   unbounded   `needle` 46 ms; `(?:.)*needle` over 20 minutes; `x(?:.)*needle`, `(?:.)+needle`
+//               past 20 s
+//   nested      `(?:(?:.){0,16}b){2}` 1.6 s, `{4}` / `{8}` / `{16}` past 30 s (the DFA grows with
+//               the product of the counts)
+//   weight      `(?:.){0,k}needle` takes 123 ms at k = 4, 189 at 8, 340 at 16, 696 at 32,
+//               1,219 at 64, 2,276 at 128: about linear in the window
+// So a counted repetition is exact only when its sub holds none, its count is at most SMALL_REP,
+// and its weight (count x the sub's weight; a character 1, a concatenation or alternation the
+// sum of its parts) is at most PREFILTER_WEIGHT = 32, which keeps any prefilter under about 0.7 s
+// over a 5 MB line. A node is summarised as EXACT (a pattern matching every string the node
+// matches) or else as HEAD / TAIL (what every match of it starts / ends with) and BEST (a piece
+// every match of it contains). A concatenation joins exact parts into pieces, starting a new piece
+// where the next part would pass the weight, and breaks a piece at a part that is not exact,
+// keeping that part's head on the left and its tail on the right; a repetition that is not exact
+// gives one copy of its sub, or nothing when it may repeat zero times. Every match of the whole
+// contains every piece, so the highest-scoring piece (literal characters 2, other classes 1,
+// `.` 0) is a superset filter; a piece past the weight is dropped (nothing required), never kept.
+const SMALL_REP = 16, PREFILTER_WEIGHT = 32;
+const NOTHING = { pat: '', score: 0, weight: 0, reps: false };
+const pieceOf = (parts) => ({ pat: parts.map((x) => x.pat).join(''), score: parts.reduce((a, x) => a + x.score, 0),
+  weight: parts.reduce((a, x) => a + x.weight, 0), reps: parts.some((x) => x.reps) });
+const light = (x) => (x.weight > PREFILTER_WEIGHT ? NOTHING : x);
 const better = (a, b) => (b.score > a.score || (b.score === a.score && b.pat.length > a.pat.length) ? b : a);
 // An alternation of required pieces: nothing is required when one branch requires nothing.
 function altPiece(list) {
   if (list.some((x) => x.pat === '')) return NOTHING;
-  return { pat: list.length === 1 ? list[0].pat : `(?:${list.map((x) => x.pat).join('|')})`, score: Math.min(...list.map((x) => x.score)) };
+  return light({ pat: list.length === 1 ? list[0].pat : `(?:${list.map((x) => x.pat).join('|')})`, score: Math.min(...list.map((x) => x.score)),
+    weight: list.reduce((a, x) => a + x.weight, 0), reps: list.some((x) => x.reps) });
 }
 // An alternation of exact branches: one that matches only the empty string makes it optional.
 function altExact(list) {
   const real = list.filter((x) => x.pat !== '');
   if (!real.length) return NOTHING;
   const g = `(?:${real.map((x) => x.pat).join('|')})`;
-  return real.length < list.length ? { pat: `${g}?`, score: 0 } : { pat: g, score: Math.min(...real.map((x) => x.score)) };
+  const weight = real.reduce((a, x) => a + x.weight, 0), reps = real.some((x) => x.reps);
+  return real.length < list.length ? { pat: `${g}?`, score: 0, weight, reps } : { pat: g, score: Math.min(...real.map((x) => x.score)), weight, reps };
 }
+// An exact summary also serves as its own head, tail and best.
+const asExact = (e) => ({ exact: e, head: e, tail: e, best: e });
 function summary(n) {
   switch (n.k) {
-    case 'empty': case 'look': return { exact: NOTHING };
+    case 'empty': case 'look': return asExact(NOTHING);
     // a literal character narrows most, a class less, `.` not at all
-    case 'cls': { const p = clsPre(n.set); return { exact: { pat: p, score: p === '.' ? 0 : count(withoutNewline(n.set)) === 1 ? 2 : 1 } }; }
+    case 'cls': {
+      const p = clsPre(n.set);
+      return asExact({ pat: p, score: p === '.' ? 0 : count(withoutNewline(n.set)) === 1 ? 2 : 1, weight: 1, reps: false });
+    }
     case 'cap': return summary(n.sub);
     case 'cat': {
       const pieces = [], cands = [];
-      let cur = [], exact = true;
+      let cur = [], curW = 0, exact = true;
+      const close = () => { pieces.push(pieceOf(cur)); cur = []; curW = 0; };
       for (const c of n.subs) {
         const sc = summary(c);
-        if (sc.exact) { cur.push(sc.exact); continue; }
+        if (sc.exact) {
+          if (curW + sc.exact.weight > PREFILTER_WEIGHT) { exact = false; close(); }
+          cur.push(sc.exact); curW += sc.exact.weight;
+          continue;
+        }
         exact = false;
+        if (curW + sc.head.weight > PREFILTER_WEIGHT) close();
         cur.push(sc.head);
-        pieces.push(pieceOf(cur));
+        close();
         cands.push(sc.best);
-        cur = [sc.tail];
+        cur = [sc.tail]; curW = sc.tail.weight;
       }
-      pieces.push(pieceOf(cur));
-      if (exact) return { exact: pieces[0] };
-      return { head: pieces[0], tail: pieces[pieces.length - 1], best: [...pieces, ...cands].reduce(better, NOTHING) };
+      close();
+      if (exact) return asExact(pieces[0]);
+      return { exact: null, head: light(pieces[0]), tail: light(pieces[pieces.length - 1]), best: [...pieces, ...cands].map(light).reduce(better, NOTHING) };
     }
     case 'alt': {
       const ss = n.subs.map(summary);
-      if (ss.every((x) => x.exact)) return { exact: altExact(ss.map((x) => x.exact)) };
-      return { head: altPiece(ss.map((x) => x.exact || x.head)), tail: altPiece(ss.map((x) => x.exact || x.tail)),
-        best: altPiece(ss.map((x) => x.exact || x.best)) };
+      if (ss.every((x) => x.exact)) {
+        const e = altExact(ss.map((x) => x.exact));
+        if (e.weight <= PREFILTER_WEIGHT) return asExact(e);
+      }
+      return { exact: null, head: altPiece(ss.map((x) => x.head)), tail: altPiece(ss.map((x) => x.tail)), best: altPiece(ss.map((x) => x.best)) };
     }
     case 'rep': {
       const sc = summary(n.sub), { min, max } = n;
-      if (sc.exact && max !== null && max <= SMALL_REP) {
-        if (sc.exact.pat === '') return { exact: NOTHING };
+      if (sc.exact && max !== null && max <= SMALL_REP && !sc.exact.reps && max * sc.exact.weight <= PREFILTER_WEIGHT) {
+        if (sc.exact.pat === '') return asExact(NOTHING);
         const q = min === 0 && max === 1 ? '?' : min === max ? `{${min}}` : `{${min},${max}}`;
-        return { exact: { pat: `(?:${sc.exact.pat})${q}`, score: min > 0 ? sc.exact.score * min : 0 } };
+        return asExact({ pat: `(?:${sc.exact.pat})${q}`, score: min > 0 ? sc.exact.score * min : 0, weight: max * sc.exact.weight, reps: true });
       }
-      if (min === 0) return { head: NOTHING, tail: NOTHING, best: NOTHING };
-      return { head: sc.exact || sc.head, tail: sc.exact || sc.tail, best: sc.exact || sc.best };
+      if (min === 0) return { exact: null, head: NOTHING, tail: NOTHING, best: NOTHING };
+      return { exact: null, head: sc.head, tail: sc.tail, best: sc.best };
     }
     default: throw new Error(`rg-regex: no prefilter for ${n.k}`);
   }
 }
 // -> a ugrep pattern string, '' for "every line".
 function pre(n) {
-  const sm = summary(n);
-  return (sm.exact || sm.best).pat;
+  return summary(n).best.pat;
 }
 
 // ---- the entry point ------------------------------------------------------------------------------

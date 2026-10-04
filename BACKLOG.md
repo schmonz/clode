@@ -236,11 +236,13 @@ Bash tool instead".
     with 5 million matches, 11.8 s), and a pathological one refuses only after 64 steps a byte:
     `.{0,100}function` over the same 5 MB line refuses after 62 s under tjs (the async twin can be
     aborted meanwhile; the sync twin cannot);
-  - ugrep, the proposer, stalls on an unbounded repetition over a long line (7.8.2, a 5 MB line
-    with no match: `needle` 46 ms, `(?:.)*needle` over 20 minutes, `x(?:.)*needle` and
-    `(?:.)+needle` past 20 s), so a prefilter never holds one (rg-regex.cjs, THE PIECES RULE): it
-    is the best piece every match must contain (`.{0,100}needle` proposes by `needle`). Seen while
-    fixing N1; the round-1 prefilter (`(?:.)*needle`) hung there;
+  - ugrep, the proposer, stalls on some prefilters over a long line (7.8.2, a 5 MB line with no
+    match): an unbounded repetition (`needle` 46 ms, `(?:.)*needle` over 20 minutes,
+    `x(?:.)*needle` past 20 s), a counted repetition inside another (`(?:(?:.){0,16}b){2}` 1.6 s,
+    `{4}` and beyond past 30 s; review round 3), and a wide window (`(?:.){0,k}needle` about linear:
+    340 ms at 16, 696 at 32, 2,276 at 128). So a prefilter holds none of the first two, and no exact
+    part heavier than 32 (rg-regex.cjs, THE PIECES RULE): it is the best piece every match must
+    contain (`.{0,100}needle` proposes by `needle`, `(?:[^a]{0,16}b){16}` by `(?:.){0,16}b`);
   - FOR THE PRINTERS (Tasks 6/7): ugrepMatches returns the MATCHER's matches, including the one at
     the end of an unterminated last line (RG-RE-MATCH-AT-UNTERMINATED-END: `$` on `abc\nxyz`, native
     selects line 2 and prints submatches []); rg's printers do not print that match. And

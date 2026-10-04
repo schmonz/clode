@@ -599,6 +599,12 @@ test('RG-RE-PREFILTER-SUPERSET: the widening rules, stated', () => {
   assert.strictEqual(pre('a(?:b|.*c)d'), '(?:b|c)d');
   assert.strictEqual(pre('(foo|bar)+baz'), '(?:foo|bar)baz');
   assert.strictEqual(pre('[a-zA-Z_]\\w*\\('), '\\x28');
+  // no counted repetition inside another, and no exact part heavier than PREFILTER_WEIGHT
+  assert.strictEqual(pre('(?:[^a]{0,16}b){16}'), '(?:.){0,16}b');
+  assert.strictEqual(pre('(?:[^,]{0,16},){16}'), '(?:.){0,16}\\x2c');
+  assert.strictEqual(pre('(?:.{0,16}){16}needle'), '(?:.){0,16}needle');  // one copy of the outer count's sub
+  assert.strictEqual(pre('.{0,32}needle'), 'needle');
+  assert.strictEqual(pre('.{0,16}needle'), '(?:.){0,16}needle');
   assert.strictEqual(pre('a.b'), 'a.b');
   assert.strictEqual(pre('x\\.y'), 'x\\x2ey');                                // punctuation as \xHH
 });
