@@ -249,7 +249,7 @@ test('RG-SORT-MODIFIED (ruling G12): files written within one second list in nat
 // The Glob tool's own argv over 30,000 files under tjs, as the bundle runs it (the async twin, execFile): the listing
 // and its sort (a stat a file) hand the loop back (longest gap under 600 ms), the answer is every file, counted, and
 // the caller's timeout ends a run within a bound (review minor of Task 10's fix round; measured here: longest gap 59 ms
-// over a 1.3 s listing, the 200 ms timeout ending it at 203 ms).
+// over a 1.3 s listing, the 200 ms timeout ending it at 203 ms); each of its three stages' yields is COUNTED (round 2).
 test('RG-SORT-MODIFIED: the async twin keeps the loop turning over 30,000 files and ends at a timeout (tjs, counted)', { skip: POSIX || NO_TJS }, () => {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'rg-files-gap-')));
   try {
@@ -275,8 +275,9 @@ test('RG-SORT-MODIFIED: the async twin keeps the loop turning over 30,000 files 
         const iv = setInterval(() => { const n = Date.now(); maxGap = Math.max(maxGap, n - last); last = n; }, 10);
         const full = await run({ timeout: 120000, maxBuffer: 20000000 });
         clearInterval(iv);
+        const ticks = { ...rgn.searchStats.ticks };
         const cut = await run({ timeout: 200, killSignal: 'SIGKILL', maxBuffer: 20000000 });
-        process.stdout.write('PROBE:' + JSON.stringify({ maxGap, full, cut }) + '\\n');
+        process.stdout.write('PROBE:' + JSON.stringify({ maxGap, full, cut, ticks }) + '\\n');
       })();
     `);
     const res = runLoader(prog, [], { timeout: 240000 });
@@ -284,6 +285,10 @@ test('RG-SORT-MODIFIED: the async twin keeps the loop turning over 30,000 files 
     assert.ok(got, `the tjs probe printed nothing (exit ${res.status}): ${(res.stderr || '').slice(0, 1500)}`);
     assert.deepStrictEqual([got.full.code, got.full.n], [0, 30000], JSON.stringify(got.full));
     assert.ok(got.maxGap < 600, `the loop was held ${got.maxGap} ms (the listing took ${got.full.ms} ms)`);
+    // COUNTED (fix round 2, review N3: with any ONE stage's yield removed the gap stayed under 600 ms on this host,
+    // 622 / 497 / 341 ms): each stage hands control back every 256 entries, so over 30,000 files each yields at least
+    // 100 times (the walk: 33,060 entries; the sort and the printing: 30,000 files), whatever the host's speed
+    for (const stage of ['walk', 'sort', 'list']) assert.ok(got.ticks[stage] >= 100, `the ${stage} stage yielded ${got.ticks[stage]} times: ${JSON.stringify(got.ticks)}`);
     assert.deepStrictEqual([got.cut.killed, got.cut.signal], [true, 'SIGKILL'], JSON.stringify(got.cut));
     assert.ok(got.cut.ms < 5000, `the timeout ended the listing ${got.cut.ms} ms in`);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }

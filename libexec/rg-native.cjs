@@ -1360,7 +1360,9 @@ function* eachPrintedLine(text, sel, spec) {
 // so two searches running at once (the async twin yields mid-search) clobber each other's counts. It is
 // an instrument for a test that runs one search at a time, never an answer: no production consumer may
 // read or trust it.
-const searchStats = { printed: 0, scannedBack: 0, read: 0 };
+// ticks: how often a listing's three stages handed control back (the walk, RG-SORT-MODIFIED's stat, the printing):
+// counted, so a stage that stops yielding is seen however fast this host is (fix round 2, review N3).
+const searchStats = { printed: 0, scannedBack: 0, read: 0, ticks: { walk: 0, sort: 0, list: 0 } };
 // The start of the line holding offset `at`, stepping back no further than `floor` (the start of the
 // first line it could be: the one after the last line taken). Every printer and the candidate lines find
 // line starts HERE, so searchStats.scannedBack counts every step.
@@ -2006,7 +2008,7 @@ function* sortedByModified(spec, entries, cwd) {
     let t = null;
     try { t = fs.statSync(path.resolve(cwd, e.stdin ? '-' : e.file), { bigint: true }).mtimeNs; } catch { /* sorted last */ }
     keyed.push({ e, t, i: keyed.length });
-    if (++n % TICK_EVERY === 0) yield TICK;
+    if (++n % TICK_EVERY === 0) { searchStats.ticks.sort++; yield TICK; }
   }
   const sign = spec.sort.reverse ? -1 : 1;
   keyed.sort((a, b) => {
@@ -2025,7 +2027,7 @@ function* printListing(spec, entries, cwd) {
     if (e.message) { err.push(Buffer.from(e.message + '\n')); continue; }
     if (!e.file) continue;
     out.push(Buffer.from(e.disp + term));
-    if (++listed % TICK_EVERY === 0) yield TICK;
+    if (++listed % TICK_EVERY === 0) { searchStats.ticks.list++; yield TICK; }
   }
   return { stdout: out.done(), stderr: spec.noMessages ? Buffer.alloc(0) : Buffer.concat(err), status: broke ? 2 : listed ? 0 : 1, signal: null };
 }
@@ -2036,6 +2038,7 @@ function* printListing(spec, entries, cwd) {
 // rules above are stated once. It returns { stdout, stderr, status } or a refusal. A directory is walked
 // here, in JS, as rg walks it (rg-walk.cjs), and ugrep searches the files it lists.
 function* searchCore(spec, opts) {
+  searchStats.ticks = { walk: 0, sort: 0, list: 0 };
   const fs = require('fs'), path = require('path');
   const cwd = opts.cwd || process.cwd();
   const pattern = spec.patterns[0];
@@ -2106,7 +2109,7 @@ function* searchCore(spec, opts) {
       // RG-WALK-*: the directory, walked as rg walks it; its files, rg's messages and errors, in rg's order.
       try {
         for (const w of walker.walk(P, { sequential, errText: osErrorText, tick: TICK })) {
-          if (w === TICK) { yield TICK; continue; }
+          if (w === TICK) { searchStats.ticks.walk++; yield TICK; continue; }
           if (w.file) entries.push({ disp: w.file, file: w.file, walked: true });
           else entries.push(w);
         }
