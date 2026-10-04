@@ -443,8 +443,6 @@ Bash tool instead".
     libexec/node-shim/internal/terminal-fd.cjs and anything else deciding "is a TTY"); stat now
     converts UTF-8 to UTF-16 while open and readdir stay on the ANSI CRT, so stat and open can
     disagree about a non-ASCII path.
-- node-shim's `fs.opendirSync` returns a Dir without `readSync` (found by the Task 7 re-review, M3); the
-  2.1.283 bundle never calls it.
 - **An unhandled rejection exits 0 under node-shim; node exits 1** (noticed 2026-10-04, ruling G18).
   libexec/node-shim/loader.cjs's 'unhandledrejection' listener prints the reason and calls
   preventDefault(), and with no process listener the program then ends with status 0. A test that

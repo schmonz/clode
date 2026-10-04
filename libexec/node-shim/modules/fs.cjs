@@ -693,16 +693,23 @@ const fsMod = {
   readlinkSync: (p) => FSS.readlink(p),
   readdirSync: (p, opts) => readdirCore(p, opts),
   opendirSync: (p) => {
-    // Minimal Dir: an async-iterable + read()/close() over an eager Dirent list,
-    // enough for a `for await (const d of await opendir(p))` walker.
+    // A Dir over an eager Dirent list in the OS's readdir order (the engine's readdir does not sort,
+    // as node's Dir does not: test/node-shim-fs-opendir.test.cjs): readSync()/read() hand over the next
+    // entry or null, an async iterator, and closeSync()/close(), after which a read is node's
+    // ERR_DIR_CLOSED.
     const ents = readdirCore(p, { withFileTypes: true });
-    let i = 0;
+    let i = 0, closed = false;
+    const next = () => {
+      if (closed) { const e = new Error('Directory handle was closed'); e.code = 'ERR_DIR_CLOSED'; throw e; }
+      return i < ents.length ? ents[i++] : null;
+    };
     return {
       path: p,
-      read: async () => (i < ents.length ? ents[i++] : null),
-      close: async () => {},
-      closeSync: () => {},
-      [Symbol.asyncIterator]() { return { next: async () => (i < ents.length ? { value: ents[i++], done: false } : { value: undefined, done: true }) }; },
+      readSync: next,
+      read: async () => next(),
+      close: async () => { closed = true; },
+      closeSync: () => { closed = true; },
+      [Symbol.asyncIterator]() { return { next: async () => { const e = next(); return e ? { value: e, done: false } : { value: undefined, done: true }; } }; },
     };
   },
   rmdirSync: (p) => FSS.rmdir(p),
