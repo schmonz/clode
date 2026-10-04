@@ -1,12 +1,11 @@
 'use strict';
-// throwawayHome(dir): the HOME and CLAUDE_CONFIG_DIR every test that runs the bundle (quaude, naude, native Claude Code)
-// against a model hands it, under that test's own temp dir (grep-native Task 10b fix round, ruling G30).
+// throwawayHome(dir): a HOME, USERPROFILE and CLAUDE_CONFIG_DIR under a test's own temp dir, for a run that needs a home
+// of its OWN, distinct from the suite's (grep-native Task 10b fix rounds, rulings G30 and G33).
 //
-// WHY. These runs used to inherit the developer's real HOME, so the bundle read ~/.claude/settings.json and RAN ITS
-// HOOKS (on the dev box an iTerm2 status hook that blocks 30 s per call: ten agentic rows timed out in one suite), and
-// WROTE into the real ~/.claude (the headless plugin install restamped ~/.claude/plugins/known_marketplaces.json).
-// The guard bundle-runs-own-home (test/bundle-home-hermetic.test.cjs) fails any spawn of the bundle whose env does
-// not give it one (test/bundle-spawn-scan.cjs finds the spawns). USERPROFILE too: HOME's spelling on Windows.
+// The whole suite already runs under a throwaway home (test/suite-home.cjs, guarded fail-closed by
+// test/suite-home-hermetic.test.cjs), so nothing reaches the developer's ~/.claude by default. This is for runs that
+// must not share even that: two sides of a differential, a run whose home is inspected afterwards, a bundle turn
+// whose session state must not leak into the next. USERPROFILE too: HOME's spelling on Windows.
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
