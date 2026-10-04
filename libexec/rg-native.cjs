@@ -363,7 +363,12 @@ function ugrepRangeParser(into = new Map()) {
 
 // The plan both twins share: each distinct file once, spelled for ugrep, in chunks; and how to
 // read the ranges back in the caller's order (a file without a match has no entry).
-function matchPlan(files, prefilter, opts, perLine) {
+// A generator (it yields every SNIFF_SLICE files of its BOM sniff, an open, a 4-byte read and a close each, so
+// the asynchronous twin hands the event loop back across a large walk: Task 9 review I-2, 915 ms held over
+// 18.7k files); matchPlan drains it at once.
+const SNIFF_SLICE = 256;
+function matchPlan(files, prefilter, opts, perLine) { return drain(matchPlanGen(files, prefilter, opts, perLine)); }
+function* matchPlanGen(files, prefilter, opts, perLine) {
   // A directory is searched as NOTHING (ugrep exits 0 on one without -r): the walk lists files,
   // so a directory here is the caller's mistake, refused rather than answered "no matches".
   // RG-TEXT-BOM: each file's first bytes, read here once, say whether its text is rg's decoding
@@ -373,7 +378,9 @@ function matchPlan(files, prefilter, opts, perLine) {
   // A file the walk listed (opts.known) is a regular file already (N-2): it is not stat'ed again, only
   // sniffed (an empty or one-byte file reads short and holds no BOM).
   const known = opts.known || new Set();
+  let n = 0;
   for (const f of files) {
+    if (++n % SNIFF_SLICE === 0) yield;
     const p = path.resolve(opts.cwd || process.cwd(), f);
     if (known.has(f)) { if (hasBom(readHead(p))) bom.add(f); continue; }
     let st = null;
@@ -709,10 +716,11 @@ const DECIDE_SLICE_MS = 20;
 function ugrepMatchesAsync(files, pattern, opts = {}) {
   if (!files.length) return Promise.resolve(new Map());
   // The floor check runs ugrep --version synchronously, ONCE per binary per process (cached).
-  let plan, t;
-  try { t = translated(pattern, opts); assertUsableUgrep(opts); plan = matchPlan(files, t.prefilter, opts, !takesUgrepRanges(t)); } catch (e) { return Promise.reject(e); }
+  let t;
+  try { t = translated(pattern, opts); assertUsableUgrep(opts); } catch (e) { return Promise.reject(e); }
   const spawn = opts.spawn || require('child_process').spawn;
-  const { chunks, inOrder, onlyAsked, bom, asked } = plan;
+  // the plan, sniffed in slices (matchPlanGen) inside the run below
+  let chunks, inOrder, onlyAsked, bom, asked;
   const aborted = () => opts.signal && opts.signal.aborted;
   const abortError = () => new UgrepError('rg-native: the search was aborted');
   const ranges = new Map(), pathErrors = [];
@@ -759,6 +767,7 @@ function ugrepMatchesAsync(files, pattern, opts = {}) {
   };
   return (async () => {
     if (aborted()) throw abortError();
+    ({ chunks, inOrder, onlyAsked, bom, asked } = await drainAsync(matchPlanGen(files, t.prefilter, opts, !takesUgrepRanges(t)), between));
     let failed = null;
     for (const argv of chunks) {
       const r = await runOne(argv);

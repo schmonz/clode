@@ -81,7 +81,10 @@ const rgTypes = () => _types || (_types = require(__dirname + '/rg-types.cjs'));
 
 // A path's (or a glob character's) BYTES as a string of one char per byte: globs match bytes (globset
 // builds its regexes with (?-u)).
-const bytesOf = (s) => Buffer.from(String(s), 'utf8').toString('latin1');
+// An ASCII string is its own bytes, so it is not encoded (Task 9 review I-2: the encode took half of a
+// 1.5 s walk under tjs, ~38 microseconds a path).
+const NOT_ASCII = /[^\x00-\x7f]/;
+const bytesOf = (s) => { s = String(s); return NOT_ASCII.test(s) ? Buffer.from(s, 'utf8').toString('latin1') : s; };
 
 // ---- globset: rg's glob dialect --------------------------------------------------------------------
 // A glob's error, as rg prints it: `error parsing glob 'G': KIND`. `usage`: rg stops before searching.

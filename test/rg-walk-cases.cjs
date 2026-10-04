@@ -15,6 +15,7 @@
 //   badig    ignore files with lines that do not parse, a line that is not UTF-8, and the escapes
 //   bomig    a .gitignore that starts with a UTF-8 BOM (rg reads it as part of the first line) and has CRLFs
 //   shared   one .gitignore over several roots searched at once (rg's ancestors are built once, by the first)
+//   uni      a non-ASCII file name, for globs over bytes
 //   h1 h2    HOMEs: XDG's git/ignore; ~/.gitconfig's core.excludesFile with a ~
 const NEEDLE = 'needle\n';
 const TREES = {
@@ -58,6 +59,8 @@ const TREES = {
     ['docs/a.md', NEEDLE], ['docs/sub/b.md', NEEDLE], ['sub/docs/c.md', NEEDLE], ['gen/g.txt', NEEDLE], ['sub/gen/g2.txt', NEEDLE],
     ['sub/x.txt', NEEDLE], ['ok.txt', NEEDLE],
   ],
+  // a non-ASCII name (built from its code point: never a literal in source); globs match its UTF-8 BYTES
+  uni: [[`caf${String.fromCodePoint(0xe9)}.txt`, NEEDLE], ['plain.txt', NEEDLE]],
   h1: [['.config/git/ignore', 'g1.txt\n']],
   h2: [['.gitconfig', '[core]\n\texcludesFile = ~/x/ex\n'], ['x/ex', 'g2.txt\n']],
 };

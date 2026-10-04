@@ -177,6 +177,16 @@ const P9_NATIVE = [
   ["RG-GLOB-ROOT", "repo", "sub", ["-j1", "-l", "--glob", "sub/*", "needle", "<T>"], "empty", 1, "", ""],
   ["RG-GLOB-ROOT", "repo", ".", ["-j1", "-l", "--glob", "sub/*", "needle", "<T>"], "empty", 0, "<T>/sub/ign.txt\n<T>/sub/anch.txt\n<T>/sub/x.ign\n", ""],
   ["RG-GLOB-ROOT", "repo", "code", ["-j1", "-l", "--iglob", "!/A.TXT", "needle", "."], "empty", 0, "./y.tsx\n./{b}.ts\n./Makefile\n./*.txt\n./README.md\n./x.ts\n./z.js\n", ""],
+  // RG-GLOB-DIALECT over a non-ASCII name (review I-2 made ASCII paths skip the UTF-8 encode, so these pin the
+  // other branch): globs match BYTES: ? is one byte (two match the e-acute), a class of it is a class of its two
+  // bytes, --iglob folds ASCII only.
+  ["RG-GLOB-DIALECT", "uni", ".", ["-j1", "-l", "--glob", "caf\u00e9.txt", "needle", "."], "empty", 0, "./caf\u00c3\u00a9.txt\n", ""],
+  ["RG-GLOB-DIALECT", "uni", ".", ["-j1", "-l", "--glob", "caf?.txt", "needle", "."], "empty", 1, "", ""],
+  ["RG-GLOB-DIALECT", "uni", ".", ["-j1", "-l", "--glob", "caf??.txt", "needle", "."], "empty", 0, "./caf\u00c3\u00a9.txt\n", ""],
+  ["RG-GLOB-DIALECT", "uni", ".", ["-j1", "-l", "--glob", "caf[\u00e9].txt", "needle", "."], "empty", 1, "", ""],
+  ["RG-GLOB-DIALECT", "uni", ".", ["-j1", "-l", "--glob", "caf*.txt", "needle", "."], "empty", 0, "./caf\u00c3\u00a9.txt\n", ""],
+  ["RG-GLOB-DIALECT", "uni", ".", ["-j1", "-l", "--iglob", "CAF\u00c9.TXT", "needle", "."], "empty", 1, "", ""],
+  ["RG-GLOB-DIALECT", "uni", ".", ["-j1", "-l", "--iglob", "CAF\u00e9.TXT", "needle", "."], "empty", 0, "./caf\u00c3\u00a9.txt\n", ""],
 ];
 
 // Every tree in a fresh root; fn(root). The trees' names are the keys of TREES, plus `empty` (a HOME).
@@ -418,3 +428,40 @@ test('N-2: a walked search never stats a file the walk listed (it reads only its
   assert.ok(listed.length >= 15, `${listed.length} files listed`);
   assert.deepStrictEqual(listed.filter((p) => seen.includes(p)), []);
 }));
+
+// ---- the async twin keeps the loop turning over a large walk (Task 9 review I-2) ----------------------------------
+// The match pass sniffs each walked file's first bytes for a BOM (an open, a 4-byte read, a close); over 18.7k
+// files that held the event loop 915 ms under tjs, 2.6 s under load, in one stretch (Glob, Task 10, walks every
+// file). 30,000 files, two directory levels; the loop must keep turning (Task 7's bound, 600 ms).
+test('RG-WALK-*: the async twin keeps the loop turning over a walk of 30,000 files (tjs)', { skip: needUgrep.skip || NO_TJS }, () => {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'rg-walk-gap-')));
+  try {
+    const tree = path.join(dir, 'w');
+    for (let a = 0; a < 60; a++) {
+      for (let b = 0; b < 50; b++) {
+        const d = path.join(tree, `pkg${a}`, `lib${b}`);
+        fs.mkdirSync(d, { recursive: true });
+        for (let c = 0; c < 10; c++) fs.writeFileSync(path.join(d, `file${c}.js`), `module.exports = ${c};\n`);
+      }
+    }
+    const prog = path.join(dir, 'probe.cjs');
+    fs.writeFileSync(prog, `
+      const rgn = require(${JSON.stringify(path.join(__dirname, '..', 'libexec', 'rg-native.cjs'))});
+      const cp = require('child_process');
+      const ctx = { translate: () => { throw new Error('translated'); }, spawn: cp.spawn, spawnSync: cp.spawnSync, ugrep: () => ${JSON.stringify(UGREP)} };
+      (async () => {
+        let last = Date.now(), maxGap = 0;
+        const iv = setInterval(() => { const n = Date.now(); maxGap = Math.max(maxGap, n - last); last = n; }, 10);
+        const a = await new Promise((res) => rgn.rgExecFile(['-l', '--hidden', 'nothing-matches-this', 'w'], { cwd: ${JSON.stringify(dir)}, encoding: 'buffer', timeout: 120000 },
+          (e, so) => res({ code: e ? e.code : 0, bytes: so.length }), 'rg', ctx));
+        clearInterval(iv);
+        process.stdout.write('PROBE:' + JSON.stringify({ maxGap, ...a }) + '\\n');
+      })();
+    `);
+    const res = runLoader(prog, [], { timeout: 240000 });
+    const got = JSON.parse(((res.stdout || '').split('\n').find((l) => l.startsWith('PROBE:')) || 'PROBE:null').slice(6));
+    assert.ok(got, `the tjs probe printed nothing (exit ${res.status}): ${(res.stderr || '').slice(0, 1500)}`);
+    assert.deepStrictEqual([got.code, got.bytes], [1, 0], JSON.stringify(got));
+    assert.ok(got.maxGap < 600, `the loop was held ${got.maxGap} ms`);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
