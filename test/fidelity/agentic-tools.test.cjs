@@ -133,6 +133,9 @@ const OUTSIDE_NATIVE = {
   toolu_out_files: 'Found 3 files\n<O>/a.txt\n<O>/sub/b.txt\n<O>/.h.txt',
   toolu_out_content: '<O>/sub/b.txt:2:beta sub/b.txt',
   toolu_in_files: 'Found 2 files\nin/c.txt\nin/deep/d.txt',
+  // review M4: a Glob under cwd with a pattern holding a `/` answered "No files found" before (bare rg: an absolute
+  // target); native lists it
+  toolu_in_glob_sub: 'in/deep/d.txt',
 };
 test('agentic Grep outside cwd under tjs: tool_results equal native\'s (never "Install ripgrep"), with no rg on PATH and with a tripwire rg', async (t) => {
   if (skipUnlessTjs(t)) return;
@@ -153,15 +156,18 @@ test('agentic Grep outside cwd under tjs: tool_results equal native\'s (never "I
     { name: 'Grep', input: { pattern: 'beta', path: out, output_mode: 'files_with_matches' }, id: 'toolu_out_files' },
     { name: 'Grep', input: { pattern: 'beta', path: path.join(out, 'sub'), output_mode: 'content' }, id: 'toolu_out_content' },
     { name: 'Grep', input: { pattern: 'beta', path: work, output_mode: 'files_with_matches' }, id: 'toolu_in_files' },
+    { name: 'Glob', input: { pattern: 'deep/*', path: path.join(work, 'in') }, id: 'toolu_in_glob_sub' },
   ];
   const want = (c) => OUTSIDE_NATIVE[c.id].split('<O>').join(out);
-  const [OUT_FILES, OUT_CONTENT, IN_FILES] = CALLS;
+  const [OUT_FILES, OUT_CONTENT, IN_FILES, IN_GLOB_SUB] = CALLS;
   const outFilesNative = (m) => toolResultText(m, OUT_FILES.id) === want(OUT_FILES);
   const outContentNative = (m) => toolResultText(m, OUT_CONTENT.id) === want(OUT_CONTENT);
   const inFilesNative = (m) => toolResultText(m, IN_FILES.id) === want(IN_FILES);
+  const inGlobSubNative = (m) => toolResultText(m, IN_GLOB_SUB.id) === want(IN_GLOB_SUB);
   assertFailsOnMissingOutput(outFilesNative, OUT_FILES);
   assertFailsOnMissingOutput(outContentNative, OUT_CONTENT);
   assertFailsOnMissingOutput(inFilesNative, IN_FILES);
+  assertFailsOnMissingOutput(inGlobSubNative, IN_GLOB_SUB);
   for (const [label, PATH] of [['no rg on PATH', noRg], ['a tripwire rg first on PATH', `${trip}${path.delimiter}${noRg}`]]) {
     const mock = await startMockAnthropic({
       respond: (body) => {
@@ -170,13 +176,14 @@ test('agentic Grep outside cwd under tjs: tool_results equal native\'s (never "I
       },
     });
     try {
-      const r = await bootP(cli, work, ['-p', 'search', '--allowedTools', 'Grep', '--add-dir', path.dirname(out)],
+      const r = await bootP(cli, work, ['-p', 'search', '--allowedTools', 'Grep,Glob', '--add-dir', path.dirname(out)],
         { ...mockEnv(work, mock.url), HOME: home, PATH }, 180000);
       assert.strictEqual(r.status, 0, `${label}: stderr:\n${r.stderr}`);
       const said = (c) => `${label}: ${c.id}: ${JSON.stringify(toolResultText(mock, c.id))}`;
       assert.ok(outFilesNative(mock), said(OUT_FILES));
       assert.ok(outContentNative(mock), said(OUT_CONTENT));
       assert.ok(inFilesNative(mock), said(IN_FILES));
+      assert.ok(inGlobSubNative(mock), said(IN_GLOB_SUB));
     } finally { await mock.close(); }
   }
 });
