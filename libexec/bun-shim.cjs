@@ -220,8 +220,9 @@ const _rawSpawn = cp.spawn;
 
 // How quaude's rg reaches its applet: the ugrep it searches with (resolved per call), the unwrapped
 // spawns, the refusal when this host has no ugrep, the operator-side surfacing when ugrep fails a search,
-// and the CLODE_RG_DEBUG line every call gets. Nothing goes to the old translation (_rgTranslate) any more:
-// quaude's rg answers every search and listing itself, or refuses (grep-native Task 10).
+// and the CLODE_RG_DEBUG line every call gets. The old rg->ugrep translation of a spawned rg is gone
+// (grep-native Task 10): quaude's rg answers every search and listing itself, or refuses by name. rgToUgrep
+// below stays the spec of the shell snapshot's `rg` function (rgShadowBody, its shell twin).
 const _rgCtx = {
   spawn: _rawSpawn, spawnSync: _rawSpawnSync,
   ugrep: () => process.env.CLODE_UGREP || which('ugrep'),
@@ -693,26 +694,18 @@ function _recordSkew(f){
 }
 
 const _rgSurfaced = new Set();
-// Loud, at the point of use: ugrep rejected an rg→ugrep translation at runtime.
+// Loud, at the point of use: ugrep failed quaude's rg's search at runtime.
 // exit >=2 only (1 == no match). Records to /doctor so the app's fallback can't hide it.
-// `pass`: which of quaude's rg's own ugrep runs failed ('walk', 'match pass'), when the call was a
-// search quaude's rg answers itself rather than a translated one: the message says what failed.
+// `pass`: which of quaude's rg's own ugrep runs failed (its 'match pass'): the message says so.
 function _surfaceRgSkew(rewritten, status, pass){
   if (!(status >= 2)) return;
   const key = rewritten.join('\0');
   if (_rgSurfaced.has(key)) return;
   _rgSurfaced.add(key);
-  if (pass) {
-    const why = `host ugrep exited ${status} in quaude's rg's ${pass}: ${rewritten.join(' ')}`;
-    process.stderr.write(`clode: quaude's rg could not search — ${why}\n` +
-      `       file an issue with this search.\n`);
-    _recordSkew({ name: 'rg', applet: 'ugrep', why, fix: `quaude's rg (libexec/rg-native.cjs): its ugrep ${pass} failed` });
-    return;
-  }
-  const why = `host ugrep exited ${status} for a translated rg command: ${rewritten.join(' ')}`;
-  process.stderr.write(`clode: rg→ugrep translation was rejected by ugrep — ${why}\n` +
-    `       file an issue with this command; meanwhile run ugrep directly.\n`);
-  _recordSkew({ name: 'rg', applet: 'ugrep', why, fix: 'refine the rg→ugrep translation (rgToUgrep)' });
+  const why = `host ugrep exited ${status} in quaude's rg's ${pass}: ${rewritten.join(' ')}`;
+  process.stderr.write(`clode: quaude's rg could not search — ${why}\n` +
+    `       file an issue with this search.\n`);
+  _recordSkew({ name: 'rg', applet: 'ugrep', why, fix: `quaude's rg (libexec/rg-native.cjs): its ugrep ${pass} failed` });
 }
 // FIND_WITHOUT_ONIGURUMA — the rule (the user's decision, 2026-09-27: "drop only that
 // flag"): when the host bfs rejects upstream's `-regextype findutils-default` but accepts
@@ -828,18 +821,11 @@ function _rgAppletMissing(cmd, applet, { debug = true } = {}) {
     + `(set CLODE_${applet.toUpperCase()} or install ${applet}); nothing was searched` };
 }
 
-// An rg-only flag the translation cannot give native's answer for: refused, naming it.
-function _rgUntranslatable(cmd, e) {
-  process.stderr.write(e.message + '\n');
-  _rgDebug(cmd, `!! untranslatable ${e.flag}`);
-  return { flag: e.flag, refuse: _rgNative.untranslatableReason(e.flag) };
-}
-
 // ONE parseable line per rg call the shim sees, whatever the outcome:
 //
-//   clode rg-debug: <rg argv> => <applet argv>        translated
-//   clode rg-debug: <rg argv> !! needs <applet>       this host has no ugrep/bfs
-//   clode rg-debug: <rg argv> !! untranslatable <flag>  rg-only flag, we refuse
+//   clode rg-debug: <rg argv> => quaude's rg over <ugrep>   answered (rg-native.cjs rgPlan)
+//   clode rg-debug: <rg argv> !! needs ugrep                this host has no ugrep
+//   clode rg-debug: <rg argv> !! untranslatable <flag>      a flag quaude's rg refuses by name
 //
 // The verdict used to be printed ONLY on the success path, which made the
 // observer (scripts/rg-inventory.mjs) blind on exactly the hosts where
@@ -852,114 +838,6 @@ function _rgUntranslatable(cmd, e) {
 function _rgDebug(cmd, verdict) {
   if (!process.env.CLODE_RG_DEBUG) return;
   process.stderr.write(`clode rg-debug: ${cmd.join(' ')} ${verdict}\n`);
-}
-
-// `rg --files` is a file LISTING, not a search, so it does not translate to a
-// grep at all. It is handled here rather than in rgToUgrep (which yields ugrep
-// argv by construction) because the right tool depends on the flags.
-//
-// INTENTIONAL DIVERGENCE (user, 2026-08-21): we do not look for ripgrep and we do
-// not want it. rg is Rust and cannot exist everywhere quaude does — NetBSD/sparc,
-// Tiger PPC, Haiku. ugrep and bfs are as portable as quaude is, so we rely on
-// them ON PURPOSE. Diverging from Claude here is the design, not a shortfall, and
-// "install rg" is not the remedy.
-//
-// Neither tool alone is faithful, but each is EXACT in one regime — measured:
-//                     .gitignore   hidden      empty files   binary
-//   ugrep -l ''       honors       skips       DROPS         needs no -I
-//   bfs -type f       no support   lists all   keeps         keeps
-// So dispatch on whether ignore semantics are wanted:
-//   --no-ignore  -> bfs, which HAS no ignore logic; that is precisely the ask, and
-//                   it keeps empty files (a marker file like .orphaned_at is
-//                   usually empty, and ugrep's -l would silently miss it).
-//   otherwise    -> ugrep --ignore-files, the only one of the two that reads
-//                   .gitignore. Known divergence: zero-length files are omitted,
-//                   because -l lists files with a MATCH and an empty file has no
-//                   lines to match.
-function rgFilesToListing(args) {
-  let hidden = false, noIgnore = false, maxDepth = null;
-  const globs = [], paths = [];
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i];
-    if (a === '--files') continue;
-    else if (a === '--hidden' || a === '.') hidden = true;
-    else if (a === '--no-ignore') noIgnore = true;
-    else if (a === '--max-depth' || a === '--maxdepth') maxDepth = args[++i];
-    else if (a.startsWith('--max-depth=')) maxDepth = a.slice(12);
-    else if (a === '--glob' || a === '-g') globs.push(args[++i]);
-    else if (a.startsWith('--glob=')) globs.push(a.slice(7));
-    else if (a.startsWith('-')) throw new RgTranslateError(a);
-    else paths.push(a);
-  }
-  if (!paths.length) paths.push('.');
-
-  if (noIgnore) {
-    const bfs = process.env.CLODE_BFS || which('bfs');
-    if (!bfs) return null;
-    const out = [bfs, ...paths];
-    if (maxDepth) out.push('-maxdepth', String(maxDepth));
-    out.push('-type', 'f');
-    // rg skips dotfiles unless --hidden; bfs lists everything, so exclude them.
-    if (!hidden) out.push('!', '-path', '*/.*');
-    if (globs.length === 1) out.push(globs[0].includes('/') ? '-path' : '-name', globs[0]);
-    else if (globs.length > 1) {
-      out.push('(');
-      globs.forEach((g, i) => {
-        if (i) out.push('-o');
-        out.push(g.includes('/') ? '-path' : '-name', g);
-      });
-      out.push(')');
-    }
-    return out;
-  }
-
-  const ugrep = process.env.CLODE_UGREP || which('ugrep');
-  if (!ugrep) return null;
-  // -L (files WITHOUT a match) plus a pattern that cannot match lists every file
-  // ugrep would have searched — including ZERO-LENGTH ones, which `-l ''` drops
-  // because -l needs a matching line and an empty file has none. That mattered:
-  // marker files (.orphaned_at) are empty, and silently omitting them is the kind
-  // of wrong answer nothing downstream can detect.
-  //
-  // `$^` demands end-of-line immediately followed by start-of-line, which no
-  // position satisfies. That it never matches is ENGINE BEHAVIOUR, not a law, and
-  // if some ugrep build ever did match it this would list NOTHING — a silent empty
-  // result, worse than the bug it replaces. So it is pinned by a fixture test
-  // (rg --files: ugrep branch lists empty/ignored/hidden exactly) that fails on a
-  // ugrep whose semantics differ, rather than trusted.
-  const out = [ugrep, '-r', '-L', '--ignore-files'];
-  if (hidden) out.push('--hidden');
-  if (maxDepth) out.push(`--depth=${maxDepth}`);
-  for (const g of globs) out.push(`--include=${g}`);
-  out.push('$^', ...paths);
-  return out;
-}
-
-// Today's translation of one rg call (its arguments, no argv[0]) — what rg-native.cjs's
-// runRg delegates to until the emulation replaces it: { argv: [applet, ...] } to run, or
-// { refuse, flag } when it cannot give native's answer. NEVER the untouched rg argv: that
-// is what used to let a host rg answer (spec: rg-to-ugrep; memory rg-divergence).
-function _rgTranslate(args) {
-  const cmd = ['rg', ...args];
-  // --files is a listing, not a search: different tool, handled before rgToUgrep.
-  if (args.includes('--files')) {
-    let listing;
-    try { listing = rgFilesToListing(args); }
-    catch (e) { if (e instanceof RgTranslateError) return _rgUntranslatable(cmd, e); throw e; }
-    if (!listing) return _rgAppletMissing(cmd, args.includes('--no-ignore') ? 'bfs' : 'ugrep');
-    _rgDebug(cmd, `=> ${listing.join(' ')}`);
-    return { argv: listing };
-  }
-  const ugrep = process.env.CLODE_UGREP || which('ugrep');
-  if (!ugrep) return _rgAppletMissing(cmd, 'ugrep');
-  try {
-    const argv = [ugrep, ...rgToUgrep(args)];
-    _rgDebug(cmd, `=> ${argv.join(' ')}`);
-    return { argv };
-  } catch (e) {
-    if (e instanceof RgTranslateError) return _rgUntranslatable(cmd, e);
-    throw e;
-  }
 }
 
 // --- spawn: approximate Bun.spawn -> Node child_process ---
@@ -2079,8 +1957,6 @@ module.exports.CLODE_SHADOWS = CLODE_SHADOWS;
 module.exports.rgToUgrep = rgToUgrep;
 module.exports.RgTranslateError = RgTranslateError;
 module.exports.rgShadowBody = rgShadowBody;
-module.exports._rgTranslate = _rgTranslate;         // today's rg translation (rg-native.cjs runRg's delegate)
 module.exports._whichLeaves = _whichLeaves;     // exported for test/bun-shim-which.test.cjs
 module.exports._exeIsPathed = _exeIsPathed;     //   (the win32 seams, driven from a Mac)
-module.exports.rgFilesToListing = rgFilesToListing;
 globalThis.Bun = globalThis.Bun || module.exports;   // ensure global even if required directly

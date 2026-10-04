@@ -307,9 +307,10 @@ const ALLOWED = {
     'libexec/clode-resolve.cjs': 1,
   },
   'slash-only-pathedness': {
-    // 641/646 are GLOBS, where "/" is the glob's own semantics, not a path
-    // separator. 837 is _exeIsPathed, which tests backslash and drive-letter too.
-    'libexec/bun-shim.cjs': 3,
+    // _exeIsPathed, which tests backslash and drive-letter too. (The two GLOB sites,
+    // where "/" was the glob's own semantics, went with rgFilesToListing: grep-native
+    // Task 10, the listing is quaude's rg's own walk now.)
+    'libexec/bun-shim.cjs': 1,
     // rg's walk (grep-native Task 9): one is a GLOB line (a `/` in an rg glob is the glob's own
     // anchoring, gitignore.rs add_line); two are rg's unix pathutil.rs (is_file_name, file_name) over
     // the walk's OWN paths, which it joins with `/` on every host, so `/` is their only separator by

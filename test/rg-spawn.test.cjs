@@ -6,59 +6,12 @@ const fs = require('node:fs');
 const os = require('node:os');
 const cp = require('node:child_process');
 const bun = require('../libexec/bun-shim.cjs');
-const { _rgTranslate } = bun;
 const { tjsPath, runLoader } = require('./node-shim-helper.cjs');
 const { defineGuard, guardTests } = require('./guard.cjs');
 const { writeFakeUgrep } = require('./rg-fake-ugrep.cjs');
 
 const REPO = path.resolve(__dirname, '..');
 const SHIM = path.join(REPO, 'libexec', 'bun-shim.cjs');
-
-function withStubUgrep(fn) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-spawn-'));
-  const ugrep = path.join(dir, 'ugrep');
-  fs.writeFileSync(ugrep, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
-  const prev = process.env.CLODE_UGREP; process.env.CLODE_UGREP = ugrep;
-  try { return fn(ugrep); } finally {
-    if (prev === undefined) delete process.env.CLODE_UGREP; else process.env.CLODE_UGREP = prev;
-  }
-}
-
-test('_rgTranslate: an rg search is translated to ugrep with the translated argv', () => {
-  withStubUgrep((ugrep) => {
-    assert.deepStrictEqual(_rgTranslate(['-n', 'foo']),
-      { argv: [ugrep, '-r', '--ignore-files', '-I', '-n', 'foo'] });
-  });
-});
-
-test('_rgTranslate: an rg-only flag is a refusal naming the flag, never an argv', () => {
-  withStubUgrep(() => {
-    const t = _rgTranslate(['--json', 'foo', '.']);
-    assert.strictEqual(t.argv, undefined);
-    assert.strictEqual(t.flag, '--json');
-    assert.match(t.refuse, /--json/);
-  });
-});
-
-// CHANGED 2026-08-21, and again 2026-09-28. It first asserted the argv was left
-// UNTOUCHED when ugrep was missing, so the app's not-found fallback would engage: a host
-// that happened to HAVE ripgrep then ran it. Then it asserted an argv that cannot
-// resolve (`clode-rg-unavailable`): no host rg, but the app's not-found fallback told the
-// MODEL "ripgrep not found on PATH. Install it", which is the one remedy quaude refuses on
-// purpose (rg cannot run everywhere quaude does). Now the missing applet is a refusal like
-// any other: a synthesized failed child, rc 2, naming ugrep, never ripgrep.
-test('_rgTranslate: applet absent is a refusal naming the applet, never a host rg', () => {
-  const prev = process.env.CLODE_UGREP; delete process.env.CLODE_UGREP;
-  const prevPath = process.env.PATH; process.env.PATH = '/nonexistent';
-  try {
-    const t = _rgTranslate(['foo']);
-    assert.strictEqual(t.argv, undefined, 'must not hand back an argv a host rg could satisfy');
-    assert.match(t.refuse, /ugrep/);
-    assert.doesNotMatch(t.refuse, /ripgrep/i);
-  } finally {
-    if (prev !== undefined) process.env.CLODE_UGREP = prev; process.env.PATH = prevPath;
-  }
-});
 
 // These drive the REAL spawn path against an executable ugrep stub — a `#!/bin/sh`
 // script, which Windows cannot exec (no shebang, no chmod bit). The logic itself is
@@ -107,25 +60,6 @@ test('rg spawn.sync: ugrep exit 1 (no match) does NOT surface', posixExec, () =>
   }
   assert.strictEqual(r.exitCode, 1, 'ugrep proposing nothing is rg finding nothing');
   assert.strictEqual(buf, '', 'nothing reaches the operator');
-});
-
-test('_rgTranslate: CLODE_RG_DEBUG logs the rewrite; unset is silent', () => {
-  withStubUgrep(() => {
-    const origErr = process.stderr.write; let buf = '';
-    process.stderr.write = (s) => { buf += s; return true; };
-    const prev = process.env.CLODE_RG_DEBUG;
-    try {
-      delete process.env.CLODE_RG_DEBUG;
-      _rgTranslate(['foo']);
-      assert.doesNotMatch(buf, /rg-debug/);
-      process.env.CLODE_RG_DEBUG = '1';
-      _rgTranslate(['bar']);
-      assert.match(buf, /rg-debug:/);
-    } finally {
-      process.stderr.write = origErr;
-      if (prev === undefined) delete process.env.CLODE_RG_DEBUG; else process.env.CLODE_RG_DEBUG = prev;
-    }
-  });
 });
 
 // ---------------------------------------------------------------------------

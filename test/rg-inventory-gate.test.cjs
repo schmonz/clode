@@ -125,8 +125,11 @@ test('gate: a failure prints the child stderr it judged', { skip: NO_FAKE }, () 
 test('shim: a refused rg call prints the same parseable rg-debug shape', () => {
   const src = `
     const shim = require(${JSON.stringify(path.join(ROOT, 'libexec', 'bun-shim.cjs'))});
-    shim._rgTranslate(['--files', '--hidden', '--no-ignore', '/tmp/x']);
-    shim._rgTranslate(['--version']);
+    const cp = require('node:child_process');
+    // quaude's rg's own verdicts (rg-native.cjs rgPlan), through the spawn surface the bundle uses: a search
+    // with no ugrep on this host, and a flag it refuses by name (the old translation's lines are gone with it)
+    cp.spawnSync('rg', ['-n', 'x', '/tmp/x']);
+    cp.spawnSync('rg', ['--pcre2', 'x', '/tmp/x']);
   `;
   // Force the applets absent regardless of what this host has installed. The
   // PATH key is dropped case-insensitively because Windows spells it `Path`, and
@@ -136,6 +139,6 @@ test('shim: a refused rg call prints the same parseable rg-debug shape', () => {
     Object.entries(process.env).filter(([k]) => !/^path$/i.test(k) && !/^CLODE_(UGREP|BFS)$/.test(k)));
   env.CLODE_RG_DEBUG = '1';
   const r = cp.spawnSync(process.execPath, ['-e', src], { encoding: 'utf8', env });
-  assert.match(r.stderr, /^clode rg-debug: rg --files --hidden --no-ignore \/tmp\/x !! needs bfs$/m);
-  assert.match(r.stderr, /^clode rg-debug: rg --version !! needs ugrep$/m);
+  assert.match(r.stderr, /^clode rg-debug: rg -n x \/tmp\/x !! needs ugrep$/m);
+  assert.match(r.stderr, /^clode rg-debug: rg --pcre2 x \/tmp\/x !! untranslatable --pcre2$/m);
 });
