@@ -135,11 +135,19 @@ test('ugrepMatches: an empty list starts no ugrep and finds nothing', () => {
   assert.strictEqual(got.size, 0);
 });
 
-test('ugrepMatches: ugrep failing (exit >= 2) is an error carrying its status and stderr, never "no matches"', needUgrep, () => {
-  withTree('root', (dir) => {
-    assert.throws(() => rgn.ugrepMatches(['a.txt', 'no-such-file.txt'], 'needle', { ugrep: UGREP, cwd: dir }),
-      (e) => e.name === 'UgrepError' && e.status === 2 && /no-such-file/.test(e.stderr) && e.matches.get('a.txt').length === 4);
-  });
+// A path ugrep only WARNS about (exit 2, the rest searched: 7.8.2 `ugrep: warning: X: No such file or
+// directory`) is rg's per-path error riding on the answer, never ugrep failing (Task 6 re-review N3);
+// ugrep failing otherwise is the stand-in rows below ("a failed chunk ends the search").
+test('ugrepMatches: a path ugrep warns about is a per-path error on the answer, the rest answered (sync and async)', needUgrep, async () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-native-'));
+  try {
+    const dir = makeRgTree(path.join(base, 'root'), 'root');
+    for (const got of [rgn.ugrepMatches(['a.txt', 'no-such-file.txt'], 'needle', { ugrep: UGREP, cwd: dir }),
+      await rgn.ugrepMatchesAsync(['a.txt', 'no-such-file.txt'], 'needle', { ugrep: UGREP, cwd: dir })]) {
+      assert.deepStrictEqual(asObj(got), { 'a.txt': NATIVE_NEEDLE_ROOT['a.txt'] });
+      assert.deepStrictEqual(got.pathErrors, [{ file: 'no-such-file.txt', text: 'No such file or directory (os error 2)' }]);
+    }
+  } finally { fs.rmSync(base, { recursive: true, force: true }); }
 });
 
 test('parseUgrepRanges: path NUL start SP end LF records, linear, any bytes in the path', () => {
@@ -526,8 +534,8 @@ test('ugrepMatchesAsync answers what ugrepMatches does, and rejects as it throws
     const sync = rgn.ugrepMatches(ROOT_FILES, 'needle', { ugrep: UGREP, cwd: dir });
     const asyncGot = await rgn.ugrepMatchesAsync(ROOT_FILES, 'needle', { ugrep: UGREP, cwd: dir, argvBudget: 1 });
     assert.deepStrictEqual(asObj(asyncGot), asObj(sync));
-    await assert.rejects(rgn.ugrepMatchesAsync(['a.txt', 'no-such-file.txt'], 'needle', { ugrep: UGREP, cwd: dir }),
-      (e) => e.name === 'UgrepError' && e.status === 2);
+    const warned = await rgn.ugrepMatchesAsync(['a.txt', 'no-such-file.txt'], 'needle', { ugrep: UGREP, cwd: dir });
+    assert.deepStrictEqual(warned.pathErrors, rgn.ugrepMatches(['a.txt', 'no-such-file.txt'], 'needle', { ugrep: UGREP, cwd: dir }).pathErrors);
   } finally { fs.rmSync(base, { recursive: true, force: true }); }
 });
 

@@ -675,3 +675,39 @@ test('a walk that fails otherwise refuses, and the operator hears it was the wal
     assert.match(s.said(), /ugrep exited 2 in quaude's rg's walk/);
     assert.strictEqual(s.skews(), 1);
   }));
+// A PASS THAT FAILS PART WAY (Task 6 re-review N3). A ugrep that printed part of its answer and then
+// failed for a reason that is not rg's own per-path error (an infrastructure failure: it died, ran out
+// of memory, said something rg never says) must not hand the caller the part as if it were the whole:
+// the Grep tool shows any rc-2 output to the model as the complete list. The caller gets quaude's
+// refusal (TQ-matching) whatever was printed first. A per-path warning (`cannot read X: Permission
+// denied`) is rg's own answer: that path's error, the rest of the pass answered, rc 2.
+test('ugrep failing part way through the match pass, having printed some: the caller gets a refusal, never the part', posixExec, () =>
+  withSearchStub('for a in "$@"; do case "$a" in --format=*) "$(dirname "$0")/fake-ugrep" "$@" | head -c 15; echo "ugrep: error: died midway" >&2; exit 2;; esac; done', (s) => {
+    for (const f of ['a.txt', 'b.txt', 'c.txt']) fs.writeFileSync(path.join(s.dir, 'tree', f), 'needle\n');
+    for (const argv of [['-l', '--null', 'needle', 'tree'], ['-c', '-H', '--null', 'needle', 'tree']]) {
+      const r = cp.spawnSync('rg', argv, { cwd: s.dir, encoding: 'utf8' });
+      assert.deepStrictEqual([r.status, r.stdout], [2, ''], JSON.stringify(r));
+      const ref = parseRgRefusal(r.stderr);
+      assert.ok(ref && /died midway/.test(ref.reason), JSON.stringify(r.stderr));
+    }
+    assert.match(s.said(), /ugrep exited 2 in quaude's rg's match pass/);
+  }));
+test('ugrep\'s walk listing some files, then failing with what rg never says: the caller gets a refusal, never the part', posixExec, () =>
+  withSearchStub('for a in "$@"; do case "$a" in -r) "$(dirname "$0")/fake-ugrep" "$@"; echo "ugrep: warning: something unexpected happened" >&2; exit 2;; esac; done', (s) => {
+    fs.writeFileSync(path.join(s.dir, 'tree', 'b.txt'), 'needle\n');
+    // --hidden: a walk argv no earlier test surfaced (the operator hears each failing argv once)
+    const r = cp.spawnSync('rg', ['--hidden', '-l', '--null', 'needle', 'tree'], { cwd: s.dir, encoding: 'utf8' });
+    assert.deepStrictEqual([r.status, r.stdout], [2, ''], JSON.stringify(r));
+    const ref = parseRgRefusal(r.stderr);
+    assert.ok(ref && /something unexpected happened/.test(ref.reason), JSON.stringify(r.stderr));
+    assert.match(s.said(), /ugrep exited 2 in quaude's rg's walk/);
+  }));
+test('a per-path warning in the match pass is rg\'s error for that path, the rest answered, never a refusal or skew', posixExec, () =>
+  withSearchStub('for a in "$@"; do case "$a" in --format=*) "$(dirname "$0")/fake-ugrep" "$@"; echo "ugrep: warning: cannot read tree/b.txt: Permission denied" >&2; exit 2;; esac; done', (s) => {
+    fs.writeFileSync(path.join(s.dir, 'tree', 'b.txt'), 'nothing here\n');
+    const r = cp.spawnSync('rg', ['-c', '-H', '--null', 'needle', 'tree'], { cwd: s.dir, encoding: 'utf8' });
+    // as native answers a file it cannot read (RG-EXIT): the error, the rest, rc 2
+    assert.deepStrictEqual([r.status, r.stdout, r.stderr], [2, 'tree/ok.txt\x001\n', 'rg: tree/b.txt: Permission denied (os error 13)\n']);
+    assert.strictEqual(s.said(), '', 'rg\'s own answer, not skew');
+    assert.strictEqual(s.skews(), 0);
+  }));

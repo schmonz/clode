@@ -362,7 +362,7 @@ function matchPlan(files, prefilter, opts, perLine) {
     }
     return out;
   };
-  return { chunks, inOrder, onlyAsked, bom };
+  return { chunks, inOrder, onlyAsked, bom, asked };
 }
 // ---- rg's text, and rg's matcher over the lines ugrep proposed -----------------------------------
 // RG-TEXT-BOM (measured against native 2.1.283): rg searches what its decoder makes of a byte
@@ -547,6 +547,22 @@ function assertUsableUgrep(opts) {
 function readFailedChunk(buf, ranges) {
   try { parseUgrepRanges(buf, ranges); } catch (e) { if (!(e instanceof UgrepError)) throw e; }
 }
+// A chunk that exited 2 having only WARNED about paths it was asked to search (ugrep 7.8.2, measured:
+// `ugrep: warning: cannot read X: Permission denied`, `ugrep: warning: X: No such file or directory`;
+// it searched the rest and printed their records) answered with rg's own per-path errors: those
+// paths' errors, never ugrep failing (Task 6 re-review N3). [{ file, text }], the text as rg spells
+// it; null when any line of its stderr is something else (an infrastructure failure).
+function perPathWarnings(stderr, asked) {
+  const out = [];
+  for (const line of toBuf(stderr).toString('utf8').split('\n')) {
+    if (!line.trim()) continue;
+    const m = /^ugrep: (?:warning: )?(?:cannot (?:read|open)(?: file)? )?(.+): ([^:]+)$/.exec(line);
+    const n = m && asked.has(m[1]) ? errnoOfText(m[2]) : undefined;
+    if (n === undefined) return null;
+    out.push({ file: m[1], text: `${m[2]} (os error ${n})` });
+  }
+  return out.length ? out : null;
+}
 const ugrepFailed = (bin, r, stderr, matches) => new UgrepError(
   `${leafOf(bin)} failed (${r.signal ? `signal ${r.signal}` : `exit ${r.status}`})${firstLine(stderr) ? `: ${firstLine(stderr)}` : ''}`,
   { status: r.status, signal: r.signal || null, stderr: toBuf(stderr).toString('utf8'), matches });
@@ -565,8 +581,8 @@ function ugrepMatches(files, pattern, opts = {}) {
   const t = translated(pattern, opts);
   assertUsableUgrep(opts);
   const spawnSync = opts.spawnSync || require('child_process').spawnSync;
-  const { chunks, inOrder, onlyAsked, bom } = matchPlan(files, t.prefilter, opts, !takesUgrepRanges(t));
-  const ranges = new Map();
+  const { chunks, inOrder, onlyAsked, bom, asked } = matchPlan(files, t.prefilter, opts, !takesUgrepRanges(t));
+  const ranges = new Map(), pathErrors = [];
   let failed = null;
   for (const argv of chunks) {
     if (opts.deadline && Date.now() > opts.deadline) throw timedOutError();
@@ -579,13 +595,18 @@ function ugrepMatches(files, pattern, opts = {}) {
     // A failed chunk ends the search: the answer is already an error, so no later chunk runs.
     // Its status comes first (re-review N-1): what it printed is read only for the matches it
     // found before failing.
-    if (r.status >= 2) { readFailedChunk(toBuf(r.stdout), ranges); failed = { r, stderr: r.stderr }; break; }
+    const warned = r.status >= 2 ? perPathWarnings(r.stderr, asked) : null;
+    if (r.status >= 2 && !warned) { readFailedChunk(toBuf(r.stdout), ranges); failed = { r, stderr: r.stderr }; break; }
     parseUgrepRanges(toBuf(r.stdout), ranges);
+    if (warned) pathErrors.push(...warned);
   }
   if (failed) throw ugrepFailed(opts.ugrep, failed.r, failed.stderr, partialMatches(files, inOrder(ranges), t, opts));
   onlyAsked(ranges);
-  return decideAll(files, inOrder(ranges), bom, t, opts);
+  return withPathErrors(decideAll(files, inOrder(ranges), bom, t, opts), pathErrors);
 }
+// The answer's per-path errors ride on the Map (`pathErrors`, ugrep's spelling of each path), so the
+// Map stays what every caller iterates.
+const withPathErrors = (m, errs) => { if (errs.length) m.pathErrors = errs; return m; };
 
 // The asynchronous twin: a Promise of the same Map, the chunks run one after another as real
 // children. opts.spawn is the UNWRAPPED spawn; opts.onChild(child) is told of each child, so the
@@ -601,10 +622,10 @@ function ugrepMatchesAsync(files, pattern, opts = {}) {
   let plan, t;
   try { t = translated(pattern, opts); assertUsableUgrep(opts); plan = matchPlan(files, t.prefilter, opts, !takesUgrepRanges(t)); } catch (e) { return Promise.reject(e); }
   const spawn = opts.spawn || require('child_process').spawn;
-  const { chunks, inOrder, onlyAsked, bom } = plan;
+  const { chunks, inOrder, onlyAsked, bom, asked } = plan;
   const aborted = () => opts.signal && opts.signal.aborted;
   const abortError = () => new UgrepError('rg-native: the search was aborted');
-  const ranges = new Map();
+  const ranges = new Map(), pathErrors = [];
   const runOne = (argv) => new Promise((resolve, reject) => {
     let child;
     try { child = spawn(opts.ugrep, argv, { cwd: opts.cwd, env: opts.env || process.env, stdio: ['ignore', 'pipe', 'pipe'] }); }
@@ -624,11 +645,13 @@ function ugrepMatchesAsync(files, pattern, opts = {}) {
       settled = true;
       // Killed: the bytes may stop anywhere, so they are not read; the kill is the answer.
       // Exit >= 2: the failure is the answer (re-review N-1), the bytes only add the matches found first.
+      // A chunk that only warned about paths is rg's per-path errors, the rest answered.
+      const warned = status >= 2 && !signal ? perPathWarnings(Buffer.concat(errs), asked) : null;
       if (status !== null && !signal) {
-        if (status >= 2) readFailedChunk(Buffer.concat(outs), ranges);
+        if (status >= 2 && !warned) readFailedChunk(Buffer.concat(outs), ranges);
         else { try { parseUgrepRanges(Buffer.concat(outs), ranges); } catch (e) { reject(e); return; } }
       }
-      resolve({ status, signal: signal || null, stderr: Buffer.concat(errs) });
+      resolve({ status, signal: signal || null, stderr: Buffer.concat(errs), warned });
     });
   });
   const yieldLoop = () => new Promise((r) => setTimeout(r, 0));
@@ -638,7 +661,8 @@ function ugrepMatchesAsync(files, pattern, opts = {}) {
     for (const argv of chunks) {
       const r = await runOne(argv);
       // A failed chunk (killed by the caller, or exit >= 2) ends the search: no later chunk runs.
-      if (r.status === null || r.status >= 2) { failed = r; break; }
+      if (r.status === null || (r.status >= 2 && !r.warned)) { failed = r; break; }
+      if (r.warned) pathErrors.push(...r.warned);
       if (aborted()) throw abortError();
     }
     if (failed) throw ugrepFailed(opts.ugrep, failed, failed.stderr, partialMatches(files, inOrder(ranges), t, opts));
@@ -657,7 +681,7 @@ function ugrepMatchesAsync(files, pattern, opts = {}) {
       const m = takesUgrepRanges(t) && !bom.has(f) ? proposed.get(f) : await decideFileAsync(f, proposed.get(f), t, opts, bom.has(f), between);
       if (m.length) out.set(f, m);
     }
-    return out;
+    return withPathErrors(out, pathErrors);
   })();
 }
 
@@ -836,13 +860,17 @@ function osErrorText(e) {
 }
 // What ugrep's walk says it could not read (the platform's strerror), as rg says it: the number is
 // the errno whose engine text is that text.
-function strerrorText(text) {
+function errnoOfText(text) {
   const want = String(text).toLowerCase();
   for (const n of Object.values(errnoTable())) {
     const t = sysErrorText(n);
-    if (t && t.toLowerCase() === want) return `${text} (os error ${n})`;
+    if (t && t.toLowerCase() === want) return n;
   }
-  return text;
+  return undefined;
+}
+function strerrorText(text) {
+  const n = errnoOfText(text);
+  return n === undefined ? text : `${text} (os error ${n})`;
 }
 
 // THE WALK, INTERIM (the plan's Task 9 replaces it with rg's own, in JS): a directory's files are
@@ -872,7 +900,7 @@ function readListing(P, stdout, stderr) {
   const prefix = spelled === '.' || spelled === './' ? '' : spelled.replace(/\/+$/, '') + '/';
   const rel = (u) => (u === spelled || u === spelled.replace(/\/+$/, '') ? '' : prefix === '' ? u : u.startsWith(prefix) ? u.slice(prefix.length) : null);
   const disp = (r) => (r === '' ? P : P + (P.endsWith('/') ? '' : '/') + r);
-  const files = [], errors = [], unknown = [];
+  const files = [], errors = [], unknown = [], unknownRaw = [];
   for (const name of toBuf(stdout).toString('utf8').split('\0')) {
     if (!name) continue;
     const r = rel(name);
@@ -884,9 +912,9 @@ function readListing(P, stdout, stderr) {
     const m = /^ugrep: (?:warning: )?cannot (?:read|open directory|open)(?: file)? (.*): ([^:]+)$/.exec(line);
     const r = m ? rel(m[1]) : null;
     if (m) errors.push(`rg: ${r === null ? m[1] : disp(r)}: ${strerrorText(m[2])}`);
-    else unknown.push(`rg: ${line.replace(/^ugrep: (?:warning: )?/, '')}`);
+    else { unknown.push(`rg: ${line.replace(/^ugrep: (?:warning: )?/, '')}`); unknownRaw.push(line); }
   }
-  return { files, errors, unknown };
+  return { files, errors, unknown, unknownRaw };
 }
 
 // A file's text, as rg reads it (RG-TEXT-BOM); `limit` bytes of it when only its start matters.
@@ -1062,14 +1090,17 @@ function* searchCore(spec, opts) {
     } else {
       const r = yield { op: 'list', P, argv: walkArgv(spec, P) };
       if (r.refusal) return r.refusal;
-      const { files, errors, unknown } = readListing(P, r.stdout, r.stderr);
+      const { files, errors, unknown, unknownRaw } = readListing(P, r.stdout, r.stderr);
       // ugrep's walk exits 2 whenever it WARNS (7.8.2, measured: one unreadable file or directory),
       // and each warning is rg's own per-path error, printed above: that is rg's answer, not skew.
-      // Anything else at rc >= 2 is ugrep failing: the operator hears of it, and when it listed
-      // nothing and said nothing rg would say, the search refuses.
+      // Anything else at rc >= 2 is ugrep failing: the operator hears of it, and the search refuses,
+      // whatever it listed first (Task 6 re-review N3: the Grep tool shows rc-2 output to the model as
+      // the whole answer, so a part of a listing must never pass for it).
       const legit = errors.length > 0 && unknown.length === 0;
-      if (r.status >= 2 && !legit && opts.onRejected) opts.onRejected([opts.ugrepName || 'ugrep', ...walkArgv(spec, P)], r.status, 'walk');
-      if (r.status >= 2 && !files.length && !errors.length) return appletRejected(opts.ugrepName || 'ugrep', r.status, r.stderr);
+      if (r.status >= 2 && !legit) {
+        if (opts.onRejected) opts.onRejected([opts.ugrepName || 'ugrep', ...walkArgv(spec, P)], r.status, 'walk');
+        return appletRejected(opts.ugrepName || 'ugrep', r.status, unknownRaw.length ? unknownRaw.join('\n') : r.stderr);
+      }
       for (const f of files) entries.push({ ...f, walked: true });
       for (const e of [...errors, ...unknown]) entries.push({ error: e });
     }
@@ -1079,14 +1110,23 @@ function* searchCore(spec, opts) {
   // there; -o and -c -o every printable match.
   const first = spec.mode === 'files' ? 'file' : !spec.only ? 'line' : undefined;
   const files = [...new Set(entries.filter((e) => e.file).map((e) => e.file))];
-  let matches = new Map(), failed = null;
+  let matches = new Map();
+  const out = [], err = [], state = { printed: false };
+  let found = false, broke = false;
   if (files.length) {
     const r = yield { op: 'match', files, pattern, first };
     if (r.refusal) return r.refusal;
-    if (r.error) { failed = r.error; matches = r.error.matches || new Map(); } else matches = r.matches;
+    // A match pass that FAILED refuses, whatever it printed first (Task 6 re-review N3): the Grep tool
+    // reads a bare rc 2 with no output as "No files found", and rc-2 output as the whole answer.
+    if (r.error) return appletRejected(opts.ugrepName || 'ugrep', r.error.status || 2, r.error.stderr || r.error.message);
+    matches = r.matches;
+    // What it only warned about is rg's per-path error (RG-EXIT), the rest answered.
+    for (const w of matches.pathErrors || []) {
+      const e = entries.find((x) => x.file && spellForUgrep(x.file) === w.file);
+      err.push(Buffer.from(`rg: ${e ? e.disp : w.file}: ${w.text}\n`));
+      broke = true;
+    }
   }
-  const out = [], err = [], state = { printed: false };
-  let found = false, broke = !!failed;
   for (const e of entries) {
     if (e.error) { err.push(Buffer.from(e.error + '\n')); broke = true; continue; }
     let text, m;
@@ -1104,10 +1144,6 @@ function* searchCore(spec, opts) {
     if (!m.length || (e.walked && binaryAtFirstRead(text))) continue;
     if (printFile(spec, { ...e, text, matches: m, withFilename }, out, state)) found = true;
   }
-  // A match pass that FAILED having printed nothing refuses (the Grep tool reads a bare rc 2 with no
-  // output as "No files found"); one that printed some of its answer first is rg's error after it.
-  if (failed && !out.length) return appletRejected(opts.ugrepName || 'ugrep', failed.status || 2, failed.stderr || failed.message);
-  if (failed) err.push(Buffer.from(`rg: ${failed.message}\n`));
   return { stdout: Buffer.concat(out), stderr: Buffer.concat(err), status: broke ? 2 : found ? 0 : 1, signal: null };
 }
 
