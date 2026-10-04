@@ -162,6 +162,11 @@ function fixture() {
     // suite-wide root, answered THIS test's deliberately-tool-less PATH
     // instead of a real (correctly negative) lookup.
     CLODE_STATE_ROOT: undefined,
+    // CLAUDE_CONFIG_DIR explicitly UNSET for the same reason (grep-native Task 10b fix round, ruling G30): it outranks
+    // HOME/.claude in clode-update's user-settings read, so an ambient one (a suite run with its own throwaway config
+    // dir) made 'honors autoUpdatesChannel:stable from user settings' read some other settings.json and fail. Each
+    // fixture's settings live in its own HOME; the CLAUDE_CONFIG_DIR branch has its own test below.
+    CLAUDE_CONFIG_DIR: undefined,
     CLODE_RELEASES_URL: 'file://' + repo,
     CLODE_FETCH_PLATFORM: PLAT,
     CLODE_PROVIDERS: providers,
@@ -348,7 +353,7 @@ function twoChannelRepo(fx) {
 }
 
 function writeUserSettings(fx, obj) {
-  const dir = path.join(fx.env.HOME, '.claude');
+  const dir = fx.env.CLAUDE_CONFIG_DIR || path.join(fx.env.HOME, '.claude');
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, 'settings.json'), JSON.stringify(obj) + '\n');
 }
@@ -375,6 +380,21 @@ test('no channel arg honors autoUpdatesChannel:stable from user settings', async
     assert.strictEqual(status, 0, 'settings-driven update succeeded');
     assert.strictEqual(fs.readFileSync(path.join(fx.providers, 'current'), 'utf8').trim(), STABLE_V,
       'followed autoUpdatesChannel=stable -> 8.8.8');
+  } finally { cleanup(fx); }
+});
+
+test('no channel arg honors autoUpdatesChannel:stable from CLAUDE_CONFIG_DIR\'s settings, not HOME\'s', async () => {
+  const fx = fixture();
+  const STABLE_V = twoChannelRepo(fx);
+  writeUserSettings(fx, { autoUpdatesChannel: 'latest' });            // HOME/.claude: must be ignored
+  fx.env.CLAUDE_CONFIG_DIR = path.join(fx.tmp, 'cfg');
+  writeUserSettings(fx, { autoUpdatesChannel: 'stable' });
+  const err = sink();
+  try {
+    const status = await clodeUpdate(undefined, opts(fx.env, err));
+    assert.strictEqual(status, 0, 'settings-driven update succeeded');
+    assert.strictEqual(fs.readFileSync(path.join(fx.providers, 'current'), 'utf8').trim(), STABLE_V,
+      'followed CLAUDE_CONFIG_DIR\'s autoUpdatesChannel=stable -> 8.8.8');
   } finally { cleanup(fx); }
 });
 
