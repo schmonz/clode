@@ -265,11 +265,15 @@ const typeIs = (mode, t) => ((Number(mode) >>> 0) & S_IFMT) === S_IF[t];
 // files had one identity, and every character device was /dev/null (BACKLOG).
 const STAT_INTS = ['dev', 'mode', 'nlink', 'uid', 'gid', 'rdev', 'blksize', 'ino', 'size', 'blocks'];
 const STAT_TIMES = ['atime', 'mtime', 'ctime', 'birthtime'];
+// A refusal only helps if it is seen, and the bundle (like any program) has catch-all callers that
+// would turn it into "file not found" or worse: the first one also goes to stderr, once.
+let _floorSaid = false;
 function requireIdentity(raw) {
   if (typeof raw.ino !== 'bigint') {
     const e = new Error('node-shim: this engine\'s sync stat carries no dev or ino (it predates '
       + 'txiki-sync-stat-identity.patch); rebuild it: node scripts/build-tjs.cjs');
     e.code = 'ERR_CLODE_ENGINE_FLOOR';
+    if (!_floorSaid) { _floorSaid = true; try { console.error(e.message); } catch { /* best effort */ } }
     throw e;
   }
 }
@@ -1030,8 +1034,12 @@ function _zeroStats() { return new Stats(_ZERO_RAW); }
 // here would only be reachable via __shimUncaught (or, off `-p`'s
 // bundle-installed handler, would kill the process) for what Node treats as
 // an ordinary poll sample. Matches libuv's uv_fs_poll, which folds every
-// stat() errno into the same "gone" signal.
-function _statOrZero(p) { try { return statSync(p); } catch { return _zeroStats(); } }
+// stat() errno into the same "gone" signal. Not the engine-floor refusal: that
+// is not a stat errno, and folding it in made every watched file read as
+// deleted on a stale engine, with nothing saying why.
+function _statOrZero(p) {
+  try { return statSync(p); } catch (e) { if (e && e.code === 'ERR_CLODE_ENGINE_FLOOR') throw e; return _zeroStats(); }
+}
 function _statsChanged(curr, prev) { return curr.mtimeMs !== prev.mtimeMs || curr.size !== prev.size; }
 
 // IMPORTANT DIVERGENCE (deliberate, see fsMod.watchFile below for why): this
