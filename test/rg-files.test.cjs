@@ -124,9 +124,8 @@ function check(row, got, root) {
   else if (sortOf(argv)) assert.deepStrictEqual(timeGroups(records(got.stdout, sep)), timeGroups(records(want, sep)), what);
   else assert.deepStrictEqual(records(got.stdout, sep).sort(), records(want, sep).sort(), what);
 }
-const NOT_TRANSLATED = () => { throw new Error('nothing reaches the old translation'); };
 function syncRun(root, [, cwdRel, argv]) {
-  const r = rgn.runRg(argv.map((a) => a.split('<ROOT>').join(root)), { cwd: path.join(root, cwdRel), spawnSync: cp.spawnSync, translate: NOT_TRANSLATED,
+  const r = rgn.runRg(argv.map((a) => a.split('<ROOT>').join(root)), { cwd: path.join(root, cwdRel), spawnSync: cp.spawnSync,
     ugrep: () => null, matchFiles: rgn.matchFilesAlone });
   return { status: r.status, stdout: l1(r.stdout), stderr: l1(r.stderr) };
 }

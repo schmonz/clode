@@ -44,7 +44,6 @@ const CAPS = UGREP ? rgn.ugrepCapabilities(UGREP) : null;
 const POSIX = process.platform === 'win32' ? 'the walk on Windows is unmeasured (BACKLOG); these trees hold names it cannot' : false;
 const needUgrep = { skip: POSIX || (!UGREP ? 'no ugrep on this host' : !CAPS.format ? CAPS.reason : false) };
 const NATIVE = providerBin(process.env);
-const NOT_TRANSLATED = () => { throw new Error('a walked search never reaches the translation'); };
 
 const P9_NATIVE = [
   ["RG-IGNORE-FILES", "repo", ".", ["-j1", "-l", "needle", "."], "empty", 0, "./g2.txt\n./g1.txt\n./other/private\n./code/y.tsx\n./code/{b}.ts\n./code/Makefile\n./code/*.txt\n./code/README.md\n./code/x.ts\n./code/a.TXT\n./code/z.js\n./keep.ign\n./dotig.txt\n./sub/ign.txt\n./sub/anch.txt\n./a.txt\n./private/in/q.txt\n./private/p.txt\n", ""],
@@ -259,7 +258,7 @@ function check(row, got, T) {
 const l1 = (b) => Buffer.from(b).toString('latin1');
 function syncRun(root, row, { alone = false } = {}) {
   const c = rowCall(root, row);
-  const r = rgn.runRg(c.argv, { cwd: c.cwd, env: c.env, spawnSync: cp.spawnSync, translate: NOT_TRANSLATED,
+  const r = rgn.runRg(c.argv, { cwd: c.cwd, env: c.env, spawnSync: cp.spawnSync,
     ugrep: () => (alone ? null : UGREP), matchFiles: alone ? rgn.matchFilesAlone : undefined });
   return { T: c.T, got: { status: r.status, stdout: l1(r.stdout), stderr: l1(r.stderr) } };
 }
@@ -268,7 +267,7 @@ function asyncRun(root, row) {
   return new Promise((resolve) => {
     const child = rgn.rgExecFile(c.argv, { cwd: c.cwd, env: c.env, encoding: 'buffer' }, (e, so, se) => resolve({ T: c.T,
       got: { status: e ? (typeof e.code === 'number' ? e.code : null) : 0, stdout: l1(so), stderr: l1(se) } }),
-    'rg', { translate: NOT_TRANSLATED, spawn: cp.spawn, spawnSync: cp.spawnSync, ugrep: () => UGREP });
+    'rg', { spawn: cp.spawn, spawnSync: cp.spawnSync, ugrep: () => UGREP });
     if (child.stdin) child.stdin.end();
   });
 }
@@ -296,7 +295,7 @@ test('RG-WALK-*: under tjs, both twins, every row (native)', { skip: needUgrep.s
     (async () => {
       const out = [];
       for (const [argv, cwd, env] of calls) {
-        const ctx = { translate: () => { throw new Error('translated'); }, spawn: cp.spawn, spawnSync: cp.spawnSync, ugrep: () => UGREP };
+        const ctx = { spawn: cp.spawn, spawnSync: cp.spawnSync, ugrep: () => UGREP };
         const s = rgn.runRg(argv, { ...ctx, cwd, env });
         const a = await new Promise((res) => {
           const c = rgn.rgExecFile(argv, { cwd, env, encoding: 'buffer' }, (err, so, se) => res({ status: err ? (typeof err.code === 'number' ? err.code : null) : 0, stdout: l1(so), stderr: l1(se) }), 'rg', ctx);
@@ -350,7 +349,7 @@ test('RG-WALK-ORDER: -j1 walks depth first in readdir order, the parallel walk L
   for (const [lifo, j] of [[false, ['-j1']], [true, []]]) {
     for (const [tree, rel] of [['repo', '.'], ['nested', 'top']]) {
       const r = rgn.runRg([...j, '-l', '--no-ignore', '--hidden', 'needle', rel], { cwd: path.join(root, tree), spawnSync: cp.spawnSync,
-        translate: NOT_TRANSLATED, ugrep: () => null, matchFiles: rgn.matchFilesAlone });
+        ugrep: () => null, matchFiles: rgn.matchFilesAlone });
       assert.strictEqual(r.stdout.toString('latin1'), expectedOrder(path.join(root, tree), tree, rel, lifo), `${tree} ${j.join(' ') || '(parallel)'}`);
     }
   }
@@ -359,7 +358,7 @@ test('RG-WALK-ORDER: native\'s -j1 order is ours exactly, and its parallel order
   { skip: POSIX || (!NATIVE ? 'no native provider' : false) }, () => withTrees((root) => {
     const env = { PATH: process.env.PATH, HOME: path.join(root, 'empty') };
     const native = (argv, cwd) => cp.spawnSync(NATIVE, ['--no-config', ...argv], { cwd, argv0: 'rg', env, encoding: 'latin1' }).stdout;
-    const ours = (argv, cwd) => rgn.runRg(argv, { cwd, env, spawnSync: cp.spawnSync, translate: NOT_TRANSLATED, ugrep: () => null, matchFiles: rgn.matchFilesAlone }).stdout.toString('latin1');
+    const ours = (argv, cwd) => rgn.runRg(argv, { cwd, env, spawnSync: cp.spawnSync, ugrep: () => null, matchFiles: rgn.matchFilesAlone }).stdout.toString('latin1');
     for (const [tree, rel] of [['repo', '.'], ['badig', '.'], ['nested', 'top']]) {
       const argv = ['-j1', '-l', '--hidden', 'needle', rel], cwd = path.join(root, tree);
       assert.strictEqual(ours(argv, cwd), native(argv, cwd), `${tree}: -j1`);
@@ -387,9 +386,9 @@ test('RG-WALK-ERROR: a directory or file rg cannot read is its error, the rest s
     fs.chmodSync(path.join(dir, 'locked'), 0); fs.chmodSync(path.join(dir, 'noread.txt'), 0);
     for (const [how, [out, err]] of Object.entries(WALK_ERROR)) {
       const argv = [...(how === '-j1' ? ['-j1'] : []), '-l', 'needle', '.'];
-      const s = rgn.runRg(argv, { cwd: dir, spawnSync: cp.spawnSync, translate: NOT_TRANSLATED, ugrep: () => UGREP });
+      const s = rgn.runRg(argv, { cwd: dir, spawnSync: cp.spawnSync, ugrep: () => UGREP });
       const a = await new Promise((res) => rgn.rgExecFile(argv, { cwd: dir, encoding: 'buffer' }, (e, so, se) => res({ status: e ? e.code : 0, stdout: so, stderr: se }),
-        'rg', { translate: NOT_TRANSLATED, spawn: cp.spawn, spawnSync: cp.spawnSync, ugrep: () => UGREP }));
+        'rg', { spawn: cp.spawn, spawnSync: cp.spawnSync, ugrep: () => UGREP }));
       for (const g of [s, a]) {
         assert.deepStrictEqual([g.status, l1(g.stdout), lines(l1(g.stderr))], [2, out, lines(err)], how);
       }
@@ -414,7 +413,7 @@ test('RG-VERSION-SIMD: --version for each architecture is native\'s (aarch64 and
   assert.strictEqual(rgTypes.versionText({ short: true }), VERSION_SHORT);
 });
 test('RG-VERSION: rg --version, -V and a search argv holding --version answer as native, and /doctor\'s probe passes', async () => {
-  const opts = { spawnSync: cp.spawnSync, translate: NOT_TRANSLATED, ugrep: () => null };
+  const opts = { spawnSync: cp.spawnSync, ugrep: () => null };
   const long = rgTypes.versionText();
   for (const [argv, want] of [[['--version'], long], [['-V'], VERSION_SHORT], [['-l', 'needle', '.', '--version'], long]]) {
     const r = rgn.runRg(argv, opts);
@@ -423,11 +422,11 @@ test('RG-VERSION: rg --version, -V and a search argv holding --version answer as
   if (VERSION_NATIVE[process.arch]) assert.strictEqual(long, VERSION_NATIVE[process.arch]);
   // the bundle's first-use probe (2.1.283's DQ, what /doctor reports as "rg works"): `rg --version` through
   // execFile, stdout starting `ripgrep `
-  const out = await new Promise((res) => rgn.rgExecFile(['--version'], {}, (e, so) => res(e ? null : so), 'rg', { translate: NOT_TRANSLATED, spawn: cp.spawn, spawnSync: cp.spawnSync, ugrep: () => null }));
+  const out = await new Promise((res) => rgn.rgExecFile(['--version'], {}, (e, so) => res(e ? null : so), 'rg', { spawn: cp.spawn, spawnSync: cp.spawnSync, ugrep: () => null }));
   assert.ok(String(out).startsWith('ripgrep '), String(out));
 });
 test('RG-TYPE-LIST: --type-list prints native\'s table (its first lines and size, measured; the whole of it, where a native is at hand)', () => {
-  const r = rgn.runRg(['--type-list'], { spawnSync: cp.spawnSync, translate: NOT_TRANSLATED, ugrep: () => null });
+  const r = rgn.runRg(['--type-list'], { spawnSync: cp.spawnSync, ugrep: () => null });
   const text = r.stdout.toString();
   assert.strictEqual(r.status, 0);
   assert.ok(text.startsWith('ada: *.adb, *.ads\nagda: *.agda, *.lagda\naidl: *.aidl\nalire: alire.toml\namake: *.bp, *.mk\n'), text.slice(0, 200));
@@ -445,7 +444,7 @@ test('RG-REFUSE-NAME-NOT-UTF8: a walked name that is not UTF-8 refuses the searc
   try {
     try { fs.writeFileSync(Buffer.concat([Buffer.from(dir + '/f'), Buffer.from([0xff])]), 'needle\n'); } catch (e) { t.skip(`this filesystem will not create a name that is not UTF-8 (${e.code})`); return; }
     fs.writeFileSync(path.join(dir, 'ok.txt'), 'needle\n');
-    const r = rgn.runRg(['-l', 'needle', '.'], { cwd: dir, spawnSync: cp.spawnSync, translate: NOT_TRANSLATED, ugrep: () => null, matchFiles: rgn.matchFilesAlone });
+    const r = rgn.runRg(['-l', 'needle', '.'], { cwd: dir, spawnSync: cp.spawnSync, ugrep: () => null, matchFiles: rgn.matchFilesAlone });
     assert.strictEqual(r.status, 2);
     assert.strictEqual(r.stdout.length, 0);
     assert.match(rgn.parseRgRefusal(r.stderr).reason, /RG-REFUSE-NAME-NOT-UTF8/);
@@ -460,7 +459,7 @@ test('N-2: a walked search never stats a file the walk listed (it reads only its
   const stat = fs.statSync, seen = [];
   fs.statSync = function (p, ...rest) { seen.push(path.resolve(cwd, String(p))); return stat.call(this, p, ...rest); };
   let r;
-  try { r = rgn.runRg(['-l', '--hidden', 'needle', '.'], { cwd, spawnSync: cp.spawnSync, translate: NOT_TRANSLATED, ugrep: () => UGREP }); } finally { fs.statSync = stat; }
+  try { r = rgn.runRg(['-l', '--hidden', 'needle', '.'], { cwd, spawnSync: cp.spawnSync, ugrep: () => UGREP }); } finally { fs.statSync = stat; }
   const listed = r.stdout.toString().split('\n').filter(Boolean).map((p) => path.resolve(cwd, p));
   assert.ok(listed.length >= 15, `${listed.length} files listed`);
   assert.deepStrictEqual(listed.filter((p) => seen.includes(p)), []);
@@ -485,7 +484,7 @@ test('RG-WALK-*: the async twin keeps the loop turning over a walk of 30,000 fil
     fs.writeFileSync(prog, `
       const rgn = require(${JSON.stringify(path.join(__dirname, '..', 'libexec', 'rg-native.cjs'))});
       const cp = require('child_process');
-      const ctx = { translate: () => { throw new Error('translated'); }, spawn: cp.spawn, spawnSync: cp.spawnSync, ugrep: () => ${JSON.stringify(UGREP)} };
+      const ctx = { spawn: cp.spawn, spawnSync: cp.spawnSync, ugrep: () => ${JSON.stringify(UGREP)} };
       (async () => {
         let last = Date.now(), maxGap = 0;
         const iv = setInterval(() => { const n = Date.now(); maxGap = Math.max(maxGap, n - last); last = n; }, 10);

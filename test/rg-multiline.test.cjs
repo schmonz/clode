@@ -70,9 +70,8 @@ function check(row, got) {
   if (status === 2) assert.strictEqual(got.stderr, err, what);
   assert.strictEqual(rgn.parseRgRefusal(got.stderr), null, `${what}: native answers this, so ours must not refuse it`);
 }
-const NOT_TRANSLATED = () => { throw new Error('nothing reaches the old translation'); };
 function syncRun(root, [, argv, input], { alone = false } = {}) {
-  const r = rgn.runRg(argv, { cwd: root, input: input ? ML_INPUT(input) : Buffer.alloc(0), spawnSync: cp.spawnSync, translate: NOT_TRANSLATED,
+  const r = rgn.runRg(argv, { cwd: root, input: input ? ML_INPUT(input) : Buffer.alloc(0), spawnSync: cp.spawnSync,
     ugrep: () => (alone ? null : UGREP), matchFiles: alone ? rgn.matchFilesAlone : undefined });
   return { status: r.status, stdout: l1(r.stdout), stderr: l1(r.stderr) };
 }

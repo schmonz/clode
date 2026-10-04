@@ -849,11 +849,10 @@ async function withP6(fn) {
     return await fn(root);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 }
-const NOT_TRANSLATED = () => { throw new Error('a search must not reach today\'s translation'); };
 // ours, synchronously; `alone`: no ugrep at all, every file decided by the matcher (matchFiles)
 function p6Sync(root, [, argv, input], { alone = false } = {}) {
   const r = rgn.runRg(argv.map((a) => a.replace('<ROOT>', root)), {
-    cwd: root, input: P6_INPUT(input), spawnSync: cp.spawnSync, translate: NOT_TRANSLATED,
+    cwd: root, input: P6_INPUT(input), spawnSync: cp.spawnSync,
     ugrep: () => (alone ? null : UGREP), matchFiles: alone ? rgn.matchFilesAlone : undefined,
   });
   return { status: r.status, stdout: Buffer.from(r.stdout).toString('latin1'), stderr: Buffer.from(r.stderr).toString('latin1') };
@@ -892,7 +891,7 @@ function p6Async(root, [, argv, input]) {
   return new Promise((resolve) => {
     const child = rgn.rgExecFile(argv.map((a) => a.replace('<ROOT>', root)), { cwd: root, encoding: 'buffer' }, (err, so, se) => {
       resolve({ status: err ? (typeof err.code === 'number' ? err.code : null) : 0, stdout: so.toString('latin1'), stderr: se.toString('latin1') });
-    }, 'rg', { translate: NOT_TRANSLATED, spawn: cp.spawn, spawnSync: cp.spawnSync, ugrep: () => UGREP });
+    }, 'rg', { spawn: cp.spawn, spawnSync: cp.spawnSync, ugrep: () => UGREP });
     if (input) child.stdin.end(P6_INPUT(input)); else if (child.stdin) child.stdin.end();
   });
 }
@@ -910,7 +909,7 @@ test('the printers under tjs: both twins, every row (native)', { skip: needUgrep
     const cp = require('child_process'), fs = require('fs'), path = require('path');
     const root = ${JSON.stringify(root)}, UGREP = ${JSON.stringify(UGREP)};
     const rows = ${JSON.stringify(rows.map(([r]) => [r[1], r[2] ? P6_INPUT(r[2]).toString('base64') : null]))};
-    const ctx = { translate: () => { throw new Error('translated'); }, spawn: cp.spawn, spawnSync: cp.spawnSync, ugrep: () => UGREP };
+    const ctx = { spawn: cp.spawn, spawnSync: cp.spawnSync, ugrep: () => UGREP };
     const l1 = (b) => Buffer.from(b).toString('latin1');
     (async () => {
       const out = [];
@@ -971,25 +970,25 @@ test('RG-EXIT: an unreadable path is rg\'s error on stderr, the rest answered, e
 });
 
 // What the emulation does not answer is refused by name (never answered differently), and nothing reaches
-// the old rg -> ugrep translation (NOT_TRANSLATED throws; none is reachable since Task 10). --json is the
+// the old rg -> ugrep translation (there is none since Task 10). --json is the
 // printers' own since Task 7, --type, --type-not, --type-list and --version quaude's rg's since Task 9, -U
 // and --files since Task 10 (test/rg-multiline.test.cjs); --type-add and --type-clear are refused by name.
 test('a search flag the printers do not answer is refused by name; -U, --files, --json, --type and --version are answered', () => {
-  const nope = rgn.runRg(['--frobnicate', 'needle', '.'], { translate: NOT_TRANSLATED, spawnSync: cp.spawnSync, ugrep: () => UGREP });
+  const nope = rgn.runRg(['--frobnicate', 'needle', '.'], { spawnSync: cp.spawnSync, ugrep: () => UGREP });
   assert.strictEqual(rgn.parseRgRefusal(nope.stderr).flag, '--frobnicate');
   for (const flag of ['--type-add', '--type-clear']) {
-    assert.strictEqual(rgn.parseRgRefusal(rgn.runRg([flag, 'x:*.x', 'needle', '.'], { translate: NOT_TRANSLATED, spawnSync: cp.spawnSync }).stderr).flag, flag);
+    assert.strictEqual(rgn.parseRgRefusal(rgn.runRg([flag, 'x:*.x', 'needle', '.'], { spawnSync: cp.spawnSync }).stderr).flag, flag);
   }
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'rg-native-flags-')));
   try {
     fs.writeFileSync(path.join(dir, 'a.ts'), 'needle\n');
     for (const argv of [['--json', '--type', 'ts', 'needle', '.'], ['-t', 'ts', '--json', 'needle', '.'], ['--version'], ['-V'], ['--type-list'],
       ['-U', '--multiline-dotall', '-l', 'needle', '.'], ['--files', '.'], ['--files', '--null', '--sort=modified', '.']]) {
-      const a = rgn.runRg(argv, { translate: NOT_TRANSLATED, spawnSync: cp.spawnSync, ugrep: () => UGREP, matchFiles: UGREP ? undefined : rgn.matchFilesAlone, cwd: dir });
+      const a = rgn.runRg(argv, { spawnSync: cp.spawnSync, ugrep: () => UGREP, matchFiles: UGREP ? undefined : rgn.matchFilesAlone, cwd: dir });
       assert.strictEqual(a.status, 0, `${argv.join(' ')}: ${a.status} ${a.stderr}`);
     }
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
-  const json = rgn.runRg(['--json', 'needle', '-'], { translate: NOT_TRANSLATED, spawnSync: cp.spawnSync, ugrep: () => UGREP, input: 'a needle\n' });
+  const json = rgn.runRg(['--json', 'needle', '-'], { spawnSync: cp.spawnSync, ugrep: () => UGREP, input: 'a needle\n' });
   assert.strictEqual(json.status, 0);
   assert.match(String(json.stdout), /^\{"type":"begin","data":\{"path":\{"text":"<stdin>"\}\}\}\n/);
 });
@@ -1004,7 +1003,7 @@ test('runRg ends at the caller\'s timeout: in ugrep\'s match pass, and while dec
     const fake = require('./rg-fake-ugrep.cjs').writeFakeUgrep(dir);
     fs.mkdirSync(path.join(dir, 'tree'));
     fs.writeFileSync(path.join(dir, 'tree', 'a.txt'), 'x needle\n');
-    const base = { cwd: dir, spawnSync: cp.spawnSync, translate: NOT_TRANSLATED, ugrep: () => fake, killSignal: 'SIGKILL' };
+    const base = { cwd: dir, spawnSync: cp.spawnSync, ugrep: () => fake, killSignal: 'SIGKILL' };
     let t0 = Date.now();
     const walk = rgn.runRg(['needle', 'tree'], { ...base, timeout: 300, env: { ...process.env, FAKE_UGREP_SLOW_MS: '5000' } });
     assert.ok(Date.now() - t0 < 3000, `${Date.now() - t0} ms`);
@@ -1039,7 +1038,7 @@ test('RG-FIRST-MATCH: -l and -c over a 5 MB line answer in well under a second u
     fs.writeFileSync(prog, `
       const rgn = require(${JSON.stringify(path.join(__dirname, '..', 'libexec', 'rg-native.cjs'))});
       const cp = require('child_process');
-      const ctx = { translate: () => { throw new Error('translated'); }, spawn: cp.spawn, spawnSync: cp.spawnSync, ugrep: () => ${JSON.stringify(UGREP)} };
+      const ctx = { spawn: cp.spawn, spawnSync: cp.spawnSync, ugrep: () => ${JSON.stringify(UGREP)} };
       const cwd = ${JSON.stringify(dir)}, out = [];
       (async () => {
         for (const argv of [['-l', 'import.*from', 'big.js'], ['-c', 'import.*from', 'big.js']]) {
@@ -1073,7 +1072,7 @@ test('runRg ends at the caller\'s timeout while asking ugrep its version', { ski
     fs.writeFileSync(slow, '#!/bin/sh\nsleep 5\necho "ugrep 7.8.2"\n', { mode: 0o755 });
     fs.writeFileSync(path.join(dir, 'a.txt'), 'needle\n');
     const t0 = Date.now();
-    const r = rgn.runRg(['needle', 'a.txt'], { cwd: dir, spawnSync: cp.spawnSync, translate: NOT_TRANSLATED, ugrep: () => slow, timeout: 300 });
+    const r = rgn.runRg(['needle', 'a.txt'], { cwd: dir, spawnSync: cp.spawnSync, ugrep: () => slow, timeout: 300 });
     assert.ok(Date.now() - t0 < 3000, `${Date.now() - t0} ms`);
     assert.deepStrictEqual([r.status, r.errorCode], [null, 'ETIMEDOUT']);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
@@ -1093,7 +1092,7 @@ test('RG-REFUSE-SPECIAL-FILE: a named FIFO refuses at once; a walked one is skip
     fs.writeFileSync(path.join(dir, 'w', 'a.txt'), 'needle\n');
     const mk = cp.spawnSync('mkfifo', [path.join(dir, 'w', 'pipe')]);
     assert.strictEqual(mk.status, 0, String(mk.stderr));
-    const ctx = { cwd: dir, spawn: cp.spawn, spawnSync: cp.spawnSync, translate: NOT_TRANSLATED, ugrep: () => UGREP };
+    const ctx = { cwd: dir, spawn: cp.spawn, spawnSync: cp.spawnSync, ugrep: () => UGREP };
     const walked = rgn.runRg(['-l', 'needle', 'w'], ctx);
     assert.deepStrictEqual([walked.status, String(walked.stdout)], [0, 'w/a.txt\n']);
     let t0 = Date.now();
@@ -1125,7 +1124,7 @@ test('RG-SPECIAL-FILE: /dev/null is an empty file, a socket is rg\'s per-path er
   try {
     fs.writeFileSync(path.join(dir, 'ok.txt'), 'needle\n');
     await new Promise((res, rej) => { server.once('error', rej); server.listen(path.join(dir, 'sock'), res); });
-    const ctx = { cwd: dir, spawn: cp.spawn, spawnSync: cp.spawnSync, translate: NOT_TRANSLATED, ugrep: () => UGREP };
+    const ctx = { cwd: dir, spawn: cp.spawn, spawnSync: cp.spawnSync, ugrep: () => UGREP };
     const viaAsync = (argv) => new Promise((res) => rgn.rgExecFile(argv, { cwd: dir, encoding: 'buffer' },
       (e, so, se) => res({ status: e ? e.code : 0, stdout: so.toString('latin1'), stderr: se.toString('latin1') }), 'rg', ctx));
     const viaSync = (argv) => { const r = rgn.runRg(argv, ctx); return { status: r.status, stdout: Buffer.from(r.stdout).toString('latin1'), stderr: Buffer.from(r.stderr).toString('latin1') }; };
@@ -1164,7 +1163,7 @@ test('RG-SPECIAL-FILE and RG-REFUSE-SPECIAL-FILE under tjs: both twins (native)'
       const rgn = require(${JSON.stringify(path.join(__dirname, '..', 'libexec', 'rg-native.cjs'))});
       const cp = require('child_process');
       const cwd = ${JSON.stringify(dir)};
-      const ctx = { translate: () => { throw new Error('translated'); }, spawn: cp.spawn, spawnSync: cp.spawnSync, ugrep: () => ${JSON.stringify(UGREP)} };
+      const ctx = { spawn: cp.spawn, spawnSync: cp.spawnSync, ugrep: () => ${JSON.stringify(UGREP)} };
       const l1 = (b) => Buffer.from(b).toString('latin1');
       (async () => {
         const out = [];
@@ -1210,7 +1209,7 @@ test('RG-JSON: every match on a 5 MB line prints in linear time under tjs (both 
     fs.writeFileSync(prog, `
       const rgn = require(${JSON.stringify(path.join(__dirname, '..', 'libexec', 'rg-native.cjs'))});
       const cp = require('child_process');
-      const ctx = { translate: () => { throw new Error('translated'); }, spawn: cp.spawn, spawnSync: cp.spawnSync, ugrep: () => ${JSON.stringify(UGREP)} };
+      const ctx = { spawn: cp.spawn, spawnSync: cp.spawnSync, ugrep: () => ${JSON.stringify(UGREP)} };
       const cwd = ${JSON.stringify(dir)}, out = [], argv = ['--json', 'from', 'big.js'];
       const last = (b) => { const t = Buffer.from(b).toString('latin1'); return { len: t.length, summary: t.slice(t.lastIndexOf('\\n', t.length - 2) + 1) }; };
       (async () => {
@@ -1255,7 +1254,7 @@ test('RG-REFUSE-SPECIAL-FILE: /dev/stdin, /dev/fd/0 and /dev/tty refuse at once 
       const rgn = require(${JSON.stringify(path.join(__dirname, '..', 'libexec', 'rg-native.cjs'))});
       const cp = require('child_process');
       const cwd = ${JSON.stringify(dir)};
-      const ctx = { translate: () => { throw new Error('translated'); }, spawn: cp.spawn, spawnSync: cp.spawnSync, ugrep: () => ${JSON.stringify(UGREP)} };
+      const ctx = { spawn: cp.spawn, spawnSync: cp.spawnSync, ugrep: () => ${JSON.stringify(UGREP)} };
       (async () => {
         const out = [];
         for (const p of ['/dev/stdin', '/dev/fd/0', '/dev/tty', '/dev/null']) {
@@ -1301,7 +1300,7 @@ test('RG-JSON: finding each match\'s line steps over the text at most once (coun
   try {
     const text = 'import x from "y";'.repeat(5600) + '\n';
     fs.writeFileSync(path.join(dir, 'one.js'), text);
-    const ctx = { translate: NOT_TRANSLATED, spawn: cp.spawn, spawnSync: cp.spawnSync, ugrep: () => UGREP };
+    const ctx = { spawn: cp.spawn, spawnSync: cp.spawnSync, ugrep: () => UGREP };
     for (const argv of [['--json', 'from', 'one.js'], ['-o', 'from', 'one.js'], ['-c', '-o', 'from', 'one.js']]) {
       const s = rgn.runRg(argv, { ...ctx, cwd: dir });
       assert.strictEqual(s.status, 0);
@@ -1337,7 +1336,7 @@ test('rg stops printing at the caller\'s maxBuffer and the async twin never hold
     fs.writeFileSync(prog, `
       const rgn = require(${JSON.stringify(path.join(__dirname, '..', 'libexec', 'rg-native.cjs'))});
       const cp = require('child_process');
-      const ctx = { translate: () => { throw new Error('translated'); }, spawn: cp.spawn, spawnSync: cp.spawnSync, ugrep: () => ${JSON.stringify(UGREP)} };
+      const ctx = { spawn: cp.spawn, spawnSync: cp.spawnSync, ugrep: () => ${JSON.stringify(UGREP)} };
       const cwd = ${JSON.stringify(dir)}, out = [], maxBuffer = 1000000;
       (async () => {
         for (const argv of [['--json', '', 'lines50k.txt'], ['--json', 'needle', 'lines.txt'], ['--json', 'from', 'line5m.js'], ['-n', '-o', 'e', 'lines.txt']]) {
@@ -1496,7 +1495,7 @@ async function withP8(fn) {
 const P8_NAMES_DIR = (argv) => argv.some((a) => /^q\/[a-z0-9]+$/.test(a));
 function p8Sync(root, [, argv, input], { alone = false } = {}) {
   const r = rgn.runRg(argv, {
-    cwd: root, input: P8_INPUT(input), spawnSync: cp.spawnSync, translate: NOT_TRANSLATED,
+    cwd: root, input: P8_INPUT(input), spawnSync: cp.spawnSync,
     ugrep: () => (alone ? null : UGREP), matchFiles: alone ? rgn.matchFilesAlone : undefined,
   });
   return { status: r.status, stdout: Buffer.from(r.stdout).toString('latin1'), stderr: Buffer.from(r.stderr).toString('latin1') };
@@ -1505,7 +1504,7 @@ function p8Async(root, [, argv, input]) {
   return new Promise((resolve) => {
     const child = rgn.rgExecFile(argv, { cwd: root, encoding: 'buffer' }, (err, so, se) => {
       resolve({ status: err ? (typeof err.code === 'number' ? err.code : null) : 0, stdout: so.toString('latin1'), stderr: se.toString('latin1') });
-    }, 'rg', { translate: NOT_TRANSLATED, spawn: cp.spawn, spawnSync: cp.spawnSync, ugrep: () => UGREP });
+    }, 'rg', { spawn: cp.spawn, spawnSync: cp.spawnSync, ugrep: () => UGREP });
     if (input) child.stdin.end(P8_INPUT(input)); else if (child.stdin) child.stdin.end();
   });
 }
@@ -1573,7 +1572,7 @@ test('RG-BINARY-*: under tjs, both twins, every row (native)', { skip: needUgrep
     (async () => {
       const out = [];
       for (const [argv, input] of rows) {
-        const ctx = { translate: () => { throw new Error('translated'); }, spawn: cp.spawn, spawnSync: cp.spawnSync, ugrep: () => UGREP };
+        const ctx = { spawn: cp.spawn, spawnSync: cp.spawnSync, ugrep: () => UGREP };
         const inp = input ? Buffer.from(input, 'base64') : undefined;
         const s = rgn.runRg(argv, { ...ctx, cwd: root, input: inp });
         const a = await new Promise((res) => {
@@ -1613,7 +1612,7 @@ test('RG-BINARY-*: the line buffer\'s fills step over the text a bounded number 
     for (const [rel, b] of [['w/big.dat', big], ['big.dat', big], ['w2/long.dat', long], ['long.dat', long], ['w3/worst.dat', wb]]) {
       fs.mkdirSync(path.dirname(path.join(d, rel)), { recursive: true }); fs.writeFileSync(path.join(d, rel), b);
     }
-    const ctx = { translate: NOT_TRANSLATED, spawn: cp.spawn, spawnSync: cp.spawnSync, ugrep: () => UGREP };
+    const ctx = { spawn: cp.spawn, spawnSync: cp.spawnSync, ugrep: () => UGREP };
     for (const [argv, len, C] of [[['-n', '-C', '2', 'needle', 'w'], big.length, 2], [['--json', '-C', '2', 'needle', 'big.dat'], big.length, 2],
       [['-n', '-C', '1', 'needle', 'w2'], long.length, 1], [['-n', 'needle', 'long.dat'], long.length, 0], [['-n', '-C', '1', 'needle', 'w3'], wb.length, 1]]) {
       const bound = (C + 2) * len;
@@ -1643,7 +1642,7 @@ test('RG-BINARY-QUIT: the async twin keeps the loop turning over a 55 MB file of
     fs.writeFileSync(prog, `
       const rgn = require(${JSON.stringify(path.join(__dirname, '..', 'libexec', 'rg-native.cjs'))});
       const cp = require('child_process');
-      const ctx = { translate: () => { throw new Error('translated'); }, spawn: cp.spawn, spawnSync: cp.spawnSync, ugrep: () => ${JSON.stringify(UGREP)} };
+      const ctx = { spawn: cp.spawn, spawnSync: cp.spawnSync, ugrep: () => ${JSON.stringify(UGREP)} };
       const cwd = ${JSON.stringify(dir)}, out = [];
       (async () => {
         for (const argv of [['-n', '-C', '2', 'function', 'w'], ['-l', 'function', 'w']]) {
@@ -1681,7 +1680,7 @@ test('RG-BINARY-QUIT: -l reads a walked file only as far as rg\'s fills decide (
     fs.writeFileSync(path.join(d, 'big', 's.bin'), 'needle\n');
     fs.truncateSync(path.join(d, 'big', 's.bin'), 2.5 * 1024 ** 3);
     fs.writeFileSync(path.join(d, 'log', 'app.log'), cat8('needle first\n' + 'log line of filler text\n'.repeat(850000), [0, 0x0a]));
-    const ctx = { translate: NOT_TRANSLATED, spawn: cp.spawn, spawnSync: cp.spawnSync, ugrep: () => UGREP };
+    const ctx = { spawn: cp.spawn, spawnSync: cp.spawnSync, ugrep: () => UGREP };
     for (const [target, status, out] of [['big', 1, ''], ['log', 0, 'log/app.log\n']]) {
       const s = rgn.runRg(['-l', 'needle', target], { ...ctx, cwd: d });
       assert.deepStrictEqual([s.status, String(s.stdout), String(s.stderr)], [status, out, ''], `sync -l ${target}`);
