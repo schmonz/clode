@@ -294,8 +294,12 @@ Bash tool instead".
     rc-2 output to the model as the whole answer. Only ugrep's per-path warnings (`cannot read X:
     ...`, `X: No such file or directory`, naming a path it was given) are rg's own errors, the rest
     answered, rc 2.
-  - ERROR TEXT IS LIBUV'S, NOT rg's strerror (re-review N2; stderr only, which the Grep tool never
-    shows the model): `Too many symbolic links encountered` where native says `Too many levels of
+  - ERROR TEXT IS LIBUV'S, NOT rg's strerror: CLOSED by grep-native Task 10's fix round 2 (review N1) for tjs,
+    the engine quaude ships: txiki-strerror.patch adds __tjs_fs_sync.strerror (the platform libc's strerror(3);
+    engine-api-floor refuses an engine without it), and rg-native prints that text (RG-ERROR-TEXT; native rows per
+    platform, darwin and linux; NetBSD's binding checked on the VM). Still libuv's wording under NODE (naude, the
+    test runner): node exposes no strerror, a named divergence of the node engine. What it said before (re-review
+    N2; stderr only, which the Grep tool never shows the model): `Too many symbolic links encountered` where native says `Too many levels of
     symbolic links` (ELOOP), `i/o error` with no `(os error 5)` for EIO, and libuv's wording for
     ENAMETOOLONG and EISDIR; an errno libuv has no name for (EOPNOTSUPP on a socket, darwin 102)
     reads `Unknown system error -102 (os error 102)` where native says `Operation not supported on
@@ -390,11 +394,14 @@ Bash tool instead".
     --max-filesize, --one-file-system are refused by name. CORRECTED (Task 10 fix round, review I-1): this said
     "no upstream tool passes them" of --max-depth, --follow and --no-ignore-vcs too, and 2.1.283 passes all three
     in production (orphanedVersionGlobExclusions, rt and the sandbox scan: --max-depth; the FileIndex fallback
-    outside a repo: --follow and --no-ignore-vcs). Task 10 had made it worse: the old translation answered
+    outside a repo: --follow and --no-ignore-vcs; and, found in fix round 2 (review N2), the environment scan
+    eo(): --no-messages, --max-filesize, --no-heading, --color=never, now RG-NO-MESSAGES and RG-MAX-FILESIZE). Task 10 had made it worse: the old translation answered
     --max-depth, quaude's rg refused it, and upstream cached [] (orphaned plugin versions went unexcluded from
     Glob and Grep; rt listed nothing). All three are walked as rg walks now (RG-WALK-MAX-DEPTH, RG-WALK-FOLLOW,
     RG-NO-IGNORE; 24 native rows), and test/build-gates/rg-carve-argv-gates.test.cjs (guard
-    rg-carve-argv-answered) reads EVERY rg argv the carve builds and requires it answered, never refused.
+    rg-carve-argv-answered) reads EVERY rg argv the carve builds and requires it answered, never refused. Fix round
+    2: it first read only `["--files"` arrays and missed eo(); it now finds the bundle's rg RUNNERS by structure
+    (bD, NQ, dTo, jv, oX in 2.1.283) and reads every array or array variable they are called with (44 shapes).
 - **quaude's rg under -U, its \n refusal, and --files for Glob (grep-native Task 10, 2026-10-04).**
   rg-differential is GREEN: 0 of 184 cells differ (42 before: -U 24, Glob's --null 18), only the named
   normalizations; proved to bite (a listing left unsorted: 10 Glob cells; --multiline-dotall ignored: the 9
