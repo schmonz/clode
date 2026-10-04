@@ -210,3 +210,15 @@ test('RG-MULTILINE under tjs: a 4 MB multi-line search keeps the loop turning, e
     assert.ok(got.maxBuffer.printed < 5000 + 64 * 1024, `printed ${got.maxBuffer.printed} bytes past a 5000-byte maxBuffer`);
   } finally { fs.rmSync(prog, { force: true }); }
 }));
+
+// Review I-2 of Task 10's fix round: many matches on ONE long line made lines::locate rescan the line from its
+// start for every match (quadratic: a 1 MB minified line stepped back over 23 GB). Counted (searchStats.scannedBack,
+// rg-native.cjs's instrument for every line-start search): linear in the text.
+test('RG-MULTILINE: locating many matches on one long line steps back over the text a bounded number of times (counted)', { skip: POSIX }, () => withMl((root) => {
+  const line = 'x = function (a) { return a; }, '.repeat(6000) + '\n';           // 192 KB, 6,000 matches, one line
+  fs.writeFileSync(path.join(root, 'min.js'), line);
+  const r = rgn.runRg(['-U', '--multiline-dotall', '-c', 'function\\s*\\(', 'min.js'], { cwd: root, spawnSync: cp.spawnSync, ugrep: () => null,
+    matchFiles: rgn.matchFilesAlone });
+  assert.deepStrictEqual([r.status, l1(r.stdout)], [0, '6000\n'], l1(r.stderr));   // native 2.1.283: 6000
+  assert.ok(rgn.searchStats.scannedBack <= 2 * line.length, `stepped back over ${rgn.searchStats.scannedBack} bytes of a ${line.length}-byte text`);
+}));

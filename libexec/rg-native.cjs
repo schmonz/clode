@@ -1757,15 +1757,19 @@ function* multilineSearch(text, t, spec, sink, quit) {
   };
   const sinkContext = function* (r) { return (yield* afterContext(r.s)) && (yield* beforeContext(r.s)); };
   const sinkMatched = function* (r) { return r.s === r.e ? false : yield* coreMatched(r.s, r.e); };
-  // lines.rs locate, linear over a text of many matches: line starts from the last one found, line ends cached
-  let lsFloor = 0, nlFrom = 0, nlAt = -2;
+  // lines.rs locate, linear over a text of many matches: a match's line start is searched for only over the
+  // bytes since the last match's start (none of which held a \n back to that match's line start: review I-2 of
+  // the fix round, each match had rescanned its whole line), line ends cached
+  let lsFloor = 0, scanTo = 0, nlFrom = 0, nlAt = -2;
   const nlAtOrAfter = (p) => {
     if (!(nlAt !== -2 && p >= nlFrom && (nlAt === -1 || p <= nlAt))) { nlFrom = p; nlAt = text.indexOf(0x0a, p); }
     return nlAt;
   };
   const locate = (m) => {
-    const ls = lineStart(text, m.start, lsFloor);
-    lsFloor = ls;
+    // matches ascend, so [scanTo, m.start) is new; a \n in it starts the line after it, else lsFloor stands
+    const back = lineStart(text, m.start, scanTo);
+    const ls = back > scanTo ? back : lsFloor;
+    lsFloor = ls; scanTo = m.start;
     let le;
     if (m.end > ls && text[m.end - 1] === 0x0a) le = m.end;
     else { const nl = nlAtOrAfter(m.end); le = nl === -1 ? len : nl + 1; }
