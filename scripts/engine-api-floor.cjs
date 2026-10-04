@@ -36,8 +36,9 @@
 // stdlib and plain data: no npm, no child_process, nothing that only real node has.
 // What it EMITS is likewise plain JS text that a bare tjs runs.
 
-// kind: 'function' | 'object' (an 'object' entry also rejects null, which
-// `typeof` alone would happily call an object).
+// kind: 'function' | 'object' | 'bigint' -- any `typeof` answer, compared
+// exactly ('bigint' is the sync stat's ino); an 'object' entry also rejects
+// null, which `typeof` alone would happily call an object.
 const ENGINE_API_FLOOR = [
   {
     name: '__tjs_fs_sync',
