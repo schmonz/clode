@@ -158,6 +158,25 @@ const P9_NATIVE = [
   ["RG-IGNORE-PARENTS", "shared", ".", ["-j1", "-l", "needle", "sub", "-", "docs"], "empty", 0, "sub/x.txt\nsub/docs/c.md\nsub/gen/g2.txt\ndocs/sub/b.md\ndocs/a.md\n", ""],
   ["RG-IGNORE-PARENTS", "shared", ".", ["-j1", "-l", "needle", "docs", "gen"], "empty", 0, "gen/g.txt\n", ""],
   ["RG-IGNORE-PARENTS", "shared", "sub", ["-j1", "-l", "needle", ".", "../docs"], "empty", 0, "./x.txt\n./docs/c.md\n./gen/g2.txt\n../docs/sub/b.md\n../docs/a.md\n", ""],
+  // RG-GLOB-LINE (review M-2): a --glob read as a gitignore line: a comment adds nothing, trailing white space
+  // goes (unless escaped), a leading / anchors, a trailing / matches directories only, X/** what is under X.
+  ["RG-GLOB-LINE", "repo", ".", ["-j1", "-l", "--glob", "#a.txt", "needle", "."], "empty", 0, "./g2.txt\n./g1.txt\n./other/private\n./code/y.tsx\n./code/{b}.ts\n./code/Makefile\n./code/*.txt\n./code/README.md\n./code/x.ts\n./code/a.TXT\n./code/z.js\n./keep.ign\n./dotig.txt\n./sub/ign.txt\n./sub/anch.txt\n./a.txt\n./private/in/q.txt\n./private/p.txt\n", ""],
+  ["RG-GLOB-LINE", "repo", ".", ["-j1", "-l", "--glob", "a.txt   ", "needle", "."], "empty", 0, "./a.txt\n", ""],
+  ["RG-GLOB-LINE", "repo", ".", ["-j1", "-l", "--glob", "/a.txt", "needle", "."], "empty", 0, "./a.txt\n", ""],
+  ["RG-GLOB-LINE", "repo", ".", ["-j1", "-l", "--iglob", "a.txt", "needle", "."], "empty", 0, "./code/a.TXT\n./a.txt\n", ""],
+  ["RG-GLOB-LINE", "repo", ".", ["-j1", "-l", "--glob", "sub/", "needle", "."], "empty", 1, "", ""],
+  ["RG-GLOB-LINE", "repo", ".", ["-j1", "-l", "--glob", "!sub/", "needle", "."], "empty", 0, "./g2.txt\n./g1.txt\n./other/private\n./code/y.tsx\n./code/{b}.ts\n./code/Makefile\n./code/*.txt\n./code/README.md\n./code/x.ts\n./code/a.TXT\n./code/z.js\n./keep.ign\n./dotig.txt\n./a.txt\n./private/in/q.txt\n./private/p.txt\n", ""],
+  ["RG-GLOB-LINE", "repo", ".", ["-j1", "-l", "--glob", "private/**", "needle", "."], "empty", 0, "./private/in/q.txt\n./private/p.txt\n", ""],
+  ["RG-GLOB-LINE", "badig", ".", ["-j1", "-l", "--no-ignore", "--glob", "keep\\ ", "needle", "."], "empty", 0, "./s/sub/keep \n", ""],
+  ["RG-GLOB-LINE", "badig", ".", ["-j1", "-l", "--no-ignore", "--glob", "\\#y.txt", "needle", "."], "empty", 0, "./s/sub/#y.txt\n", ""],
+  // RG-GLOB-ROOT (review M-2): globs are matched relative to rg's cwd: a path under it loses that prefix, any
+  // other is matched as spelled (so /anch.txt anchors to the cwd, and sub/* misses an absolute target from sub).
+  ["RG-GLOB-ROOT", "repo", "sub", ["-j1", "-l", "--glob", "/anch.txt", "needle", "."], "empty", 0, "./anch.txt\n", ""],
+  ["RG-GLOB-ROOT", "repo", ".", ["-j1", "-l", "--glob", "/anch.txt", "needle", "sub"], "empty", 1, "", ""],
+  ["RG-GLOB-ROOT", "repo", "sub", ["-j1", "-l", "--glob", "/anch.txt", "needle", ".."], "empty", 1, "", ""],
+  ["RG-GLOB-ROOT", "repo", "sub", ["-j1", "-l", "--glob", "sub/*", "needle", "<T>"], "empty", 1, "", ""],
+  ["RG-GLOB-ROOT", "repo", ".", ["-j1", "-l", "--glob", "sub/*", "needle", "<T>"], "empty", 0, "<T>/sub/ign.txt\n<T>/sub/anch.txt\n<T>/sub/x.ign\n", ""],
+  ["RG-GLOB-ROOT", "repo", "code", ["-j1", "-l", "--iglob", "!/A.TXT", "needle", "."], "empty", 0, "./y.tsx\n./{b}.ts\n./Makefile\n./*.txt\n./README.md\n./x.ts\n./z.js\n", ""],
 ];
 
 // Every tree in a fresh root; fn(root). The trees' names are the keys of TREES, plus `empty` (a HOME).

@@ -54,14 +54,16 @@
 //                      rg's error; a --glob decides before a type does
 //   RG-WALK-SYMLINK    a symlink the walk finds is neither followed nor searched; a NAMED one is followed
 //   RG-WALK-ORDER      -j1 (and rg's single-threaded cases): depth first, each directory in the order the
-//                      OS's readdir gives it (30 of 30). Otherwise rg walks in parallel and the order is
-//                      not fixed: its MODAL order is a LIFO stack over readdir order (each directory's
-//                      entries last-first, a subdirectory walked when it is popped; 6 of 6 and 33 of 40,
-//                      Task 7 review), which quaude's rg prints; rg-differential forgives order there,
-//                      and only there. ONE behaviour everywhere: a host with one CPU runs native rg on one
-//                      thread (available_parallelism, a performance choice), and quaude's rg still walks
-//                      as the parallel walk's mode. Several roots: each in turn, as given (native has no
-//                      modal order across roots: 8 runs, 6 orders).
+//                      OS's readdir gives it (20 of 20 on APFS and on overlayfs, Task 9). Otherwise rg walks in
+//                      parallel and the order is NOT fixed: on this Mac a small tree (one directory, or
+//                      top/tree) walks LIFO over readdir order 20 of 20 (each directory's entries last-first, a
+//                      subdirectory walked when it is popped), but a many-directory tree's root gives 19-20
+//                      orders in 20 runs, and on a 12-thread Linux host even small trees give 5-15 (commonest
+//                      3-7 of 20). quaude's rg prints the LIFO order; rg-differential forgives order there, and
+//                      only there (it judges -j1). ONE behaviour everywhere: a host with one CPU runs native rg
+//                      on one thread (available_parallelism, a performance choice), and quaude's rg still walks
+//                      as the parallel walk's LIFO. Several roots: each in turn, as given (native has no order
+//                      across roots: 8 runs, 6 orders).
 //   RG-WALK-ERROR      a directory that cannot be read is rg's error (rc 2, the rest searched):
 //                      `rg: DIR: ERR` in the parallel walk, `rg: DIR: IO error for operation on DIR: ERR` in
 //                      the single-threaded one
