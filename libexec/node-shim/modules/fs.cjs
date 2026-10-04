@@ -241,12 +241,18 @@ function latin1Encode(str) {
   return out;
 }
 
+// A path's type, from the engine's st_mode bits (S_IFMT): every is*() reads them, as node's do. The
+// engine's `kind` is only file/dir/symlink/other, so keying on it answered isFIFO(), isSocket(),
+// isBlockDevice() false for every path and isCharacterDevice() false for /dev/null; the 2.1.283
+// bundle's readInheritedFdSync then refused every CLAUDE_CODE_*_FILE_DESCRIPTOR pipe ("not a pipe or
+// socket"). The S_IF* values are POSIX's, and MSVC's struct stat uses the same ones.
+const S_IFMT = 0o170000;
+const S_IF = { file: 0o100000, dir: 0o040000, symlink: 0o120000, fifo: 0o010000, socket: 0o140000, char: 0o020000, block: 0o060000 };
+const typeIs = (mode, t) => ((mode >>> 0) & S_IFMT) === S_IF[t];
 class Stats {
-  #kind;
   constructor(raw) {
     this.size = raw.size;
     this.mode = raw.mode;
-    this.#kind = raw.kind;
     // FSS.stat exposes only mtimeMs (second-resolution: st_mtime*1000). Node's
     // Stats carries atime/mtime/ctime/birthtime as both Date and *Ms/*Ns.
     // DIVERGENCE (documented): this build reads only the whole-second mtime, so
@@ -270,28 +276,28 @@ class Stats {
     this.gid = raw.gid === undefined ? 0 : raw.gid;
     this.rdev = 0; this.blksize = 4096; this.blocks = Math.ceil((raw.size || 0) / 512);
   }
-  isFile() { return this.#kind === 'file'; }
-  isDirectory() { return this.#kind === 'dir'; }
-  isSymbolicLink() { return this.#kind === 'symlink'; }
-  isBlockDevice() { return false; }
-  isCharacterDevice() { return this.#kind === 'char'; }
-  isFIFO() { return false; }
-  isSocket() { return false; }
+  isFile() { return typeIs(this.mode, 'file'); }
+  isDirectory() { return typeIs(this.mode, 'dir'); }
+  isSymbolicLink() { return typeIs(this.mode, 'symlink'); }
+  isBlockDevice() { return typeIs(this.mode, 'block'); }
+  isCharacterDevice() { return typeIs(this.mode, 'char'); }
+  isFIFO() { return typeIs(this.mode, 'fifo'); }
+  isSocket() { return typeIs(this.mode, 'socket'); }
 }
 
 // fs.Dirent — the shape readdir(withFileTypes) yields. FSS.readdir returns NAMES
 // only (probed), so the entry kind comes from an lstat (no symlink follow, like
 // node's d_type). `parentPath` is node's field (`path` is the deprecated alias).
 class Dirent {
-  #kind;
-  constructor(name, kind, parentPath) { this.name = name; this.parentPath = parentPath; this.path = parentPath; this.#kind = kind; }
-  isFile() { return this.#kind === 'file'; }
-  isDirectory() { return this.#kind === 'dir'; }
-  isSymbolicLink() { return this.#kind === 'symlink'; }
-  isBlockDevice() { return false; }
-  isCharacterDevice() { return false; }
-  isFIFO() { return false; }
-  isSocket() { return false; }
+  #mode;
+  constructor(name, mode, parentPath) { this.name = name; this.parentPath = parentPath; this.path = parentPath; this.#mode = mode; }
+  isFile() { return typeIs(this.#mode, 'file'); }
+  isDirectory() { return typeIs(this.#mode, 'dir'); }
+  isSymbolicLink() { return typeIs(this.#mode, 'symlink'); }
+  isBlockDevice() { return typeIs(this.#mode, 'block'); }
+  isCharacterDevice() { return typeIs(this.#mode, 'char'); }
+  isFIFO() { return typeIs(this.#mode, 'fifo'); }
+  isSocket() { return typeIs(this.#mode, 'socket'); }
 }
 
 function readAll(fd) {
@@ -459,9 +465,9 @@ function mkdtempSync(prefix) {
 }
 
 function direntFor(parentPath, name) {
-  let kind = 'file';
-  try { kind = FSS.lstat(path.join(parentPath, name)).kind; } catch { /* broken link etc → treat as file */ }
-  return new Dirent(name, kind, parentPath);
+  let mode = S_IF.file;
+  try { mode = FSS.lstat(path.join(parentPath, name)).mode; } catch { /* broken link etc → treat as file */ }
+  return new Dirent(name, mode, parentPath);
 }
 
 // Shared readdir core: honours { withFileTypes, recursive } like host node.
