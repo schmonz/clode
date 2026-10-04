@@ -35,7 +35,9 @@
 //   RG-IGNORE-PARENTS  ignore files in the searched directory's ancestors apply, matched against the
 //                      canonical searched directory joined with the entry's path relative to ITS OWN
 //                      directory (rg's dir.rs rebuild, measured: top/.ignore's `tree/sub/b.txt` misses
-//                      top/tree/sub/b.txt searched from top/tree, and hits every b.txt searched from sub)
+//                      top/tree/sub/b.txt searched from top/tree, and hits every b.txt searched from sub);
+//                      several roots share the ancestors the previous root built, rebuild root and all,
+//                      until a root that is no directory (stdin aside) drops them (dir.rs's cache)
 //   RG-IGNORE-GLOBAL   the global excludes: ~/.gitconfig's core.excludesFile (`~` is HOME), else
 //                      $XDG_CONFIG_HOME/git/config's (or ~/.config/git/config's), else
 //                      $XDG_CONFIG_HOME/git/ignore (or ~/.config/git/ignore); HOME and XDG_CONFIG_HOME are
@@ -407,23 +409,36 @@ function makeWalker(spec, ctx) {
   }
   const ROOT = { dir: '', dirB: '', parent: null, absParent: true, absoluteBase: null, custom: EMPTY_GI, ignore: EMPTY_GI, gi: EMPTY_GI, ex: EMPTY_GI, hasGit: false, errs: [] };
   // dir.rs add_parents: the root's ancestors, each an absolute parent, from `/` down. Errors: rc 2.
+  // RG-IGNORE-PARENTS across roots (review M-1): add_parents keeps a cache of the ancestors it built (dir.rs
+  // `compiled`, weak), and walk.rs holds one root's chain until the next root is set up, so the next root
+  // REUSES the ancestors the previous one built, absolute base (the path rebuild's root) and all; a root that
+  // is no directory (stdin aside) drops the chain (walk.rs: `self.ig = self.ig_root.clone()`), and the next
+  // one builds afresh. Measured: -j1 over `sub docs .` lists docs/a.md, over `sub ok.txt docs .` it does not.
+  let liveParents = new Map();
   function withParents(P) {
-    if (!opts.parents && !opts.gitIgnore && !opts.gitExclude && !opts.gitGlobal) return { node: ROOT, errs: [] };
+    if (!opts.parents && !opts.gitIgnore && !opts.gitExclude && !opts.gitGlobal) { liveParents = new Map(); return { node: ROOT, errs: [] }; }
     let canon;
-    try { canon = fs.realpathSync(at(P)); } catch { return { node: ROOT, errs: [] }; }
+    try { canon = fs.realpathSync(at(P)); } catch { liveParents = new Map(); return { node: ROOT, errs: [] }; }
     const chain = [];
     for (let d = canon; path.dirname(d) !== d;) { d = path.dirname(d); chain.push(d); }
     let node = ROOT;
-    const errs = [];
+    const errs = [], live = new Map();
     for (const parent of chain.reverse()) {
-      const n = childNode(node, parent, { absParent: true });
-      n.absoluteBase = canon;
-      n.hasGit = opts.requireGit && opts.gitIgnore ? exists(path.join(parent, '.git')) : false;
-      errs.push(...n.errs);
+      let n = liveParents.get(parent);
+      if (!n) {
+        n = childNode(node, parent, { absParent: true });
+        n.absoluteBase = canon;
+        n.hasGit = opts.requireGit && opts.gitIgnore ? exists(path.join(parent, '.git')) : false;
+        errs.push(...n.errs);
+      }
+      live.set(parent, n);
       node = n;
     }
+    liveParents = live;
     return { node, errs };
   }
+  // A root that is not a directory (a named file, a path that is not there): the ancestors are not kept.
+  const dropParents = () => { liveParents = new Map(); };
   const chainOf = function* (node) { for (let n = node; n; n = n.parent) yield n; };
   // dir.rs matched_ignore, on one-char-per-byte paths
   function matchedIgnore(node, p, isDir) {
@@ -530,7 +545,7 @@ function makeWalker(spec, ctx) {
     };
     yield* visitDir(top, P);
   }
-  return { walk };
+  return { walk, dropParents };
 }
 
 // rg's usage error before any search (an unknown type, a glob that does not parse): `rg: MESSAGE`, rc 2.

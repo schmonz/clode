@@ -148,6 +148,16 @@ const P9_NATIVE = [
   // are), so it is part of the first line's glob, which then matches nothing; CRLF lines lose their CR.
   ["RG-IGNORE-FILES", "bomig", ".", ["-j1", "-l", "needle", "."], "empty", 0, "./a.log\n./ok.txt\n", ""],
   ["RG-IGNORE-FILES", "bomig", ".", ["-l", "needle", "."], "empty", 0, "./ok.txt\n./a.log\n", ""],
+  // RG-IGNORE-PARENTS (review M-1): several roots share their ancestors' matchers, built by the first root whose
+  // walk needs them and kept while the previous root's chain lives (dir.rs add_parents' cache; walk.rs keeps one
+  // root's chain until the next root is set up, and a root that is no directory, but stdin, drops it). -j1 only:
+  // in parallel the roots race to build them, so the files listed vary from run to run (measured, 30 runs).
+  ["RG-IGNORE-PARENTS", "shared", ".", ["-j1", "-l", "needle", "sub", "docs", "."], "empty", 0, "sub/x.txt\nsub/docs/c.md\nsub/gen/g2.txt\ndocs/sub/b.md\ndocs/a.md\n./ok.txt\n./docs/sub/b.md\n./sub/x.txt\n./sub/docs/c.md\n", ""],
+  ["RG-IGNORE-PARENTS", "shared", ".", ["-j1", "-l", "needle", "docs", "sub", "."], "empty", 0, "sub/x.txt\nsub/gen/g2.txt\n./ok.txt\n./docs/sub/b.md\n./sub/x.txt\n./sub/docs/c.md\n", ""],
+  ["RG-IGNORE-PARENTS", "shared", ".", ["-j1", "-l", "needle", "sub", "ok.txt", "docs", "."], "empty", 0, "sub/x.txt\nsub/docs/c.md\nsub/gen/g2.txt\nok.txt\n./ok.txt\n./docs/sub/b.md\n./sub/x.txt\n./sub/docs/c.md\n", ""],
+  ["RG-IGNORE-PARENTS", "shared", ".", ["-j1", "-l", "needle", "sub", "-", "docs"], "empty", 0, "sub/x.txt\nsub/docs/c.md\nsub/gen/g2.txt\ndocs/sub/b.md\ndocs/a.md\n", ""],
+  ["RG-IGNORE-PARENTS", "shared", ".", ["-j1", "-l", "needle", "docs", "gen"], "empty", 0, "gen/g.txt\n", ""],
+  ["RG-IGNORE-PARENTS", "shared", "sub", ["-j1", "-l", "needle", ".", "../docs"], "empty", 0, "./x.txt\n./docs/c.md\n./gen/g2.txt\n../docs/sub/b.md\n../docs/a.md\n", ""],
 ];
 
 // Every tree in a fresh root; fn(root). The trees' names are the keys of TREES, plus `empty` (a HOME).
