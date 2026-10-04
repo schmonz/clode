@@ -853,12 +853,18 @@ const LONG_BOOL = {
   // RG-WALK-FOLLOW, RG-NO-IGNORE's --no-ignore-vcs (rg-walk.cjs)
   '--follow': (s) => { s.follow = true; }, '--no-follow': (s) => { s.follow = false; },
   '--no-ignore-vcs': (s) => { s.noIgnoreVcs = true; }, '--ignore-vcs': (s) => { s.noIgnoreVcs = false; },
+  // RG-NO-MESSAGES (fix round 2, review N2: 2.1.283's environment scan passes these): rg's error and ignore-file
+  // messages are not written, the exit status still says an error happened; --no-heading is what rg does printing
+  // to a pipe anyway (as quaude's rg always prints)
+  '--no-messages': (s) => { s.noMessages = true; }, '--messages': (s) => { s.noMessages = false; },
+  '--no-heading': () => {},
 };
 const SHORT_BOOL = { l: '--files-with-matches', c: '--count', i: '--ignore-case', s: '--case-sensitive', n: '--line-number',
   N: '--no-line-number', H: '--with-filename', I: '--no-filename', 0: '--null', o: '--only-matching', '.': '--hidden', U: '--multiline', L: '--follow' };
 const LONG_VALUE = { '--after-context': 'after', '--before-context': 'before', '--context': 'context', '--max-columns': 'maxColumns',
   '--regexp': 'pattern', '--glob': 'glob', '--iglob': 'iglob', '--threads': 'threads', '--type': 'type', '--type-not': 'typeNot',
-  '--sort': 'sort', '--sortr': 'sortr', '--max-depth': 'maxDepth', '--maxdepth': 'maxDepth' };
+  '--sort': 'sort', '--sortr': 'sortr', '--max-depth': 'maxDepth', '--maxdepth': 'maxDepth', '--max-filesize': 'maxFilesize',
+  '--color': 'color' };
 const SHORT_VALUE = { A: 'after', B: 'before', C: 'context', M: 'maxColumns', e: 'pattern', g: 'glob', j: 'threads', t: 'type', T: 'typeNot', d: 'maxDepth' };
 // rg's special modes, answered whatever else the argv holds (RG-VERSION, RG-TYPE-LIST: rg-types.cjs).
 const SPECIAL_LONG = { '--version': 'version', '--type-list': 'type-list' };
@@ -884,6 +890,23 @@ function setValue(s, key, flag, v) {
   if (key === 'pattern') { s.patterns.push(v); return null; }
   if (key === 'glob' || key === 'iglob') { s.globs.push([key, v]); return null; }
   if (key === 'type' || key === 'typeNot') { s.types.push([key, v]); return null; }
+  // RG-MAX-FILESIZE (rg-walk.cjs): grep-cli's parse_human_readable_size, its errors as rg words them
+  if (key === 'maxFilesize') {
+    const bad = (why) => ({ usage: `rg: error parsing flag ${flag}: invalid size: ${why}\n` });
+    const m = /^([0-9]+)([KMG])?$/.exec(v);
+    if (!m) return bad(`invalid format for size '${v}', which should be a non-empty sequence of digits followed by an optional 'K', 'M' or 'G' suffix`);
+    const U64 = 18446744073709551615n, n = BigInt(m[1]);
+    if (n > U64) return bad(`invalid integer found in size '${v}': number too large to fit in target type`);
+    const size = n * (m[2] === 'G' ? 1n << 30n : m[2] === 'M' ? 1n << 20n : m[2] === 'K' ? 1n << 10n : 1n);
+    if (size > U64) return bad(`size too big in '${v}'`);
+    s.maxFilesize = Number(size);
+    return null;
+  }
+  // --color: printing to a pipe, rg's `never` and `auto` are the same; `always` and `ansi` are refused by name
+  if (key === 'color') {
+    if (!['never', 'auto', 'always', 'ansi'].includes(v)) return { usage: `rg: error parsing flag ${flag}: choice '${v}' is unrecognized\n` };
+    return v === 'never' || v === 'auto' ? null : cannotYet(`${flag}=${v}`);
+  }
   if (key === 'sort' || key === 'sortr') {
     if (!SORT_CHOICES.has(v)) return { usage: `rg: error parsing flag ${flag}: choice '${v}' is unrecognized\n` };
     if (v !== 'none' && v !== 'modified') return cannotYet(`${flag}=${v}`);
@@ -900,7 +923,7 @@ function setValue(s, key, flag, v) {
 function parseRgSearch(argv) {
   const s = { mode: 'standard', patterns: [], ignoreCase: false, lineNumber: null, withFilename: null, nul: false, only: false, multiline: false, dotall: false,
     before: null, after: null, context: null, maxColumns: 0, hidden: false, noIgnore: false, globs: [], types: [], threads: null, paths: [],
-    sort: null, maxDepth: null, follow: false, noIgnoreVcs: false };
+    sort: null, maxDepth: null, follow: false, noIgnoreVcs: false, maxFilesize: null, noMessages: false };
   let special = null;
   const pos = [];
   let end = false;
@@ -2004,7 +2027,7 @@ function* printListing(spec, entries, cwd) {
     out.push(Buffer.from(e.disp + term));
     if (++listed % TICK_EVERY === 0) yield TICK;
   }
-  return { stdout: out.done(), stderr: Buffer.concat(err), status: broke ? 2 : listed ? 0 : 1, signal: null };
+  return { stdout: out.done(), stderr: spec.noMessages ? Buffer.alloc(0) : Buffer.concat(err), status: broke ? 2 : listed ? 0 : 1, signal: null };
 }
 
 // ---- the search, once: a generator both twins drive --------------------------------------------------
@@ -2195,7 +2218,8 @@ function* searchCore(spec, opts) {
   // RG-JSON: one summary after every file, whatever was found.
   if (state.json && out.len <= state.limit) out.push(jsonSummary(state.json));
   searchStats.printed = out.len;
-  return { stdout: out.done(), stderr: Buffer.concat(err), status: broke ? 2 : found ? 0 : 1, signal: null };
+  // RG-NO-MESSAGES: every message rg would write (per-path errors, ignore-file errors) unwritten; the status stays
+  return { stdout: out.done(), stderr: spec.noMessages ? Buffer.alloc(0) : Buffer.concat(err), status: broke ? 2 : found ? 0 : 1, signal: null };
 }
 
 // How a step the core asked for ended in a refusal or a failure: refusals stop the search; a ugrep

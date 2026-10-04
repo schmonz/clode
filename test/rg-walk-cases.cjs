@@ -19,6 +19,7 @@
 //   plugcache, skills   2.1.283's production --max-depth 4 listings (orphaned plugin versions; skills, rt)
 //   links, linksout, linksrepo   symlinks for -L/--follow (2.1.283's FileIndex fallback), outside and inside a repo
 //   errs     paths whose errors rg words in its libc's text (RG-ERROR-TEXT)
+//   envscan  2.1.283's environment scan (eo()): --no-messages, --max-filesize, -o -H --null over config files
 //   h1 h2    HOMEs: XDG's git/ignore; ~/.gitconfig's core.excludesFile with a ~
 const NEEDLE = 'needle\n';
 const TREES = {
@@ -81,6 +82,15 @@ const TREES = {
     ['.gitignore', 'ign.md\n'], ['ign.md', NEEDLE], ['.ignore', 'dot.md\n'], ['dot.md', NEEDLE],
   ],
   linksout: [['o.md', NEEDLE]],
+  // RG-NO-MESSAGES and RG-MAX-FILESIZE (2.1.283's environment scan eo(): -o -H --null --no-messages --max-filesize 4M
+  // over config files for s3://, gs:// and az:// URLs): one file past 4 MiB, one exactly at it, a hidden one, one the
+  // globs leave out, node_modules, and an .ignore line that does not parse (a message --no-messages withholds)
+  envscan: [
+    ['cfg/a.toml', 'bucket = "s3://my-bucket/path"\nother = "gs://g-b.x/y"\nnone\nAZ://NOPE az://ok-1\n'],
+    ['b.json', '{"u":"s3://json-b"}\n'], ['c.txt', 's3://not-in-txt\n'], ['node_modules/x/m.json', 's3://in-node-modules\n'],
+    ['.h.yml', 'k: s3://hidden\n'], ['big.yaml', 'x: s3://big-bucket\n' + 'y'.repeat(4 * 1048576) + '\n'],
+    ['atlimit.yaml', `x: s3://at-limit\n${'y'.repeat(4 * 1048576 - 18)}\n`], ['.ignore', '[z-a]\n'],
+  ],
   // RG-ERROR-TEXT: errnos whose libc text libuv words differently (a link to itself: ELOOP; one through a loop of
   // two), next to a broken link (ENOENT) and a file to search
   errs: [['ok.txt', NEEDLE], ['self', { symlink: 'self' }], ['gone', { symlink: 'nowhere' }], ['dd/lp', { symlink: '../dd/lp' }]],

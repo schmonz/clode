@@ -61,6 +61,8 @@
 //                      `rg: LINK: ERR` in parallel, `rg: LINK: IO error for operation on LINK: ERR` on one thread
 //   RG-WALK-MAX-DEPTH  --max-depth N (--maxdepth, -d): the root is depth 0, an entry deeper than N is not
 //                      reached, a directory at depth N is not entered (0: only a NAMED file is listed)
+//   RG-MAX-FILESIZE    --max-filesize N[K|M|G] (1024-based): a walked file larger than N bytes is skipped (a NAMED
+//                      one never: walk.rs checks entries below the root only)
 //   RG-WALK-ORDER      -j1 (and rg's single-threaded cases): depth first, each directory in the order the
 //                      OS's readdir gives it (20 of 20 on APFS and on overlayfs, Task 9). Otherwise rg walks in
 //                      parallel and the order is NOT fixed: on this Mac a small tree (one directory, or
@@ -339,6 +341,9 @@ function makeWalker(spec, ctx) {
   // RG-WALK-MAX-DEPTH and RG-WALK-FOLLOW (hiargs.rs walk_builder: max_depth, follow_links)
   const maxDepth = typeof spec.maxDepth === 'number' ? spec.maxDepth : Infinity;
   const follow = !!spec.follow;
+  const maxFilesize = typeof spec.maxFilesize === 'number' ? spec.maxFilesize : null;
+  // a followed link's size is its target's (walk.rs reads the followed entry's metadata)
+  const tooBig = (p, link) => { try { return (link ? fs.statSync : fs.lstatSync)(at(p)).size > maxFilesize; } catch { return false; } };
   const anyRules = opts.ignore || opts.gitGlobal || opts.gitIgnore || opts.gitExclude || opts.custom;
   const joinPath = (dir, name) => dir + (dir.endsWith('/') ? '' : '/') + name;
 
@@ -580,6 +585,7 @@ function makeWalker(spec, ctx) {
           }
         }
         if (skip(node, p, type === 'dir')) continue;
+        if (maxFilesize !== null && type === 'file' && tooBig(p, c.type === 'symlink')) continue;   // RG-MAX-FILESIZE
         if (sequential) {
           if (type === 'dir') yield* visitDir(node, p, depth + 1);
           else if (type === 'file') yield { file: p };
