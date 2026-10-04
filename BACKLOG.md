@@ -334,6 +334,9 @@ Bash tool instead".
   - A path that is not UTF-8 would be `{"bytes": ...}` in native's JSON; the interim walk reads
     ugrep's listing as UTF-8 (lossy), so such a name cannot reach the printer as its bytes. Task 9's
     walk must carry names as bytes. `--type` beside `--json` refuses naming `--type` (Task 9).
+  - SPEED, -l over a repository: `-l e` over this repo takes 2.5 s under tjs where native takes 35 ms
+    (Task 8 review, pre-existing): every file's matches are found and decided before rg's first-match
+    stop is applied.
   - SPEED: linear, and bounded by the caller's maxBuffer and event loop since Task 7 review I2 (the
     search stops printing past execFile's maxBuffer; the async twin hands the loop back at least
     every 20 ms while it reads ugrep's records, decides and prints). Before that the whole answer
@@ -345,20 +348,37 @@ Bash tool instead".
   grep-searcher 0.1.14, encoding_rs_io 0.1.7, grep-printer 0.2.2 and ripgrep 14.1.1's hiargs.rs, every
   rule measured against native 2.1.283 on darwin-arm64 and linux-x64 (test/rg-native.test.cjs P8 rows;
   a scratch differential of 561 darwin and 374 linux cells over NUL positions, peeks, BOMs, UTF-16
-  chunks, buffer growth and context: 0 differ; 334 of the 561 differed before). rg-differential's binary
-  cells (late.dat 10 content + 4 count, early.dat 7 content) are equal now (139 -> 118 findings).
+  chunks, buffer growth and context: 0 differ before the ruling below; 334 of the 561 differed before;
+  the review's 1,665 darwin and 1,110 Linux-native hostile cells: 0). rg-differential's binary cells
+  (late.dat 10 content + 4 count, early.dat 7 content) are equal now (139 -> 118 findings).
   - RG-BINARY-QUIT (a walked file): the 64 KiB fills (the 3-byte BOM peek as the first read; the
     UTF-16 decoder's 8 KiB reads; the buffer tripling for a long line; the roll keeping context lines)
-    and the fill that meets the first NUL ending the search. -c prints nothing for a file with a NUL;
-    -l now reads a walked file whole (it read 64 KiB) to place its NUL against its first match.
-  - RG-BINARY-CONVERT (a named file or stdin): NUL as a line break. A pattern that is not a plain
-    literal is decided again over that text with the matcher alone (every line): about a microsecond a
-    byte under tjs, for a named file with a NUL only.
-  - RG-BINARY-MMAP: **native differs by platform here, by rg's own rule** (mmap.rs: never on macOS):
-    on every other host rg memory-maps up to 10 named regular files, and a NUL stays inside its line
-    (linux-x64 native, measured: early.dat's lines 1 and 3, bytes_searched 19, where darwin says 1 and
-    4 and 40). quaude's rg follows the host's platform, so the Linux CI gate (Task 11) judges this
-    branch and the Mac gate the other; the P8 rows pin both on any host (runRg's `platform`).
+    and the fill that meets the first NUL ending the search. -c prints nothing for a file with a NUL.
+    -l reads a walked file only up to the fill that decides it (a prefix, doubled until it does: review
+    I-1; reading it whole failed for a 3 GiB file and took an 800 MB log to 851 MB of memory).
+  - RG-BINARY-CONVERT (stdin; more than 10 paths, or a path that is not a regular file, `-` included;
+    a file with a BOM): NUL as a line break. A pattern that is not a plain literal is decided again over
+    that text with the matcher alone (every line): about a microsecond a byte under tjs, for such a file
+    with a NUL only.
+  - RG-BINARY-MMAP + RG-MMAP-EVERYWHERE (**user ruling 2026-10-04**): up to 10 named regular files are
+    answered as rg searching a memory map, a NUL inside its line, on EVERY host. Native rg maps them
+    everywhere but macOS, a clause its own source calls a guess (grep-searcher 0.1.14 mmap.rs:73-75, "I
+    guess memory maps on macOS aren't great. Should re-evaluate."). So on macOS a named binary's answer is
+    Linux native's (early.dat: lines 1 and 3, bytes_searched 19, where macOS native says 1 and 4, 40): the
+    ONE written platform divergence, stated once in scripts/lib/rg-probe.cjs MMAP_EVERYWHERE with both
+    natives' literals. rg-differential judges its 8 cells on macOS against Linux native's answer and
+    requires macOS native to still print its recorded one; its control plants a byte off and a stale
+    record, and both are named. The P8 rows keep the 7 darwin rows that differ as P8_MACOS_DIVERGENCE.
+    The 10-path cap is pinned by Linux-native rows for 10 and 11 named files.
+  - RG-STDIN-ALL-THERE: stdin is read as if all of it had arrived (the BufReader's 8 KiB, then as much
+    as fits). Native's own fills over a pipe follow the writer's timing, not an OS rule (measured
+    2026-10-04, 10 runs per writer, a NUL at byte 65536 of 65,547: one write, Linux whole every time,
+    macOS 64 KiB first 9-10 of 10; 65,537 bytes then a pause, macOS 8 to 2). A race has no answer; only
+    the standard printer's stop over more than 8 KiB of stdin depends on it. NetBSD, Windows and Haiku
+    unmeasured, and need not be: the choice holds wherever the writer races.
+  - The fills scan back with the engine's lastIndexOf (a JS byte loop over a 55 MB minified bundle held
+    the event loop 761-1011 ms under tjs: review I-2); each byte is stepped over at most max(-A, -B) + 2
+    times (worst measured 1.98).
   - NOT MODELLED, named: (1) rg's line buffer belongs to a searching thread and keeps its grown size
     for the next file that thread searches (measured: under -j1, a file with a 100 KB line before a
     file whose NUL lies at 70 KB hides the second from -l; alone, it is listed); quaude's rg starts
@@ -366,9 +386,11 @@ Bash tool instead".
     nondeterminism; under -j1 it is rg's walk order, Task 9's (ruling G15), after which a sequential
     search can carry the size across files. (2) A UTF-16 read that the line buffer's room cuts short
     (a line longer than about 52 KB of text) is taken to end on a whole character; encoding_rs's
-    exact cut is unmeasured. (3) stdin's reads are the BufReader's 8 KiB, then what the pipe holds:
-    64 KiB at a time on macOS (native 19 of 20 runs), all of it on Linux (40 of 40); a caller writing
-    in pieces makes native's own fills vary. Only the standard printer's stop point depends on it.
+    exact cut is unmeasured.
+  - FOUND, not this task's: -l over a file with millions of a LITERAL's matches asks ugrep for every
+    match (RG-RE-LITERAL-RANGES' range format), and past RG_MAX_BUFFER (256 MB of records) the search
+    fails (an 800 MB log with `needle` on every line: rc 2, before and after Task 8); rg stops at the
+    first. And ugrep reads a 3 GiB file to its end for -l (3.9 s) where rg answers from its first fill.
 - **node-shim's sync stat has no dev, ino or rdev: an engine gap. FIXED** (6d43ee6 engine, 3008358
   bigint; ruling G18, 2026-10-04). The sync stat/lstat/fstat (txiki-sync-stat-identity.patch) now
   answer from libuv's uv_stat_t, as the async tjs.stat and node's statSync do, and hand JS every
