@@ -30,6 +30,14 @@ string, and frame-oracle, whose env is built from nothing and whose captures eac
 clode-update's fixture unsets CLAUDE_CONFIG_DIR as it unsets CLODE_STATE_ROOT, with its own CLAUDE_CONFIG_DIR test.
 The 15 edited files pass with the real HOME present (43 pass, 8 opt-in skips), and ~/.claude/plugins/known_marketplaces.json
 was not touched again.
+CORRECTED (fix round 2, ruling G32): that guard read only env objects that set ANTHROPIC_*, and missed `doctor` run
+with no env at all (native `doctor` in a fresh HOME writes ~/.claude.json and ~/.claude/backups), --version and
+--clode-attest runs, `HOME: os.homedir()`, `process.env['HOME']`, an ambient CLAUDE_CONFIG_DIR, a process.env spread
+after the throwaway home, and an env built by assignment. bundle-runs-own-home now finds every spawn of the bundle by
+WHAT IS SPAWNED (test/bundle-spawn-scan.cjs: derived from a few seeds through bindings, helpers and launchers, over
+test/ and scripts/lib/; 81 spawns) and judges the env it gets; 27 more were given their own home. Known limit: a
+launcher handed in as a callback (frame-oracle's capture) is not followed; its captures are hermetic by construction
+(test/e2e.cjs sandbox()).
 
 ## 87 of the 90 tools the carve can register have no driver that can fail (2026-09-28)
 
@@ -195,6 +203,10 @@ Bash tool instead".
     shadow, always, and recognises a generator holding only that line as a snapshot. Real Bash tool,
     zsh and bash, against native: --allowedTools Bash,Grep with no host rg answers (it said "command
     not found" before Task 10b, and the missing file after), and `alias rg='rg -c'` is honoured.
+    With --allowedTools naming Grep or Glob and a host rg on PATH, the Bash tool's `rg` is that host rg:
+    upstream's guard (`if ! (unalias rg; command -v rg)`) writes no rg at all then, and no find/grep shadow
+    is injected. Native does exactly the same, so in both modes the Bash tool's `rg` matches native (the
+    review of fix round 1 drove both shells through the real Bash tool).
     Left open: the Bash tool's rg is the shell shadow (rgShadowBody, the old rg-to-ugrep translation),
     not quaude's rg: under `-c` it prints zero counts (`in/e.log:0`) where rg prints none, and its file
     order is ugrep's.
