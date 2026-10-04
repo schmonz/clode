@@ -298,7 +298,15 @@ Bash tool instead".
     the engine quaude ships: txiki-strerror.patch adds __tjs_fs_sync.strerror (the platform libc's strerror(3);
     engine-api-floor refuses an engine without it), and rg-native prints that text (RG-ERROR-TEXT; native rows per
     platform, darwin and linux; NetBSD's binding checked on the VM). Still libuv's wording under NODE (naude, the
-    test runner): node exposes no strerror, a named divergence of the node engine. NOT CLOSED ON WINDOWS, and
+    test runner): node exposes no strerror, a named divergence of the node engine. NAUDE IS PRODUCTION, NOT A TEST
+    HOST: libexec/naude-entry.cjs materializes rg-native.cjs (and its companions) beside bun-shim, and bun-shim wraps
+    node's own child_process, so every Grep and Glob call a naude user makes is answered by rg-native under Node,
+    and its per-path errors read libuv's table: `Too many symbolic links encountered` for native's `Too many levels
+    of symbolic links` (ELOOP), libuv's wording for ENAMETOOLONG and EISDIR, and `Unknown system error -102 (os
+    error 102)` for an errno libuv cannot name (macOS's EOPNOTSUPP on a socket). stderr only; the Grep tool shows
+    the model rc-2 output, but these lines are per-path messages beside the answer. Listed among the named
+    exceptions in the grep-native constraints (2026-10-04). Closing it needs a libc strerror under Node (an addon,
+    or the text carried by the error), not a table here. NOT CLOSED ON WINDOWS, and
     unmeasured there: rg built for Windows does not print the C library's text. Rust's std formats an OS error with
     FormatMessageW and the raw Win32 code (`The system cannot find the file specified. (os error 2)`, `Access is
     denied. (os error 5)`); quaude's rg prints the MSVC CRT's strerror with the CRT errno libuv mapped the Win32
