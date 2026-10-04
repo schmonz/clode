@@ -16,7 +16,7 @@ const path = require('node:path');
 const cp = require('node:child_process');
 const rgn = require('../libexec/rg-native.cjs');
 const { makeRgTree, normalizeRg } = require('../scripts/lib/rg-probe.cjs');
-const { tjsPath, runLoader } = require('./node-shim-helper.cjs');
+const { tjsPath, runLoader, engineSpawn, LOADER } = require('./node-shim-helper.cjs');
 
 // The host ugrep the tests drive (quaude's own resolution: CLODE_UGREP, else PATH).
 function hostUgrep() {
@@ -1222,6 +1222,63 @@ test('RG-JSON: every match on a 5 MB line prints in linear time under tjs (both 
       assert.strictEqual(normalizeRg(Buffer.from(r.summary, 'latin1'), ['--json']), '{"data":{"elapsed_total":{},"stats":{"bytes_printed":20323626,'
         + '"bytes_searched":5000007,"elapsed":{},"matched_lines":1,"matches":275822,"searches":1,"searches_with_match":1}},"type":"summary"}\n', r.twin);
       assert.ok(r.ms < 10000, `${r.twin}: ${r.ms} ms (native ~100 ms; linear ~2.4 s here)`);
+    }
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+// THE CALLER'S DESCRIPTORS (Task 7 review I1). A named /dev/stdin, /dev/fd/N or /proc/self/fd/N is the
+// rg CHILD's descriptor to native; quaude's rg runs inside its caller, so opening one opens the CALLER's
+// (on macOS an O_NONBLOCK open of /dev/fd/0 returns a dup that keeps fd 0's blocking mode, and the read
+// held the whole engine: under -p from a terminal quaude froze). And no character device but /dev/null
+// is ever read: a nonblocking read of a terminal can eat keystrokes typed ahead into a live TUI. So those
+// names, and every other character device, refuse by name at once (RG-REFUSE-SPECIAL-FILE), with
+// quaude's own stdin a terminal nothing writes to (the repro: native printed ok.txt, ours never ended).
+test('RG-REFUSE-SPECIAL-FILE: /dev/stdin, /dev/fd/0 and /dev/tty refuse at once under a terminal, never read (tjs, both twins)', {
+  skip: needUgrep.skip || (!['darwin', 'linux'].includes(process.platform) ? 'needs script(1) for a pty'
+    : !tjsPath() ? 'no tjs engine' : !fs.existsSync('/usr/bin/script') ? 'no /usr/bin/script' : false),
+}, async () => {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'rg-native-tty-')));
+  try {
+    fs.writeFileSync(path.join(dir, 'ok.txt'), 'needle\n');
+    const prog = path.join(dir, 'probe.cjs');
+    fs.writeFileSync(prog, `
+      const rgn = require(${JSON.stringify(path.join(__dirname, '..', 'libexec', 'rg-native.cjs'))});
+      const cp = require('child_process');
+      const cwd = ${JSON.stringify(dir)};
+      const ctx = { translate: () => { throw new Error('translated'); }, spawn: cp.spawn, spawnSync: cp.spawnSync, ugrep: () => ${JSON.stringify(UGREP)} };
+      (async () => {
+        const out = [];
+        for (const p of ['/dev/stdin', '/dev/fd/0', '/dev/tty', '/dev/null']) {
+          const argv = ['-l', 'needle', p, 'ok.txt'];
+          const s = rgn.runRg(argv, { ...ctx, cwd });
+          const a = await new Promise((res) => rgn.rgExecFile(argv, { cwd }, (e, so, se) => res({ status: e ? e.code : 0, stdout: String(so), stderr: String(se) }), 'rg', ctx));
+          out.push({ p, sync: { status: s.status, stdout: String(s.stdout), stderr: String(s.stderr) }, async: a });
+        }
+        process.stdout.write('PROBE:' + JSON.stringify(out) + '\\n');
+      })();
+    `);
+    const [cmd, argv] = engineSpawn(['run', LOADER, prog]);
+    const quote = (x) => `'${x.replace(/'/g, "'\\''")}'`;
+    const [sc, sargs] = process.platform === 'darwin' ? ['/usr/bin/script', ['-q', '/dev/null', cmd, ...argv]]
+      : ['/usr/bin/script', ['-qec', [cmd, ...argv].map(quote).join(' '), '/dev/null']];
+    // script's stdin stays open and silent (a real pipe from a sleep: macOS script(1) rejects a socket
+    // pair, node's 'pipe'), so the pty it hands the engine has nothing to read
+    const child = cp.spawn('/bin/sh', ['-c', 'sleep 60 | "$@"', 'sh', sc, ...sargs], { stdio: ['ignore', 'pipe', 'pipe'], detached: true });
+    let out = '';
+    child.stdout.on('data', (d) => { out += d; });
+    const t0 = Date.now();
+    const done = await new Promise((res) => {
+      const iv = setInterval(() => { if (out.includes('PROBE:') && out.slice(out.indexOf('PROBE:')).includes('\n')) { clearInterval(iv); res(true); } else if (Date.now() - t0 > 20000) { clearInterval(iv); res(false); } }, 50);
+    });
+    try { process.kill(-child.pid, 'SIGKILL'); } catch { /* gone */ }
+    assert.ok(done, `the engine under a terminal never answered (${Date.now() - t0} ms): ${out.slice(0, 500)}`);
+    const got = JSON.parse(out.slice(out.indexOf('PROBE:') + 6).split(/\r?\n/)[0]);
+    for (const r of got) {
+      for (const twin of ['sync', 'async']) {
+        if (r.p === '/dev/null') { assert.deepStrictEqual([r[twin].status, r[twin].stdout], [0, 'ok.txt\n'], `${twin} ${r.p}`); continue; }
+        assert.strictEqual(r[twin].status, 2, `${twin} ${r.p}: ${JSON.stringify(r[twin])}`);
+        assert.match(rgn.parseRgRefusal(r[twin].stderr).reason, /RG-REFUSE-SPECIAL-FILE/, `${twin} ${r.p}`);
+      }
     }
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
