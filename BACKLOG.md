@@ -298,7 +298,13 @@ Bash tool instead".
     the engine quaude ships: txiki-strerror.patch adds __tjs_fs_sync.strerror (the platform libc's strerror(3);
     engine-api-floor refuses an engine without it), and rg-native prints that text (RG-ERROR-TEXT; native rows per
     platform, darwin and linux; NetBSD's binding checked on the VM). Still libuv's wording under NODE (naude, the
-    test runner): node exposes no strerror, a named divergence of the node engine. What it said before (re-review
+    test runner): node exposes no strerror, a named divergence of the node engine. NOT CLOSED ON WINDOWS, and
+    unmeasured there: rg built for Windows does not print the C library's text. Rust's std formats an OS error with
+    FormatMessageW and the raw Win32 code (`The system cannot find the file specified. (os error 2)`, `Access is
+    denied. (os error 5)`); quaude's rg prints the MSVC CRT's strerror with the CRT errno libuv mapped the Win32
+    error to (`No such file or directory (os error 2)`, `Permission denied (os error 13)`). libuv has already lost
+    the Win32 code when JS sees the error, so the strerror binding cannot reach native's text there; matching it
+    needs the Win32 code carried up from libuv. No native rg row has been recorded on Windows. What it said before (re-review
     N2; stderr only, which the Grep tool never shows the model): `Too many symbolic links encountered` where native says `Too many levels of
     symbolic links` (ELOOP), `i/o error` with no `(os error 5)` for EIO, and libuv's wording for
     ENAMETOOLONG and EISDIR; an errno libuv has no name for (EOPNOTSUPP on a socket, darwin 102)
@@ -325,8 +331,10 @@ Bash tool instead".
   - THE ASYNC TWIN asks `ugrep --version` without blocking (ugrepCapabilitiesAsync): measured in a
     noble container, the synchronous probe held the loop ~300 ms on a first search.
   - UNMEASURED ON WINDOWS: a walked file's path joins its target with `/` (Rust's Path::join gives
-    `\` there), and a path's error text is libuv's message capitalized (`No such file or directory`,
-    `Permission denied` match macOS's strerror, which is what native prints; Windows' does not).
+    `\` there), and a path's error text is the MSVC CRT's strerror with the CRT errno (`No such file or
+    directory (os error 2)`), where rg built for Windows prints FormatMessageW's text with the raw Win32 code
+    (`The system cannot find the file specified. (os error 2)`, `Access is denied. (os error 5)`): see "ERROR
+    TEXT IS LIBUV'S" above.
 - **quaude's rg prints --json itself (grep-native Task 7, 2026-10-04): what it leaves to later tasks.**
   The Grep tool's content mode is answered, message for message (RG-JSON and its siblings in
   libexec/rg-native.cjs); driven end to end through the real 2.1.283 bundle under tjs, its

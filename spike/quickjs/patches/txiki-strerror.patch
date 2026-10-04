@@ -6,8 +6,15 @@
 # error -102` for an errno it has no name for (macOS's EOPNOTSUPP on a socket). rg, built on the host, prints
 # the C library's text (Rust's io::Error formats strerror_r), so quaude's rg printed different stderr from
 # native's for those errnos (grep-native Task 10 fix round 2, review N1: 130 of 412 -L rows; BACKLOG "ERROR
-# TEXT IS LIBUV'S, NOT rg's strerror"). One binding, and every platform answers with its own libc's text,
-# which is exactly what rg built there prints. Never a table in JS.
+# TEXT IS LIBUV'S, NOT rg's strerror"). One binding, and every POSIX platform answers with its own libc's
+# text, which is exactly what rg built there prints. Never a table in JS.
+#
+# WINDOWS IS DIVERGENT, AND UNMEASURED. There rg's text is not the C library's: Rust's std formats an OS error
+# with FormatMessageW and the raw Win32 code (`The system cannot find the file specified. (os error 2)`,
+# `Access is denied. (os error 5)`), while this binding gives the MSVC CRT's strerror for the CRT errno
+# libuv mapped the Win32 error to (`No such file or directory`, 2; `Permission denied`, 13). libuv has
+# already lost the Win32 code by the time JS sees the error, so no binding here can recover it. No native rg
+# row has been recorded on Windows.
 #
 # Guarded by test/rg-walk.test.cjs's RG-ERROR-TEXT rows (native literals) and by the engine-api-floor entry
 # that refuses an engine without it.

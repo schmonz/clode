@@ -985,7 +985,10 @@ function parseRgSearch(argv) {
 // EACCES, ENOTDIR; measured against native's literals in test/rg-native.test.cjs).
 // RG-ERROR-TEXT: rg prints its platform's C library text for an errno (Rust's io::Error formats strerror_r),
 // so quaude's rg asks the engine for strerror(3) (txiki-strerror.patch: __tjs_fs_sync.strerror) and prints that,
-// as written. libuv's own table (what tjs.Error and node's messages carry, capitalized below) is the fallback
+// as written. That holds on POSIX only. On WINDOWS rg prints FormatMessageW's text with the raw Win32 code
+// (`The system cannot find the file specified. (os error 2)`, `Access is denied. (os error 5)`), and this prints
+// the MSVC CRT's strerror with the CRT errno libuv mapped it to (`No such file or directory (os error 2)`,
+// `Permission denied (os error 13)`): libuv has lost the Win32 code, so Windows is a named divergence, unmeasured. libuv's own table (what tjs.Error and node's messages carry, capitalized below) is the fallback
 // where an engine has no such binding: NODE (naude, and the test runner) exposes none, so there the text of an
 // errno whose libuv wording differs from the libc's (ELOOP, ENAMETOOLONG, an errno libuv cannot name) is libuv's,
 // a named divergence of the node engine only (test/rg-walk.test.cjs maps native's rows through it for node).
