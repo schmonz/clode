@@ -11,8 +11,8 @@
 // What is judged: a regular file, a hard link to it (same ino), a different file, a directory, a
 // symlink (stat follows, lstat does not), a FIFO, a unix socket, /dev/null and /dev/zero; through
 // statSync, lstatSync, fstatSync, fs.promises.stat/lstat, callback stat/lstat and FileHandle.stat;
-// numbers only for now (`{ bigint: true }` is still ignored). Every value is printed with its type,
-// so a number where node has a bigint is a difference.
+// each with and without `{ bigint: true }`. Every value is printed with its type, so a number where
+// node has a bigint is a difference.
 //
 // The one allowance: a field the ORACLE sees move between its own two runs (node, then quaude,
 // then node again) cannot be judged, and is named in the output rather than skipped silently.
@@ -48,7 +48,7 @@ const paths = { file: path.join(dir, 'file.txt'), hardlink: path.join(dir, 'hard
   dir: path.join(dir, 'sub'), symlink: path.join(dir, 'link'), fifo: path.join(dir, 'fifo'), sock: path.join(dir, 'sock'),
   null: '/dev/null', zero: '/dev/zero' };
 const OPENABLE = ['file', 'hardlink', 'other', 'symlink', 'fifo', 'null', 'zero'];
-const VARIANTS = [['', undefined]];
+const VARIANTS = [['', undefined], [' bigint', { bigint: true }]];
 const cb = (fn, p, o) => new Promise((res, rej) => {
   const done = (e, s) => (e ? rej(e) : res(s));
   if (o) fs[fn](p, o, done); else fs[fn](p, done);
@@ -109,8 +109,10 @@ test('every Stats and BigIntStats field equals host node\'s (stat, lstat, fstat,
     assert.strictEqual(before['file statSync ino'], before['hardlink statSync ino'], 'a hard link shares its ino');
     assert.notStrictEqual(before['file statSync ino'], before['other statSync ino'], 'two files differ in ino');
     assert.match(before['file statSync ino'], /^number [1-9]/);
+    assert.match(before['file statSync bigint ino'], /^bigint [1-9]/);
     assert.notStrictEqual(before['null statSync rdev'], before['zero statSync rdev'], '/dev/null and /dev/zero differ in rdev');
     assert.notStrictEqual(before['symlink statSync ino'], before['symlink lstatSync ino'], 'stat follows a symlink, lstat does not');
+    assert.strictEqual(before['file statSync bigint class'], 'BigIntStats');
 
     const moving = Object.keys(before).filter((k) => before[k] !== after[k]);
     for (const k of moving) t.diagnostic(`unjudgeable, the oracle moved between its runs: ${k} (${before[k]} -> ${after[k]})`);

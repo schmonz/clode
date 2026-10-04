@@ -12,8 +12,8 @@
 //   - stat/lstat/fstat return libuv's uv_stat_t (txiki-sync-stat-identity.patch):
 //     size, mode, uid, gid as numbers; kind 'file'|'dir'|'symlink'|'other';
 //     dev, ino, nlink, rdev, blksize, blocks, size64 as exact BigInts; and
-//     atime/mtime/ctime/birthtime as <name>Sec + <name>Nsec BigInts. Stats
-//     below is built from that, as node builds it.
+//     atime/mtime/ctime/birthtime as <name>Sec + <name>Nsec BigInts. Stats and
+//     BigIntStats below are built from that, as node builds them.
 //   - symlink(target, linkpath) — same arg order as POSIX symlink(2) and
 //     as node's fs.symlinkSync(target, path).
 //   - errors are real Error instances with .code/.errno/.syscall set by the
@@ -252,15 +252,17 @@ const S_IFMT = 0o170000;
 const S_IF = { file: 0o100000, dir: 0o040000, symlink: 0o120000, fifo: 0o010000, socket: 0o140000, char: 0o020000, block: 0o060000 };
 const typeIs = (mode, t) => ((Number(mode) >>> 0) & S_IFMT) === S_IF[t];
 
-// fs.Stats, built as node builds it (lib/internal/fs/utils.js) from what the
+// fs.Stats and fs.BigIntStats, built as node builds them (lib/internal/fs/utils.js) from what the
 // engine's sync stat hands over (spike/quickjs/patches/txiki-sync-stat-identity.patch): libuv's
 // uv_stat_t, with every 64-bit field as an exact BigInt and each time as seconds + nanoseconds.
-// node fills a Float64Array from that same struct, so a number here is the BigInt's nearest double;
-// the times are node's own arithmetic, msFromTimeSpec (sec * 1e3 + nsec / 1e6). The four Dates are node's lazy getters
+// node fills a Float64Array (numbers) or a BigInt64Array (bigint: true) from that same struct, so a
+// number here is the BigInt's nearest double and a bigint is its signed 64-bit reading; the times
+// are node's own arithmetic, msFromTimeSpec (sec * 1e3 + nsec / 1e6) and nsFromTimeSpecBigInt
+// (sec * 1e9 + nsec, the Ms being that / 1e6, truncated). The four Dates are node's lazy getters
 // on the prototype: computed on first read from the *Ms field, rounded, then an own property, so
 // the own keys (and JSON.stringify) are node's. Until this engine fix dev, ino and rdev were 0,
-// nlink 1 and every time the whole-second mtime: two different files had one identity, and every
-// character device was /dev/null (BACKLOG).
+// nlink 1, every time the whole-second mtime and `{ bigint: true }` was ignored: two different
+// files had one identity, and every character device was /dev/null (BACKLOG).
 const STAT_INTS = ['dev', 'mode', 'nlink', 'uid', 'gid', 'rdev', 'blksize', 'ino', 'size', 'blocks'];
 const STAT_TIMES = ['atime', 'mtime', 'ctime', 'birthtime'];
 function requireIdentity(raw) {
@@ -289,7 +291,18 @@ class Stats extends StatsBase {
     for (const t of STAT_TIMES) this[t + 'Ms'] = Number(raw[t + 'Sec']) * 1000 + Number(raw[t + 'Nsec']) / 1000000;
   }
 }
-for (const C of [Stats]) {
+class BigIntStats extends StatsBase {
+  constructor(raw) {
+    super();
+    requireIdentity(raw);
+    for (const f of STAT_INTS) this[f] = BigInt.asIntN(64, BigInt(rawInt(raw, f)));
+    const ns = {};
+    for (const t of STAT_TIMES) ns[t] = BigInt.asIntN(64, raw[t + 'Sec']) * 1000000000n + BigInt.asIntN(64, raw[t + 'Nsec']);
+    for (const t of STAT_TIMES) this[t + 'Ms'] = ns[t] / 1000000n;
+    for (const t of STAT_TIMES) this[t + 'Ns'] = ns[t];
+  }
+}
+for (const C of [Stats, BigIntStats]) {
   for (const t of STAT_TIMES) {
     Object.defineProperty(C.prototype, t, {
       enumerable: true,
@@ -299,6 +312,7 @@ for (const C of [Stats]) {
     });
   }
 }
+const makeStats = (raw, opts) => (opts && opts.bigint ? new BigIntStats(raw) : new Stats(raw));
 
 // fs.Dirent — the shape readdir(withFileTypes) yields. FSS.readdir returns NAMES
 // only (probed), so the entry kind comes from an lstat (no symlink follow, like
@@ -400,8 +414,8 @@ function readSync(fd, buf, offset, length, position) {
   return src.length;
 }
 
-const statSync = (p) => new Stats(FSS.stat(p));
-const lstatSync = (p) => new Stats(FSS.lstat(p));
+const statSync = (p, opts) => makeStats(FSS.stat(p), opts);
+const lstatSync = (p, opts) => makeStats(FSS.lstat(p), opts);
 
 // Encode string data honoring encoding (shared by writeFileSync/appendFileSync/
 // writeSync); never silently mis-encode an unimplemented charset — fail loud.
@@ -650,7 +664,7 @@ const fsMod = {
   constants,
   readFileSync, writeFileSync, mkdirSync, readSync,
   statSync, lstatSync,
-  fstatSync: (fd) => new Stats(FSS.fstat(fd)),
+  fstatSync: (fd, opts) => makeStats(FSS.fstat(fd), opts),
   fchmodSync,
   existsSync: (p) => { try { FSS.stat(p); return true; } catch { return false; } },
   realpathSync: (p) => FSS.realpath(p),
@@ -760,7 +774,7 @@ function makeFileHandle(fd, p) {
     },
     async writeFile(data, opts) { writeAll(fd, typeof data === 'string' ? encodeStr(data, typeof opts === 'string' ? opts : opts?.encoding) : new Uint8Array(data.buffer ?? data, data.byteOffset ?? 0, data.byteLength ?? data.length), null); },
     async appendFile(data, opts) { writeAll(fd, typeof data === 'string' ? encodeStr(data, typeof opts === 'string' ? opts : opts?.encoding) : new Uint8Array(data.buffer ?? data, data.byteOffset ?? 0, data.byteLength ?? data.length), null); },
-    async stat() { return new Stats(FSS.fstat(fd)); },
+    async stat(opts) { return makeStats(FSS.fstat(fd), opts); },
     // FileHandle.readFile: upstream 2.1.251's file reader probes the head of a file for
     // its encoding with a positioned read and then reads the WHOLE thing off the same
     // handle (`o = r === void 0 ? await e.readFile() : …`). Missing this method made every
@@ -850,9 +864,9 @@ const promises = {
       files: n(r.files), ffree: n(r.ffree),
     };
   },
-  stat: async (p) => statSync(p),
-  lstat: async (p) => lstatSync(p),
-  fstat: async (fd) => fsMod.fstatSync(fd),
+  stat: async (p, opts) => statSync(p, opts),
+  lstat: async (p, opts) => lstatSync(p, opts),
+  fstat: async (fd, opts) => fsMod.fstatSync(fd, opts),
   mkdir: async (p, opts) => mkdirSync(p, opts),
   readdir: async (p, opts) => readdirCore(p, opts),
   opendir: async (p) => fsMod.opendirSync(p),
