@@ -40,6 +40,10 @@
 // byte-identical (stats included) except a binary's, and each differs only by a later task's class:
 // .git searched 10, .gitignore/.ignore precedence 10, whitelist glob 4, brace glob 2, refused --type 7
 // (Task 9); late.dat's binary quit 10, early.dat's convert mode 7 (Task 8); refused -U 8 (Task 10).
+// After Task 8 (rg's binary detection): 118 differ. After Task 9 (rg's walk in JS: ignore rules, glob
+// dialect, --type, order; --version from native), measured the same way: 42 of 184 differ (the six new
+// cells are the -j1 walk cells, all equal), and every one is Task 10's: -U refused (8 files, 8 count, 8
+// content) and Glob's --null refused (18). files 29 -> 8, count 29 -> 8, content 41 -> 8, --version 1 -> 0.
 // The note tallies what ours refused, so each task's progress is visible in the verdict itself.
 //
 // WHERE IT RUNS: wherever a native provider, tjs and ugrep all exist. Otherwise it SKIPS
@@ -66,15 +70,18 @@ const { tjsPath, resolveBin } = require('../node-shim-helper.cjs');
 
 // Measured: RG_MATRIX's cells per tree kind: 21 Grep argv x 2 directory target forms plus 3
 // Glob argv x 2 (2026-09-28); for bin2 the 21 Grep argv once more naming early.dat; for root
-// the 12 stdin-branch argv and rg --version (2026-10-03).
-const KIND_FLOORS = { root: 61, nogit: 48, bin2: 69 };
+// the 12 stdin-branch argv and rg --version (2026-10-03); and in each, the two -j1 walk cells
+// (RG-WALK-ORDER, 2026-10-04).
+const KIND_FLOORS = { root: 63, nogit: 50, bin2: 71 };
 const FLOOR = Object.values(KIND_FLOORS).reduce((a, b) => a + b, 0);
 // ANSWERED FLOORS: per kind, the cells NATIVE answered: rc 0 with output (rg's "found"). A cell
 // native answers rc 1 judges only that ours found nothing too (with --json that is a lone
 // summary line), so a verdict needs enough answered cells to say anything about the bytes.
 // Measured 2026-10-03 against native 2.1.283 on darwin-arm64, twice, the same both times: 123
-// of the 178 cells (root's 47 = 34 + the 12 stdin cells + --version).
-const ANSWERED_FLOORS = { root: 47, nogit: 42, bin2: 34 };
+// of the 178 cells (root's 47 = 34 + the 12 stdin cells + --version); with the -j1 walk cells
+// (2026-10-04) 128 of 184 (root's -l and -c, nogit's -l and -c, bin2's -l: its -c counts nothing,
+// a NUL squashing late.dat's count and early.dat holding no match before its NUL's fill).
+const ANSWERED_FLOORS = { root: 49, nogit: 44, bin2: 35 };
 
 // THE TRIPWIRE: an `rg` placed FIRST on the PATH ours sees, which prints this and exits 99.
 // Bun.which('rg') then answers its absolute path, which is exactly the route on a host with
@@ -143,6 +150,19 @@ test('compareRg reads the printer from the LAST of --json, -l and -c', () => {
 test('compareRg does not forgive order where rg promised one (--sort=modified)', () => {
   const c = P.compareRg(res(GLOB, 'a.txt\0b.txt\0'), res(GLOB, 'b.txt\0a.txt\0'));
   assert.strictEqual(c.same, false);
+});
+
+// RG-WALK-ORDER (ruling G15): rg on one thread walks depth first in readdir order, 20 of 20 on APFS and on
+// overlayfs (grep-native Task 9), and quaude's rg walks the same; so under -j1 (in any spelling) order is
+// judged, never forgiven.
+test('compareRg does not forgive order where rg walks on one thread (-j1, -j 1, --threads=1, --threads 1)', () => {
+  for (const j of [['-j1'], ['-j', '1'], ['--threads=1'], ['--threads', '1']]) {
+    const argv = [...j, ...FILES];
+    assert.strictEqual(P.compareRg(res(argv, 'a.txt\0b.txt\0'), res(argv, 'b.txt\0a.txt\0')).same, false, j.join(' '));
+    assert.strictEqual(P.compareRg(res(argv, 'a.txt\0b.txt\0'), res(argv, 'a.txt\0b.txt\0')).same, true, j.join(' '));
+  }
+  // -j2 and -j0 (rg's default count) walk in parallel: still forgiven
+  for (const j of [['-j2'], ['-j', '0']]) assert.strictEqual(P.compareRg(res([...j, ...FILES], 'a.txt\0b.txt\0'), res([...j, ...FILES], 'b.txt\0a.txt\0')).same, true, j.join(' '));
 });
 
 test('compareRg: a record set that differs only by a MISSING record is not forgiven by the order normalization', () => {
@@ -277,7 +297,7 @@ test('a tree kind under its floor makes rg-differential BROKEN, naming the kind'
     read: () => { const c = controlCells(); c.cells = c.cells.filter((x) => x.kind !== 'bin2'); return c; },
     scan: scanCells });
   assert.strictEqual(r.verdict, BROKEN, r.message);
-  assert.match(r.message, /the bin2 tree has 0 cells, under its floor of 69/);
+  assert.match(r.message, /the bin2 tree has 0 cells, under its floor of 71/);
 });
 
 test('RG_MATRIX holds every kind at or above its floor, and each cell id once', () => {

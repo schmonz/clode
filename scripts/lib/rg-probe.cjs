@@ -306,10 +306,19 @@ for (const kind of RG_TREE_KINDS) {
 // rg --version: the bundle's first-use probe (`DQ` in 2.1.283) runs it and reads `ripgrep ` at
 // the start of its stdout as "rg works" (what /doctor reports).
 RG_MATRIX.push({ id: 'root rg --version', kind: 'root', tool: 'Version', target: '.', spec: {} });
+// RG-WALK-ORDER's cells (ruling G15): the Grep tool's -l and -c argv over each tree, on ONE thread (-j1, which
+// no upstream tool passes), where rg's walk order is fixed (depth first in readdir order) and compareRg judges
+// it rather than forgiving it.
+for (const kind of RG_TREE_KINDS) {
+  for (const mode of ['files_with_matches', 'count']) {
+    RG_MATRIX.push({ id: `${kind} Walk -j1 ${mode} .`, kind, tool: 'Walk', target: '.', spec: { pattern: 'needle', mode } });
+  }
+}
 
 // One cell's argv against the tree it runs in (`treeDir`: absolute, as the target for ABS).
 function cellArgv(cell, treeDir) {
   if (cell.tool === 'Version') return ['--version'];
+  if (cell.tool === 'Walk') return ['-j1', ...grepArgv(cell.spec, '.')];
   if (cell.target === 'STDIN') {
     const a = grepArgv(cell.spec, '-');
     for (let i = a.length - 2; i >= 0; i--) if (a[i] === '--glob') a.splice(i, 2);   // the builder's splice
@@ -396,16 +405,21 @@ function runOursRg(argv, cwd, opts = {}) { return runOursRgBatch([{ argv, cwd }]
 //
 //   1. WALK ORDER. rg searches a tree in parallel and prints each file as it finishes, so the
 //      ORDER of files is not deterministic (measured 2026-09-27, report-grep.md
-//      native-evidence.txt: 6 runs of -l over one tree, 2 different orders). Unless the argv
-//      asks rg to sort (--sort/--sortr, as the Glob tool does), each file's record is sorted
-//      before comparing: `path\0` for -l/--files with --null (a line without it), `path\0N\n`
-//      for -c, and for --json one file's begin..end messages as one record, the summary after
-//      them. The records themselves, and the number of them, must still match exactly.
+//      native-evidence.txt: 6 runs of -l over one tree, 2 different orders; 2026-10-04, grep-native
+//      Task 9: on the root of this matrix's kind of tree, 20 orders in 20 runs, on this Mac and in a
+//      Linux container). Unless the argv asks rg to sort (--sort/--sortr, as the Glob tool does) or to
+//      walk on ONE thread (-j1: depth first in readdir order, 20 of 20 on both, and quaude's rg walks
+//      the same: RG-WALK-ORDER, ruling G15), each file's record is sorted before comparing: `path\0`
+//      for -l/--files with --null (a line without it), `path\0N\n` for -c, and for --json one file's
+//      begin..end messages as one record, the summary after them. The records themselves, and the
+//      number of them, must still match exactly.
 //   2. ELAPSED TIMES in --json: `"elapsed":{...}` in each end message's stats and
 //      `"elapsed_total":{...}` in the summary are wall-clock readings; their contents are
 //      blanked. Every other stat must match.
 const L = (b) => Buffer.from(b || '').toString('latin1');   // one char per byte, both ways
 const rgSorts = (argv) => argv.some((x) => /^--sortr?(=|$)/.test(x));
+// rg walks on one thread: -j1 / --threads=1, or the flag then `1`.
+const rgOneThread = (argv) => argv.some((x, i) => x === '-j1' || x === '--threads=1' || ((x === '-j' || x === '--threads') && argv[i + 1] === '1'));
 // The printer is the LAST of --json, -l and -c on the argv (rg's own rule, RG-ARGV: `--json -l` prints
 // paths); --files lists files whatever else is asked.
 function recordShape(argv) {
@@ -423,7 +437,7 @@ function normalizeRg(stdout, argv) {
   let s = L(stdout);
   const shape = recordShape(argv);
   if (shape === 'json') s = s.replace(/"(elapsed|elapsed_total)":\{[^{}]*\}/g, '"$1":{}');
-  if (!shape || rgSorts(argv)) return s;
+  if (!shape || rgSorts(argv) || rgOneThread(argv)) return s;
   if (shape !== 'json') return splitAfter(s, shape).sort().join('');
   const files = []; const rest = []; let cur = null;
   for (const line of splitAfter(s, '\n')) {
@@ -445,7 +459,7 @@ function compareRg(a, b) {
   if (x !== y) {
     let i = 0;
     while (i < x.length && i < y.length && x[i] === y[i]) i++;
-    why.push(`stdout differs at byte ${i} of ${x.length} vs ${y.length}${recordShape(argv) && !rgSorts(argv) ? ' (walk order normalized)' : ''}: `
+    why.push(`stdout differs at byte ${i} of ${x.length} vs ${y.length}${recordShape(argv) && !rgSorts(argv) && !rgOneThread(argv) ? ' (walk order normalized)' : ''}: `
       + `native ${snip(x, i)} ours ${snip(y, i)}`);
   }
   if (why.length && b.stderr && b.stderr.length) {
@@ -534,4 +548,4 @@ function mmapEverywhere(id, native, argv, tree, platform) {
 
 module.exports = { RG_TREE_KINDS, makeRgTree, treeEntries, RG_MATRIX, cellArgv, grepArgv, globArgv, VCS_DIRS, flagLiterals, builderFlagLiterals, matrixDrift,
   consumerUsageErrorRegex, refusalDrift,
-  runNativeRg, nativeRgVersion, runOursRg, cellInput, assertNoAncestorRules, runOursRgBatch, compareRg, normalizeRg, MMAP_EVERYWHERE, mmapEverywhere, inTree };
+  runNativeRg, nativeRgVersion, runOursRg, cellInput, assertNoAncestorRules, runOursRgBatch, compareRg, normalizeRg, rgOneThread, MMAP_EVERYWHERE, mmapEverywhere, inTree };
