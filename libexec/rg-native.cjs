@@ -290,41 +290,68 @@ class UgrepError extends Error {
 // so such a match is dropped here. Measured against native on text, CRLF and a file with no
 // final newline.
 function parseUgrepRanges(buf, into = new Map()) {
+  const p = ugrepRangeParser(into);
+  p.push(buf);
+  return p.end();
+}
+// The same, fed as the bytes arrive (the asynchronous twin parses each chunk of ugrep's output as it
+// comes, so a long answer never holds the event loop in one parse: Task 7 review I2). push(chunk) reads
+// every complete record and keeps the incomplete tail; end() returns the Map, or throws when what is
+// left is not a record. RG-EMPTY-AFTER-MATCH holds across chunks.
+function ugrepRangeParser(into = new Map()) {
   const lastEnd = new Map();
-  const bad = (at) => { throw new UgrepError(`rg-native: ugrep's --format output is not path NUL start SP end LF at byte ${at}`, { matches: into }); };
-  const num = (j) => {
-    let v = 0;
-    const from = j;
-    for (let d; j < buf.length && (d = buf[j]) >= 0x30 && d <= 0x39; j++) v = v * 10 + (d - 0x30);
-    return j === from ? bad(from) : [v, j];
+  let pending = Buffer.alloc(0), seen = 0;
+  const NEED_MORE = {};
+  const parse = (buf, final) => {
+    const bad = (at) => { throw new UgrepError(`rg-native: ugrep's --format output is not path NUL start SP end LF at byte ${seen + at}`, { matches: into }); };
+    const short = (at) => { if (final) bad(at); throw NEED_MORE; };
+    const num = (j) => {
+      let v = 0;
+      const from = j;
+      for (let d; j < buf.length && (d = buf[j]) >= 0x30 && d <= 0x39; j++) v = v * 10 + (d - 0x30);
+      if (j === buf.length) short(j);
+      return j === from ? bad(from) : [v, j];
+    };
+    let i = 0;
+    // ugrep names the file in every record; the name is decoded once per run of the same bytes.
+    let lastName = null, lastAt = 0, lastLen = -1;
+    const sameName = (at, len) => {
+      if (len !== lastLen) return false;
+      for (let k = 0; k < len; k++) if (buf[at + k] !== buf[lastAt + k]) return false;
+      return true;
+    };
+    try {
+      while (i < buf.length) {
+        const z = buf.indexOf(0, i);
+        if (z === -1) short(i);
+        let [start, j] = num(z + 1);
+        if (buf[j] !== 0x20) bad(j);
+        let end;
+        [end, j] = num(j + 1);
+        if (buf[j] === 0x0d) j++;
+        if (j === buf.length) short(j);
+        if (buf[j] !== 0x0a) bad(j);
+        const file = sameName(i, z - i) ? lastName : (lastName = buf.toString('utf8', i, z));
+        lastAt = i; lastLen = z - i;
+        i = j + 1;
+        if (start === end && lastEnd.get(file) === end) continue;
+        lastEnd.set(file, end);
+        let list = into.get(file);
+        if (!list) { list = []; into.set(file, list); }
+        list.push({ start, end });
+      }
+    } catch (e) { if (e !== NEED_MORE) throw e; }
+    return i;
   };
-  let i = 0;
-  // ugrep names the file in every record; the name is decoded once per run of the same bytes.
-  let lastName = null, lastAt = 0, lastLen = -1;
-  const sameName = (at, len) => {
-    if (len !== lastLen) return false;
-    for (let k = 0; k < len; k++) if (buf[at + k] !== buf[lastAt + k]) return false;
-    return true;
+  return {
+    push(chunk) {
+      const buf = pending.length ? Buffer.concat([pending, toBuf(chunk)]) : toBuf(chunk);
+      const used = parse(buf, false);
+      seen += used;
+      pending = buf.subarray(used);
+    },
+    end() { if (pending.length) parse(pending, true); return into; },
   };
-  while (i < buf.length) {
-    const z = buf.indexOf(0, i);
-    if (z === -1) bad(i);
-    const file = sameName(i, z - i) ? lastName : (lastName = buf.toString('utf8', i, z));
-    lastAt = i; lastLen = z - i;
-    let [start, j] = num(z + 1);
-    if (buf[j] !== 0x20) bad(j);
-    let end;
-    [end, j] = num(j + 1);
-    if (buf[j] === 0x0d) j++;
-    if (buf[j] !== 0x0a) bad(j);
-    i = j + 1;
-    if (start === end && lastEnd.get(file) === end) continue;
-    lastEnd.set(file, end);
-    let list = into.get(file);
-    if (!list) { list = []; into.set(file, list); }
-    list.push({ start, end });
-  }
-  return into;
 }
 
 // The plan both twins share: each distinct file once, spelled for ugrep, in chunks; and how to
@@ -419,16 +446,31 @@ function utf16ToUtf8(b, le) {
 
 // The lines of `text` to decide: those holding a proposed offset, or (`all`) every line.
 // [lineStart, lineEnd) pairs, the terminator excluded, ascending.
-function candidateLines(text, proposed, all) {
+// A generator: it yields every SLICE_LINES lines (so the asynchronous twin can hand the loop back on a
+// file of 200,000 lines; Task 7 review I2) and returns the pairs; candidateLines drains it at once.
+const SLICE_LINES = 4096;
+const drain = (gen) => { let r = gen.next(); while (!r.done) r = gen.next(); return r.value; };
+async function drainAsync(gen, between) { let r = gen.next(); while (!r.done) { await between(); r = gen.next(); } return r.value; }
+function candidateLines(text, proposed, all) { return drain(candidateLinesGen(text, proposed, all)); }
+function* candidateLinesGen(text, proposed, all) {
   const out = [];
+  let n = 0;
   const lineAt = (ls) => { let le = text.indexOf(0x0a, ls); if (le === -1) le = text.length; out.push(ls, le); return le + 1; };
-  if (all) { for (let ls = 0; ls < text.length;) ls = lineAt(ls); return out; }
-  const starts = new Set();
-  for (const { start } of proposed || []) {
+  if (all) { for (let ls = 0; ls < text.length;) { ls = lineAt(ls); if (++n % SLICE_LINES === 0) yield; } return out; }
+  // ugrep proposes in file order, so line starts come ascending: each is taken once, found scanning
+  // back no further than the line before (linear; a set and a sort of 200,000 starts held the loop).
+  // Proposals out of order (never measured) are sorted first.
+  let list = proposed || [];
+  for (let k = 1; k < list.length; k++) if (list[k].start < list[k - 1].start) { list = list.slice().sort((a, b) => a.start - b.start); break; }
+  let next = 0;
+  for (const { start } of list) {
     if (start > text.length || (start === text.length && (text.length === 0 || text[text.length - 1] === 0x0a))) continue;
-    starts.add(start === 0 ? 0 : text.lastIndexOf(0x0a, start - 1) + 1);
+    if (start < next) continue;                     // on the line just taken
+    let ls = start;
+    while (ls > next && text[ls - 1] !== 0x0a) ls--;
+    next = lineAt(ls);
+    if (++n % SLICE_LINES === 0) yield;
   }
-  for (const ls of [...starts].sort((a, b) => a - b)) lineAt(ls);
   return out;
 }
 
@@ -482,7 +524,8 @@ const timedOutError = () => new UgrepError('rg-native: the search passed its cal
 // long line no longer holds the loop for its whole search (review I2).
 const DECIDE_SLICE_STEPS = 1 << 16;
 async function decideFileAsync(file, proposed, t, opts, all, between) {
-  const { text, lines } = fileLines(file, proposed, opts, all);
+  const { text } = fileLines(file, [], opts, false);
+  const lines = await drainAsync(candidateLinesGen(text, proposed, all), between);
   return decideLinesAsync(text, lines, t, between, opts.first);
 }
 async function decideLinesAsync(text, lines, t, between, first) {
@@ -643,25 +686,39 @@ function ugrepMatchesAsync(files, pattern, opts = {}) {
     child.on('close', (status, signal) => {
       if (settled) return;
       settled = true;
-      // Killed: the bytes may stop anywhere, so they are not read; the kill is the answer.
-      // Exit >= 2: the failure is the answer (re-review N-1), the bytes only add the matches found first.
-      // A chunk that only warned about paths is rg's per-path errors, the rest answered.
+      // Its output is read by the caller, in slices (readRecords). A chunk that only warned about
+      // paths is rg's per-path errors, the rest answered.
       const warned = status >= 2 && !signal ? perPathWarnings(Buffer.concat(errs), asked) : null;
-      if (status !== null && !signal) {
-        if (status >= 2 && !warned) readFailedChunk(Buffer.concat(outs), ranges);
-        else { try { parseUgrepRanges(Buffer.concat(outs), ranges); } catch (e) { reject(e); return; } }
-      }
-      resolve({ status, signal: signal || null, stderr: Buffer.concat(errs), warned });
+      resolve({ status, signal: signal || null, stderr: Buffer.concat(errs), warned, outs });
     });
   });
   const yieldLoop = () => new Promise((r) => setTimeout(r, 0));
+  let slice = Date.now();
+  const between = async () => {
+    if (Date.now() - slice > DECIDE_SLICE_MS) { await yieldLoop(); slice = Date.now(); }
+    if (aborted()) throw abortError();
+  };
+  // ugrep's records, read PARSE_SLICE bytes at a time with the loop handed back between (Task 7 review
+  // I2: 200,000 records took 480 ms in one parse under tjs). Killed, or exit >= 2 (re-review N-1): the
+  // failure is the answer, and the complete records before any bad byte only add the matches found
+  // first. Otherwise a bad record is the answer.
+  const PARSE_SLICE = 64 * 1024;
+  const readRecords = async (r, failedRun) => {
+    const parser = ugrepRangeParser(ranges);
+    try {
+      for (const b of r.outs) for (let i = 0; i < b.length; i += PARSE_SLICE) { parser.push(b.subarray(i, i + PARSE_SLICE)); await between(); }
+      parser.end();
+    } catch (e) { if (!failedRun || !(e instanceof UgrepError)) throw e; }
+  };
   return (async () => {
     if (aborted()) throw abortError();
     let failed = null;
     for (const argv of chunks) {
       const r = await runOne(argv);
       // A failed chunk (killed by the caller, or exit >= 2) ends the search: no later chunk runs.
-      if (r.status === null || (r.status >= 2 && !r.warned)) { failed = r; break; }
+      const failedRun = r.status === null || r.signal || (r.status >= 2 && !r.warned);
+      if (!r.signal && r.status !== null) await readRecords(r, failedRun);
+      if (failedRun) { failed = r; break; }
       if (r.warned) pathErrors.push(...r.warned);
       if (aborted()) throw abortError();
     }
@@ -669,11 +726,6 @@ function ugrepMatchesAsync(files, pattern, opts = {}) {
     onlyAsked(ranges);
     const proposed = inOrder(ranges);
     const out = new Map(), seen = new Set();
-    let slice = Date.now();
-    const between = async () => {
-      if (Date.now() - slice > DECIDE_SLICE_MS) { await yieldLoop(); slice = Date.now(); }
-      if (aborted()) throw abortError();
-    };
     for (const f of files) {
       if (seen.has(f) || (!proposed.has(f) && !bom.has(f))) continue;
       seen.add(f);
@@ -964,7 +1016,8 @@ const OMITTED_CONTEXT = Buffer.from('[Omitted long context line]');
 // LINEAR in the text: the matches ascend, so a match at or before the current line's terminator is on
 // that line, and a later one's line start is found scanning back no further than that terminator
 // (scanning back from every match to its line's start was quadratic on a minified line).
-function selectedLines(text, matches) {
+function* selectedLines(text, matches) {
+  let n = 0;
   const unterminated = text.length > 0 && text[text.length - 1] !== 0x0a;
   const sel = [];
   let L = null, le = -1;
@@ -976,14 +1029,16 @@ function selectedLines(text, matches) {
       le = lineEndAt(text, ls);
     }
     if (!(unterminated && m.start === text.length)) L.ms.push(m);
+    if (++n % SLICE_LINES === 0) yield TICK;
   }
   return sel;
 }
 // RG-CONTEXT, stated once for every printer: each selected line with spec.before lines before it and
-// spec.after after it, merged where they meet. visit(ls, num, L) for every line printed, in order (L
-// the selected line, null for a context line); gap() before a line that does not follow the one
+// spec.after after it, merged where they meet. Yields { ls, num, L } for every line printed, in order (L
+// the selected line, null for a context line), and GAP before a line that does not follow the one
 // printed before it in this file (and before the first).
-function eachPrintedLine(text, sel, spec, visit, gap) {
+const GAP = { gap: true };
+function* eachPrintedLine(text, sel, spec) {
   const next = (ls) => { const i = text.indexOf(0x0a, ls); return i === -1 || i + 1 >= text.length ? -1 : i + 1; };
   const prev = (ls) => (ls === 0 ? -1 : ls < 2 ? 0 : text.lastIndexOf(0x0a, ls - 2) + 1);
   // Line numbers, counted forward once.
@@ -991,32 +1046,45 @@ function eachPrintedLine(text, sel, spec, visit, gap) {
   const numAt = (ls) => { for (let i = text.indexOf(0x0a, at); i !== -1 && i < ls; i = text.indexOf(0x0a, i + 1)) atNum++; at = ls; return atNum; };
   let cur = -1, curNum = 0, pend = 0;
   const drainAfter = (upTo) => {
-    for (let nx; pend > 0 && (nx = next(cur)) !== -1 && (upTo === -1 || nx < upTo); pend--) { visit(nx, curNum + 1, null); cur = nx; curNum++; }
+    const got = [];
+    for (let nx; pend > 0 && (nx = next(cur)) !== -1 && (upTo === -1 || nx < upTo); pend--) { got.push({ ls: nx, num: curNum + 1, L: null }); cur = nx; curNum++; }
+    return got;
   };
   for (const L of sel) {
     const n = numAt(L.ls);
-    drainAfter(L.ls);
+    yield* drainAfter(L.ls);
     let first = L.ls, firstNum = n;
     for (let k = 0, p; k < spec.before && (p = prev(first)) !== -1 && (cur === -1 || p > cur); k++) { first = p; firstNum--; }
-    if (cur === -1 || next(cur) !== first) gap();
-    for (let ls = first, num = firstNum; ls !== L.ls; ls = next(ls), num++) visit(ls, num, null);
-    visit(L.ls, n, L);
+    if (cur === -1 || next(cur) !== first) yield GAP;
+    for (let ls = first, num = firstNum; ls !== L.ls; ls = next(ls), num++) yield { ls, num, L: null };
+    yield { ls: L.ls, num: n, L };
     cur = L.ls; curNum = n; pend = spec.after;
   }
-  drainAfter(-1);
+  yield* drainAfter(-1);
+}
+// How often a printer hands control back (TICK: the asynchronous twin yields the event loop there once
+// its slice is spent, the synchronous one checks its deadline), in lines or matches printed.
+const TICK = { op: 'tick' }, TICK_EVERY = 256;
+// What a search prints, written into one growing buffer as it goes (its length is what stops a search
+// past the caller's maxBuffer; a list of every piece, concatenated at the end, held the loop a second
+// for the 5 million pieces of -n -o over 200,000 lines).
+function outBuffers() {
+  const w = new ByteWriter(64 * 1024);
+  return { get len() { return w.len; }, push(...bs) { for (const b of bs) w.bytes(b); }, done: () => w.done() };
 }
 // A line's end: the index of its \n, or the text's end.
 function lineEndAt(text, ls) { const i = text.indexOf(0x0a, ls); return i === -1 ? text.length : i; }
 
-// One file's (or stdin's) output into `out` (an array of Buffers): true when rg found something in it.
+// One file's (or stdin's) output into `out` (outBuffers): true when rg found something in it.
 // `state.printed` carries "something was printed before" across files (RG-CONTEXT's `--`); `state.json`
-// the JSON printer's running totals (its summary).
-function printFile(spec, e, out, state) {
+// the JSON printer's running totals (its summary); `state.limit` the caller's maxBuffer, past which it
+// stops (Task 7 review I2: what execFile would kill the child for). A generator: it yields TICK.
+function* printFile(spec, e, out, state) {
   const { text, matches } = e;
   if (spec.mode === 'files') { out.push(Buffer.from(e.disp + (spec.nul ? '\0' : '\n'))); return true; }
-  const sel = selectedLines(text, matches);
+  const sel = yield* selectedLines(text, matches);
   if (!sel.length) return false;
-  if (spec.mode === 'json') { printJson(spec, e, sel, out, state.json); return true; }
+  if (spec.mode === 'json') { yield* printJson(spec, e, sel, out, state); return true; }
   const path = e.withFilename ? Buffer.from(e.disp) : null;
   // A file with a selected line prints its count, even a -c -o count of 0 (its only match was the
   // unprintable one at an unterminated end: native prints `0`); a file with none prints nothing.
@@ -1033,18 +1101,27 @@ function printFile(spec, e, out, state) {
     return p;
   };
   const ctx = spec.before > 0 || spec.after > 0;
-  eachPrintedLine(text, sel, spec, (ls, num, L) => {
+  let n = 0;
+  for (const ev of eachPrintedLine(text, sel, spec)) {
+    if (ev === GAP) { if (ctx && state.printed) out.push(SEP); continue; }
+    const { ls, num, L } = ev;
     const ms = L && L.ms;
     const sep = ms ? ':' : '-';
     if (ms) state.printed = true;
     if (ms && spec.only && ms.length) {
-      for (const m of ms) out.push(...prefix(num, sep), cols && m.end - m.start > cols ? OMITTED_MATCH : text.subarray(m.start, m.end), NL);
-      return;
+      for (const m of ms) {
+        out.push(...prefix(num, sep), cols && m.end - m.start > cols ? OMITTED_MATCH : text.subarray(m.start, m.end), NL);
+        if (out.len > state.limit) return true;
+        if (++n % TICK_EVERY === 0) yield TICK;
+      }
+      continue;
     }
     const le = lineEndAt(text, ls), end = le < text.length ? le + 1 : le;
     if (cols && end - ls > cols) out.push(...prefix(num, sep), ms ? OMITTED_MATCH : OMITTED_CONTEXT, NL);
     else { out.push(...prefix(num, sep), text.subarray(ls, end)); if (end === le) out.push(NL); }
-  }, () => { if (ctx && state.printed) out.push(SEP); });
+    if (out.len > state.limit) return true;
+    if (++n % TICK_EVERY === 0) yield TICK;
+  }
   return true;
 }
 
@@ -1090,33 +1167,48 @@ const BACKSLASH = String.fromCharCode(0x5c);
 const JSON_ESCAPE = [];
 for (let c = 0; c < 0x20; c++) JSON_ESCAPE[c] = BACKSLASH + 'u00' + c.toString(16).padStart(2, '0');
 for (const [c, e] of [[0x22, '"'], [0x5c, BACKSLASH], [0x08, 'b'], [0x0c, 'f'], [0x0a, 'n'], [0x0d, 'r'], [0x09, 't']]) JSON_ESCAPE[c] = BACKSLASH + e;
-// Rust's str::from_utf8: shortest forms only, no surrogates, nothing past U+10FFFF.
-function isUtf8(b, i, end) {
-  while (i < end) {
+// Rust's str::from_utf8: shortest forms only, no surrogates, nothing past U+10FFFF. utf8Step checks
+// the sequences that START before `stop` (none may run past `end`): the index after them, or -1.
+function isUtf8(b, i, end) { return utf8Step(b, i, end, end) !== -1; }
+function utf8Step(b, i, end, stop) {
+  while (i < stop) {
     const c = b[i];
     if (c < 0x80) { i++; continue; }
     const n = c >= 0xc2 && c <= 0xdf ? 1 : c >= 0xe0 && c <= 0xef ? 2 : c >= 0xf0 && c <= 0xf4 ? 3 : 0;
-    if (n === 0 || i + n >= end) return false;
+    if (n === 0 || i + n >= end) return -1;
     const c1 = b[i + 1];
     const lo = c === 0xe0 ? 0xa0 : c === 0xf0 ? 0x90 : 0x80, hi = c === 0xed ? 0x9f : c === 0xf4 ? 0x8f : 0xbf;
-    if (c1 < lo || c1 > hi) return false;
-    for (let k = 2; k <= n; k++) if (b[i + k] < 0x80 || b[i + k] > 0xbf) return false;
+    if (c1 < lo || c1 > hi) return -1;
+    for (let k = 2; k <= n; k++) if (b[i + k] < 0x80 || b[i + k] > 0xbf) return -1;
     i += n + 1;
   }
-  return true;
+  return i;
 }
 // RG-JSON-BYTES: grep-printer's Data, written into `w`: {"text": the bytes, escaped} when they are
 // UTF-8, else {"bytes": standard base64}.
-function jsonData(w, b, from = 0, to = b.length) {
-  if (!isUtf8(b, from, to)) { w.ascii(`{"bytes":"${Buffer.from(b.subarray(from, to)).toString('base64')}"}`); return; }
+function jsonData(w, b, from = 0, to = b.length) { drain(jsonDataGen(w, b, from, to)); }
+// The same as a generator that yields every JSON_SLICE bytes, for a whole line (a minified 5 MB line
+// held the loop a second in one call under tjs: Task 7 review I2).
+const JSON_SLICE = 64 * 1024;
+function* jsonDataGen(w, b, from = 0, to = b.length) {
+  let i = from;
+  while (i < to) {
+    i = utf8Step(b, i, to, Math.min(to, i + JSON_SLICE));
+    if (i === -1) { w.ascii(`{"bytes":"${Buffer.from(b.subarray(from, to)).toString('base64')}"}`); return; }
+    if (i < to) yield;
+  }
   w.ascii('{"text":"');
   let run = from;
-  for (let i = from; i < to; i++) {
-    const c = b[i];
-    if (c >= 0x20 && c !== 0x22 && c !== 0x5c) continue;
-    if (run < i) w.bytes(b, run, i);
-    w.ascii(JSON_ESCAPE[c]);
-    run = i + 1;
+  for (let s0 = from; s0 < to; s0 += JSON_SLICE) {
+    const e0 = Math.min(to, s0 + JSON_SLICE);
+    for (let k = s0; k < e0; k++) {
+      const c = b[k];
+      if (c >= 0x20 && c !== 0x22 && c !== 0x5c) continue;
+      if (run < k) w.bytes(b, run, k);
+      w.ascii(JSON_ESCAPE[c]);
+      run = k + 1;
+    }
+    if (e0 < to) yield;
   }
   if (run < to) w.bytes(b, run, to);
   w.ascii('"}');
@@ -1130,7 +1222,8 @@ function jsonDuration(ns, sorted) {
 }
 // The running totals the summary sums (only files that printed add to them).
 const jsonTotals = () => ({ startNs: clockNs(), elapsedNs: 0, searches: 0, withMatch: 0, bytesSearched: 0, bytesPrinted: 0, matchedLines: 0, matches: 0 });
-function printJson(spec, e, sel, out, totals) {
+function* printJson(spec, e, sel, out, state) {
+  const totals = state.json;
   const t0 = clockNs();
   const { text } = e;
   const pw = new ByteWriter(64);
@@ -1138,18 +1231,30 @@ function printJson(spec, e, sel, out, totals) {
   const path = Buffer.from(pw.done());
   const w = new ByteWriter();
   w.ascii('{"type":"begin","data":{"path":'); w.bytes(path); w.ascii('}}\n');
-  let matchedLines = 0, matches = 0;
-  eachPrintedLine(text, sel, spec, (ls, num, L) => {
+  let matchedLines = 0, matches = 0, n = 0;
+  // Past the caller's maxBuffer the rest is never printed: what is written so far goes out, unfinished,
+  // as a killed rg's would.
+  const full = () => out.len + w.len > state.limit;
+  for (const ev of eachPrintedLine(text, sel, spec)) {
+    if (ev === GAP) continue;
+    const { ls, num, L } = ev;
     const le = lineEndAt(text, ls), end = le < text.length ? le + 1 : le;
     w.ascii(L ? '{"type":"match","data":{"path":' : '{"type":"context","data":{"path":'); w.bytes(path);
-    w.ascii(',"lines":'); jsonData(w, text, ls, end);
+    w.ascii(',"lines":');
+    for (const slice of jsonDataGen(w, text, ls, end)) yield slice || TICK;
     w.ascii(`,"line_number":${spec.lineNumber ? num : 'null'},"absolute_offset":${ls},"submatches":[`);
     if (L) {
       matchedLines++; matches += L.ms.length;
-      L.ms.forEach((m, i) => { w.ascii(i ? ',{"match":' : '{"match":'); jsonData(w, text, m.start, m.end); w.ascii(`,"start":${m.start - ls},"end":${m.end - ls}}`); });
+      for (let i = 0; i < L.ms.length; i++) {
+        const m = L.ms[i];
+        w.ascii(i ? ',{"match":' : '{"match":'); jsonData(w, text, m.start, m.end); w.ascii(`,"start":${m.start - ls},"end":${m.end - ls}}`);
+        if (++n % TICK_EVERY === 0) { if (full()) { out.push(w.done()); return; } yield TICK; }
+      }
     }
     w.ascii(']}}\n');
-  }, () => {});
+    if (full()) { out.push(w.done()); return; }
+    if (++n % TICK_EVERY === 0) yield TICK;
+  }
   const printed = w.len;
   const ns = clockNs() - t0;
   w.ascii('{"type":"end","data":{"path":'); w.bytes(path);
@@ -1281,7 +1386,8 @@ function* searchCore(spec, opts) {
   const first = spec.mode === 'files' ? 'file' : spec.mode !== 'json' && !spec.only ? 'line' : undefined;
   const files = [...new Set(entries.filter((e) => e.file).map((e) => e.file))];
   let matches = new Map();
-  const out = [], err = [], state = { printed: false, json: spec.mode === 'json' ? jsonTotals() : null };
+  const out = outBuffers(), err = [], state = { printed: false, json: spec.mode === 'json' ? jsonTotals() : null,
+    limit: typeof opts.maxBuffer === 'number' && opts.maxBuffer >= 0 ? opts.maxBuffer : Infinity };
   let found = false, broke = false;
   if (files.length) {
     const r = yield { op: 'match', files, pattern, first };
@@ -1312,11 +1418,14 @@ function* searchCore(spec, opts) {
       }
     }
     if (!m.length || (e.walked && binaryAtFirstRead(text))) continue;
-    if (printFile(spec, { ...e, text, matches: m, withFilename }, out, state)) found = true;
+    if (yield* printFile(spec, { ...e, text, matches: m, withFilename }, out, state)) found = true;
+    // Past the caller's maxBuffer: nothing more is printed (its execFile kills the child here).
+    if (out.len > state.limit) break;
+    yield TICK;
   }
   // RG-JSON: one summary after every file, whatever was found.
-  if (state.json) out.push(jsonSummary(state.json));
-  return { stdout: Buffer.concat(out), stderr: Buffer.concat(err), status: broke ? 2 : found ? 0 : 1, signal: null };
+  if (state.json && out.len <= state.limit) out.push(jsonSummary(state.json));
+  return { stdout: out.done(), stderr: Buffer.concat(err), status: broke ? 2 : found ? 0 : 1, signal: null };
 }
 
 // How a step the core asked for ended in a refusal or a failure: refusals stop the search; a ugrep
@@ -1401,9 +1510,11 @@ function searchSync(plan, opts) {
     },
     stdin: () => (typeof opts.input === 'string' ? Buffer.from(opts.input, 'utf8') : toBuf(opts.input)),
     decide: ({ text, t, first }) => { try { return { matches: matchTextLines(text, t, deadline, first) }; } catch (e) { return matchOutcome(e, opts, ugrep); } },
+    // printing: the caller's timeout is checked as it goes
+    tick: () => { if (deadline && Date.now() > deadline) throw timedOutError(); return null; },
   };
   let res;
-  try { res = driveSync(searchCore(spec, { cwd: opts.cwd, onRejected: opts.onRejected, ugrepName: ugrep && leafOf(ugrep), deadline }), handlers); } catch (e) {
+  try { res = driveSync(searchCore(spec, { cwd: opts.cwd, onRejected: opts.onRejected, ugrepName: ugrep && leafOf(ugrep), deadline, maxBuffer: opts.maxBuffer }), handlers); } catch (e) {
     if (e && e.timedOut) return { stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), status: null, signal: opts.killSignal || 'SIGTERM', errorCode: 'ETIMEDOUT' };
     throw e;
   }
@@ -1430,8 +1541,8 @@ function runChild(spawn, bin, argv, o, onChild) {
 }
 // Every line of `text` decided by the matcher, in slices, `between()` after each (it yields to the
 // event loop and throws once the search is stopped).
-function matchTextLinesAsync(text, t, between, first) {
-  return decideLinesAsync(text, candidateLines(text, null, true), t, between, first);
+async function matchTextLinesAsync(text, t, between, first) {
+  return decideLinesAsync(text, await drainAsync(candidateLinesGen(text, null, true), between), t, between, first);
 }
 
 // A search's asynchronous run (rgSpawn's, for spawn, execFile and Bun.spawn): a child of node's shape
@@ -1488,13 +1599,18 @@ function searchChild(plan, opts, ctx) {
     decide: async ({ text, t, first }) => {
       try { return { matches: await matchTextLinesAsync(text, t, between, first) }; } catch (e) { if (stopped) return {}; return matchOutcome(e, ctx, ugrep); }
     },
+    // printing: the event loop is handed back once a slice is spent (Task 7 review I2)
+    tick: async () => {
+      if (Date.now() - slice > DECIDE_SLICE_MS) { await new Promise((r) => setTimeout(r, 0)); slice = Date.now(); }
+      return null;
+    },
   };
   setTimeout(async () => {
     if (sh.isDone()) return;
     child.emit('spawn');
     if (stopped) { sh.finish({ status: null, signal: stopped, stderr: null }); return; }
     let res;
-    try { res = await driveAsync(searchCore(spec, { cwd: opts.cwd, onRejected: ctx.onRejected, ugrepName: ugrep && leafOf(ugrep) }), handlers, () => !!stopped); }
+    try { res = await driveAsync(searchCore(spec, { cwd: opts.cwd, onRejected: ctx.onRejected, ugrepName: ugrep && leafOf(ugrep), maxBuffer: ctx.maxBuffer }), handlers, () => !!stopped); }
     catch (e) { res = stopped ? null : rgRefusal(`quaude's rg failed (${(e && e.message) || e}); nothing was found`); }
     if (stopped || !res) { sh.finish({ status: null, signal: stopped, stderr: null }); return; }
     sh.out(toBuf(res.stdout));
@@ -1608,6 +1724,7 @@ function refusedChild(r, opts) {
 // refusal. ctx: what runRg's opts carry (ugrep, missing, matchFiles, debug, translate, spawnSync,
 // onRejected), plus
 //   spawn                 the UNWRAPPED asynchronous spawn
+//   maxBuffer             (rgExecFile's) where a search stops printing; spawn has no such bound
 function rgSpawn(argv, opts = {}, ctx) {
   const plan = rgPlan(argv, ctx);
   if (plan.result) return refusedChild(plan.result, opts);
@@ -1654,7 +1771,8 @@ function rgExecFile(argv, opts, cb, file, ctx) {
   const enc = o.encoding === undefined ? 'utf8' : o.encoding;
   const conv = (b) => (enc === 'buffer' || enc === null ? b : b.toString(enc));
   const maxBuffer = typeof o.maxBuffer === 'number' ? o.maxBuffer : 1024 * 1024;
-  const child = rgSpawn(argv, { ...o, stdio: 'pipe' }, ctx);
+  // The search stops printing once past maxBuffer (as execFile would kill the child there).
+  const child = rgSpawn(argv, { ...o, stdio: 'pipe' }, { ...ctx, maxBuffer });
   const outs = [], errs = [];
   let outLen = 0, errLen = 0, overflow = null, aborted = null;
   child.stdout.on('data', (d) => {

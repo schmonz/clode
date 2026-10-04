@@ -1282,3 +1282,57 @@ test('RG-REFUSE-SPECIAL-FILE: /dev/stdin, /dev/fd/0 and /dev/tty refuse at once 
     }
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+// THE CALLER'S maxBuffer AND ITS EVENT LOOP (Task 7 review I2). The Grep tool runs rg through execFile
+// with maxBuffer 20,000,000 and a 20 s timeout; native is killed within ~100 ms of passing 20 MB. Ours
+// built the whole answer before the child saw any of it, holding the loop the whole time (tjs, this
+// Mac: `--json '' lines.txt` 31.7 s total and a 20.3 s block, so the timeout could not fire; `--json
+// needle lines.txt` 4.8 s; `--json from` over a 5 MB line 3.2 s). Now the search stops printing once
+// past the caller's maxBuffer, and the async twin hands the loop back while it parses ugrep's records
+// and while it prints. Bounds: the loop's longest gap, and the whole call, under tjs.
+test('rg\'s output stops at the caller\'s maxBuffer and the async twin never holds the loop (tjs, the Grep tool\'s execFile options)', {
+  skip: needUgrep.skip || (!tjsPath() ? 'no tjs engine' : false),
+}, () => {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'rg-native-maxbuf-')));
+  try {
+    let lines = '';
+    for (let i = 0; i < 200000; i++) lines += `line ${i} needle here\n`;
+    fs.writeFileSync(path.join(dir, 'lines.txt'), lines);
+    fs.writeFileSync(path.join(dir, 'line5m.js'), 'var a=1;' + 'import x from "y";'.repeat(270000) + '\n');
+    const prog = path.join(dir, 'probe.cjs');
+    fs.writeFileSync(prog, `
+      const rgn = require(${JSON.stringify(path.join(__dirname, '..', 'libexec', 'rg-native.cjs'))});
+      const cp = require('child_process');
+      const ctx = { translate: () => { throw new Error('translated'); }, spawn: cp.spawn, spawnSync: cp.spawnSync, ugrep: () => ${JSON.stringify(UGREP)} };
+      const cwd = ${JSON.stringify(dir)}, out = [];
+      (async () => {
+        for (const argv of [['--json', '', 'lines.txt'], ['--json', 'needle', 'lines.txt'], ['--json', 'from', 'line5m.js'], ['-n', '-o', 'e', 'lines.txt']]) {
+          let last = Date.now(), maxGap = 0;
+          const iv = setInterval(() => { const n = Date.now(); maxGap = Math.max(maxGap, n - last); last = n; }, 10);
+          const t0 = Date.now();
+          const a = await new Promise((res) => rgn.rgExecFile(argv, { cwd, encoding: 'buffer', maxBuffer: 20000000, timeout: 20000, killSignal: 'SIGKILL' },
+            (e, so) => res({ code: e ? e.code : 0, bytes: so.length }), 'rg', ctx));
+          clearInterval(iv);
+          out.push({ argv, twin: 'async', ms: Date.now() - t0, maxGap, ...a });
+        }
+        const t1 = Date.now();
+        const s = rgn.runRg(['--json', '', 'lines.txt'], { ...ctx, cwd, maxBuffer: 20000000 });
+        out.push({ twin: 'sync', ms: Date.now() - t1, code: s.errorCode || s.status, bytes: s.stdout.length });
+        process.stdout.write('PROBE:' + JSON.stringify(out) + '\\n');
+      })();
+    `);
+    const res = runLoader(prog, [], { timeout: 180000 });
+    const line = (res.stdout || '').split('\n').find((l) => l.startsWith('PROBE:'));
+    assert.ok(line, `the tjs probe printed nothing (exit ${res.status}): ${(res.stderr || '').slice(0, 1500)}`);
+    const got = JSON.parse(line.slice('PROBE:'.length));
+    if (process.env.RG_TIMINGS) console.log(JSON.stringify(got));
+    for (const r of got) {
+      const what = JSON.stringify(r);
+      if (r.twin === 'sync') { assert.strictEqual(r.code, 'ENOBUFS', what); assert.ok(r.ms < 30000, what); continue; }
+      // the three --json calls pass 20 MB (native: execFile's maxBuffer error); -n -o fits
+      assert.strictEqual(r.code, r.argv[0] === '--json' ? 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' : 0, what);
+      assert.ok(r.maxGap < 600, `the loop was held ${r.maxGap} ms: ${what}`);
+      assert.ok(r.ms < 15000, what);
+    }
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
