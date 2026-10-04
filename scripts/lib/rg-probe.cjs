@@ -274,7 +274,8 @@ function refusalDrift(text) {
 // Returns [{ where, argv }]: `where` names the shape by its offset and first flags (stable to read, not a name).
 const RG_VALUE_FLAGS = new Map([['--glob', 'x*'], ['-g', 'x*'], ['--iglob', 'x*'], ['--max-depth', '4'], ['--maxdepth', '4'], ['-d', '4'],
   ['-j', '1'], ['--threads', '1'], ['--type', 'ts'], ['-t', 'ts'], ['--type-not', 'ts'], ['-T', 'ts'], ['--sort', 'modified'],
-  ['--sortr', 'modified'], ['-e', 'x'], ['--regexp', 'x'], ['-A', '1'], ['-B', '1'], ['-C', '1'], ['-M', '500'], ['--max-columns', '500']]);
+  ['--sortr', 'modified'], ['-e', 'x'], ['--regexp', 'x'], ['-A', '1'], ['-B', '1'], ['-C', '1'], ['-M', '500'], ['--max-columns', '500'],
+  ['--max-filesize', '4M']]);
 // The string and template literals of a stretch of carve text, in order: [{ value, start, end, template }].
 function jsLiterals(src) {
   const out = [];
@@ -324,9 +325,97 @@ function argvOfRegion(region) {
   }
   return argv;
 }
+// THE RUNNERS, by structure (fix round 2, review N2: an argv the bundle built in a variable, or handed to a runner
+// that is not oX, had been missed; the environment scan eo() runs `-o -H --no-messages ... --max-filesize 4M -e ...`
+// through dTo, and quaude's rg refused it while this guard stayed green):
+//   - a function that destructures the bundle's rg resolution, `{rgPath:A,rgArgs:B,argv0:C}=F()` (bD, NQ, dTo in
+//     2.1.283), or that takes the sandbox's `X={command:"rg"}` default and destructures `{command:` from it (jv);
+//   - and, to a fixpoint, a function that hands its own first parameter on as a runner's first argument (oX).
+// Every call of a runner whose first argument is an array literal, or a variable holding one that starts with a
+// flag, is a shape: the literal, plus what `NAME.push(...)` adds between the definition and the call.
+const isIdent = (c) => c !== undefined && /[\w$]/.test(c);
+// The index after the parenthesised group that opens at `open` (its `(`), skipping strings.
+function parenEnd(t, open) {
+  let depth = 0;
+  for (let i = open; i < t.length; i++) {
+    const c = t[i];
+    if (c === '"' || c === '\'' || c === '`') { for (i++; i < t.length && t[i] !== c; i++) if (t[i] === '\\') i++; continue; }
+    if (c === '(') depth++;
+    else if (c === ')' && --depth === 0) return i + 1;
+  }
+  return -1;
+}
+// The name and first parameter of the function whose `function NAME(` most nearly precedes `at`.
+function enclosingFunction(t, at) {
+  const re = new RegExp(`function (${ID})\\((${ID})?`, 'g');
+  const from = Math.max(0, at - 20000);
+  let m, last = null;
+  re.lastIndex = from;
+  while ((m = re.exec(t)) && m.index < at) last = { name: m[1], first: m[2] || null, index: m.index };
+  return last;
+}
+function carveRunners(t) {
+  const runners = new Map();   // name -> where defined
+  for (const m of t.matchAll(new RegExp(`function (${ID})\\([^)]*\\)\\{let\\{rgPath:${ID},rgArgs:${ID},argv0:${ID}\\}=${ID}\\(\\)`, 'g'))) runners.set(m[1], m.index);
+  for (const m of t.matchAll(new RegExp(`function (${ID})\\(${ID},[^)]*${ID}=\\{command:"rg"\\}\\)\\{let\\{command:`, 'g'))) runners.set(m[1], m.index);
+  // wrappers, to a fixpoint: a function that passes its own first parameter to a runner, near that runner
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const [name, defAt] of [...runners]) {
+      for (let i = t.indexOf(`${name}(`); i !== -1; i = t.indexOf(`${name}(`, i + 1)) {
+        if (isIdent(t[i - 1]) || t[i - 1] === '.' || Math.abs(i - defAt) > 50000) continue;
+        const f = enclosingFunction(t, i);
+        if (!f || !f.first || runners.has(f.name) || !t.startsWith(`${name}(${f.first},`, i)) continue;
+        runners.set(f.name, f.index);
+        grew = true;
+      }
+    }
+  }
+  return runners;
+}
+// Every argv a runner is called with: [{ where, argv }].
+function runnerCallShapes(t, runners) {
+  const shapes = [];
+  for (const name of runners.keys()) {
+    for (let i = t.indexOf(`${name}(`); i !== -1; i = t.indexOf(`${name}(`, i + 1)) {
+      if (isIdent(t[i - 1]) || t[i - 1] === '.' || t.slice(Math.max(0, i - 9), i) === 'function ') continue;
+      const a = i + name.length + 1;
+      let region = null;
+      if (t[a] === '[') {
+        const end = arrayEnd(t, a);
+        if (end !== -1) region = t.slice(a, end);
+      } else {
+        const v = new RegExp(`^(${ID})[,)]`).exec(t.slice(a, a + 80));
+        if (!v) continue;
+        const X = v[1], back = t.slice(Math.max(0, i - 6000), i), base = Math.max(0, i - 6000);
+        let def = -1;
+        for (const m of back.matchAll(new RegExp(`(?<![\\w$.])${X.replace(/\$/g, '\\$')}=\\[`, 'g'))) def = base + m.index + X.length + 1;
+        if (def === -1) continue;
+        const end = arrayEnd(t, def);
+        if (end === -1 || end > i) continue;
+        const parts = [t.slice(def, end)];
+        const pushes = t.slice(end, i);
+        for (const m of pushes.matchAll(new RegExp(`(?<![\\w$.])${X.replace(/\$/g, '\\$')}\\.push\\(`, 'g'))) {
+          const open = end + m.index + m[0].length - 1, close = parenEnd(t, open);
+          if (close !== -1 && close <= i) parts.push(t.slice(open, close));
+        }
+        region = parts.join(',');
+      }
+      if (!region) continue;
+      const first = jsLiterals(region)[0];
+      if (!first || !first.value.startsWith('-')) continue;
+      const flags = argvOfRegion(region);
+      // a search with no -e reads its pattern from a positional the carve computes: stand one in
+      const searches = !flags.includes('--files') && !flags.includes('--version') && !flags.includes('-e') && !flags.includes('--regexp');
+      const argv = [...flags, ...(searches ? ['x'] : []), '.'];
+      shapes.push({ where: `@${i} ${name}(${flags.slice(0, 3).join(' ')} ...)`, argv });
+    }
+  }
+  return shapes;
+}
 function carveRgArgvShapes(text) {
   const t = String(text);
-  const shapes = [];
+  const shapes = runnerCallShapes(t, carveRunners(t));
   for (let i = t.indexOf('["--files"'); i !== -1; i = t.indexOf('["--files"', i + 1)) {
     const end = arrayEnd(t, i);
     if (end === -1) continue;
@@ -657,5 +746,5 @@ function mmapEverywhere(id, native, argv, tree, platform) {
 }
 
 module.exports = { RG_TREE_KINDS, makeRgTree, treeEntries, RG_MATRIX, cellArgv, grepArgv, globArgv, VCS_DIRS, flagLiterals, builderFlagLiterals, matrixDrift,
-  consumerUsageErrorRegex, refusalDrift, carveRgArgvShapes,
+  consumerUsageErrorRegex, refusalDrift, carveRgArgvShapes, carveRunners,
   runNativeRg, nativeRgVersion, runOursRg, cellInput, assertNoAncestorRules, runOursRgBatch, compareRg, normalizeRg, rgOneThread, MMAP_EVERYWHERE, mmapEverywhere, inTree };

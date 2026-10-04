@@ -6,13 +6,18 @@
 // Glob tool's `--glob !...` exclusions, rt's skill listing, the sandbox scan), and `--follow` (the FileIndex
 // fallback outside a repo) had been refused all along. A refusal there is silent: upstream catches it and caches
 // an empty list. rg-differential judges only the Grep and Glob tools' argv; this judges EVERY argv shape the
-// carve builds, read BY STRUCTURE (scripts/lib/rg-probe.cjs carveRgArgvShapes: each `["--files"` array with the
-// flags pushed onto it, the Grep builder through grepArgv, the first-use probe, each again with the EAGAIN
-// retry's `-j 1`), run through runRg in a scratch tree. A finding: a shape quaude's rg refuses (parseRgRefusal),
-// or one that exits other than 0 or 1.
+// carve builds, read BY STRUCTURE (scripts/lib/rg-probe.cjs carveRgArgvShapes): the RUNNERS (a function that
+// destructures the bundle's `{rgPath,rgArgs,argv0}`, or takes the sandbox's `{command:"rg"}`, and any function
+// handing its first parameter on to one: bD, NQ, dTo, jv, oX in 2.1.283) and every call of one with an array
+// literal or an array variable (what `NAME.push(...)` adds before the call included); each `["--files"` array as
+// a net; the Grep builder through grepArgv; the first-use probe; each again with the EAGAIN retry's `-j 1`. Each
+// runs through runRg in a scratch tree. A finding: a shape quaude's rg refuses (parseRgRefusal), or one that
+// exits other than 0 or 1. (Fix round 2, review N2: reading only `["--files"` arrays missed the environment
+// scan eo(), `dTo(["-o","-H",...,"--no-messages",...,"--max-filesize",...,"-e",...])`, which quaude's rg refused.)
 //
-// FLOOR: the shapes the 2.1.283 carve gives (38, measured 2026-10-04: 7 listings, 11 Grep shapes, the version
-// probe, and each again under -j 1). CONTROL: the 2.1.283 snippets verbatim plus one planted `["--files",
+// FLOOR: the shapes the 2.1.283 carve gives (44, measured 2026-10-04: 9 runner calls (7 listings, eo()'s scan,
+// the Grep tool's own builder), the Glob builder's array before its pushes, 11 Grep shapes from grepArgv, the
+// version probe, and each again under -j 1). CONTROL: the 2.1.283 snippets verbatim plus one planted `["--files",
 // "--frobnicate"]` array, through the same extraction and the same runRg: it must be named.
 // The literal relative requires below are load-bearing for the production-gate population sweep
 // (test/guards-population.cjs).
@@ -30,7 +35,7 @@ const { decodeGraphRunner } = require('../../libexec/inspect-claude-bundle.cjs')
 
 const REPO = path.resolve(__dirname, '..', '..');
 const EXTRACT = path.join(REPO, 'libexec', 'extract-claude-js.cjs');
-const FLOOR = 38;
+const FLOOR = 44;
 
 // VERBATIM from the 2.1.283 darwin-arm64 carve (decoded graph.json, 2026-10-04): each `["--files"` array with
 // what follows it (the sandbox scan, the file count, the markdown loader, the orphaned versions, the Glob tool,
@@ -45,6 +50,13 @@ const SNIPPETS_2_1_283 = [
   " l=await oX([\"--files\",\"--hidden\",\"--max-depth\",String(o),\"-g\",\"!.git\",\"-g\",\"!node_modules\",...e.flatMap((i)=>[\"-g\",i])],n,AbortSignal.timeout(Ce));return hn(jr(l,n).filter((i)=>!s||s.test(i)),r)}catch{return[]}}function jr(e,n,r=\"darwin\"){let o=r===\"win32\"?\"\\\\\":\"/\",s=n.endsWith(o)?n:n+o;return e.map((l)=>l.startsWith(s)?l.slice(s.length):l",
   "g}}else n=await Ke(r.command,[...r.args,\"--version\"],{timeout:5000});let s=n.code===0&&!!n.stdout&&n.stdout.startsWith(\"ripgrep \");",
   "w);let I=h?[\"-j\",\"1\"]:[],D=[..",
+  // the runners, by structure (fix round 2, review N2), and the environment scan eo()'s call of dTo
+  "function bD(e,r,n,s,h=!1,g,y){let{rgPath:b,rgArgs:S,argv0:T}=Q4(),w=g??hc(r,b);om(e,r,w);let I=h?[\"-j\",\"1\"]:[],D=[...S,.", 
+  "function NQ(e,r,n){let{rgPath:s,rgArgs:h,argv0:g}=Q4();return new Promise((y,b)=", 
+  "function dTo(e,r,n,s){let{rgPath:h,rgArgs:g,argv0:y}=Q4();return new Promise((b,", 
+  "async function jv(e,r,n,s={command:\"rg\"}){let{command:h,args:g=[],argv0:y}=s,b=A3(h,[...g,", 
+  "async function oX(e,r,n,s){r/* ... */s?.beforeSpawn?.(),bD(e,r,n,(S,T,w)=>{b(S,T,w,!1)},!1,s?.cwd", 
+  "let f=await dTo([\"-o\",\"-H\",\"--no-line-number\",\"--no-messages\",\"--no-heading\",\"--color=never\",\"--null\",\"--hidden\",\"-g\",\"!.git\",\"-g\",\"!node_modules\",...[\"*.toml\",\"*.yaml\",\"*.yml\",\"*.json\",\"*.cfg\"].flatMap((c)=>[\"-g\",c]),\"--max-filesize\",Xr,\"-e\",\"[a-z0-9.+-]?(s3|gs|az)://[a-z0-9][a-z0-9._-]*\"],e,i,(c)=>{for(let g of c){let u=g.indexOf(\"\\x00\");if(u<0)continue;let h=g.slice(0,u);for(let w of Te(g.slice(u+1),pn)){if(w.leng", 
 ];
 const CARVE_2_1_283 = SNIPPETS_2_1_283.join(';');
 
@@ -86,27 +98,32 @@ const control = () => ({ results: answer(P.carveRgArgvShapes(`${CARVE_2_1_283};l
 
 guardTests(defineGuard({ name: 'rg-carve-argv-answered', floor: FLOOR, read: readCarve, scan, control }));
 
-test('carveRgArgvShapes reads 2.1.283\'s listings as the carve builds them, by structure', () => {
-  const shapes = P.carveRgArgvShapes(CARVE_2_1_283).filter((s) => s.argv[0] === '--files');
-  assert.deepStrictEqual(shapes.map((s) => s.argv), [
+test('carveRgArgvShapes reads 2.1.283\'s runners and the argv they are called with, by structure', () => {
+  assert.deepStrictEqual([...P.carveRunners(CARVE_2_1_283).keys()].sort(), ['NQ', 'bD', 'dTo', 'jv', 'oX']);
+  const all = P.carveRgArgvShapes(CARVE_2_1_283);
+  const listings = all.filter((s) => s.argv[0] === '--files').map((s) => JSON.stringify(s.argv)).sort();
+  assert.deepStrictEqual(listings, [
     ['--files', '--hidden', '--max-depth', '4', '-g', '!**/node_modules/**', '.'],
     ['--files', '--hidden', '--glob', '!x', '.'],
     ['--files', '--hidden', '--follow', '--no-ignore', '--glob', '*.md', '.'],
     ['--files', '--hidden', '--no-ignore', '--max-depth', '4', '--glob', 'x*', '.'],
+    ['--files', '--null', '--glob', 'x*', '--sort=modified', '--no-ignore', '--hidden', '--iglob', 'x*', '--glob', 'x*', '.'],
     ['--files', '--null', '--glob', 'x*', '--sort=modified', '--no-ignore', '--hidden', '--iglob', 'x*', '.'],
     ['--files', '--follow', '--hidden', '--glob', '!.git/', '--glob', '!.svn/', '--glob', '!.hg/', '--glob', '!.bzr/', '--glob', '!.jj/',
       '--glob', '!.sl/', '--no-ignore-vcs', '.'],
     ['--files', '--hidden', '--max-depth', '4', '-g', '!.git', '-g', '!node_modules', '-g', 'x*', '.'],
-  ]);
-  const all = P.carveRgArgvShapes(CARVE_2_1_283);
+  ].map((a) => JSON.stringify(a)).sort());
+  // the environment scan eo(), through dTo: the shape the first reading missed
+  assert.ok(all.some((s) => JSON.stringify(s.argv) === JSON.stringify(['-o', '-H', '--no-line-number', '--no-messages', '--no-heading', '--color=never',
+    '--null', '--hidden', '-g', '!.git', '-g', '!node_modules', '-g', 'x*', '--max-filesize', '4M', '-e', '[a-z0-9.+-]?(s3|gs|az)://[a-z0-9][a-z0-9._-]*', '.'])));
   assert.ok(all.some((s) => s.argv.length === 1 && s.argv[0] === '--version'), 'the first-use probe');
-  assert.strictEqual(all.length, FLOOR, 'every shape again under the EAGAIN retry\'s -j 1');
+  assert.strictEqual(all.length, 42, 'the snippets\' shapes, each again under the EAGAIN retry\'s -j 1 (the carve adds the Grep tool\'s own call: 44)');
   assert.ok(all.some((s) => s.argv[0] === '-j' && s.argv[2] === '--files'));
 });
 test('the 2.1.283 shapes are all answered here (no provider needed)', () => {
   const r = scan({ results: answer(P.carveRgArgvShapes(CARVE_2_1_283)), what: 'snippets' });
   assert.deepStrictEqual(r.findings, []);
-  assert.strictEqual(r.examined, FLOOR);
+  assert.strictEqual(r.examined, 42);
 });
 test('the control names the planted refused listing, by its argv', () => {
   const r = scan(control());
