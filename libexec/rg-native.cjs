@@ -850,13 +850,16 @@ const LONG_BOOL = {
   '--multiline': (s) => { s.multiline = true; }, '--no-multiline': (s) => { s.multiline = false; },
   '--multiline-dotall': (s) => { s.dotall = true; }, '--no-multiline-dotall': (s) => { s.dotall = false; },
   '--files': (s) => { s.mode = 'list'; },
+  // RG-WALK-FOLLOW, RG-NO-IGNORE's --no-ignore-vcs (rg-walk.cjs)
+  '--follow': (s) => { s.follow = true; }, '--no-follow': (s) => { s.follow = false; },
+  '--no-ignore-vcs': (s) => { s.noIgnoreVcs = true; }, '--ignore-vcs': (s) => { s.noIgnoreVcs = false; },
 };
 const SHORT_BOOL = { l: '--files-with-matches', c: '--count', i: '--ignore-case', s: '--case-sensitive', n: '--line-number',
-  N: '--no-line-number', H: '--with-filename', I: '--no-filename', 0: '--null', o: '--only-matching', '.': '--hidden', U: '--multiline' };
+  N: '--no-line-number', H: '--with-filename', I: '--no-filename', 0: '--null', o: '--only-matching', '.': '--hidden', U: '--multiline', L: '--follow' };
 const LONG_VALUE = { '--after-context': 'after', '--before-context': 'before', '--context': 'context', '--max-columns': 'maxColumns',
   '--regexp': 'pattern', '--glob': 'glob', '--iglob': 'iglob', '--threads': 'threads', '--type': 'type', '--type-not': 'typeNot',
-  '--sort': 'sort', '--sortr': 'sortr' };
-const SHORT_VALUE = { A: 'after', B: 'before', C: 'context', M: 'maxColumns', e: 'pattern', g: 'glob', j: 'threads', t: 'type', T: 'typeNot' };
+  '--sort': 'sort', '--sortr': 'sortr', '--max-depth': 'maxDepth', '--maxdepth': 'maxDepth' };
+const SHORT_VALUE = { A: 'after', B: 'before', C: 'context', M: 'maxColumns', e: 'pattern', g: 'glob', j: 'threads', t: 'type', T: 'typeNot', d: 'maxDepth' };
 // rg's special modes, answered whatever else the argv holds (RG-VERSION, RG-TYPE-LIST: rg-types.cjs).
 const SPECIAL_LONG = { '--version': 'version', '--type-list': 'type-list' };
 const SPECIAL_SHORT = { V: 'version-short' };
@@ -897,7 +900,7 @@ function setValue(s, key, flag, v) {
 function parseRgSearch(argv) {
   const s = { mode: 'standard', patterns: [], ignoreCase: false, lineNumber: null, withFilename: null, nul: false, only: false, multiline: false, dotall: false,
     before: null, after: null, context: null, maxColumns: 0, hidden: false, noIgnore: false, globs: [], types: [], threads: null, paths: [],
-    sort: null };
+    sort: null, maxDepth: null, follow: false, noIgnoreVcs: false };
   let special = null;
   const pos = [];
   let end = false;

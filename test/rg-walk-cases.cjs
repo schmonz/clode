@@ -16,6 +16,8 @@
 //   bomig    a .gitignore that starts with a UTF-8 BOM (rg reads it as part of the first line) and has CRLFs
 //   shared   one .gitignore over several roots searched at once (rg's ancestors are built once, by the first)
 //   uni      a non-ASCII file name, for globs over bytes
+//   plugcache, skills   2.1.283's production --max-depth 4 listings (orphaned plugin versions; skills, rt)
+//   links, linksout, linksrepo   symlinks for -L/--follow (2.1.283's FileIndex fallback), outside and inside a repo
 //   h1 h2    HOMEs: XDG's git/ignore; ~/.gitconfig's core.excludesFile with a ~
 const NEEDLE = 'needle\n';
 const TREES = {
@@ -58,6 +60,29 @@ const TREES = {
     ['.git/HEAD', 'x\n'], ['.gitignore', 'docs/*.md\n**/gen/**\n'],
     ['docs/a.md', NEEDLE], ['docs/sub/b.md', NEEDLE], ['sub/docs/c.md', NEEDLE], ['gen/g.txt', NEEDLE], ['sub/gen/g2.txt', NEEDLE],
     ['sub/x.txt', NEEDLE], ['ok.txt', NEEDLE],
+  ],
+  // 2.1.283's production --max-depth listings (grep-native Task 10 fix round, review I-1): a plugin cache whose
+  // version dirs carry an empty `.orphaned_at` (orphanedVersionGlobExclusions: --max-depth 4 from the cache), and a
+  // skills tree (rt: --max-depth 4, -g SKILL.md -g *.md); one marker and one .md each sit too deep
+  plugcache: [
+    ['mkt/plug/1.0/.orphaned_at', ''], ['mkt/plug/2.0/a.txt', NEEDLE], ['mkt/plug/2.0/deep/.orphaned_at', ''], ['mkt/.orphaned_at', ''],
+    ['mkt/other/0.1/x.txt', NEEDLE],
+  ],
+  skills: [
+    ['README.md', NEEDLE], ['m/SKILL.md', NEEDLE], ['m/n/x.md', NEEDLE], ['m/n/o/deep.md', NEEDLE], ['m/n/o/p/deeper.md', NEEDLE],
+    ['node_modules/p/SKILL.md', NEEDLE], ['.git/x.md', NEEDLE], ['notes.txt', NEEDLE],
+  ],
+  // RG-WALK-FOLLOW (2.1.283's FileIndex fallback outside a repo: --files --follow --hidden ... [--no-ignore-vcs]):
+  // a link to a directory, to a file, to nowhere, to a directory outside the tree, and one back to an ancestor
+  links: [
+    ['real/a.md', NEEDLE], ['real/sub/b.md', NEEDLE], ['ldir', { symlink: 'real' }], ['lfile.md', { symlink: 'real/a.md' }],
+    ['broken.md', { symlink: 'nowhere' }], ['real/sub/loop', { symlink: '..' }], ['lout', { symlink: '../linksout' }],
+    ['.gitignore', 'ign.md\n'], ['ign.md', NEEDLE], ['.ignore', 'dot.md\n'], ['dot.md', NEEDLE],
+  ],
+  linksout: [['o.md', NEEDLE]],
+  linksrepo: [
+    ['.git/HEAD', 'x\n'], ['real/a.md', NEEDLE], ['ldir', { symlink: 'real' }], ['.gitignore', 'ign.md\n'], ['ign.md', NEEDLE],
+    ['.ignore', 'dot.md\n'], ['dot.md', NEEDLE],
   ],
   // a non-ASCII name (built from its code point: never a literal in source); globs match its UTF-8 BYTES
   uni: [[`caf${String.fromCodePoint(0xe9)}.txt`, NEEDLE], ['plain.txt', NEEDLE]],

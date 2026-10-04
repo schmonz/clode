@@ -105,18 +105,22 @@ test('both spawn routes answer rg --files identically (child_process and Bun.spa
   fs.writeFileSync(path.join(tree, '.orphaned_at'), '');
   fs.writeFileSync(path.join(tree, 'sub', '.orphaned_at'), '');
   fs.writeFileSync(path.join(tree, 'other.txt'), 'x\n');
-  fs.utimesSync(path.join(tree, 'sub', '.orphaned_at'), 1700000060, 1700000060);   // the newer: listed last
-  fs.utimesSync(path.join(tree, '.orphaned_at'), 1700000000, 1700000000);
+  // ZERO-LENGTH markers (an empty file is listed: nothing is read), one too deep for --max-depth 4
+  fs.mkdirSync(path.join(tree, 'a', 'b', 'c', 'd'), { recursive: true });
+  fs.writeFileSync(path.join(tree, 'a', 'b', 'c', 'd', '.orphaned_at'), '');
 
-  const got = runRoutes(dir, ['--files', '--no-ignore', '--hidden', '--glob', '.orphaned_at', '--sort=modified', tree],
+  // 2.1.283's orphanedVersionGlobExclusions argv, as it builds it (its answer becomes the Glob builder's
+  // `--glob !...` exclusions): measured, review I-1 of grep-native Task 10's fix round
+  const got = runRoutes(dir, ['--files', '--hidden', '--no-ignore', '--max-depth', '4', '--glob', '.orphaned_at', tree],
     { ...process.env, CLODE_BFS: '', CLODE_UGREP: '' });
 
   assert.strictEqual(got.cpErr, null,
     'child_process spawn of rg must not fail — before the fix this was ENOENT');
   assert.ok(got.cp.length > 0, `child_process route produced nothing: ${JSON.stringify(got)}`);
   assert.deepStrictEqual(got.cp, got.bun, 'the two spawn routes must answer the SAME');
-  // native 2.1.283's embedded rg over this tree: both empty marker files, oldest first, nothing else
-  if (process.platform !== 'win32') assert.deepStrictEqual(got.cp, [`${tree}/.orphaned_at`, `${tree}/sub/.orphaned_at`]);
+  // native 2.1.283's embedded rg over this tree: the two empty markers within depth 4 (rg's parallel order is
+  // its own, so compared as a set), never the one at depth 5
+  if (process.platform !== 'win32') assert.deepStrictEqual(got.cp.slice().sort(), [`${tree}/.orphaned_at`, `${tree}/sub/.orphaned_at`]);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 

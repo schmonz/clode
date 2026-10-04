@@ -45,7 +45,8 @@
 //   RG-IGNORE-FILE-ERRORS  a line of an ignore file that does not parse is skipped and named on stderr
 //                      (`rg: PATH: line N: error parsing glob ...`, rc unchanged); a line that is not
 //                      UTF-8 ends that file silently; one in an ANCESTOR's file is an error (rc 2)
-//   RG-NO-IGNORE       --no-ignore: none of the ignore files, ancestors' or global
+//   RG-NO-IGNORE       --no-ignore: none of the ignore files, ancestors' or global; --no-ignore-vcs: no
+//                      .gitignore, .git/info/exclude or global excludes (.ignore and .rgignore still apply)
 //   RG-HIDDEN          a name starting with `.` is skipped unless --hidden, or a glob, ignore line or type
 //                      whitelists it; `.git` is an ordinary hidden directory (searched under --hidden)
 //   RG-TYPE            --type T selects files whose NAME matches one of T's globs (rg-types.cjs, from
@@ -53,6 +54,13 @@
 //                      selected a file matching none is excluded; `all` is every type; an unknown name is
 //                      rg's error; a --glob decides before a type does
 //   RG-WALK-SYMLINK    a symlink the walk finds is neither followed nor searched; a NAMED one is followed
+//   RG-WALK-FOLLOW     -L/--follow: a symlink the walk finds is followed, to a file (listed under its own
+//                      path) or a directory (walked under its own path), after a LOOP check against every
+//                      directory the walk is inside (same device and inode): `rg: File system loop found: LINK
+//                      points to an ancestor DIR` (rc 2, the rest walked); a broken one is
+//                      `rg: LINK: ERR` in parallel, `rg: LINK: IO error for operation on LINK: ERR` on one thread
+//   RG-WALK-MAX-DEPTH  --max-depth N (--maxdepth, -d): the root is depth 0, an entry deeper than N is not
+//                      reached, a directory at depth N is not entered (0: only a NAMED file is listed)
 //   RG-WALK-ORDER      -j1 (and rg's single-threaded cases): depth first, each directory in the order the
 //                      OS's readdir gives it (20 of 20 on APFS and on overlayfs, Task 9). Otherwise rg walks in
 //                      parallel and the order is NOT fixed: on this Mac a small tree (one directory, or
@@ -326,8 +334,11 @@ function makeWalker(spec, ctx) {
   const env = ctx.env || process.env;
   const at = (p) => path.resolve(cwd, p);
   const exists = (p) => { try { fs.statSync(at(p)); return true; } catch { return false; } };
-  const no = !!spec.noIgnore;
-  const opts = { hidden: !spec.hidden, ignore: !no, parents: !no, gitGlobal: !no, gitIgnore: !no, gitExclude: !no, requireGit: true, custom: !no };
+  const no = !!spec.noIgnore, vcs = !no && !spec.noIgnoreVcs;
+  const opts = { hidden: !spec.hidden, ignore: !no, parents: !no, gitGlobal: vcs, gitIgnore: vcs, gitExclude: vcs, requireGit: true, custom: !no };
+  // RG-WALK-MAX-DEPTH and RG-WALK-FOLLOW (hiargs.rs walk_builder: max_depth, follow_links)
+  const maxDepth = typeof spec.maxDepth === 'number' ? spec.maxDepth : Infinity;
+  const follow = !!spec.follow;
   const anyRules = opts.ignore || opts.gitGlobal || opts.gitIgnore || opts.gitExclude || opts.custom;
   const joinPath = (dir, name) => dir + (dir.endsWith('/') ? '' : '/') + name;
 
@@ -520,11 +531,25 @@ function makeWalker(spec, ctx) {
     const { node: top, errs: perrs } = withParents(P);
     if (perrs.length) yield { error: `rg: ${perrs.join('\n')}` };
     let n = 0;
+    // RG-WALK-FOLLOW's loop check: the identity of each directory the walk is inside, root included (walk.rs
+    // check_symlink_loop: the parents up to the first absolute one; walkdir's own check alike).
+    const ident = (d) => { const st = fs.statSync(at(d), { bigint: true }); return `${st.dev}:${st.ino}`; };
+    const inside = [], insideDirs = [];
     // The parallel walk reads a directory before its ignore files (walk.rs Work::read_dir), the
     // single-threaded one after (walkdir yields the directory, then fails to read it).
-    const visitDir = function* (parent, dir) {
+    const visitDir = function* (parent, dir, depth) {
       let node = sequential ? childNode(parent, dir) : null;
       if (node && node.errs.length) yield { message: `rg: ${node.errs.join('\n')}` };
+      // RG-WALK-MAX-DEPTH: a directory at the limit is not entered (walkdir never opens it; the parallel walk
+      // opens it, so only its error shows, then stops: walk.rs run_one)
+      if (depth >= maxDepth) {
+        if (!sequential) {
+          try { readDir(dir); } catch (e) { if (e instanceof WalkRefusal) throw e; yield { error: `rg: ${dir}: ${errText(e)}` }; return; }
+          const nd = childNode(parent, dir);
+          if (nd.errs.length) yield { message: `rg: ${nd.errs.join('\n')}` };
+        }
+        return;
+      }
       let list;
       try { list = readDir(dir); } catch (e) {
         if (e instanceof WalkRefusal) throw e;
@@ -536,21 +561,37 @@ function makeWalker(spec, ctx) {
         if (node.errs.length) yield { message: `rg: ${node.errs.join('\n')}` };
       }
       const kept = [];
+      if (follow) { inside.push(ident(dir)); insideDirs.push(dir); }
       for (const c of list) {
         const p = joinPath(dir, c.name);
         if (tick && ++n % 256 === 0) yield tick;
-        if (skip(node, p, c.type === 'dir')) continue;
+        let type = c.type;
+        if (type === 'symlink' && follow) {
+          // RG-WALK-FOLLOW: the link's target decides, after the loop check
+          let st;
+          try { st = fs.statSync(at(p), { bigint: true }); } catch (e) {
+            yield { error: `rg: ${p}: ${sequential ? `IO error for operation on ${p}: ` : ''}${errText(e)}` };
+            continue;
+          }
+          type = st.isDirectory() ? 'dir' : st.isFile() ? 'file' : 'other';
+          if (type === 'dir') {
+            const k = inside.lastIndexOf(`${st.dev}:${st.ino}`);   // the nearest (walk.rs: from the parent up)
+            if (k !== -1) { yield { error: `rg: File system loop found: ${p} points to an ancestor ${insideDirs[k]}` }; continue; }
+          }
+        }
+        if (skip(node, p, type === 'dir')) continue;
         if (sequential) {
-          if (c.type === 'dir') yield* visitDir(node, p);
-          else if (c.type === 'file') yield { file: p };
-        } else kept.push({ p, type: c.type });
+          if (type === 'dir') yield* visitDir(node, p, depth + 1);
+          else if (type === 'file') yield { file: p };
+        } else kept.push({ p, type });
       }
       for (let k = kept.length - 1; k >= 0; k--) {
-        if (kept[k].type === 'dir') yield* visitDir(node, kept[k].p);
+        if (kept[k].type === 'dir') yield* visitDir(node, kept[k].p, depth + 1);
         else if (kept[k].type === 'file') yield { file: kept[k].p };
       }
+      if (follow) { inside.pop(); insideDirs.pop(); }
     };
-    yield* visitDir(top, P);
+    yield* visitDir(top, P, 0);
   }
   return { walk, dropParents };
 }
