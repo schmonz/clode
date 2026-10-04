@@ -175,7 +175,7 @@ function runRg(argv, opts = {}) {
 //   (no flag)           binaries (a NUL, early or past 64 KiB; invalid UTF-8) are searched as
 //                       text: under --format ugrep reports their matches like any file's, and
 //                       -a changed nothing on any version or file measured, so it is not
-//                       passed. rg's binary quit and convert rules are the printers' (Task 8)
+//                       passed. rg's binary quit and convert rules are the printers' (RG-BINARY-*)
 //   -Y                  empty matches are reported (without it ugrep drops them, and a pattern
 //                       like `e*` matches every line in rg but only some in ugrep), so a
 //                       prefilter that can match empty proposes every line
@@ -410,14 +410,47 @@ function readHead(p) {
     return b.subarray(0, fs.readSync(fd, b, 0, 4, 0));
   } catch { return Buffer.alloc(0); } finally { if (fd !== null) try { fs.closeSync(fd); } catch { /* closed */ } }
 }
-function rgText(bytes) {
-  if (bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) return bytes.subarray(3);
-  if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xfe) return utf16ToUtf8(bytes.subarray(2), true);
-  if (bytes.length >= 2 && bytes[0] === 0xfe && bytes[1] === 0xff) return utf16ToUtf8(bytes.subarray(2), false);
-  return bytes;
+function rgText(bytes) { return rgTextRead(bytes).text; }
+// rg's text, and HOW ITS READER HANDS IT OVER (RG-BINARY-QUIT reads in these steps): { text, read }.
+// read.bounds: the text offsets no single read crosses, ascending (past them a read is as long as the
+// line buffer's free room); read.snap: a read cut short by that room ends on a character boundary (the
+// UTF-16 decoder writes whole characters). Measured against native 2.1.283 (test/rg-native.test.cjs):
+//   plain   encoding_rs_io's BomPeeker reads 3 bytes to sniff a BOM and hands them over as the FIRST
+//           read, so a newline in the first 3 bytes ends rg's first fill there
+//   bom8    the BOM is dropped and nothing else is sniffed: every read is as long as there is room
+//   utf16   the decoder reads 8 KiB of the file at a time into its own buffer and hands over what it
+//           decodes: one read per 8 KiB, the first one (after the peek's third byte) 4,096 code units,
+//           every later one 4,096 more; a lead surrogate at a read's end waits for the next
+// `stdin`: rg reads its stdin through std's 8 KiB BufReader, which the 3-byte peek fills first: the
+// next read is the rest of those 8 KiB, then what the pipe holds (the UTF-16 decoder's 8 KiB reads then
+// start at byte 8192). What the pipe holds is the OS's: on macOS (`pipe64k`) a caller's one big write
+// arrives 64 KiB at a time (measured: native's fills ended at byte 65536 in 19 of 20 runs), on Linux
+// all of it (40 of 40); assumed so elsewhere. A caller writing in smaller pieces hands over less.
+const STDIN_BUF = 8 * 1024, PIPE_BUF = 64 * 1024;
+function rgTextRead(bytes, { stdin = false, pipe64k = false } = {}) {
+  // stdin's reads: the BufReader's first 8 KiB, then each 64 KiB of the input under pipe64k, `skip`
+  // bytes before them in the text
+  const pipe = (skip, head) => {
+    const b = head.slice();
+    if (pipe64k) for (let p = PIPE_BUF; p - skip < bytes.length; p += PIPE_BUF) b.push(p - skip);
+    return b;
+  };
+  if (bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) {
+    return { text: bytes.subarray(3), read: { kind: 'bom8', bounds: stdin ? pipe(3, [STDIN_BUF - 3]) : [], snap: false } };
+  }
+  for (const le of [true, false]) {
+    if (bytes.length >= 2 && bytes[0] === (le ? 0xff : 0xfe) && bytes[1] === (le ? 0xfe : 0xff)) {
+      const ends = [];
+      const text = utf16ToUtf8(bytes.subarray(2), le, { first: stdin ? (STDIN_BUF - 2) / 2 : 4096, every: 4096, ends });
+      return { text, read: { kind: 'utf16', bounds: ends, snap: true } };
+    }
+  }
+  return { text: bytes, read: { kind: 'plain', bounds: stdin ? pipe(0, [3, STDIN_BUF]) : [3], snap: false } };
 }
-// The WHATWG UTF-16 decoder (what encoding_rs implements), straight to UTF-8 bytes.
-function utf16ToUtf8(b, le) {
+// The WHATWG UTF-16 decoder (what encoding_rs implements), straight to UTF-8 bytes. `chunks`: where the
+// output stands after each read of the decoder (code unit `first`, then every `every` more; a pending
+// lead surrogate not yet written), pushed onto chunks.ends, and before a last U+FFFD written at the end.
+function utf16ToUtf8(b, le, chunks = null) {
   const out = Buffer.alloc(b.length * 2 + 4);
   let o = 0;
   const put = (c) => {
@@ -426,9 +459,11 @@ function utf16ToUtf8(b, le) {
     else if (c < 0x10000) { out[o++] = 0xe0 | (c >> 12); out[o++] = 0x80 | ((c >> 6) & 0x3f); out[o++] = 0x80 | (c & 0x3f); }
     else { out[o++] = 0xf0 | (c >> 18); out[o++] = 0x80 | ((c >> 12) & 0x3f); out[o++] = 0x80 | ((c >> 6) & 0x3f); out[o++] = 0x80 | (c & 0x3f); }
   };
-  let lead = -1;
+  const mark = () => { const e = chunks.ends; if (o > (e.length ? e[e.length - 1] : 0)) e.push(o); };
+  let lead = -1, nextMark = chunks ? chunks.first : -1;
   const n = b.length >> 1;
   for (let i = 0; i < n; i++) {
+    if (i === nextMark) { mark(); nextMark += chunks.every; }
     const u = le ? b[2 * i] | (b[2 * i + 1] << 8) : (b[2 * i] << 8) | b[2 * i + 1];
     if (lead !== -1) {
       const l = lead;
@@ -440,7 +475,9 @@ function utf16ToUtf8(b, le) {
     else if (u >= 0xdc00 && u <= 0xdfff) put(0xfffd);
     else put(u);
   }
+  if (chunks) mark();
   if (lead !== -1 || (b.length & 1)) put(0xfffd); // one, for whatever was left over
+  if (chunks) mark();
   return out.subarray(0, o);
 }
 
@@ -785,9 +822,9 @@ function ugrepMatchesAsync(files, pattern, opts = {}) {
 //                              ends; quaude's rg cannot without blocking or reading its caller's input
 //   RG-EXIT                    0 found, 1 not found, 2 when any path failed (its error on stderr, the
 //                              rest still searched and printed): never quaude's refusal
-//   RG-BINARY-QUIT-FIRST-READ  INTERIM (the plan's Task 8 replaces it with rg's LineBuffer): a WALKED
-//                              file whose first 64 KiB of text hold a NUL prints nothing; a NAMED
-//                              file, and stdin, are searched as text (native's convert mode, Task 8)
+//   RG-BINARY-QUIT, RG-BINARY-CONVERT, RG-BINARY-MMAP  (grep-native Task 8) what a NUL does to a walked
+//                              file, a named one or stdin, and a named one rg memory-maps: stated where
+//                              they are, "rg's binary detection" below
 //
 // WHERE WE PRINT. As rg prints to a pipe or a file, which is what every surface the bundle uses
 // hands it (no heading, no colour, no line numbers unless -n).
@@ -937,7 +974,7 @@ function strerrorText(text) {
 // what ugrep's walk lists under today's walk flags (bun-shim's rgToUgrep: -r, --ignore-files unless
 // --no-ignore, -. for --hidden, --include/--exclude for --glob), `-l` over an empty pattern so a file
 // is listed whatever it holds (an EMPTY file is not, and has no line rg could match), with no -I: a
-// binary is rg's decision (RG-BINARY-QUIT-FIRST-READ), not ugrep's.
+// binary is rg's decision (RG-BINARY-QUIT), not ugrep's.
 // rg's --glob as today's translation hands it to ugrep (`!G` -> --exclude=G, else --include=G), stated
 // ONCE: bun-shim's rgToUgrep spells its --glob with it too. NOT rg's dialect: ugrep's --exclude matches
 // FILES by name, so a deny glob naming a directory (`--glob '!private'`, `--iglob '!/private'`, the
@@ -977,16 +1014,198 @@ function readListing(P, stdout, stderr) {
   return { files, errors, unknown, unknownRaw };
 }
 
-// A file's text, as rg reads it (RG-TEXT-BOM); `limit` bytes of it when only its start matters.
-function readRgText(file, cwd, limit) {
+// A file's bytes, as rg opens them (its text and binary detection: rgView).
+function readRgBytes(file, cwd) {
   const fs = require('fs'), path = require('path');
-  const p = path.resolve(cwd || process.cwd(), file);
-  if (!limit) return rgText(fs.readFileSync(p));
-  const fd = fs.openSync(p, 'r');
-  try { const b = Buffer.alloc(limit); return rgText(b.subarray(0, fs.readSync(fd, b, 0, limit, 0))); } finally { fs.closeSync(fd); }
+  return fs.readFileSync(path.resolve(cwd || process.cwd(), file));
 }
-const FIRST_READ = 64 * 1024;   // rg's first read of a file (grep-searcher's DEFAULT_BUFFER_CAPACITY)
-const binaryAtFirstRead = (text) => text.subarray(0, FIRST_READ).indexOf(0) !== -1;
+
+// ---- rg's binary detection (grep-native Task 8) -----------------------------------------------------
+// grep-searcher 0.1.14 (line_buffer.rs, searcher/glue.rs, searcher/core.rs, searcher/mmap.rs),
+// encoding_rs_io 0.1.7, grep-printer 0.2.2 and ripgrep 14.1.1's hiargs.rs, read from the crates; every
+// rule measured against native 2.1.283 and pinned by test/rg-native.test.cjs's P8 rows. rg looks for a
+// NUL as it reads, and what it does on finding one depends on how the file came to be searched:
+//   RG-BINARY-QUIT    a WALKED file (rg's "implicit" detection): rg reads into a 64 KiB line buffer,
+//                     fill by fill (rgTextRead's reads; each fill reads until it holds a newline, growing
+//                     the buffer threefold when a line fills it; between fills it keeps the last
+//                     max(-A, -B) + 1 lines it may still print as context, unless it printed past them).
+//                     The fill that meets the first NUL ends the search before any of it is searched: what
+//                     rg prints is what the fills before it held. --json: those lines, binary_offset the
+//                     NUL's offset, bytes_searched the bytes rg had let go of (late.dat: a match at 0, NUL at
+//                     120030: 65526, the whole lines of the first fill; 65502 under -C 1). -c prints NOTHING
+//                     for a file with a NUL anywhere (the count is squashed); -l lists a file whose first
+//                     match came before that fill. The standard printer ends with `[path: ]WARNING: stopped
+//                     searching binary file after match (found "\0" byte around offset N)` when it printed
+//                     a match.
+//   RG-BINARY-CONVERT a NAMED file or stdin, read as above ("explicit" detection, never a filter): every
+//                     NUL is a line break (the line after `\0\1\2\n` in early.dat is line 4) and the
+//                     search reads to the end. --json: those lines (a NUL's line ends `\n`), binary_offset the
+//                     first NUL, bytes_searched the whole text. -l and -c count those lines. The standard
+//                     printer prints what the fills before the NUL's fill held, stops at the first line
+//                     it would print from that fill on, and ends `[path: ]binary file matches (found "\0"
+//                     byte around offset N)` when it saw a match (the one it stopped at included).
+//   RG-BINARY-MMAP    a NAMED file on a host that is not macOS, when every path is a regular file and
+//                     there are at most 10 (rg memory-maps them; macOS never: mmap.rs), and the file has
+//                     no BOM (that one is read as RG-BINARY-CONVERT): a NUL stays inside its line. rg looks
+//                     in the first 64 KiB, then in each line it prints. --json: binary_offset the first NUL
+//                     found so, bytes_searched that offset (else the whole text). The standard printer stops
+//                     at the first line it would print once one is found, with RG-BINARY-CONVERT's last
+//                     line. -l and -c: as for text.
+// A NUL in rg's TEXT counts (a UTF-16 file's decoded U+0000, not the zero bytes of its code units).
+// NOT MODELLED (named, BACKLOG): rg's line buffer is one per searching thread and keeps its grown size
+// for the next file that thread searches; quaude's rg starts every file at 64 KiB (native agrees unless
+// an earlier file on the same thread held a line longer than 64 KiB; under -j1 that order is rg's walk,
+// Task 9's). A UTF-16 read the line buffer's room cuts short is taken to end on a whole character.
+const RG_BUFFER = 64 * 1024;          // grep-searcher's DEFAULT_BUFFER_CAPACITY
+const MMAP_MAX_PATHS = 10;            // hiargs.rs: memory maps for at most 10 paths, all files
+// How rg searches one target: 'quit' (walked), 'convert' (named or stdin), 'mmap' (named, RG-BINARY-MMAP).
+function binaryHow(e, mmap) { return e.walked ? 'quit' : e.stdin || !mmap ? 'convert' : 'mmap'; }
+// Whether rg memory-maps this search's named files (RG-BINARY-MMAP): not on macOS; every path (`-` too,
+// as a file of that name) a regular file, following symlinks; at most 10.
+function mmapsNamedFiles(spec, cwd, platform) {
+  if (platform === 'darwin' || spec.paths.length > MMAP_MAX_PATHS) return false;
+  const fs = require('fs'), path = require('path');
+  return spec.paths.every((P) => { try { return fs.statSync(path.resolve(cwd, P)).isFile(); } catch { return false; } });
+}
+// rg's view of one file: { how, text, read, nul }. text is rg's text (RG-TEXT-BOM) with, for
+// RG-BINARY-CONVERT, every NUL a newline; nul the first NUL's offset (-1: none). A file with a BOM is read,
+// never mapped (grep-searcher's slice_needs_transcoding).
+function rgView(bytes, how, { stdin = false, pipe64k = false } = {}) {
+  const { text, read } = rgTextRead(bytes, { stdin, pipe64k });
+  const h = how === 'mmap' && read.kind !== 'plain' ? 'convert' : how;
+  const nul = text.indexOf(0);
+  if (nul === -1 || h !== 'convert') return { how: h, text, read, nul };
+  const conv = Buffer.from(text);
+  for (let i = nul; i !== -1; i = conv.indexOf(0, i + 1)) conv[i] = 0x0a;
+  return { how: h, text: conv, read, nul };
+}
+// One read of rg's reader: (at, room) -> how many bytes of the text it hands over (rgTextRead's bounds;
+// a UTF-16 read cut short by the room ends on a whole character, one with fewer than 4 bytes of room
+// hands over as much of the next character as fits: encoding_rs_io's tiny transcoder).
+function rgReader(text, read) {
+  let bi = 0;
+  return (at, room) => {
+    while (bi < read.bounds.length && read.bounds[bi] <= at) bi++;
+    const lim = bi < read.bounds.length ? Math.min(read.bounds[bi], text.length) : text.length;
+    let n = Math.min(room, lim - at);
+    if (read.snap && n < lim - at) {
+      if (room < 4) { let e = at + 1; while (e < lim && (text[e] & 0xc0) === 0x80) e++; n = Math.min(room, e - at); }
+      else while (n > 0 && (text[at + n] & 0xc0) === 0x80) n--;
+    }
+    return Math.max(0, n);
+  };
+}
+// lines.rs `preceding`: the start of the line `count` lines before the last line of [from, to).
+function precedingStart(t, from, to, count) {
+  let pos = to;
+  if (pos === from) return from;
+  if (t[pos - 1] === 0x0a) pos--;
+  for (;;) {
+    const ls = lineStart(t, pos, from);
+    if (ls === from) return from;
+    if (count === 0) return ls;
+    if (ls - 1 === from) return from;
+    count--; pos = ls - 1;
+  }
+}
+// rg's LineBuffer and ReadByLine over a view, fill by fill, until the fill that meets the first NUL (or
+// the end). `visited(from, to)`: the end of the last line rg sank (printed, or context) while searching
+// [from, to), -1 for none (what the next roll keeps depends on it). Returns { searched: where the last
+// fill searched before that one ended, from: where that fill's search began, bytes: what rg had let go
+// of when it stopped (its absolute_byte_offset), cap: the buffer's size then }. A generator: it yields
+// TICK now and then.
+function* lineBufferFills(v, { quit, maxContext, visited, cap = RG_BUFFER }) {
+  const t = v.text, reader = rgReader(t, v.read);
+  let A = 0, end = 0, lastLT = 0, at = 0, from = 0, reads = 0;
+  for (;;) {
+    // core.roll: what the search let go of in the buffer it searched ([A, A + lastLT))
+    let consumed = lastLT;
+    if (maxContext > 0 && lastLT > 0) {
+      const lv = visited(from, A + lastLT);
+      consumed = Math.max(precedingStart(t, A, A + lastLT, maxContext) - A, lv < 0 ? 0 : lv - A);
+    }
+    const oldLen = lastLT, searched = A + lastLT;
+    A += consumed; end -= consumed; lastLT = end;
+    // LineBuffer.fill: read until the new bytes hold a newline, or a NUL ends a quit
+    let didread = false, met = false;
+    for (;;) {
+      if (cap - end === 0) cap += Math.max(1, cap) * 2;
+      const n = reader(at, cap - end);
+      if (n === 0) { lastLT = end; didread = lastLT > 0; break; }
+      const oldend = end;
+      end += n; at += n;
+      if (++reads % 64 === 0) yield TICK;
+      if (v.nul !== -1 && v.nul < A + end) {
+        met = true;
+        if (quit) { end = v.nul - A; lastLT = end; break; }
+      }
+      const ls = lineStart(t, A + end, A + oldend);
+      if (ls > A + oldend) { lastLT = ls - A; didread = true; break; }
+    }
+    if (met) return { searched, from: searched, bytes: A, cap };
+    if (!didread) return { searched, from: -1, bytes: A, cap };
+    if (consumed === 0 && oldLen === lastLT) return { searched, from: -1, bytes: A + oldLen, cap };
+    from = searched;
+  }
+}
+// The lines rg sinks, in order, as [where they are searched from, end of the line]: a match and its
+// before-context at the match, an after-context line at itself (RG-CONTEXT, eachPrintedLine).
+function* sunkLines(text, sel, spec) {
+  const out = [];
+  let n = 0;
+  for (const ev of eachPrintedLine(text, sel, spec)) {
+    if (ev === GAP) continue;
+    const le = lineEndAt(text, ev.ls);
+    out.push(ev.at, le < text.length ? le + 1 : le);
+    if (++n % TICK_EVERY === 0) yield TICK;
+  }
+  return out;
+}
+// visited() for lineBufferFills over sunkLines' pairs: the regions it asks about ascend.
+function visitedIn(pairs) {
+  let i = 0;
+  return (from, to) => {
+    let last = -1;
+    while (i < pairs.length && pairs[i] < to) { if (pairs[i] >= from) last = pairs[i + 1]; i += 2; }
+    return last;
+  };
+}
+// What rg's binary detection makes of one file's search: { squash } (-c prints nothing), or { text, sel,
+// bin } with text and sel cut to what rg searched (RG-BINARY-QUIT), and bin what the printers report:
+// { offset (the NUL, -1 until RG-BINARY-MMAP finds one), bytes (bytes_searched), quit, stopAt (the
+// standard printer's RG-BINARY-CONVERT stop), mmap, window }. null when the text holds no NUL.
+function* binaryOutcome(v, sel, spec) {
+  if (v.nul === -1) return { text: v.text, sel, bin: null };
+  const maxContext = Math.max(spec.before, spec.after);
+  const fills = function* () {
+    const pairs = maxContext > 0 ? yield* sunkLines(v.text, sel, spec) : [];
+    return yield* lineBufferFills(v, { quit: v.how === 'quit', maxContext, visited: visitedIn(pairs) });
+  };
+  if (v.how === 'quit') {
+    if (spec.mode === 'count') return { squash: true };
+    const f = yield* fills();
+    return { text: v.text.subarray(0, f.searched), sel: sel.filter((L) => L.ls < f.searched), bin: { offset: v.nul, bytes: f.bytes, quit: true } };
+  }
+  if (v.how === 'convert') {
+    const stopAt = spec.mode === 'standard' ? (yield* fills()).from : -1;
+    return { text: v.text, sel, bin: { offset: v.nul, bytes: v.text.length, stopAt } };
+  }
+  const window = v.nul < Math.min(v.text.length, RG_BUFFER);
+  return { text: v.text, sel, bin: { offset: window ? v.nul : -1, mmap: true, window } };
+}
+// RG-BINARY-MMAP's look inside each line rg prints: (ls, end) -> the first NUL in [ls, end), or -1. Lines
+// come in ascending order, so the text is scanned once.
+function nulFinder(text) {
+  let next = -2;
+  return (ls, end) => {
+    if (next === -1) return -1;
+    if (next < ls) next = text.indexOf(0, ls);
+    return next !== -1 && next < end ? next : -1;
+  };
+}
+// The standard printer's last line for a file with binary data (grep-printer's write_binary_message).
+const binaryMessage = (bin, path, off) => Buffer.from(`${path ? path + ': ' : ''}${bin.quit ? 'WARNING: stopped searching binary file after match' : 'binary file matches'}`
+  + ` (found "${BACKSLASH}0" byte around offset ${off})\n`);
 
 // Every line of `text` decided by the matcher alone: stdin, and matchFilesAlone.
 function matchTextLines(text, t, deadline, first) { return decideLines(text, candidateLines(text, null, true), t, deadline, first); }
@@ -997,7 +1216,7 @@ function matchFilesAlone(files, pattern, opts = {}) {
   const out = new Map();
   for (const f of files) {
     if (out.has(f)) continue;
-    const m = matchTextLines(readRgText(f, opts.cwd), t, opts.deadline, opts.first);
+    const m = matchTextLines(rgText(readRgBytes(f, opts.cwd)), t, opts.deadline, opts.first);
     if (m.length) out.set(f, m);
   }
   return out;
@@ -1031,9 +1250,10 @@ function* selectedLines(text, matches) {
   return sel;
 }
 // RG-CONTEXT, stated once for every printer: each selected line with spec.before lines before it and
-// spec.after after it, merged where they meet. Yields { ls, num, L } for every line printed, in order (L
-// the selected line, null for a context line), and GAP before a line that does not follow the one
-// printed before it in this file (and before the first).
+// spec.after after it, merged where they meet. Yields { ls, num, L, at } for every line printed, in order (L
+// the selected line, null for a context line; `at` where rg's search was when it printed the line: an
+// after-context line's own start, a before-context line's match's, RG-BINARY-QUIT's and -CONVERT's fills),
+// and GAP before a line that does not follow the one printed before it in this file (and before the first).
 const GAP = { gap: true };
 function* eachPrintedLine(text, sel, spec) {
   const next = (ls) => { const i = text.indexOf(0x0a, ls); return i === -1 || i + 1 >= text.length ? -1 : i + 1; };
@@ -1044,7 +1264,7 @@ function* eachPrintedLine(text, sel, spec) {
   let cur = -1, curNum = 0, pend = 0;
   const drainAfter = (upTo) => {
     const got = [];
-    for (let nx; pend > 0 && (nx = next(cur)) !== -1 && (upTo === -1 || nx < upTo); pend--) { got.push({ ls: nx, num: curNum + 1, L: null }); cur = nx; curNum++; }
+    for (let nx; pend > 0 && (nx = next(cur)) !== -1 && (upTo === -1 || nx < upTo); pend--) { got.push({ ls: nx, num: curNum + 1, L: null, at: nx }); cur = nx; curNum++; }
     return got;
   };
   for (const L of sel) {
@@ -1053,8 +1273,8 @@ function* eachPrintedLine(text, sel, spec) {
     let first = L.ls, firstNum = n;
     for (let k = 0, p; k < spec.before && (p = prev(first)) !== -1 && (cur === -1 || p > cur); k++) { first = p; firstNum--; }
     if (cur === -1 || next(cur) !== first) yield GAP;
-    for (let ls = first, num = firstNum; ls !== L.ls; ls = next(ls), num++) yield { ls, num, L: null };
-    yield { ls: L.ls, num: n, L };
+    for (let ls = first, num = firstNum; ls !== L.ls; ls = next(ls), num++) yield { ls, num, L: null, at: L.ls };
+    yield { ls: L.ls, num: n, L, at: L.ls };
     cur = L.ls; curNum = n; pend = spec.after;
   }
   yield* drainAfter(-1);
@@ -1094,11 +1314,17 @@ function lineEndAt(text, ls) { const i = text.indexOf(0x0a, ls); return i === -1
 // One file's (or stdin's) output into `out` (outBuffers): true when rg found something in it.
 // `state.printed` carries "something was printed before" across files (RG-CONTEXT's `--`); `state.json`
 // the JSON printer's running totals (its summary); `state.limit` the caller's maxBuffer, past which it
-// stops (Task 7 review I2: what execFile would kill the child for). A generator: it yields TICK.
+// stops (Task 7 review I2: what execFile would kill the child for). e.sel: the file's selected lines
+// (selectedLines), cut to what rg searched; e.bin: binaryOutcome's report, null for text; neither for a
+// -l whose file was not read. A generator: it yields TICK.
 function* printFile(spec, e, out, state) {
-  const { text, matches } = e;
-  if (spec.mode === 'files') { out.push(Buffer.from(e.disp + (spec.nul ? '\0' : '\n'))); return true; }
-  const sel = yield* selectedLines(text, matches);
+  const { text } = e;
+  if (spec.mode === 'files') {
+    if (e.sel && !e.sel.length) return false;
+    out.push(Buffer.from(e.disp + (spec.nul ? '\0' : '\n')));
+    return true;
+  }
+  const sel = e.sel;
   if (!sel.length) return false;
   if (spec.mode === 'json') { yield* printJson(spec, e, sel, out, state); return true; }
   const path = e.withFilename ? Buffer.from(e.disp) : null;
@@ -1117,13 +1343,38 @@ function* printFile(spec, e, out, state) {
     return p;
   };
   const ctx = spec.before > 0 || spec.after > 0;
-  let n = 0;
+  // RG-BINARY-CONVERT and RG-BINARY-MMAP: the first line rg would print once it has seen binary data
+  // ends the file (a match among them counts toward its last line); RG-BINARY-MMAP finds a NUL past its
+  // first 64 KiB in the lines it prints.
+  const bin = e.bin;
+  let off = bin ? bin.offset : -1;
+  const nulIn = bin && bin.mmap && !bin.window ? nulFinder(text) : null;
+  const stops = (ev) => {
+    if (!bin) return false;
+    if (bin.stopAt >= 0) return ev.at >= bin.stopAt;
+    if (!bin.mmap) return false;
+    if (bin.window) return true;
+    if (off !== -1) return true;
+    const le = lineEndAt(text, ev.ls), z = nulIn(ev.ls, le < text.length ? le + 1 : le);
+    if (z !== -1) off = z;
+    return z !== -1;
+  };
+  // `--` before a group: between files only once the file prints a line (grep-printer's search
+  // separator), inside a file at once (the searcher's context break, written before the line it precedes
+  // is judged).
+  let n = 0, matches = 0, wrote = false, pendingSep = false;
   for (const ev of eachPrintedLine(text, sel, spec)) {
-    if (ev === GAP) { if (ctx && state.printed) out.push(SEP); continue; }
+    if (ev === GAP) {
+      if (ctx && state.printed) { if (wrote) out.push(SEP); else pendingSep = true; }
+      continue;
+    }
     const { ls, num, L } = ev;
+    if (stops(ev)) { if (L) matches++; break; }
+    if (pendingSep) { out.push(SEP); pendingSep = false; }
+    wrote = true;
     const ms = L && L.ms;
     const sep = ms ? ':' : '-';
-    if (ms) state.printed = true;
+    if (ms) { state.printed = true; matches++; }
     if (ms && spec.only && ms.length) {
       for (const m of ms) {
         out.push(...prefix(num, sep), cols && m.end - m.start > cols ? OMITTED_MATCH : text.subarray(m.start, m.end), NL);
@@ -1138,7 +1389,8 @@ function* printFile(spec, e, out, state) {
     if (out.len > state.limit) return true;
     if (++n % TICK_EVERY === 0) yield TICK;
   }
-  return true;
+  if (bin && off !== -1 && matches > 0) { out.push(binaryMessage(bin, e.withFilename ? e.disp : null, off)); state.printed = true; }
+  return matches > 0;
 }
 
 // ---- rg's JSON Lines printer (grep-native Task 7) -------------------------------------------------
@@ -1248,6 +1500,11 @@ function* printJson(spec, e, sel, out, state) {
   const w = new ByteWriter();
   w.ascii('{"type":"begin","data":{"path":'); w.bytes(path); w.ascii('}}\n');
   let matchedLines = 0, matches = 0, n = 0;
+  // RG-BINARY-*: the end message's binary_offset (RG-BINARY-MMAP: found in the first line printed that
+  // holds a NUL, past its first 64 KiB) and bytes_searched.
+  const bin = e.bin;
+  let off = bin ? bin.offset : -1;
+  const nulIn = bin && bin.mmap && off === -1 ? nulFinder(text) : null;
   // Past the caller's maxBuffer the rest is never printed: what is written so far goes out, unfinished,
   // as a killed rg's would.
   const full = () => out.len + w.len > state.limit;
@@ -1255,6 +1512,7 @@ function* printJson(spec, e, sel, out, state) {
     if (ev === GAP) continue;
     const { ls, num, L } = ev;
     const le = lineEndAt(text, ls), end = le < text.length ? le + 1 : le;
+    if (nulIn && off === -1) off = nulIn(ls, end);
     w.ascii(L ? '{"type":"match","data":{"path":' : '{"type":"context","data":{"path":'); w.bytes(path);
     w.ascii(',"lines":');
     // a line longer than what is left of maxBuffer stops inside it, as a killed rg's output would
@@ -1275,11 +1533,12 @@ function* printJson(spec, e, sel, out, state) {
   const printed = w.len;
   const ns = clockNs() - t0;
   w.ascii('{"type":"end","data":{"path":'); w.bytes(path);
-  w.ascii(`,"binary_offset":null,"stats":{"elapsed":${jsonDuration(ns, false)},"searches":1,"searches_with_match":1,"bytes_searched":${text.length},`
+  const searched = !bin ? text.length : bin.mmap ? (off !== -1 ? off : text.length) : bin.bytes;
+  w.ascii(`,"binary_offset":${off !== -1 ? off : 'null'},"stats":{"elapsed":${jsonDuration(ns, false)},"searches":1,"searches_with_match":1,"bytes_searched":${searched},`
     + `"bytes_printed":${printed},"matched_lines":${matchedLines},"matches":${matches}}}}\n`);
   out.push(w.done());
   Object.assign(totals, { elapsedNs: totals.elapsedNs + ns, searches: totals.searches + 1, withMatch: totals.withMatch + 1,
-    bytesSearched: totals.bytesSearched + text.length, bytesPrinted: totals.bytesPrinted + printed,
+    bytesSearched: totals.bytesSearched + searched, bytesPrinted: totals.bytesPrinted + printed,
     matchedLines: totals.matchedLines + matchedLines, matches: totals.matches + matches });
 }
 // ripgrep's summary: serde_json's json! value, so every object's keys are sorted.
@@ -1419,22 +1678,44 @@ function* searchCore(spec, opts) {
       broke = true;
     }
   }
+  // RG-BINARY-MMAP: whether rg memory-maps this search's named files (never on macOS).
+  const platform = opts.platform || process.platform;
+  const mmap = mmapsNamedFiles(spec, cwd, platform);
+  // A literal's matches are the same in a file's bytes and in RG-BINARY-CONVERT's text (it holds no
+  // newline or NUL), so ugrep's ranges stand; anything else is decided again over rg's text.
+  const literal = takesUgrepRanges(t);
   for (const e of entries) {
     if (e.error) { err.push(Buffer.from(e.error + '\n')); broke = true; continue; }
-    let text, m;
-    if (e.stdin) { text = rgText(toBuf(yield { op: 'stdin' })); m = yield { op: 'decide', text, t, first }; if (m.refusal) return m.refusal; m = m.matches; }
-    else {
+    let v = null, m;
+    const how = binaryHow(e, mmap);
+    if (e.stdin) {
+      v = rgView(toBuf(yield { op: 'stdin' }), how, { stdin: true, pipe64k: platform === 'darwin' });
+      m = yield { op: 'decide', text: v.text, t, first };
+      if (m.refusal) return m.refusal;
+      m = m.matches;
+    } else {
       m = matches.get(e.file);
       if (!m || !m.length) continue;
       pastDeadline();
-      // -l reads nothing of a named file, and of a walked one only what RG-BINARY-QUIT-FIRST-READ needs.
-      if (spec.mode === 'files' && !e.walked) text = Buffer.alloc(0);
-      else {
-        try { text = readRgText(e.file, cwd, spec.mode === 'files' ? FIRST_READ : 0); } catch (x) { err.push(Buffer.from(`rg: ${e.disp}: ${osErrorText(x)}\n`)); broke = true; continue; }
+      // -l reads nothing of a named file whose matches stand whatever its bytes hold.
+      if (!(spec.mode === 'files' && !e.walked && (how === 'mmap' || literal))) {
+        try { v = rgView(readRgBytes(e.file, cwd), how); } catch (x) { err.push(Buffer.from(`rg: ${e.disp}: ${osErrorText(x)}\n`)); broke = true; continue; }
+        if (v.how === 'convert' && v.nul !== -1 && !(literal && v.read.kind === 'plain')) {
+          m = yield { op: 'decide', text: v.text, t, first };
+          if (m.refusal) return m.refusal;
+          m = m.matches;
+        }
       }
     }
-    if (!m.length || (e.walked && binaryAtFirstRead(text))) continue;
-    if (yield* printFile(spec, { ...e, text, matches: m, withFilename }, out, state)) found = true;
+    if (!m.length) continue;
+    let fe = { ...e, matches: m, withFilename };
+    if (v) {
+      const sel = yield* selectedLines(v.text, m);
+      const o = yield* binaryOutcome(v, sel, spec);
+      if (o.squash) continue;
+      fe = { ...fe, text: o.text, sel: o.sel, bin: o.bin };
+    }
+    if (yield* printFile(spec, fe, out, state)) found = true;
     // Past the caller's maxBuffer: nothing more is printed (its execFile kills the child here).
     if (out.len > state.limit) break;
     yield TICK;
@@ -1531,7 +1812,7 @@ function searchSync(plan, opts) {
     tick: () => { if (deadline && Date.now() > deadline) throw timedOutError(); return null; },
   };
   let res;
-  try { res = driveSync(searchCore(spec, { cwd: opts.cwd, onRejected: opts.onRejected, ugrepName: ugrep && leafOf(ugrep), deadline, maxBuffer: opts.maxBuffer }), handlers); } catch (e) {
+  try { res = driveSync(searchCore(spec, { cwd: opts.cwd, onRejected: opts.onRejected, ugrepName: ugrep && leafOf(ugrep), deadline, maxBuffer: opts.maxBuffer, platform: opts.platform }), handlers); } catch (e) {
     if (e && e.timedOut) return { stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), status: null, signal: opts.killSignal || 'SIGTERM', errorCode: 'ETIMEDOUT' };
     throw e;
   }
@@ -1627,7 +1908,7 @@ function searchChild(plan, opts, ctx) {
     child.emit('spawn');
     if (stopped) { sh.finish({ status: null, signal: stopped, stderr: null }); return; }
     let res;
-    try { res = await driveAsync(searchCore(spec, { cwd: opts.cwd, onRejected: ctx.onRejected, ugrepName: ugrep && leafOf(ugrep), maxBuffer: ctx.maxBuffer }), handlers, () => !!stopped); }
+    try { res = await driveAsync(searchCore(spec, { cwd: opts.cwd, onRejected: ctx.onRejected, ugrepName: ugrep && leafOf(ugrep), maxBuffer: ctx.maxBuffer, platform: ctx.platform }), handlers, () => !!stopped); }
     catch (e) { res = stopped ? null : rgRefusal(`quaude's rg failed (${(e && e.message) || e}); nothing was found`); }
     if (stopped || !res) { sh.finish({ status: null, signal: stopped, stderr: null }); return; }
     sh.out(toBuf(res.stdout));
