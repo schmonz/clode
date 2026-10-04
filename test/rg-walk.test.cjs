@@ -195,18 +195,6 @@ const P9_NATIVE = [
   ["RG-NO-IGNORE","linksrepo",".",["--files","--follow","--hidden","--glob","!.git/","."],"empty",0,"./.gitignore\n./.ignore\n./real/a.md\n./ldir/a.md\n",""],
   ["RG-NO-IGNORE","linksrepo",".",["--files","--follow","--hidden","--glob","!.git/","--no-ignore-vcs","."],"empty",0,"./.gitignore\n./.ignore\n./ign.md\n./real/a.md\n./ldir/a.md\n",""],
   ["RG-NO-IGNORE","linksrepo",".",["--files","--hidden","--glob","!.git/","--no-ignore-vcs","--ignore-vcs","."],"empty",0,"./.gitignore\n./.ignore\n./real/a.md\n",""],
-  // RG-ERROR-TEXT (Task 10 fix round 2, review N1): an errno as the platform C library words it (rg-native.cjs: the
-  // engine's strerror(3)); a link to itself or through a loop (ELOOP), a name past NAME_MAX (ENAMETOOLONG), a path
-  // through a file (ENOTDIR). Node has no strerror binding: its runs map these through libuv's table (nodeText below).
-  ["RG-ERROR-TEXT","errs",".",["-L","-l","needle","."],"empty",2,"./ok.txt\n","rg: ./gone: No such file or directory (os error 2)\nrg: ./self: Too many levels of symbolic links (os error 62)\nrg: ./dd/lp: Too many levels of symbolic links (os error 62)\n"],
-  ["RG-ERROR-TEXT","errs",".",["-j1","-L","-l","needle","."],"empty",2,"./ok.txt\n","rg: ./gone: IO error for operation on ./gone: No such file or directory (os error 2)\nrg: ./self: IO error for operation on ./self: Too many levels of symbolic links (os error 62)\nrg: ./dd/lp: IO error for operation on ./dd/lp: Too many levels of symbolic links (os error 62)\n"],
-  ["RG-ERROR-TEXT","errs",".",["--files","-L","."],"empty",2,"./ok.txt\n","rg: ./gone: No such file or directory (os error 2)\nrg: ./self: Too many levels of symbolic links (os error 62)\nrg: ./dd/lp: Too many levels of symbolic links (os error 62)\n"],
-  ["RG-ERROR-TEXT","errs",".",["-j1","--files","--follow","."],"empty",2,"./ok.txt\n","rg: ./gone: IO error for operation on ./gone: No such file or directory (os error 2)\nrg: ./self: IO error for operation on ./self: Too many levels of symbolic links (os error 62)\nrg: ./dd/lp: IO error for operation on ./dd/lp: Too many levels of symbolic links (os error 62)\n"],
-  ["RG-ERROR-TEXT","errs",".",["-l","needle","self","ok.txt"],"empty",2,"ok.txt\n","rg: self: Too many levels of symbolic links (os error 62)\n"],
-  ["RG-ERROR-TEXT","errs",".",["--files","self","ok.txt"],"empty",2,"ok.txt\n","rg: self: Too many levels of symbolic links (os error 62)\n"],
-  ["RG-ERROR-TEXT","errs",".",["-l","needle",NREP,"ok.txt"],"empty",2,"ok.txt\n",`rg: ${NREP}: File name too long (os error 63)\n`],
-  ["RG-ERROR-TEXT","errs",".",["-l","needle","ok.txt/x","ok.txt"],"empty",2,"ok.txt\n","rg: ok.txt/x: Not a directory (os error 20)\n"],
-  ["RG-ERROR-TEXT","errs",".",["-c","needle","dd/lp","ok.txt"],"empty",2,"ok.txt:1\n","rg: dd/lp: Too many levels of symbolic links (os error 62)\n"],
   // 2.1.283's environment scan eo() (fix round 2, review N2), its argv verbatim: RG-NO-MESSAGES (rg's messages unwritten, the
   // status kept; --no-heading and --color=never as printing to a pipe) and RG-MAX-FILESIZE (a walked file past N bytes skipped).
   ["RG-NO-MESSAGES","envscan",".",["-o","-H","--no-line-number","--no-messages","--no-heading","--color=never","--null","--hidden","-g","!.git","-g","!node_modules","-g","*.toml","-g","*.yaml","-g","*.yml","-g","*.json","-g","*.cfg","--max-filesize","4M","-e","[a-z0-9.+-]?(s3|gs|az)://[a-z0-9][a-z0-9._-]*","."],"empty",0,"./b.json\u0000s3://json-b\n./cfg/a.toml\u0000s3://my-bucket\n./cfg/a.toml\u0000gs://g-b.x\n./cfg/a.toml\u0000az://ok-1\n./atlimit.yaml\u0000s3://at-limit\n./.h.yml\u0000s3://hidden\n",""],
@@ -256,6 +244,38 @@ const P9_NATIVE = [
   ["RG-GLOB-DIALECT", "uni", ".", ["-j1", "-l", "--iglob", "CAF\u00c9.TXT", "needle", "."], "empty", 1, "", ""],
   ["RG-GLOB-DIALECT", "uni", ".", ["-j1", "-l", "--iglob", "CAF\u00e9.TXT", "needle", "."], "empty", 0, "./caf\u00c3\u00a9.txt\n", ""],
 ];
+
+// RG-ERROR-TEXT (Task 10 fix round 2, review N1): an errno as the platform C library words it (rg-native.cjs: the
+// engine's strerror(3)); a link to itself or through a loop (ELOOP), a name past NAME_MAX (ENAMETOOLONG), a path
+// through a file (ENOTDIR), a broken link (ENOENT). Per platform, because the number and the words are the libc's:
+// darwin's measured on this Mac, linux's in a node:24.21.0-bookworm container (linux-x64 native); a platform with no
+// recorded native (NetBSD has no native Claude Code) runs none of these rows. Node has no strerror binding: its runs
+// map these through libuv's table (nodeText below).
+const P9_ERROR_TEXT = {
+  darwin: [
+    ["RG-ERROR-TEXT","errs",".",["-L","-l","needle","."],"empty",2,"./ok.txt\n","rg: ./gone: No such file or directory (os error 2)\nrg: ./self: Too many levels of symbolic links (os error 62)\nrg: ./dd/lp: Too many levels of symbolic links (os error 62)\n"],
+    ["RG-ERROR-TEXT","errs",".",["-j1","-L","-l","needle","."],"empty",2,"./ok.txt\n","rg: ./gone: IO error for operation on ./gone: No such file or directory (os error 2)\nrg: ./self: IO error for operation on ./self: Too many levels of symbolic links (os error 62)\nrg: ./dd/lp: IO error for operation on ./dd/lp: Too many levels of symbolic links (os error 62)\n"],
+    ["RG-ERROR-TEXT","errs",".",["--files","-L","."],"empty",2,"./ok.txt\n","rg: ./gone: No such file or directory (os error 2)\nrg: ./self: Too many levels of symbolic links (os error 62)\nrg: ./dd/lp: Too many levels of symbolic links (os error 62)\n"],
+    ["RG-ERROR-TEXT","errs",".",["-j1","--files","--follow","."],"empty",2,"./ok.txt\n","rg: ./gone: IO error for operation on ./gone: No such file or directory (os error 2)\nrg: ./self: IO error for operation on ./self: Too many levels of symbolic links (os error 62)\nrg: ./dd/lp: IO error for operation on ./dd/lp: Too many levels of symbolic links (os error 62)\n"],
+    ["RG-ERROR-TEXT","errs",".",["-l","needle","self","ok.txt"],"empty",2,"ok.txt\n","rg: self: Too many levels of symbolic links (os error 62)\n"],
+    ["RG-ERROR-TEXT","errs",".",["--files","self","ok.txt"],"empty",2,"ok.txt\n","rg: self: Too many levels of symbolic links (os error 62)\n"],
+    ["RG-ERROR-TEXT","errs",".",["-l","needle",NREP,"ok.txt"],"empty",2,"ok.txt\n",`rg: ${NREP}: File name too long (os error 63)\n`],
+    ["RG-ERROR-TEXT","errs",".",["-l","needle","ok.txt/x","ok.txt"],"empty",2,"ok.txt\n","rg: ok.txt/x: Not a directory (os error 20)\n"],
+    ["RG-ERROR-TEXT","errs",".",["-c","needle","dd/lp","ok.txt"],"empty",2,"ok.txt:1\n","rg: dd/lp: Too many levels of symbolic links (os error 62)\n"],
+  ],
+  linux: [
+    ["RG-ERROR-TEXT","errs",".",["-L","-l","needle","."],"empty",2,"./ok.txt\n","rg: ./gone: No such file or directory (os error 2)\nrg: ./self: Too many levels of symbolic links (os error 40)\nrg: ./dd/lp: Too many levels of symbolic links (os error 40)\n"],
+    ["RG-ERROR-TEXT","errs",".",["-j1","-L","-l","needle","."],"empty",2,"./ok.txt\n","rg: ./gone: IO error for operation on ./gone: No such file or directory (os error 2)\nrg: ./self: IO error for operation on ./self: Too many levels of symbolic links (os error 40)\nrg: ./dd/lp: IO error for operation on ./dd/lp: Too many levels of symbolic links (os error 40)\n"],
+    ["RG-ERROR-TEXT","errs",".",["--files","-L","."],"empty",2,"./ok.txt\n","rg: ./gone: No such file or directory (os error 2)\nrg: ./self: Too many levels of symbolic links (os error 40)\nrg: ./dd/lp: Too many levels of symbolic links (os error 40)\n"],
+    ["RG-ERROR-TEXT","errs",".",["-j1","--files","--follow","."],"empty",2,"./ok.txt\n","rg: ./gone: IO error for operation on ./gone: No such file or directory (os error 2)\nrg: ./self: IO error for operation on ./self: Too many levels of symbolic links (os error 40)\nrg: ./dd/lp: IO error for operation on ./dd/lp: Too many levels of symbolic links (os error 40)\n"],
+    ["RG-ERROR-TEXT","errs",".",["-l","needle","self","ok.txt"],"empty",2,"ok.txt\n","rg: self: Too many levels of symbolic links (os error 40)\n"],
+    ["RG-ERROR-TEXT","errs",".",["--files","self","ok.txt"],"empty",2,"ok.txt\n","rg: self: Too many levels of symbolic links (os error 40)\n"],
+    ["RG-ERROR-TEXT","errs",".",["-l","needle",NREP,"ok.txt"],"empty",2,"ok.txt\n",`rg: ${NREP}: File name too long (os error 36)\n`],
+    ["RG-ERROR-TEXT","errs",".",["-l","needle","ok.txt/x","ok.txt"],"empty",2,"ok.txt\n","rg: ok.txt/x: Not a directory (os error 20)\n"],
+    ["RG-ERROR-TEXT","errs",".",["-c","needle","dd/lp","ok.txt"],"empty",2,"ok.txt:1\n","rg: dd/lp: Too many levels of symbolic links (os error 40)\n"],
+  ],
+};
+P9_NATIVE.push(...(P9_ERROR_TEXT[process.platform] || []));
 
 // Every tree in a fresh root; fn(root). The trees' names are the keys of TREES, plus `empty` (a HOME).
 async function withTrees(fn) {
