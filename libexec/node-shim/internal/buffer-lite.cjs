@@ -59,15 +59,23 @@ class Buffer extends Uint8Array {
     }
     return out;
   }
-  toString(enc) {
-    if (enc === 'hex') return [...this].map((x) => x.toString(16).padStart(2, '0')).join('');
-    if (enc === 'base64') return b64encode(this);
+  // node: toString([encoding[, start[, end]]]) decodes bytes start..end of THIS buffer (start below 0
+  // is 0, end past the length is the length, end at or before start is ''). Ignoring them decoded the
+  // whole buffer: rg-native's record parser read every file name as all of ugrep's output.
+  toString(enc, start, end) {
+    const len = this.length;
+    const s0 = start === undefined ? 0 : Math.max(0, Math.min(len, Math.trunc(Number(start)) || 0));
+    const e0 = end === undefined ? len : Math.max(0, Math.min(len, Math.trunc(Number(end)) || 0));
+    if (e0 <= s0) return '';
+    const v = s0 === 0 && e0 === len ? this : this.subarray(s0, e0);
+    if (enc === 'hex') return [...v].map((x) => x.toString(16).padStart(2, '0')).join('');
+    if (enc === 'base64') return b64encode(v);
     if (enc === 'latin1' || enc === 'binary') {
       let s = ''; const CH = 0x8000;
-      for (let i = 0; i < this.length; i += CH) s += String.fromCharCode.apply(null, this.subarray(i, Math.min(i + CH, this.length)));
+      for (let i = 0; i < v.length; i += CH) s += String.fromCharCode.apply(null, v.subarray(i, Math.min(i + CH, v.length)));
       return s;
     }
-    return td.decode(this);
+    return td.decode(v);
   }
   slice(a, b) { return new Buffer(super.slice(a, b)); }
   equals(other) { return this.length === other.length && this.every((v, i) => v === other[i]); }
