@@ -148,6 +148,12 @@ Bash tool instead".
     Task 4, and no task of that plan names it: the bundle's own `djn` refuses whenever its
     rgPath (`Bun.which('rg') ?? 'rg'`) is not absolute, before anything is spawned, so the
     model is still told to install ripgrep on a host without one.
+  - FIXED in part (grep-native Task 6): files_with_matches and count are quaude's rg's own now
+    (libexec/rg-native.cjs: -l, -c and the standard printer, as native prints them; --max-columns
+    a no-op there, as native's is). In rg-differential, 28 of the 90 files/count cells are equal
+    (none were); every one of the other 62 is in a class below that a later task of that plan owns
+    (.git, ignore precedence, whitelist and brace globs, --type: Task 9; -U: Task 10; a binary's
+    NUL past rg's first read: Task 8).
   - With `--max-columns` dropped, 44 of the 60 files/count argv x tree cells still differ from
     native (the other 16 are empty on both sides): `--glob '!.git'` excludes no directory in
     ugrep (.git/HEAD is searched); ugrep -I drops invalid-UTF-8 files; `-c` prints zero counts;
@@ -192,7 +198,9 @@ Bash tool instead".
 - **Deferred from the grep-native Task 4 review (2026-10-03):**
   - an applet's LEGITIMATE rc 2 (an rg-compatible error, with nothing printed) becomes
     quaude's refusal today; when the emulation owns the printers, rc 2 must be native's own
-    (plan Task 6);
+    (plan Task 6). FIXED (grep-native Task 6, RG-EXIT): a path rg cannot read is rg's own error
+    on stderr (`rg: ./locked.txt: Permission denied (os error 13)`), the rest still searched and
+    printed, exit 2, never quaude's refusal; native's literals in test/rg-native.test.cjs;
   - one carve reader shared by test/build-gates (see "readCarve has seven copies"), and one list
     of bun-shim's companions shared by the build sites (test/shim-companions.test.cjs derives
     COMPANIONS from bun-shim.cjs, transitively since rg-native.cjs gained rg-regex.cjs; the
@@ -243,7 +251,8 @@ Bash tool instead".
     340 ms at 16, 696 at 32, 2,276 at 128). So a prefilter holds none of the first two, and no exact
     part heavier than 32 (rg-regex.cjs, THE PIECES RULE): it is the best piece every match must
     contain (`.{0,100}needle` proposes by `needle`, `(?:[^a]{0,16}b){16}` by `(?:.){0,16}b`);
-  - FOR THE PRINTERS (Tasks 6/7): ugrepMatches returns the MATCHER's matches, including the one at
+  - FOR THE PRINTERS (Tasks 6/7; Task 6's -l, -c and standard printer DONE, RG-RE-MATCH-AT-
+    UNTERMINATED-END and RG-TEXT-BOM measured per printer; --json is Task 7's): ugrepMatches returns the MATCHER's matches, including the one at
     the end of an unterminated last line (RG-RE-MATCH-AT-UNTERMINATED-END: `$` on `abc\nxyz`, native
     selects line 2 and prints submatches []); rg's printers do not print that match. And
     RG-TEXT-BOM: offsets are into rg's decoding of a file with a BOM (UTF-8 stripped, UTF-16
@@ -258,6 +267,33 @@ Bash tool instead".
     slices of 65,536 steps and hands the event loop back every 20 ms, inside a line too, so the
     caller's abort lands within a slice (measured under tjs, mid-line on a 200 KB line: a 300 ms
     timer fired 13-15 ms late, and the search ended in the same turn).
+- **quaude's rg answers -l, -c and the standard printer itself (grep-native Task 6, 2026-10-03):
+  what is interim, what it refuses, what is unmeasured.**
+  - THE WALK IS INTERIM: a directory's files are ugrep's listing under today's walk flags (`-r
+    --ignore-files`, `-.` for --hidden, --include/--exclude for --glob; `-l --null -e ''`), then
+    ugrepMatches searches that list: two ugrep passes per directory (the listing reads each file's
+    first block). What ugrep's walk could not read comes back as its warnings (`cannot read X`,
+    `cannot open directory X`, the phrasing of 7.8.2 and 5.0.0), re-spelled as rg's errors. Task
+    9's JS walk replaces both. A NAMED file skips the walk (RG-EXPLICIT-FILE).
+  - RG-BINARY-QUIT-FIRST-READ IS INTERIM: a walked file (or stdin) whose first 64 KiB of text hold
+    a NUL prints nothing; native agrees for a NUL there, not for one later (late.dat: -l lists it,
+    -c prints nothing; ours counts it). Task 8 replaces it with rg's LineBuffer.
+  - REFUSED BY NAME, never passed to ugrep: every flag outside the set a search reads (-l -c -i -s
+    -n -N -H -I -0 -o -. -A -B -C -M -e -g -j, their long names, --iglob --no-ignore --no-hidden
+    --case-sensitive), so -U (Task 10), -S/--smart-case, -w, -F, -v and the rest; more than one -e;
+    an rg with no path (rg then reads stdin or walks `./` by what its stdin is). A number flag that
+    is not a number is rg's own usage error, its text measured.
+  - STDIN (target `-`) is decided by the matcher alone, every line, no ugrep: about 1 microsecond a
+    byte under tjs. A caller whose stdin slot is not a pipe ('inherit', 'ignore') gives quaude's rg
+    nothing to read, where rg would read an inherited stdin.
+  - THE SYNCHRONOUS TWIN (spawnSync, execFileSync) is bounded by the caller's timeout (each ugrep run
+    gets the time left; each slice of deciding checks it; ETIMEDOUT as node reports it), and per
+    line by RG-RE-REFUSE-COST with or without one. 2.1.283 reaches rg through no synchronous surface.
+  - THE ASYNC TWIN asks `ugrep --version` without blocking (ugrepCapabilitiesAsync): measured in a
+    noble container, the synchronous probe held the loop ~300 ms on a first search.
+  - UNMEASURED ON WINDOWS: a walked file's path joins its target with `/` (Rust's Path::join gives
+    `\` there), and a path's error text is libuv's message capitalized (`No such file or directory`,
+    `Permission denied` match macOS's strerror, which is what native prints; Windows' does not).
 - quaude's rg plumbing, deferred from the Task 5 review (2026-10-03): the sync ugrepMatches
   reports a run that hit its maxBuffer (ENOBUFS) as "could not be run", and the async twin
   buffers without any cap (M4); ARGV_BUDGET counts only the file names, not the pattern, against
