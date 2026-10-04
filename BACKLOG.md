@@ -284,8 +284,21 @@ Bash tool instead".
     each Read-deny rule into an `--iglob` (`Vin`; `!**/x/**` shapes are equal today, measured), so
     a deny rule written without its `/**` would let Grep list files the user denied. Until then the
     Grep tool's own deny shapes (`**/x/**`, `**/.git/hooks/**`) are the ones that hold.
-  - A NAMED FIFO or device refuses (RG-REFUSE-SPECIAL-FILE): native reads it until a writer closes
-    it (none: it waits); a walked one is skipped by both (review M-2).
+  - A NAMED FIFO, or a device that has bytes or would wait (/dev/zero, a terminal), refuses
+    (RG-REFUSE-SPECIAL-FILE): native reads it until it ends (a FIFO until a writer closes it; none:
+    it waits); a walked one is skipped by both (review M-2). Any other named special path answers as
+    native (RG-SPECIAL-FILE, re-review N1): /dev/null is an empty file, a socket is rg's per-path
+    error, and neither takes the rest of the search down.
+  - A UGREP PASS THAT FAILS refuses, whatever it printed first (re-review N3): the Grep tool shows
+    rc-2 output to the model as the whole answer. Only ugrep's per-path warnings (`cannot read X:
+    ...`, `X: No such file or directory`, naming a path it was given) are rg's own errors, the rest
+    answered, rc 2.
+  - ERROR TEXT IS LIBUV'S, NOT rg's strerror (re-review N2; stderr only, which the Grep tool never
+    shows the model): `Too many symbolic links encountered` where native says `Too many levels of
+    symbolic links` (ELOOP), `i/o error` with no `(os error 5)` for EIO, and libuv's wording for
+    ENAMETOOLONG and EISDIR; an errno libuv has no name for (EOPNOTSUPP on a socket, darwin 102)
+    reads `Unknown system error -102 (os error 102)` where native says `Operation not supported on
+    socket (os error 102)`. The fix is the engine's strerror, not a table here.
   - THE SYNC TWIN'S BOUND reaches every spawn (ugrep --version included) and is checked before each
     file is read; one read, once started, runs to its end (review M-2).
   - RG-BINARY-QUIT-FIRST-READ IS INTERIM: a WALKED file whose first 64 KiB of text hold a NUL
