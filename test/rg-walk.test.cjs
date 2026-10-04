@@ -144,6 +144,10 @@ const P9_NATIVE = [
   ["RG-GLOB-DENY-RULES", "repo", ".", ["--hidden", "-l", "--null", "needle", "--iglob", "!**", "."], "empty", 1, "", ""],
   ["RG-GLOB-DENY-RULES", "repo", ".", ["--hidden", "-l", "--null", "needle", "--iglob", "!**/code/[{]b[}].ts", "."], "empty", 0, "./.hid.txt\u0000./.git/HEAD\u0000./private/p.txt\u0000./private/in/q.txt\u0000./a.txt\u0000./sub/anch.txt\u0000./sub/ign.txt\u0000./dotig.txt\u0000./keep.ign\u0000./code/z.js\u0000./code/a.TXT\u0000./code/x.ts\u0000./g1.txt\u0000./code/Makefile\u0000./code/README.md\u0000./code/*.txt\u0000./g2.txt\u0000./code/y.tsx\u0000./code/.h.ts\u0000./other/private\u0000", ""],
   ["RG-GLOB-DENY-RULES", "repo", ".", ["--hidden", "-l", "--null", "needle", "--iglob", "!**/CODE/**", "--iglob", "!**/CODE", "."], "empty", 0, "./.hid.txt\u0000./.git/HEAD\u0000./a.txt\u0000./other/private\u0000./private/p.txt\u0000./dotig.txt\u0000./g2.txt\u0000./sub/anch.txt\u0000./keep.ign\u0000./private/in/q.txt\u0000./g1.txt\u0000./sub/ign.txt\u0000", ""],
+  // RG-IGNORE-FILES (review I-1): an ignore file's UTF-8 BOM is no BOM to rg (ignore 0.4.23 reads lines as they
+  // are), so it is part of the first line's glob, which then matches nothing; CRLF lines lose their CR.
+  ["RG-IGNORE-FILES", "bomig", ".", ["-j1", "-l", "needle", "."], "empty", 0, "./a.log\n./ok.txt\n", ""],
+  ["RG-IGNORE-FILES", "bomig", ".", ["-l", "needle", "."], "empty", 0, "./ok.txt\n./a.log\n", ""],
 ];
 
 // Every tree in a fresh root; fn(root). The trees' names are the keys of TREES, plus `empty` (a HOME).

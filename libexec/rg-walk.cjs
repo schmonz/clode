@@ -27,7 +27,8 @@
 //                      hiding, and once there is one, a FILE no glob matches is excluded (a directory
 //                      no glob matches falls through to the ignore rules)
 //   RG-IGNORE-FILES    in each directory: .rgignore over .ignore over .gitignore over .git/info/exclude
-//                      over the global excludes; within a kind the deepest directory's matching line wins
+//                      over the global excludes; within a kind the deepest directory's matching line wins;
+//                      a file's lines are read as they are (a UTF-8 BOM is part of the first one, \r\n ends one)
 //   RG-IGNORE-REPO     .gitignore, .git/info/exclude and the global excludes apply only in a git repo (a
 //                      `.git`, file or directory, in the directory or above it), and .gitignore files
 //                      only up to the directory holding that `.git`; .ignore and .rgignore always apply
@@ -288,7 +289,9 @@ function addFile(fs, gi, file, shown) {
   const errs = [];
   let io = false;
   let start = 0, n = 0;
-  const td = new TextDecoder('utf-8', { fatal: true });
+  // ignoreBOM: a UTF-8 BOM is no BOM to rg (ignore 0.4.23 reads each line as it is, so the BOM is part of the
+  // first line's glob); TextDecoder would drop it from every line it decodes (review I-1, measured).
+  const td = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
   while (start < bytes.length) {
     let end = bytes.indexOf(0x0a, start);
     const next = end === -1 ? bytes.length : end + 1;
@@ -571,7 +574,7 @@ function globalExcludesPath(fs, path, env) {
     const m = new RegExp(`(?:^|\\n)${WS}*excludesfile${WS}*=${WS}*"?${WS}*([^\\t\\n\\x0b\\f\\r ]+?)${WS}*"?${WS}*(?=\\n|$)`, 'i').exec(data);
     if (!m) return null;
     let s;
-    try { s = new TextDecoder('utf-8', { fatal: true }).decode(Buffer.from(m[1], 'latin1')); } catch { return null; }
+    try { s = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(Buffer.from(m[1], 'latin1')); } catch { return null; }
     return home ? s.split('~').join(home) : s;
   };
   return (home && parse(read(path.join(home, '.gitconfig')))) || (xdg && parse(read(path.join(xdg, 'git', 'config'))))

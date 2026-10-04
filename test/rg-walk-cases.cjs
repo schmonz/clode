@@ -13,6 +13,7 @@
 //   up       a repo whose .gitignore applies to up/inner, searched from inside it
 //   nested   top/.ignore over top/tree: rg's parent-directory rules, matched as rg rebuilds the path
 //   badig    ignore files with lines that do not parse, a line that is not UTF-8, and the escapes
+//   bomig    a .gitignore that starts with a UTF-8 BOM (rg reads it as part of the first line) and has CRLFs
 //   h1 h2    HOMEs: XDG's git/ignore; ~/.gitconfig's core.excludesFile with a ~
 const NEEDLE = 'needle\n';
 const TREES = {
@@ -46,6 +47,10 @@ const TREES = {
     ['a.txt', NEEDLE], ['b.txt', NEEDLE], ['c.txt', NEEDLE], ['d.txt', NEEDLE],
     ['s/a.txt', NEEDLE], ['s/b.txt', NEEDLE], ['s/c.txt', NEEDLE], ['s/d.txt', NEEDLE],
     ['s/sub/!x.txt', NEEDLE], ['s/sub/#y.txt', NEEDLE], ['s/sub/trail.txt', NEEDLE], ['s/sub/keep ', NEEDLE], ['s/sub/keep', NEEDLE],
+  ],
+  bomig: [
+    ['.git/HEAD', 'x\n'], ['.gitignore', Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from('*.log\r\nfoo.txt\r\n')])],
+    ['a.log', NEEDLE], ['foo.txt', NEEDLE], ['ok.txt', NEEDLE],
   ],
   h1: [['.config/git/ignore', 'g1.txt\n']],
   h2: [['.gitconfig', '[core]\n\texcludesFile = ~/x/ex\n'], ['x/ex', 'g2.txt\n']],
