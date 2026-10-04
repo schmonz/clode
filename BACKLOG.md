@@ -22,6 +22,14 @@ pointed at an empty directory (agentic-tools, node-shim-agentic and updateguard 
 5 of 5; the strict-mode sweep). The same rows also WRITE the real ~/.claude (the headless plugin install
 stamped ~/.claude/plugins/known_marketplaces.json's lastUpdated during the run). Give them a throwaway
 config dir (CLAUDE_CONFIG_DIR, or HOME) as the --continue row and the Grep-outside-cwd row already do.
+FIXED (Task 10b fix round, ruling G30): every env that talks to a model in test/ now spreads
+`...throwawayHome(<its own temp dir>)` (test/throwaway-home.cjs: HOME, USERPROFILE and CLAUDE_CONFIG_DIR under that dir,
+outside the run's cwd) or sets both itself; the guard bundle-runs-own-home (test/bundle-home-hermetic.test.cjs) fails any
+literal that does not, or that sets HOME to process.env.HOME (18 literals; exempt by name: a unit test's input, a fixture
+string, and frame-oracle, whose env is built from nothing and whose captures each get test/e2e.cjs's seeded HOME).
+clode-update's fixture unsets CLAUDE_CONFIG_DIR as it unsets CLODE_STATE_ROOT, with its own CLAUDE_CONFIG_DIR test.
+The 15 edited files pass with the real HOME present (43 pass, 8 opt-in skips), and ~/.claude/plugins/known_marketplaces.json
+was not touched again.
 
 ## 87 of the 90 tools the carve can register have no driver that can fail (2026-09-28)
 

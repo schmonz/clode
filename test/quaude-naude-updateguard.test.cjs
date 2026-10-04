@@ -32,6 +32,7 @@
 //
 // Gates (clean skips, never failures): no tjs binary; no CLODE_PROVIDER_BIN.
 const { test, before, after } = require('node:test');
+const { throwawayHome } = require('./throwaway-home.cjs');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -147,7 +148,7 @@ async function driveBashTurn(bin, bash) {
       : cannedToolUseSSE(bash.name, bash.input, bash.id),
   });
   try {
-    const env = cleanEnv({ ANTHROPIC_BASE_URL: mock.url, ANTHROPIC_API_KEY: 'sk-ant-mock' });
+    const env = cleanEnv({ ...throwawayHome(fs.mkdtempSync(path.join(os.tmpdir(), 'updateguard-home-'))), ANTHROPIC_BASE_URL: mock.url, ANTHROPIC_API_KEY: 'sk-ant-mock' });
     const run = await runTarget(bin,
       ['-p', 'run the command', '--allowedTools', 'Bash', '--dangerously-skip-permissions'],
       env, 60000);

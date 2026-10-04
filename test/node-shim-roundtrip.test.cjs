@@ -49,6 +49,7 @@ test('mock round-trip under tjs: -p prints PONG, exit 0', async (t) => {
       env: {
         ...process.env,
         HOME: home,                                    // never the operator's real ~/.claude
+        CLAUDE_CONFIG_DIR: path.join(home, '.claude'),
         CLODE_DEPS: path.join(home, 'deps'),
         CLODE_CACHE: path.join(home, 'cache'),
         ANTHROPIC_BASE_URL: mock.url,

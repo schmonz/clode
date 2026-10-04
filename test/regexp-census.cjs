@@ -20,6 +20,7 @@
 // Run as a program (the guard does, through spawnSync, because the mock lives on an event loop a
 // synchronous read() cannot give it): node test/regexp-census.cjs <staged-dir> <out.json>
 const fs = require('node:fs');
+const { throwawayHome } = require('./throwaway-home.cjs');
 const os = require('node:os');
 const path = require('node:path');
 
@@ -76,7 +77,7 @@ async function runTurns(stageDir, workDir) {
     const mock = await startMockAnthropic({ respond: turn.respond });
     const cfg = fs.mkdtempSync(path.join(workDir, `cfg-${turn.name}-`));
     const censusFile = path.join(workDir, `census-${turn.name}.json`);
-    const env = { ...process.env, ANTHROPIC_BASE_URL: mock.url, ANTHROPIC_API_KEY: 'sk-ant-mock',
+    const env = { ...process.env, ...throwawayHome(cfg), ANTHROPIC_BASE_URL: mock.url, ANTHROPIC_API_KEY: 'sk-ant-mock',
       CLAUDE_CONFIG_DIR: cfg, CLODE_REGEXP_CENSUS_OUT: censusFile,
       NODE_PATH: path.join(__dirname, '..', 'deps', 'claude', 'node_modules') };
     delete env.CLODE_ENGINE;

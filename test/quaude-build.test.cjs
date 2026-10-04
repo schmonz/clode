@@ -20,6 +20,7 @@
 // suites). Hermetic: CLODE_CACHE points into the fixture tmp dir; the repo's
 // own node_modules feeds the dep members (ensureDeps early-returns).
 const { test, before, after } = require('node:test');
+const { throwawayHome } = require('./throwaway-home.cjs');
 const assert = require('node:assert');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -297,7 +298,7 @@ test('strict-mode sweep: agentic Bash mock oracle against the blobulated quaude'
   try {
     const r = await runQuaude(
       ['-p', 'run the command', '--allowedTools', 'Bash'],
-      cleanEnv({ ANTHROPIC_BASE_URL: mock.url, ANTHROPIC_API_KEY: 'sk-ant-mock' }));
+      cleanEnv({ ...throwawayHome(fs.mkdtempSync(path.join(os.tmpdir(), 'quaude-build-home-'))), ANTHROPIC_BASE_URL: mock.url, ANTHROPIC_API_KEY: 'sk-ant-mock' }));
     assert.strictEqual(r.status, 0, `stderr:\n${r.stderr}`);
     assert.match(r.stdout, /TOOLDONE/, `stdout:\n${r.stdout}`);
     assert.ok(stdoutInline(mock), 'tool_result lacks the command\'s stdout inline (missing, or degraded to the '

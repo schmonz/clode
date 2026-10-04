@@ -52,6 +52,7 @@ function mockEnv(mock, home = freshHome()) {
   return {
     ...process.env,
     HOME: home,                              // never the operator's real ~/.claude
+    CLAUDE_CONFIG_DIR: pathx.join(home, '.claude'),
     CLODE_DEPS: pathx.join(home, 'deps'),
     CLODE_CACHE: pathx.join(home, 'cache'),
     ANTHROPIC_BASE_URL: mock.url,

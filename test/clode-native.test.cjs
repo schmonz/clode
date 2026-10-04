@@ -23,6 +23,7 @@
 // see scripts/platform-tag.cjs's file header for why the toolchain and the
 // bundle live at different keys/locations).
 const { test, before, after } = require('node:test');
+const { throwawayHome } = require('./throwaway-home.cjs');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -282,7 +283,7 @@ test('acceptance 3: quaude-from-native passes the agentic Bash mock oracle', asy
       : cannedToolUseSSE(BASH.name, BASH.input, BASH.id),
   });
   try {
-    const env = { ...process.env, ANTHROPIC_BASE_URL: mock.url, ANTHROPIC_API_KEY: 'sk-ant-mock' };
+    const env = { ...process.env, ...throwawayHome(path.join(DIR, 'acceptance-3')), ANTHROPIC_BASE_URL: mock.url, ANTHROPIC_API_KEY: 'sk-ant-mock' };
     delete env.NODE_PATH;                     // the product must stay self-contained
     const r = await runNative(QUAUDE, ['-p', 'run the command', '--allowedTools', 'Bash'], env, 120000);
     assert.strictEqual(r.status, 0, `stderr:\n${r.stderr}`);

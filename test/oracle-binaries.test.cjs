@@ -14,6 +14,7 @@
 // and additionally needs Node >= 24 (SEA) + a tjs (blobulate) + a Bun-packaged CC
 // provider. Missing any of those, it SKIPs — never a false green.
 const test = require('node:test');
+const { throwawayHome } = require('./throwaway-home.cjs');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -82,6 +83,7 @@ test('naude and quaude binaries agree on the same baked Claude Code', async (t) 
         timeout: RUN_TIMEOUT,
         env: {
           ...process.env,
+          ...throwawayHome(fs.mkdtempSync(path.join(os.tmpdir(), 'oracle-bin-home-'))),
           ANTHROPIC_BASE_URL: mock.url,
           ANTHROPIC_API_KEY: 'sk-ant-mock',        // dummy; the mock ignores it. NOT a secret.
           ...extraEnv,

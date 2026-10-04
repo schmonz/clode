@@ -10,6 +10,7 @@
 // modules/fs.cjs makeFileHandle and the dogfooding transcript that surfaced it).
 // Hermetic; gated on tjs + CLODE_PROVIDER_BIN like the M3 round-trip.
 const test = require('node:test');
+const { throwawayHome } = require('./throwaway-home.cjs');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -107,6 +108,7 @@ test('agentic Bash round-trip under tjs: tool_result carries real stdout inline'
       ['-p', 'run the command', '--allowedTools', 'Bash'],
       {
         ...process.env,
+        ...throwawayHome(`${dir}-home`),
         ANTHROPIC_BASE_URL: mock.url,
         ANTHROPIC_API_KEY: 'sk-ant-mock',              // dummy; NOT a secret
         NODE_PATH: path.join(REPO, 'deps', 'claude', 'node_modules'),
@@ -170,6 +172,7 @@ test('agentic Edit round-trip under tjs: overwriting an existing file works (Fil
       ['-p', 'edit the file', '--allowedTools', 'Read,Edit', '--debug', '--debug-to-stderr'],
       {
         ...process.env,
+        ...throwawayHome(`${dir}-home`),
         ANTHROPIC_BASE_URL: mock.url,
         ANTHROPIC_API_KEY: 'sk-ant-mock',
         NODE_PATH: path.join(REPO, 'deps', 'claude', 'node_modules'),
@@ -221,7 +224,7 @@ test('a darwin-carved quaude takes the macOS branch (managed-settings under /Lib
   const mock = await startMockAnthropic({ respond: () => cannedSSE('hi') });
   try {
     const r = await bootP(cli, dir, ['-p', 'hi', '--debug', '--debug-to-stderr'],
-      { ...process.env, ANTHROPIC_BASE_URL: mock.url, ANTHROPIC_API_KEY: 'sk-ant-mock', NODE_PATH: path.join(REPO, 'deps', 'claude', 'node_modules') }, 120000);
+      { ...process.env, ...throwawayHome(`${dir}-home`), ANTHROPIC_BASE_URL: mock.url, ANTHROPIC_API_KEY: 'sk-ant-mock', NODE_PATH: path.join(REPO, 'deps', 'claude', 'node_modules') }, 120000);
     assert.strictEqual(r.status, 0, `stderr:\n${r.stderr}`);
     assert.match(r.stderr, /\/Library\/Application Support\/ClaudeCode/, 'darwin carve must use the macOS managed-settings path');
     assert.doesNotMatch(r.stderr, /\/etc\/claude-code/, 'darwin carve must NOT use the linux managed-settings path');

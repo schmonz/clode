@@ -190,6 +190,7 @@ function probeCredentialStoreAttempt() {
     stubDir = makeShadowDir(logFile, gitBin);
     const env = safeEnv({
       HOME: home,
+      CLAUDE_CONFIG_DIR: undefined,   // explicitly unset (safeEnv drops CLAUDE_*): the config dir is this HOME's .claude
       PATH: [stubDir, process.env.PATH || ''].join(path.delimiter),
       // Unroutable: the probe fails fast on connection refused, never a real network or
       // credential -- and (measured) the credential-store lookup happens during

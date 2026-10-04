@@ -26,6 +26,7 @@
 //     node --test test/naude-smoke.test.cjs
 // (or drop CLODE_CLAUDE_BIN if /usr/local/bin/claude or /usr/bin/claude exists.)
 const test = require('node:test');
+const { throwawayHome } = require('./throwaway-home.cjs');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -129,6 +130,7 @@ test('naude: real SEA build boots the baked CC and answers PONG offline', async 
     const r = await run(naude, ['-p', 'say PONG'], {
       env: {
         ...process.env,
+        ...throwawayHome(cache),
         ANTHROPIC_BASE_URL: mock.url,
         ANTHROPIC_API_KEY: 'sk-ant-mock',   // dummy; the mock ignores it. NOT a secret.
         NAUDE_CACHE: cache,

@@ -7,6 +7,7 @@
 // shared global. See docs/superpowers/plans/2026-07-24-vm-context-isolation.md.
 // tjs + CLODE_PROVIDER_BIN gated.
 const test = require('node:test');
+const { throwawayHome } = require('../throwaway-home.cjs');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -70,6 +71,7 @@ test('Workflow runs to completion under quaude (vm isolation)', async (t) => {
   });
   const env = {
     ...process.env,
+    ...throwawayHome(`${dir}-home`),
     ANTHROPIC_BASE_URL: mock.url, ANTHROPIC_API_KEY: 'sk-ant-mock',
     CLAUDE_CONFIG_DIR: configDir,
     NODE_PATH: path.join(REPO, 'deps', 'claude', 'node_modules'),

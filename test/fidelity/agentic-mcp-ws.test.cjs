@@ -5,6 +5,7 @@
 // delegation), does the MCP handshake, the model calls the ws MCP tool, and the
 // tool's result marshals back into the Anthropic tool_result.
 const test = require('node:test');
+const { throwawayHome } = require('../throwaway-home.cjs');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -84,7 +85,7 @@ test('MCP-over-WebSocket under tjs: connect + handshake + tool call over the nat
       respond: (body) => body.includes(MCP.id) ? cannedSSE('MCPDONE') : cannedToolUseSSE(MCP.name, MCP.input, MCP.id),
     });
     try {
-      const env = { ...process.env, ANTHROPIC_BASE_URL: mock.url, ANTHROPIC_API_KEY: 'sk-ant-mock', NODE_PATH: path.join(REPO, 'deps', 'claude', 'node_modules') };
+      const env = { ...process.env, ...throwawayHome(`${dir}-home`), ANTHROPIC_BASE_URL: mock.url, ANTHROPIC_API_KEY: 'sk-ant-mock', NODE_PATH: path.join(REPO, 'deps', 'claude', 'node_modules') };
       const r = await bootP(cli, dir, ['-p', 'call the mcp tool', '--allowedTools', MCP.name, '--mcp-config', mcpConfig], env, 120000);
       assert.ok(mcp.seen.includes('initialize'),
         `MCP server never got initialize — the ws transport failed to connect. seen=${JSON.stringify(mcp.seen)}\nstderr:\n${r.stderr.slice(-600)}`);

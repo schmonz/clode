@@ -12,6 +12,7 @@
 // below. The row now runs in a fresh config dir, asks for a synchronous agent, and judges the
 // answer.
 const test = require('node:test');
+const { throwawayHome } = require('../throwaway-home.cjs');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -119,7 +120,7 @@ async function engineRun(cmd, argv) {
   // tool_result. The old byte-equality check passed on those two identical errors, with no
   // subagent ever dispatched; judging the tool_result for the subagent's answer found it.
   const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'subdiff-cfg-'));
-  const env = { ...process.env, ANTHROPIC_BASE_URL: mock.url, ANTHROPIC_API_KEY: 'sk-ant-mock',
+  const env = { ...process.env, ...throwawayHome(`${dir}-home`), ANTHROPIC_BASE_URL: mock.url, ANTHROPIC_API_KEY: 'sk-ant-mock',
     CLAUDE_CONFIG_DIR: configDir, NODE_PATH: path.join(REPO, 'deps', 'claude', 'node_modules') };
   const r = await run(cmd, [...argv(cli), '-p', 'delegate the work', '--allowedTools', 'Task',
     '--debug', '--debug-to-stderr'], dir, env, 90000);

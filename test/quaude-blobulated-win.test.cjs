@@ -16,6 +16,7 @@
 // machinery: this test is validating a DIFFERENT build output's shape, not
 // driving the ordinary built product. CLODE_QUAUDE_EXE stays its own gate.
 const test = require('node:test');
+const { throwawayHome } = require('./throwaway-home.cjs');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const { spawn, spawnSync } = require('node:child_process');
@@ -51,6 +52,7 @@ test('blobulated quaude.exe -p prints PONG through the VFS module path', async (
   try {
     const r = await bootQuaude(exe, ['-p', 'say PONG'], {
       ...process.env,
+      ...throwawayHome(fs.mkdtempSync(path.join(os.tmpdir(), 'quaude-win-home-'))),
       ANTHROPIC_BASE_URL: mock.url,
       ANTHROPIC_API_KEY: 'sk-ant-mock',   // dummy; NOT a secret
     }, 120000);

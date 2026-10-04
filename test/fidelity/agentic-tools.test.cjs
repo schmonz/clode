@@ -6,6 +6,7 @@
 // tool_result content sent back) — node is the reference for "correct". Gated on
 // a tjs binary + CLODE_PROVIDER_BIN.
 const test = require('node:test');
+const { throwawayHome } = require('../throwaway-home.cjs');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -41,7 +42,7 @@ function bootP(cli, dir, args, env, timeoutMs) {
   });
 }
 function mockEnv(dir, url) {
-  return { ...process.env, ANTHROPIC_BASE_URL: url, ANTHROPIC_API_KEY: 'sk-ant-mock', NODE_PATH: path.join(REPO, 'deps', 'claude', 'node_modules') };
+  return { ...process.env, ...throwawayHome(`${dir}-home`), ANTHROPIC_BASE_URL: url, ANTHROPIC_API_KEY: 'sk-ant-mock', NODE_PATH: path.join(REPO, 'deps', 'claude', 'node_modules') };
 }
 // Every tool row judges toolResultText(mock, id) (scripts/lib/tool-result.cjs): the model's
 // view of the tool's output, and nothing else. NOT a substring search of the request body:
@@ -142,12 +143,11 @@ test('agentic Grep outside cwd under tjs: tool_results equal native\'s (never "I
   if (process.platform === 'win32') { t.skip('native literals measured on POSIX; the tripwire is a shell script'); return; }
   const bin = providerBin(); if (!bin) { t.skip('no CLODE_PROVIDER_BIN'); return; }
   const { cli, dir } = stageBundle(bin);
-  const base = fs.realpathSync(dir), work = path.join(base, 'work'), out = path.join(base, 'outside', 'tree'), home = path.join(base, 'home');
+  const base = fs.realpathSync(dir), work = path.join(base, 'work'), out = path.join(base, 'outside', 'tree');
   const T0 = 1700000000;
   for (const [root, files] of [[out, [['a.txt', 7.5], ['sub/b.txt', 3.1], ['.h.txt', 1.2]]], [work, [['in/c.txt', 5.5], ['in/deep/d.txt', 2.5]]]]) {
     for (const [f, dt] of files) { const p = path.join(root, f); fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, `one\nbeta ${f}\n`); fs.utimesSync(p, T0 + dt, T0 + dt); }
   }
-  fs.mkdirSync(home);
   const trip = path.join(base, 'trip');
   fs.mkdirSync(trip);
   fs.writeFileSync(path.join(trip, 'rg'), '#!/bin/sh\necho TRIPWIRE-HOST-RG-RAN "$@"\nexit 99\n', { mode: 0o755 });
@@ -177,7 +177,7 @@ test('agentic Grep outside cwd under tjs: tool_results equal native\'s (never "I
     });
     try {
       const r = await bootP(cli, work, ['-p', 'search', '--allowedTools', 'Grep,Glob', '--add-dir', path.dirname(out)],
-        { ...mockEnv(work, mock.url), HOME: home, PATH }, 180000);
+        { ...mockEnv(base, mock.url), PATH }, 180000);   // its HOME: <base>-home, outside both trees
       assert.strictEqual(r.status, 0, `${label}: stderr:\n${r.stderr}`);
       const said = (c) => `${label}: ${c.id}: ${JSON.stringify(toolResultText(mock, c.id))}`;
       assert.ok(outFilesNative(mock), said(OUT_FILES));

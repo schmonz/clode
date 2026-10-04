@@ -5,6 +5,7 @@
 // environment"). Run it under both engines and assert the (ANSI-stripped)
 // output matches — the slash parser/dispatch path is fidelity-clean.
 const test = require('node:test');
+const { throwawayHome } = require('../throwaway-home.cjs');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -30,7 +31,7 @@ function run(cmd, argv) {
   const bin = providerBin();
   const { dir, cli } = stage(bin);
   const cfg = fs.mkdtempSync(path.join(os.tmpdir(), 'slashcfg-'));
-  const env = { ...process.env, CLAUDE_CONFIG_DIR: cfg, ANTHROPIC_API_KEY: 'sk-ant-mock', NODE_PATH: path.join(REPO, 'deps', 'claude', 'node_modules') };
+  const env = { ...process.env, ...throwawayHome(`${dir}-home`), CLAUDE_CONFIG_DIR: cfg, ANTHROPIC_API_KEY: 'sk-ant-mock', NODE_PATH: path.join(REPO, 'deps', 'claude', 'node_modules') };
   return new Promise((resolve) => {
     const c = spawn(cmd, [...argv(cli), '-p', '/status'], { cwd: dir, stdio: ['ignore', 'pipe', 'pipe'], env });
     let so = '', se = ''; c.stdout.on('data', (d) => so += d); c.stderr.on('data', (d) => se += d);
