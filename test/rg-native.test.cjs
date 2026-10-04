@@ -923,7 +923,7 @@ test('runRg ends at the caller\'s timeout: in ugrep\'s walk, and while deciding 
 // matches, as rg does, instead of deciding every match on it. On one 5 MB minified line with an
 // `import` and a `from` every few dozen bytes, `import.*from`'s first leftmost-first match is the whole
 // line (its `.*` is greedy), so deciding every match took 5.3 s under tjs (this Mac, 2026-10-04; the
-// pinned carve's own 59 MB cli.cjs line passed Grep's 20 s timeout); the earliest search takes 70 ms.
+// pinned carve's own one-line 59 MB extracted bundle passed Grep's 20 s timeout); the earliest search takes 70 ms.
 test('RG-FIRST-MATCH: -l and -c over a 5 MB line answer in well under a second under tjs (both twins)', {
   skip: needUgrep.skip || (!tjsPath() ? 'no tjs engine' : false),
 }, () => {
