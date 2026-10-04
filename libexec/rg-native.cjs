@@ -1292,9 +1292,10 @@ const searchStats = { printed: 0, scannedBack: 0 };
 // The start of the line holding offset `at`, stepping back no further than `floor` (the start of the
 // first line it could be: the one after the last line taken). Every printer and the candidate lines find
 // line starts HERE, so searchStats.scannedBack counts every step.
+// The engine's own backward search does the stepping (a byte loop in JS took 891 ms over 50 MB under
+// tjs, holding the event loop for a fill; lastIndexOf takes 16 ms: Task 8 review I-2).
 function lineStart(text, at, floor) {
-  let ls = at;
-  while (ls > floor && text[ls - 1] !== 0x0a) ls--;
+  const ls = at > floor ? floor + text.subarray(floor, at).lastIndexOf(0x0a) + 1 : at;
   searchStats.scannedBack += at - ls;
   return ls;
 }

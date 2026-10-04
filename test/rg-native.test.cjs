@@ -1553,3 +1553,44 @@ test('RG-BINARY-*: the line buffer\'s fills step over the text at most once (cou
     }
   } finally { fs.rmSync(d, { recursive: true, force: true }); }
 });
+
+// RG-BINARY-QUIT's fills over a minified bundle with a NUL at its end (Task 8 review I-2): each read scans
+// back to its last newline and each roll back over the context lines it keeps, and a byte loop in JS
+// over 55 MB of 500 KB lines held the event loop 761-1011 ms under tjs (Task 7's own gap bound is
+// 600 ms). The async twin must keep handing the loop back: walked, with context, and -l.
+test('RG-BINARY-QUIT: the async twin keeps the loop turning over a 55 MB file of long lines with a NUL at its end (tjs)', {
+  skip: needUgrep.skip || NO_TJS,
+}, () => {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'rg-native-p8gap-')));
+  try {
+    let line = '';
+    while (line.length < 500000) line += 'var a=b.c(d,e)||function(x){return x+1};';
+    fs.mkdirSync(path.join(dir, 'w'));
+    fs.writeFileSync(path.join(dir, 'w', 'cli.cjs'), cat8((line + '\n').repeat(110), [0, 0x0a]));
+    const prog = path.join(dir, 'probe.cjs');
+    fs.writeFileSync(prog, `
+      const rgn = require(${JSON.stringify(path.join(__dirname, '..', 'libexec', 'rg-native.cjs'))});
+      const cp = require('child_process');
+      const ctx = { translate: () => { throw new Error('translated'); }, spawn: cp.spawn, spawnSync: cp.spawnSync, ugrep: () => ${JSON.stringify(UGREP)} };
+      const cwd = ${JSON.stringify(dir)}, out = [];
+      (async () => {
+        for (const argv of [['-n', '-C', '2', 'function', 'w'], ['-l', 'function', 'w']]) {
+          let last = Date.now(), maxGap = 0;
+          const iv = setInterval(() => { const n = Date.now(); maxGap = Math.max(maxGap, n - last); last = n; }, 10);
+          const a = await new Promise((res) => rgn.rgExecFile(argv, { cwd, encoding: 'buffer', maxBuffer: 1000000, timeout: 60000, killSignal: 'SIGKILL' },
+            (e, so) => res({ code: e ? e.code : 0, bytes: so.length }), 'rg', ctx));
+          clearInterval(iv);
+          out.push({ argv, maxGap, ...a });
+        }
+        process.stdout.write('PROBE:' + JSON.stringify(out) + '\\n');
+      })();
+    `);
+    const res = runLoader(prog, [], { timeout: 180000 });
+    const got = JSON.parse(((res.stdout || '').split('\n').find((l) => l.startsWith('PROBE:')) || 'PROBE:null').slice(6));
+    assert.ok(got, `the tjs probe printed nothing (exit ${res.status}): ${(res.stderr || '').slice(0, 1500)}`);
+    if (process.env.RG_TIMINGS) console.log(JSON.stringify(got));
+    assert.strictEqual(got[0].code, 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER', JSON.stringify(got[0]));
+    assert.deepStrictEqual([got[1].code, got[1].bytes], [0, 10], JSON.stringify(got[1]));
+    for (const r of got) assert.ok(r.maxGap < 600, `the loop was held ${r.maxGap} ms: ${JSON.stringify(r)}`);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
