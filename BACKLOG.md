@@ -152,8 +152,9 @@ Bash tool instead".
     (libexec/rg-native.cjs: -l, -c and the standard printer, as native prints them; --max-columns
     a no-op there, as native's is). In rg-differential, 28 of the 90 files/count cells are equal
     (none were); every one of the other 62 is in a class below that a later task of that plan owns
-    (.git, ignore precedence, whitelist and brace globs, --type: Task 9; -U: Task 10; a binary's
-    NUL past rg's first read: Task 8, done 2026-10-04).
+    (.git, ignore precedence, whitelist and brace globs, --type: Task 9, done 2026-10-04; -U: Task 10;
+    a binary's NUL past rg's first read: Task 8, done 2026-10-04). After Task 9, 8 files and 8 count
+    cells differ, every one -U.
   - With `--max-columns` dropped, 44 of the 60 files/count argv x tree cells still differ from
     native (the other 16 are empty on both sides): `--glob '!.git'` excludes no directory in
     ugrep (.git/HEAD is searched); ugrep -I drops invalid-UTF-8 files; `-c` prints zero counts;
@@ -183,18 +184,18 @@ Bash tool instead".
   test/fidelity/agentic-tools.test.cjs's Grep row checked the whole body and passed on its
   own `pattern:`. Since f4d763d it reads the tool_result, and a `--json` refusal on stderr
   never counts as a pass. The fix is the next task.
-- **`rg --version` is answered by ugrep's own version, so /doctor reports rg not working.**
-  The 2.1.283 bundle's first-use probe (`DQ`) runs `rg --version` and reads `ripgrep ` at the
-  start of stdout as "works"; quaude's rg hands that call to ugrep, which prints `ugrep 7.8.2
-  aarch64-apple-darwin25 +neon...`, so the probe sets working=false. Native's embedded rg prints
-  `ripgrep 14.1.1 (rev 7c1d0ed28a)`, a blank line, then `features:+pcre2`, `simd(compile):+NEON`,
-  `simd(runtime):+NEON`, a blank line, and `PCRE2 10.45 is available (JIT is available)` (134
-  bytes, darwin-arm64). Not fixed in grep-native Task 4's fix round on purpose: there is no
-  clean one-rule answer. Byte equality needs native's per-platform feature lines (the simd
-  lines differ per CPU), and answering `ripgrep 14.1.1` at all is quaude claiming to be a
-  ripgrep it is not. That needs a decision (the version rg-native.cjs emulates, the feature
-  lines per platform). Measured by test/fidelity/rg-differential.test.cjs's `root rg --version`
-  cell.
+- **`rg --version` was answered by ugrep's own version, so /doctor reported rg not working.** FIXED
+  (grep-native Task 9, user ruling 2026-10-03): quaude's rg answers `--version`, `-V` and `--type-list`
+  from libexec/rg-types.cjs, generated from the pinned native by scripts/gen-rg-types.cjs and held fresh
+  by test/build-gates/rg-types-gates.test.cjs (rg-types-fresh: an upstream bump that moves rg's version or
+  a type fails there, by regeneration, never a skip). The simd lines are rg's own per-architecture rule for
+  the host (RG-VERSION-SIMD): aarch64 `+NEON` both (cfg constants); no lines on architectures rg has no rule
+  for; on x86_64 the compile line linux-x64 native was measured printing (`+SSE2,+SSSE3,-AVX2`, a Xeon
+  E5-1650 v2 container) and, as the NAMED EXEMPTION, that same set for the runtime line, which native reads
+  from the CPU (an AVX2 CPU prints `+AVX2`). The bundle's probe reads only `ripgrep ` at the start.
+  Unmeasured: darwin-x64 native's compile line (its default target may differ); the gate's `--version`
+  cell on an x86_64 CI runner with AVX2 will differ in that one word until a named exception is added
+  there (Task 11 runs the gate on linux-x64).
 - **Deferred from the grep-native Task 4 review (2026-10-03):**
   - an applet's LEGITIMATE rc 2 (an rg-compatible error, with nothing printed) becomes
     quaude's refusal today; when the emulation owns the printers, rc 2 must be native's own
@@ -270,21 +271,17 @@ Bash tool instead".
     timer fired 13-15 ms late, and the search ended in the same turn).
 - **quaude's rg answers -l, -c and the standard printer itself (grep-native Task 6, 2026-10-03):
   what is interim, what it refuses, what is unmeasured.**
-  - THE WALK IS INTERIM: a directory's files are ugrep's listing under today's walk flags (`-r
-    --ignore-files`, `-.` for --hidden, --include/--exclude for --glob; `-l --null -e ''`), then
-    ugrepMatches searches that list: two ugrep passes per directory (the listing reads each file's
-    first block). What ugrep's walk could not read comes back as its warnings (`cannot read X`,
-    `cannot open directory X`, the phrasing of 7.8.2 and 5.0.0), re-spelled as rg's errors; the
-    walk then exits 2 (7.8.2, measured), which is rg's answer, not skew (review I-3). Task 9's JS
-    walk replaces both. A NAMED file skips the walk (RG-EXPLICIT-FILE).
-  - THE WALK'S GLOBS ARE TODAY'S (rg-native.cjs ugrepGlobArg, one statement since review M-1):
-    ugrep's --exclude names FILES, so a deny glob naming a DIRECTORY excludes nothing rg excludes.
-    Measured (native 2.1.283 vs ours, a tree with private/x.txt and sub/private/y.txt): `--glob
-    '!private'` native drops both, ours neither; `--iglob '!/private'` and `--glob '!/private'`
-    native drop private/x.txt, ours list it. THE DENY-RULE ANGLE for Task 9: the Grep tool turns
-    each Read-deny rule into an `--iglob` (`Vin`; `!**/x/**` shapes are equal today, measured), so
-    a deny rule written without its `/**` would let Grep list files the user denied. Until then the
-    Grep tool's own deny shapes (`**/x/**`, `**/.git/hooks/**`) are the ones that hold.
+  - THE WALK IS rg's (grep-native Task 9; it was ugrep's listing under today's flags, two ugrep passes
+    per directory): libexec/rg-walk.cjs walks in JS by rg's ignore crate 0.4.23 and globset 0.4.15 (rules
+    stated there, native literals in test/rg-walk.test.cjs: 94 rows, and linux-x64 native agreeing with
+    darwin's on every one), and ugrep searches only the files it lists. A NAMED file skips the walk
+    (RG-EXPLICIT-FILE).
+  - THE DENY-RULE ANGLE (review M-1) is CLOSED for searches: the Grep tool's Read-deny `--iglob` shapes
+    (`Vin`: `!/S`, `!/S/**` with `!/S` beside it, `!**/S`, `!**`, braces as `[{]`) are walked as rg walks
+    any glob (RG-GLOB-DENY-RULES rows; `--glob '!private'` and `--iglob '!/private'` now exclude what
+    native excludes). STILL OPEN in the Glob tool until Task 10: `--files` goes to the translation, whose
+    globs are ugrepGlobArg's (`!G` -> --exclude, files only), so a deny rule naming a directory still lets
+    Glob list what native hides.
   - A NAMED special path is decided UNREAD (Task 7 review I1). /dev/stdin, /dev/std{out,err},
     /dev/fd/N and /proc/self/fd/N refuse by name (to native they are the rg child's descriptors;
     quaude's rg runs inside its caller, and opening /dev/fd/0 there froze the engine under a
@@ -331,9 +328,13 @@ Bash tool instead".
   tool_results equal native's up to rg's own (nondeterministic) file order. Left:
   - (DONE, Task 8) `binary_offset`, a named binary's line breaks at NUL and a walked file's quit:
     RG-BINARY-*, the entry below.
-  - A path that is not UTF-8 would be `{"bytes": ...}` in native's JSON; the interim walk reads
-    ugrep's listing as UTF-8 (lossy), so such a name cannot reach the printer as its bytes. Task 9's
-    walk must carry names as bytes. `--type` beside `--json` refuses naming `--type` (Task 9).
+  - A NAME THAT IS NOT UTF-8 refuses the search by name (RG-REFUSE-NAME-NOT-UTF8, grep-native Task 9),
+    where Linux native lists it (`./f\377`, measured in a bookworm container) and names it `{"bytes": ...}`
+    in --json. Carrying it as bytes needs the engine: node-shim's readdir hands over strings (tjs's
+    FSS.readdir decodes d_name; node decodes unless asked for buffers), its open takes a string, and
+    ugrep's file list is argv (strings on both engines). Needs: a bytes readdir and open in the tjs sync
+    binding, and the match pass for such a file decided by the matcher alone. APFS will not create such a
+    name (EILSEQ), so on macOS the test skips naming it.
   - SPEED, -l over a repository: `-l e` over this repo takes 2.5 s under tjs where native takes 35 ms
     (Task 8 review, pre-existing): every file's matches are found and decided before rg's first-match
     stop is applied.
@@ -344,6 +345,37 @@ Bash tool instead".
     over 200,000 lines blocked 20.3 s (the 20 s timeout could not fire). Still slow beside native
     (~100 ms each): that case takes 12.9 s with a 138 ms longest gap; every match of a 5 MB line
     3.4 s (32 ms); `--json -n e .` over this repo 7.0 s (77 ms); `-o -n e .` 9.4 s (44 ms).
+- **quaude's rg walks as rg walks (grep-native Task 9, 2026-10-04): what is measured, what is not.**
+  libexec/rg-walk.cjs (ignore crate 0.4.23, globset 0.4.15, read from the crates; rules stated there) and
+  libexec/rg-types.cjs (type table and version text, generated from native). rg-differential: 118 -> 42
+  of 184 cells differ, every one Task 10's (-U 24, Glob's --null 18).
+  - WALK ORDER (ruling G15), measured 20 runs each: -j1 is native's order exactly, 20 of 20, on APFS (this
+    Mac) and overlayfs (bookworm container); quaude's rg prints it, and rg-differential now JUDGES order
+    on six -j1 cells (compareRg forgives order only for a parallel walk). The parallel walk's order is
+    NOT fixed on either: on this Mac a small tree (one directory, or top/tree) gives the LIFO-over-readdir
+    order 20 of 20, which quaude's rg prints, but the root of a many-directory tree gives 19-20 orders in
+    20 runs; on a 12-thread Xeon in the container even small trees give 5-15 orders (commonest 3-7 of 20).
+    G15's "modal order" holds for small trees on macOS only; the normalization stays for parallel cells.
+    ONE behaviour everywhere: a one-CPU host runs native rg on one thread (available_parallelism, a
+    performance choice), and quaude's rg still walks as the parallel walk's LIFO.
+  - IGNORE-FILE ERRORS: a line of an ignore file that does not parse is skipped and named on stderr
+    (`rg: ./.gitignore: line 2: error parsing glob '[z-a]': invalid range; 'z' > 'a'`, several joined
+    with newlines), rc unchanged; one in an ancestor's file is an error (rc 2); a line that is not UTF-8
+    ends that file silently. All measured and pinned (RG-IGNORE-FILE-ERRORS).
+  - .git/info/exclude through a worktree's `.git` FILE (gitdir + commondir) follows dir.rs; only the
+    `gitdir:` pointing nowhere case is measured (exclude then reads nothing, .gitignore still applies).
+  - SPEED: the walk over this repo takes ~200 ms under tjs (~20 ms under node), `-l --hidden --glob !.git
+    needle .` 483 ms end to end (native 30 ms). node-shim's opendirSync reads each entry's type with an
+    lstat (the engine's sync readdir returns names only): a walk that ignores nothing (`--no-ignore`, and
+    Glob's argv, Task 10) over this checkout on NFS spent 22 s on 11,825 entries. Fix: d_type from the
+    engine's readdir (the libuv readdir already has it).
+  - UNMEASURED ON WINDOWS: rg joins walked paths with `\` (Path::join), treats FILE_ATTRIBUTE_HIDDEN as
+    hidden, and strips ignore-file roots by path component (not bytes); quaude's rg joins with `/`, hides
+    dot names only, and strips by bytes. Real platform facts in rg's source, to be measured on a Windows
+    native before they are copied (test/rg-walk.test.cjs skips there, saying so).
+  - --type-add, --type-clear, --ignore-file, --no-ignore-vcs and the other --no-ignore-* flags,
+    --no-require-git, --follow, --max-depth, --max-filesize, --one-file-system are refused by name (no
+    upstream tool passes them).
 - **quaude's rg's binary detection is rg's line buffer (grep-native Task 8, 2026-10-04).** Read from
   grep-searcher 0.1.14, encoding_rs_io 0.1.7, grep-printer 0.2.2 and ripgrep 14.1.1's hiargs.rs, every
   rule measured against native 2.1.283 on darwin-arm64 and linux-x64 (test/rg-native.test.cjs P8 rows;
@@ -387,8 +419,10 @@ Bash tool instead".
     for the next file that thread searches (measured: under -j1, a file with a 100 KB line before a
     file whose NUL lies at 70 KB hides the second from -l; alone, it is listed); quaude's rg starts
     every file at 64 KiB. In the parallel walk which thread searches what is native's own
-    nondeterminism; under -j1 it is rg's walk order, Task 9's (ruling G15), after which a sequential
-    search can carry the size across files. (2) A UTF-16 read that the line buffer's room cuts short
+    nondeterminism; under -j1 quaude's rg now walks in rg's order (Task 9), but carrying the size
+    needs every walked file READ up to its longest line, the ones ugrep finds no match in too (rg grows
+    its buffer on any long line it reads, matching or not), which is a whole-tree read the bundle never
+    asks for (no upstream tool passes -j1). Left until something passes -j1. (2) A UTF-16 read that the line buffer's room cuts short
     (a line longer than about 52 KB of text) is taken to end on a whole character; encoding_rs's
     exact cut is unmeasured.
   - FOUND, not this task's: -l over a file with millions of a LITERAL's matches asks ugrep for every
