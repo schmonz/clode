@@ -1064,6 +1064,10 @@ function* eachPrintedLine(text, sel, spec) {
 // I-1, M1). printed: the bytes the printers produced, before any caller truncated them (the search stops
 // once past the caller's maxBuffer); scannedBack: the bytes stepped over finding lines' starts (linear
 // means at most the text's length).
+// TEST-ONLY, AND MODULE-GLOBAL: one object for the whole process, reset by every search as it starts,
+// so two searches running at once (the async twin yields mid-search) clobber each other's counts. It is
+// an instrument for a test that runs one search at a time, never an answer: no production consumer may
+// read or trust it.
 const searchStats = { printed: 0, scannedBack: 0 };
 // The start of the line holding offset `at`, stepping back no further than `floor` (the start of the
 // first line it could be: the one after the last line taken). Every printer and the candidate lines find
