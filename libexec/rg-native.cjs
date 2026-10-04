@@ -466,9 +466,7 @@ function* candidateLinesGen(text, proposed, all) {
   for (const { start } of list) {
     if (start > text.length || (start === text.length && (text.length === 0 || text[text.length - 1] === 0x0a))) continue;
     if (start < next) continue;                     // on the line just taken
-    let ls = start;
-    while (ls > next && text[ls - 1] !== 0x0a) ls--;
-    next = lineAt(ls);
+    next = lineAt(lineStart(text, start, next));
     if (++n % SLICE_LINES === 0) yield;
   }
   return out;
@@ -1023,8 +1021,7 @@ function* selectedLines(text, matches) {
   let L = null, le = -1;
   for (const m of matches) {
     if (!L || m.start > le) {
-      let ls = m.start;
-      while (ls > le + 1 && text[ls - 1] !== 0x0a) ls--;
+      const ls = lineStart(text, m.start, le + 1);
       L = { ls, ms: [] }; sel.push(L);
       le = lineEndAt(text, ls);
     }
@@ -1061,6 +1058,21 @@ function* eachPrintedLine(text, sel, spec) {
     cur = L.ls; curNum = n; pend = spec.after;
   }
   yield* drainAfter(-1);
+}
+// WHAT THE LAST SEARCH DID, counted: the tests' instrument (test/rg-native.test.cjs), because an
+// operation count holds on any host under any load, where a wall-clock bound does not (Task 7 re-review
+// I-1, M1). printed: the bytes the printers produced, before any caller truncated them (the search stops
+// once past the caller's maxBuffer); scannedBack: the bytes stepped over finding lines' starts (linear
+// means at most the text's length).
+const searchStats = { printed: 0, scannedBack: 0 };
+// The start of the line holding offset `at`, stepping back no further than `floor` (the start of the
+// first line it could be: the one after the last line taken). Every printer and the candidate lines find
+// line starts HERE, so searchStats.scannedBack counts every step.
+function lineStart(text, at, floor) {
+  let ls = at;
+  while (ls > floor && text[ls - 1] !== 0x0a) ls--;
+  searchStats.scannedBack += at - ls;
+  return ls;
 }
 // How often a printer hands control back (TICK: the asynchronous twin yields the event loop there once
 // its slice is spent, the synchronous one checks its deadline), in lines or matches printed.
@@ -1241,7 +1253,8 @@ function* printJson(spec, e, sel, out, state) {
     const le = lineEndAt(text, ls), end = le < text.length ? le + 1 : le;
     w.ascii(L ? '{"type":"match","data":{"path":' : '{"type":"context","data":{"path":'); w.bytes(path);
     w.ascii(',"lines":');
-    for (const slice of jsonDataGen(w, text, ls, end)) yield slice || TICK;
+    // a line longer than what is left of maxBuffer stops inside it, as a killed rg's output would
+    for (const slice of jsonDataGen(w, text, ls, end)) { if (full()) { out.push(w.done()); return; } yield slice || TICK; }
     w.ascii(`,"line_number":${spec.lineNumber ? num : 'null'},"absolute_offset":${ls},"submatches":[`);
     if (L) {
       matchedLines++; matches += L.ms.length;
@@ -1384,6 +1397,7 @@ function* searchCore(spec, opts) {
   const first = spec.mode === 'files' ? 'file' : spec.mode !== 'json' && !spec.only ? 'line' : undefined;
   const files = [...new Set(entries.filter((e) => e.file).map((e) => e.file))];
   let matches = new Map();
+  searchStats.printed = 0; searchStats.scannedBack = 0;
   const out = outBuffers(), err = [], state = { printed: false, json: spec.mode === 'json' ? jsonTotals() : null,
     limit: typeof opts.maxBuffer === 'number' && opts.maxBuffer >= 0 ? opts.maxBuffer : Infinity };
   let found = false, broke = false;
@@ -1423,6 +1437,7 @@ function* searchCore(spec, opts) {
   }
   // RG-JSON: one summary after every file, whatever was found.
   if (state.json && out.len <= state.limit) out.push(jsonSummary(state.json));
+  searchStats.printed = out.len;
   return { stdout: out.done(), stderr: Buffer.concat(err), status: broke ? 2 : found ? 0 : 1, signal: null };
 }
 
@@ -1832,4 +1847,4 @@ function rgExecFileSync(r, opts, file, args) {
 
 module.exports = { isRgExe, rgRefusal, parseRgRefusal, untranslatableReason, runRg, rgSpawn, rgExecFile, rgSpawnSync, rgExecFileSync, RG_MAX_BUFFER,
   UGREP_MIN, parseUgrepVersion, versionAtLeast, ugrepCapabilities, ugrepCapabilitiesAsync, ugrepMatchArgv, chunkFiles, parseUgrepRanges,
-  ugrepMatches, ugrepMatchesAsync, matchFilesAlone, parseRgSearch, ugrepGlobArg, UgrepError, rgText };
+  ugrepMatches, ugrepMatchesAsync, matchFilesAlone, parseRgSearch, ugrepGlobArg, UgrepError, rgText, searchStats };
