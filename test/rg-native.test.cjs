@@ -1594,3 +1594,30 @@ test('RG-BINARY-QUIT: the async twin keeps the loop turning over a 55 MB file of
     for (const r of got) assert.ok(r.maxGap < 600, `the loop was held ${r.maxGap} ms: ${JSON.stringify(r)}`);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+// -l of a walked file reads only up to the fill that answers it (Task 8 review I-1): a file larger than a
+// Buffer may be (sparse, 2.5 GiB of zeros after `needle\n`: the NUL is in the first fill, so native lists
+// nothing, rc 1; reading it whole failed, rc 2), and a 20 MB log with its NUL at the end and a match on
+// its first line (native lists it after one fill), counted by searchStats.read. Both twins.
+const RG_FILL = 64 * 1024;
+test('RG-BINARY-QUIT: -l reads a walked file only as far as rg\'s fills decide (counted; both twins)', {
+  skip: needUgrep.skip || (process.platform === 'win32' ? 'sparse files' : false),
+}, async () => {
+  const d = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'rg-native-p8l-')));
+  try {
+    fs.mkdirSync(path.join(d, 'big')); fs.mkdirSync(path.join(d, 'log'));
+    fs.writeFileSync(path.join(d, 'big', 's.bin'), 'needle\n');
+    fs.truncateSync(path.join(d, 'big', 's.bin'), 2.5 * 1024 ** 3);
+    fs.writeFileSync(path.join(d, 'log', 'app.log'), cat8('needle first\n' + 'log line of filler text\n'.repeat(850000), [0, 0x0a]));
+    const ctx = { translate: NOT_TRANSLATED, spawn: cp.spawn, spawnSync: cp.spawnSync, ugrep: () => UGREP };
+    for (const [target, status, out] of [['big', 1, ''], ['log', 0, 'log/app.log\n']]) {
+      const s = rgn.runRg(['-l', 'needle', target], { ...ctx, cwd: d });
+      assert.deepStrictEqual([s.status, String(s.stdout), String(s.stderr)], [status, out, ''], `sync -l ${target}`);
+      assert.ok(rgn.searchStats.read <= 4 * RG_FILL, `sync -l ${target} read ${rgn.searchStats.read} bytes`);
+      const a = await new Promise((res) => rgn.rgExecFile(['-l', 'needle', target], { cwd: d, encoding: 'buffer' },
+        (e, so, se) => res([e ? e.code : 0, String(so), String(se)]), 'rg', ctx));
+      assert.deepStrictEqual(a, [status, out, ''], `async -l ${target}`);
+      assert.ok(rgn.searchStats.read <= 4 * RG_FILL, `async -l ${target} read ${rgn.searchStats.read} bytes`);
+    }
+  } finally { fs.rmSync(d, { recursive: true, force: true }); }
+});

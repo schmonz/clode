@@ -1110,11 +1110,14 @@ function precedingStart(t, from, to, count) {
 }
 // rg's LineBuffer and ReadByLine over a view, fill by fill, until the fill that meets the first NUL (or
 // the end). `visited(from, to)`: the end of the last line rg sank (printed, or context) while searching
-// [from, to), -1 for none (what the next roll keeps depends on it). Returns { searched: where the last
-// fill searched before that one ended, from: where that fill's search began, bytes: what rg had let go
-// of when it stopped (its absolute_byte_offset), cap: the buffer's size then }. A generator: it yields
-// TICK now and then.
-function* lineBufferFills(v, { quit, maxContext, visited, cap = RG_BUFFER }) {
+// [from, to), -1 for none (what the next roll keeps depends on it). Returns { met: the NUL ended it,
+// searched: where the last fill searched before that one ended, from: where that fill's search began,
+// bytes: what rg had let go of when it stopped (its absolute_byte_offset), cap: the buffer's size then }.
+// `stopAfter`: stop once a fill searched past that offset (-l: rg stops at its first match). `partial`:
+// the text is only a prefix of the file, so a read that reaches its end cannot be trusted: { more: true }
+// asks for a longer one (a NUL found inside it, or a fill that ended before it, stands). A generator: it
+// yields TICK now and then.
+function* lineBufferFills(v, { quit, maxContext, visited, cap = RG_BUFFER, stopAfter = -1, partial = false }) {
   const t = v.text, reader = rgReader(t, v.read);
   let A = 0, end = 0, lastLT = 0, at = 0, from = 0, reads = 0;
   for (;;) {
@@ -1125,13 +1128,14 @@ function* lineBufferFills(v, { quit, maxContext, visited, cap = RG_BUFFER }) {
       consumed = Math.max(precedingStart(t, A, A + lastLT, maxContext) - A, lv < 0 ? 0 : lv - A);
     }
     const oldLen = lastLT, searched = A + lastLT;
+    if (stopAfter >= 0 && searched > stopAfter) return { met: false, searched, from: -1, bytes: A, cap };
     A += consumed; end -= consumed; lastLT = end;
     // LineBuffer.fill: read until the new bytes hold a newline, or a NUL ends a quit
     let didread = false, met = false;
     for (;;) {
       if (cap - end === 0) cap += Math.max(1, cap) * 2;
       const n = reader(at, cap - end);
-      if (n === 0) { lastLT = end; didread = lastLT > 0; break; }
+      if (n === 0) { if (partial) return { more: true }; lastLT = end; didread = lastLT > 0; break; }
       const oldend = end;
       end += n; at += n;
       if (++reads % 64 === 0) yield TICK;
@@ -1139,14 +1143,45 @@ function* lineBufferFills(v, { quit, maxContext, visited, cap = RG_BUFFER }) {
         met = true;
         if (quit) { end = v.nul - A; lastLT = end; break; }
       }
+      if (partial && at === t.length) return { more: true };
       const ls = lineStart(t, A + end, A + oldend);
       if (ls > A + oldend) { lastLT = ls - A; didread = true; break; }
     }
-    if (met) return { searched, from: searched, bytes: A, cap };
-    if (!didread) return { searched, from: -1, bytes: A, cap };
-    if (consumed === 0 && oldLen === lastLT) return { searched, from: -1, bytes: A + oldLen, cap };
+    if (met) return { met: true, searched, from: searched, bytes: A, cap };
+    if (!didread) return { met: false, searched, from: -1, bytes: A, cap };
+    if (consumed === 0 && oldLen === lastLT) return { met: false, searched, from: -1, bytes: A + oldLen, cap };
     from = searched;
   }
+}
+// -l on a walked file (RG-BINARY-QUIT): rg stops at the file's first match, so whether it lists the file
+// depends only on the bytes up to the end of the fill that holds that match, or the NUL that comes first.
+// Those are read, a prefix of the file doubled until the fills decide, never the whole of a large file
+// (Task 8 review I-1: reading every listed file whole took an 800 MB log from 10 MB of memory to 814,
+// and a 3 GiB one failed outright where native answers in milliseconds). true when rg lists it.
+function* walkedListed(file, cwd, m, spec) {
+  const fs = require('fs'), path = require('path');
+  const fd = fs.openSync(path.resolve(cwd || process.cwd(), file), 'r');
+  try {
+    const size = fs.fstatSync(fd).size;
+    const maxContext = Math.max(spec.before, spec.after);
+    // a UTF-16 file's text is about half its bytes, so twice the match's offset, and two fills more
+    let want = Math.min(size, 2 * m[0].end + 2 * RG_BUFFER);
+    for (;;) {
+      const b = Buffer.alloc(want);
+      let n = 0;
+      for (let r; n < want && (r = fs.readSync(fd, b, n, want - n, n)) > 0;) n += r;
+      searchStats.read += n;
+      const partial = n < size, v = rgView(b.subarray(0, n), 'quit');
+      if (!partial && v.nul === -1) return true;
+      if (m[0].start < v.text.length) {
+        const sel = yield* selectedLines(v.text, [m[0]]);
+        const pairs = maxContext > 0 ? yield* sunkLines(v.text, sel, spec) : [];
+        const f = yield* lineBufferFills(v, { quit: true, maxContext, visited: visitedIn(pairs), partial, stopAfter: sel[0].ls });
+        if (!f.more) return !f.met || f.searched > sel[0].ls;
+      }
+      want = Math.min(size, want * 2);
+    }
+  } finally { fs.closeSync(fd); }
 }
 // The lines rg sinks, in order, as [where they are searched from, end of the line]: a match and its
 // before-context at the match, an after-context line at itself (RG-CONTEXT, eachPrintedLine).
@@ -1282,13 +1317,14 @@ function* eachPrintedLine(text, sel, spec) {
 // WHAT THE LAST SEARCH DID, counted: the tests' instrument (test/rg-native.test.cjs), because an
 // operation count holds on any host under any load, where a wall-clock bound does not (Task 7 re-review
 // I-1, M1). printed: the bytes the printers produced, before any caller truncated them (the search stops
-// once past the caller's maxBuffer); scannedBack: the bytes stepped over finding lines' starts (linear
-// means at most the text's length).
+// once past the caller's maxBuffer); scannedBack: the bytes stepped over finding lines' starts (linear:
+// a bounded multiple of the text's length, see test/rg-native.test.cjs); read: the bytes -l read of
+// walked files (walkedListed's prefixes).
 // TEST-ONLY, AND MODULE-GLOBAL: one object for the whole process, reset by every search as it starts,
 // so two searches running at once (the async twin yields mid-search) clobber each other's counts. It is
 // an instrument for a test that runs one search at a time, never an answer: no production consumer may
 // read or trust it.
-const searchStats = { printed: 0, scannedBack: 0 };
+const searchStats = { printed: 0, scannedBack: 0, read: 0 };
 // The start of the line holding offset `at`, stepping back no further than `floor` (the start of the
 // first line it could be: the one after the last line taken). Every printer and the candidate lines find
 // line starts HERE, so searchStats.scannedBack counts every step.
@@ -1661,7 +1697,7 @@ function* searchCore(spec, opts) {
   const first = spec.mode === 'files' ? 'file' : spec.mode !== 'json' && !spec.only ? 'line' : undefined;
   const files = [...new Set(entries.filter((e) => e.file).map((e) => e.file))];
   let matches = new Map();
-  searchStats.printed = 0; searchStats.scannedBack = 0;
+  searchStats.printed = 0; searchStats.scannedBack = 0; searchStats.read = 0;
   const out = outBuffers(), err = [], state = { printed: false, json: spec.mode === 'json' ? jsonTotals() : null,
     limit: typeof opts.maxBuffer === 'number' && opts.maxBuffer >= 0 ? opts.maxBuffer : Infinity };
   let found = false, broke = false;
@@ -1698,8 +1734,13 @@ function* searchCore(spec, opts) {
       m = matches.get(e.file);
       if (!m || !m.length) continue;
       pastDeadline();
-      // -l reads nothing of a named file whose matches stand whatever its bytes hold.
-      if (!(spec.mode === 'files' && !e.walked && (how === 'mmap' || literal))) {
+      if (spec.mode === 'files' && e.walked) {
+        // -l of a walked file reads only what rg's line buffer would have before it answers.
+        let listed;
+        try { listed = yield* walkedListed(e.file, cwd, m, spec); } catch (x) { err.push(Buffer.from(`rg: ${e.disp}: ${osErrorText(x)}\n`)); broke = true; continue; }
+        if (!listed) continue;
+      } else if (!(spec.mode === 'files' && (how === 'mmap' || literal))) {
+        // -l reads nothing of a named file whose matches stand whatever its bytes hold.
         try { v = rgView(readRgBytes(e.file, cwd), how); } catch (x) { err.push(Buffer.from(`rg: ${e.disp}: ${osErrorText(x)}\n`)); broke = true; continue; }
         if (v.how === 'convert' && v.nul !== -1 && !(literal && v.read.kind === 'plain')) {
           m = yield { op: 'decide', text: v.text, t, first };
