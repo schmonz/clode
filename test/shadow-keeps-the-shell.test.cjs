@@ -45,9 +45,17 @@ const FINDINGS = [
   { name: 'grep', applet: 'ugrep', why: 'stand-in skew', fix: 'nothing to fix' },
   { name: 'find', applet: 'bfs', why: 'stand-in skew', fix: 'nothing to fix' },
 ];
+// quaude's snapshot as its writer emits it on a host with no rg (grep-native Task 10b): the bundle reaches rg by
+// Bun.which('rg'), which answers quaude's own ABSOLUTE path (a path string, no file there), and with no argv0 the
+// writer (2.1.283's aAn) spells rg as an alias inside upstream's "no host rg" guard: `alias rg='<that path>'`.
+// zsh expands an alias in a sourced snapshot and runs `rg` as that missing file unless the injected rg shadow
+// takes the name back; bash, not expanding aliases there, reaches the function anyway.
+const QUAUDE_RG = path.join(os.tmpdir(), 'no-such-quaude-dir', 'rg');
+const ALIASED = `# Check for rg availability\nalias rg='${QUAUDE_RG}'\n${UPSTREAM}`;
 const SHAPES = {
   plain: rewriteSnapshot(UPSTREAM),
   skewed: rewriteSnapshot(UPSTREAM, FINDINGS),
+  aliased: rewriteSnapshot(ALIASED),
 };
 
 // The stand-in applet. A "match" is an argument spelled NEEDLE; -q silences the

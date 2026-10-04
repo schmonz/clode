@@ -648,8 +648,13 @@ function rewriteSnapshot(text, findings){
   });
   out += text.slice(i);
   // Additive: a real snapshot that shadows find/grep but not rg gets an injected
-  // ugrep-translating rg shadow, spliced right after the last rewritten shadow.
-  if (sawAny && !sawRg) out = out.slice(0, lastEnd) + '\n' + rgShadowBody() + out.slice(lastEnd);
+  // ugrep-translating rg shadow, spliced right after the last rewritten shadow. It
+  // takes the name back from an alias first, as upstream does before its find and
+  // grep shadows: quaude's snapshot writer (no argv0) spells rg `alias rg='<path>'`
+  // when the host has none, and zsh expands that alias over the function, running
+  // whatever the path names (a bare `rg` today; quaude's own path, with no file
+  // there, once Bun.which('rg') answers one).
+  if (sawAny && !sawRg) out = out.slice(0, lastEnd) + '\nunalias rg 2>/dev/null || true\n' + rgShadowBody() + out.slice(lastEnd);
   return out;
 }
 
