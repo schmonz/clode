@@ -8,6 +8,21 @@ Concrete clode-under-Node divergences from native Claude Code, to triage and fix
 That page is GENERATED from `scripts/build-graph.cjs` — the one declaration of the build — so it
 cannot drift from it; it is also where the honest answer to "does this need node?" lives.
 
+## Ten agentic rows run the developer's own ~/.claude, hooks included (2026-10-04)
+
+Measured during grep-native Task 10b's full suite (RC 1, 10 failures, every one at its cap with empty
+stderr): test/fidelity/agentic-tools.test.cjs (Write, Grep, multi-turn, hook rows), node-shim-agentic
+(Bash, Edit), clode-native acceptance 3, quaude-build's strict-mode sweep and both
+quaude-naude-updateguard deny turns hand the bundle the runner's real HOME, so it reads
+~/.claude/settings.json and runs its hooks. This box's hooks call ~/.config/iterm2/cc-status, which today
+takes 30.4 s per call ("Socket recv failed: Resource temporarily unavailable", it2 exits 2; measured
+directly), so every turn outlives its 60-120 s cap. It is not the code under test: the hang reproduces with
+bd33e8d's libexec; the same turn with a temp HOME takes 9.5 s; all 10 pass with only CLAUDE_CONFIG_DIR
+pointed at an empty directory (agentic-tools, node-shim-agentic and updateguard 12 of 12; acceptances 1-3
+5 of 5; the strict-mode sweep). The same rows also WRITE the real ~/.claude (the headless plugin install
+stamped ~/.claude/plugins/known_marketplaces.json's lastUpdated during the run). Give them a throwaway
+config dir (CLAUDE_CONFIG_DIR, or HOME) as the --continue row and the Grep-outside-cwd row already do.
+
 ## 87 of the 90 tools the carve can register have no driver that can fail (2026-09-28)
 
 `every-tool-driven` (test/build-gates/tool-coverage-gates.test.cjs; the grep-native plan's task
