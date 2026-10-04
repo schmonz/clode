@@ -1005,3 +1005,81 @@ test('RG-REFUSE-SPECIAL-FILE: a named FIFO refuses at once; a walked one is skip
     assert.match(rgn.parseRgRefusal(a.se).reason, /RG-REFUSE-SPECIAL-FILE/);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+// RG-SPECIAL-FILE (Task 6 re-review N1): a named special path that cannot block is answered as
+// native answers it, and never takes the rest of the search down with it. Measured against native
+// 2.1.283 (darwin-arm64): `rg -l needle /dev/null` rc 1, nothing; `rg -c -H --null needle /dev/null
+// ok.txt` -> `ok.txt\x001\n` rc 0; a unix socket named beside ok.txt -> `rg: sock: Operation not
+// supported on socket (os error 102)` on stderr, `ok.txt` answered, rc 2 (the open's error, as for an
+// unreadable file; its text is libuv's, BACKLOG). Only a path that can block or never end refuses
+// (RG-REFUSE-SPECIAL-FILE): a FIFO, and a device that has bytes or would wait (native reads /dev/zero
+// until it is killed: measured, still running at 3 s).
+test('RG-SPECIAL-FILE: /dev/null is an empty file, a socket is rg\'s per-path error; only a blocking or endless one refuses (native)', {
+  skip: needUgrep.skip || (process.platform === 'win32' ? 'no /dev/null or unix sockets' : false),
+}, async () => {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'rg-native-special-')));
+  const server = require('node:net').createServer();
+  try {
+    fs.writeFileSync(path.join(dir, 'ok.txt'), 'needle\n');
+    await new Promise((res, rej) => { server.once('error', rej); server.listen(path.join(dir, 'sock'), res); });
+    const ctx = { cwd: dir, spawn: cp.spawn, spawnSync: cp.spawnSync, translate: NOT_TRANSLATED, ugrep: () => UGREP };
+    const viaAsync = (argv) => new Promise((res) => rgn.rgExecFile(argv, { cwd: dir, encoding: 'buffer' },
+      (e, so, se) => res({ status: e ? e.code : 0, stdout: so.toString('latin1'), stderr: se.toString('latin1') }), 'rg', ctx));
+    const viaSync = (argv) => { const r = rgn.runRg(argv, ctx); return { status: r.status, stdout: Buffer.from(r.stdout).toString('latin1'), stderr: Buffer.from(r.stderr).toString('latin1') }; };
+    const sockErr = /^rg: sock: .+ \(os error (\d+)\)\n$/;
+    for (const run of [viaSync, viaAsync]) {
+      assert.deepStrictEqual(await run(['-l', 'needle', '/dev/null']), { status: 1, stdout: '', stderr: '' });
+      assert.deepStrictEqual(await run(['-c', '-H', '--null', 'needle', '/dev/null', 'ok.txt']), { status: 0, stdout: 'ok.txt\x001\n', stderr: '' });
+      const s = await run(['-l', 'needle', 'sock', 'ok.txt']);
+      assert.deepStrictEqual([s.status, s.stdout], [2, 'ok.txt\n'], JSON.stringify(s));
+      assert.match(s.stderr, sockErr);
+      if (process.platform === 'darwin') assert.strictEqual(sockErr.exec(s.stderr)[1], '102');
+      assert.strictEqual(rgn.parseRgRefusal(s.stderr), null);
+      const z = await run(['-l', 'needle', '/dev/zero', 'ok.txt']);
+      assert.strictEqual(z.status, 2);
+      assert.match(rgn.parseRgRefusal(z.stderr).reason, /RG-REFUSE-SPECIAL-FILE/);
+    }
+  } finally { server.close(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+// The same under tjs, where node-shim's Stats answers isFIFO() false for every path: the type is
+// read from the mode bits, so a FIFO still refuses at once and /dev/null still answers.
+test('RG-SPECIAL-FILE and RG-REFUSE-SPECIAL-FILE under tjs: both twins (native)', {
+  skip: needUgrep.skip || (process.platform === 'win32' ? 'no /dev/null, mkfifo or unix sockets' : !tjsPath() ? 'no tjs engine' : false),
+}, async () => {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'rg-native-special-tjs-')));
+  const server = require('node:net').createServer();
+  try {
+    fs.writeFileSync(path.join(dir, 'ok.txt'), 'needle\n');
+    assert.strictEqual(cp.spawnSync('mkfifo', [path.join(dir, 'pipe')]).status, 0);
+    await new Promise((res, rej) => { server.once('error', rej); server.listen(path.join(dir, 'sock'), res); });
+    const prog = path.join(dir, 'probe.cjs');
+    fs.writeFileSync(prog, `
+      const rgn = require(${JSON.stringify(path.join(__dirname, '..', 'libexec', 'rg-native.cjs'))});
+      const cp = require('child_process');
+      const cwd = ${JSON.stringify(dir)};
+      const ctx = { translate: () => { throw new Error('translated'); }, spawn: cp.spawn, spawnSync: cp.spawnSync, ugrep: () => ${JSON.stringify(UGREP)} };
+      const l1 = (b) => Buffer.from(b).toString('latin1');
+      (async () => {
+        const out = [];
+        for (const argv of [['-l', 'needle', '/dev/null'], ['-c', '-H', '--null', 'needle', '/dev/null', 'ok.txt'], ['-l', 'needle', 'sock', 'ok.txt'], ['-l', 'needle', 'pipe', 'ok.txt']]) {
+          const s = rgn.runRg(argv, { ...ctx, cwd });
+          const a = await new Promise((res) => rgn.rgExecFile(argv, { cwd, encoding: 'buffer' }, (e, so, se) => res({ status: e ? e.code : 0, stdout: l1(so), stderr: l1(se) }), 'rg', ctx));
+          out.push({ sync: { status: s.status, stdout: l1(s.stdout), stderr: l1(s.stderr) }, async: a });
+        }
+        process.stdout.write('PROBE:' + JSON.stringify(out) + '\\n');
+      })();
+    `);
+    const res = runLoader(prog, [], { timeout: 60000 });
+    const line = (res.stdout || '').split('\n').find((l) => l.startsWith('PROBE:'));
+    assert.ok(line, `the tjs probe printed nothing (exit ${res.status}): ${(res.stderr || '').slice(0, 1500)}`);
+    for (const twin of ['sync', 'async']) {
+      const got = JSON.parse(line.slice('PROBE:'.length)).map((r) => r[twin]);
+      assert.deepStrictEqual(got[0], { status: 1, stdout: '', stderr: '' }, twin);
+      assert.deepStrictEqual(got[1], { status: 0, stdout: 'ok.txt\x001\n', stderr: '' }, twin);
+      assert.deepStrictEqual([got[2].status, got[2].stdout], [2, 'ok.txt\n'], twin);
+      assert.match(got[2].stderr, /^rg: sock: .+ \(os error \d+\)\n$/, twin);
+      assert.strictEqual(got[3].status, 2, twin);
+      assert.match(rgn.parseRgRefusal(got[3].stderr).reason, /RG-REFUSE-SPECIAL-FILE/, twin);
+    }
+  } finally { server.close(); fs.rmSync(dir, { recursive: true, force: true }); }
+});

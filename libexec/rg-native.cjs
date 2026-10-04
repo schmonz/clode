@@ -701,9 +701,11 @@ function ugrepMatchesAsync(files, pattern, opts = {}) {
 //   RG-FIRST-MATCH             -l stops at a file's first match, -c and the standard printer
 //                              without -o at a line's first (rg-regex.cjs RG-RE-EARLIEST), as rg
 //                              does; -o and -c -o find every match
-//   RG-REFUSE-SPECIAL-FILE     a NAMED path that is neither a regular file nor a directory (a FIFO,
-//                              a device) refuses: rg reads it until it ends, quaude's rg cannot
-//                              without blocking its caller; a walked one is skipped, as rg skips it
+//   RG-SPECIAL-FILE            a NAMED path that is neither a regular file nor a directory: an empty
+//                              device (/dev/null) is an empty file, one that cannot be opened (a
+//                              socket) is rg's per-path error; a walked one is skipped, as rg skips it
+//   RG-REFUSE-SPECIAL-FILE     a named FIFO, or a device that has bytes or would wait, refuses: rg
+//                              reads it until it ends, quaude's rg cannot without blocking its caller
 //   RG-EXIT                    0 found, 1 not found, 2 when any path failed (its error on stderr, the
 //                              rest still searched and printed): never quaude's refusal
 //   RG-BINARY-QUIT-FIRST-READ  INTERIM (the plan's Task 8 replaces it with rg's LineBuffer): a WALKED
@@ -813,8 +815,9 @@ function sysErrorText(n) {
   } catch { /* not this engine's */ }
   try {
     if (globalThis.tjs && typeof globalThis.tjs.Error === 'function') {
-      const m = /^[A-Z0-9_]+: (.+)$/.exec(new globalThis.tjs.Error(-n).message);
-      if (m) return m[1];
+      // `ENOENT: no such file or directory`; an errno libuv has no name for, `Unknown system error -102: ...`
+      const m = /^(?:[A-Z0-9_]+: (.+)|([^:]+): .*)$/.exec(new globalThis.tjs.Error(-n).message);
+      if (m) return m[1] || m[2];
     }
   } catch { /* not this engine's */ }
   return null;
@@ -823,7 +826,10 @@ const errnoTable = () => { const os = require('os'); return (os.constants && os.
 const capital = (t) => t[0].toUpperCase() + t.slice(1);
 function osErrorText(e) {
   const code = e && e.code;
-  const n = code ? errnoTable()[code] : undefined;
+  // An errno libuv has no name for (EOPNOTSUPP on darwin: node says `Unknown system error -102`, tjs
+  // `EUNKNOWN`) still carries its number.
+  let n = code ? errnoTable()[code] : undefined;
+  if (n === undefined && e && typeof e.errno === 'number' && e.errno !== 0) n = Math.abs(e.errno);
   const m = /^[A-Z0-9_]+: ([^,]+)/.exec(String((e && e.message) || ''));
   const text = m ? m[1] : n !== undefined ? sysErrorText(n) : null;
   return text ? `${capital(text)}${n !== undefined ? ` (os error ${n})` : ''}` : String(code || (e && e.message) || 'unknown error');
@@ -980,6 +986,26 @@ function printFile(spec, e, out, state) {
   return true;
 }
 
+// RG-SPECIAL-FILE / RG-REFUSE-SPECIAL-FILE (Task 6 re-review N1; measured against native 2.1.283): what
+// a NAMED special path is to quaude's rg. A FIFO is opened by rg and read until a writer closes it (with
+// none it waits), so it refuses: an open of it would block the caller beyond any bound. Anything else
+// is opened without blocking and read once: an open that fails is rg's per-path error (a unix socket:
+// `Operation not supported on socket (os error 102)`, the rest answered, rc 2), a device at its end
+// (/dev/null) is an empty file (rc 1, or the other paths' answer), and one that has bytes or would
+// wait (/dev/zero, a terminal) refuses: native reads it until it ends, which may be never. The type
+// comes from the mode bits, which every engine reports (node-shim's Stats answers isFIFO() false).
+const S_IFMT = 0o170000, S_IFIFO = 0o010000;
+function specialKind(p, st) {
+  if (st && (st.mode & S_IFMT) === S_IFIFO) return { kind: 'refuse' };
+  const fs = require('fs');
+  const c = fs.constants || {};
+  let fd;
+  try { fd = fs.openSync(p, (c.O_RDONLY || 0) | (c.O_NONBLOCK || 0)); } catch (e) { return { kind: 'openError', e }; }
+  try { return fs.readSync(fd, Buffer.alloc(1), 0, 1, null) === 0 ? { kind: 'empty' } : { kind: 'refuse' }; } catch (e) {
+    return e && e.code === 'EAGAIN' ? { kind: 'refuse' } : { kind: 'openError', e };
+  } finally { try { fs.closeSync(fd); } catch { /* closed */ } }
+}
+
 // ---- the search, once: a generator both twins drive --------------------------------------------------
 // It yields what it needs done ({ op: 'list', P }, { op: 'match', files, pattern }, { op: 'stdin' },
 // { op: 'decide', text }) and is answered synchronously (runRg) or asynchronously (rgSpawn), so the
@@ -994,18 +1020,21 @@ function* searchCore(spec, opts) {
     if (P === '-') return { kind: 'stdin' };
     try {
       const st = fs.statSync(path.resolve(cwd, P));
-      return { kind: st.isDirectory() ? 'dir' : st.isFile() ? 'file' : 'special' };
+      return { kind: st.isDirectory() ? 'dir' : st.isFile() ? 'file' : 'special', st };
     } catch (e) { return { kind: 'error', e }; }
   });
-  // RG-REFUSE-SPECIAL-FILE (measured against native 2.1.283): a NAMED FIFO rg opens and reads until a
-  // writer closes it (with none, it waits); quaude's rg cannot, without an open that blocks its
-  // caller beyond any bound, so a named path that is neither a regular file nor a directory refuses.
-  // A walked one is skipped, as native skips it (ugrep's walk lists regular files only).
-  const special = spec.paths.find((P, i) => kinds[i].kind === 'special');
-  if (special !== undefined) {
-    return rgRefusal(`quaude answers rg with its own emulation over ugrep, on purpose, and ${special} is not a regular file `
-      + '(a FIFO or a device), which rg reads until it ends and quaude\'s rg cannot read without blocking its caller '
-      + '(RG-REFUSE-SPECIAL-FILE); nothing was searched');
+  // A NAMED path that is neither a regular file nor a directory: RG-SPECIAL-FILE answers it as native
+  // does (an empty device is an empty file; one that cannot be opened is rg's per-path error), and
+  // RG-REFUSE-SPECIAL-FILE refuses one that can block or never end. A walked one is skipped, as native
+  // skips it (ugrep's walk lists regular files only).
+  for (let i = 0; i < spec.paths.length; i++) {
+    if (kinds[i].kind !== 'special') continue;
+    kinds[i] = specialKind(path.resolve(cwd, spec.paths[i]), kinds[i].st);
+    if (kinds[i].kind === 'refuse') {
+      return rgRefusal(`quaude answers rg with its own emulation over ugrep, on purpose, and ${spec.paths[i]} is a FIFO or a device `
+        + 'that has bytes or would wait, which rg reads until it ends and quaude\'s rg cannot read without blocking its caller '
+        + '(RG-REFUSE-SPECIAL-FILE); nothing was searched');
+    }
   }
   const pastDeadline = () => { if (opts.deadline && Date.now() > opts.deadline) throw timedOutError(); };
   // rg walks one path that is not a directory (and anything under -j1) with walkdir, whose error for
@@ -1024,6 +1053,8 @@ function* searchCore(spec, opts) {
     const P = spec.paths[i], k = kinds[i];
     if (k.kind === 'stdin') entries.push({ disp: '<stdin>', stdin: true, walked: false });
     else if (k.kind === 'error') entries.push({ error: `rg: ${P}: ${sequential ? `IO error for operation on ${P}: ` : ''}${osErrorText(k.e)}` });
+    else if (k.kind === 'openError') entries.push({ error: `rg: ${P}: ${osErrorText(k.e)}` });
+    else if (k.kind === 'empty') continue;
     else if (k.kind === 'file') {
       let err = null;
       try { fs.closeSync(fs.openSync(path.resolve(cwd, P), 'r')); } catch (e) { err = e; }
