@@ -601,6 +601,8 @@ test('ugrepMatches and ugrepMatchesAsync under tjs: native\'s ranges', {
 //   RG-BINARY-QUIT-FIRST-READ  (interim, the plan's Task 8 replaces it with rg's LineBuffer) a WALKED
 //                              file whose first 64 KiB of text hold a NUL prints nothing; a named one,
 //                              and stdin, are searched as text
+//   RG-FIRST-MATCH             -l stops at a file's first match, -c and the standard printer without
+//                              -o at a line's first (rg-regex.cjs RG-RE-EARLIEST); -o, -c -o: every one
 const u16le = (s) => Buffer.from(s, 'utf16le');
 const P6_FILES = [
   ['a.txt', 'alpha needle\nbeta\nneedle two needle\n'],
@@ -655,6 +657,18 @@ const P6_NATIVE = [
   ['RG-STDIN', ["-c","-H","--null","needle","-"], "nul.bin", 0, '<stdin>\x002\n'],
   ['RG-EXPLICIT-FILE', ["-l","needle","nul.bin"], null, 0, 'nul.bin\n'],
   ['RG-EXPLICIT-FILE', ["-c","needle","nul.bin"], null, 0, '2\n'],
+  // RG-FIRST-MATCH: -l stops at a file's first match, -c and the standard printer without -o at a
+  // line's first (an earliest search); -o and -c -o still find every match (review I-4)
+  ['RG-FIRST-MATCH', ["-c","n.*e","a.txt"], null, 0, '2\n'],
+  ['RG-FIRST-MATCH', ["-c","e.*?e","ctx.txt"], null, 0, '3\n'],
+  ['RG-FIRST-MATCH', ["-l","t.*o","a.txt"], null, 0, 'a.txt\n'],
+  ['RG-FIRST-MATCH', ["-c","(?:needle|e)+","a.txt"], null, 0, '3\n'],
+  ['RG-FIRST-MATCH', ["-n","e+","a.txt"], null, 0, '1:alpha needle\n2:beta\n3:needle two needle\n'],
+  ['RG-FIRST-MATCH', ["-c","-o","e+","a.txt"], null, 0, '7\n'],
+  ['RG-FIRST-MATCH', ["-n","x*","nonl.txt"], null, 0, '1:abc\n2:xyz\n'],
+  ['RG-FIRST-MATCH', ["-c","x*","nonl.txt"], null, 0, '2\n'],
+  ['RG-FIRST-MATCH', ["-l","zz|needle","bom8.txt"], null, 0, 'bom8.txt\n'],
+  ['RG-FIRST-MATCH', ["-c","a|ab","a.txt"], null, 0, '2\n'],
   ['RG-RE-MATCH-AT-UNTERMINATED-END', ["-c","-o","-H","$","u1.txt"], null, 0, 'u1.txt:0\n'],
   ['RG-RE-MATCH-AT-UNTERMINATED-END', ["-n","-o","$","u1.txt"], null, 0, '1:xyz\n'],
   ['RG-MAX-COLUMNS', ["-c","--max-columns","5","needle","long.txt"], null, 0, '2\n'],
@@ -893,13 +907,56 @@ test('runRg ends at the caller\'s timeout: in ugrep\'s walk, and while deciding 
     assert.ok(Date.now() - t0 < 3000, `${Date.now() - t0} ms`);
     assert.deepStrictEqual([walk.status, walk.signal, walk.errorCode], [null, 'SIGKILL', 'ETIMEDOUT']);
     t0 = Date.now();
-    // an ordinary pattern over more stdin than the time allows (it answers in about 0.5 s with none)
+    // an ordinary pattern over more stdin than the time allows (-c -o decides every match: it
+    // answers in about a second with no timeout)
     const input = ('abc def '.repeat(12) + '\n').repeat(100000);
-    const lines = rgn.runRg(['\\w+', '-'], { ...base, timeout: 100, input });
+    const lines = rgn.runRg(['-c', '-o', '\\w+', '-'], { ...base, timeout: 100, input });
     assert.ok(Date.now() - t0 < 3000, `${Date.now() - t0} ms`);
     assert.deepStrictEqual([lines.status, lines.errorCode], [null, 'ETIMEDOUT']);
-    assert.strictEqual(rgn.runRg(['-c', '\\w+', '-'], { ...base, input }).stdout.toString(), '100000\n');
+    assert.strictEqual(rgn.runRg(['-c', '-o', '\\w+', '-'], { ...base, input }).stdout.toString(), '2400000\n');
     // and with time enough, the same search answers
     assert.strictEqual(rgn.runRg(['needle', 'tree'], { ...base, timeout: 60000 }).stdout.toString(), 'tree/a.txt:x needle\n');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+// RG-FIRST-MATCH, timed (review I-4): -l (the Grep tool's default mode) and -c answer WHETHER a line
+// matches, as rg does, instead of deciding every match on it. On one 5 MB minified line with an
+// `import` and a `from` every few dozen bytes, `import.*from`'s first leftmost-first match is the whole
+// line (its `.*` is greedy), so deciding every match took 5.3 s under tjs (this Mac, 2026-10-04; the
+// pinned carve's own 59 MB cli.cjs line passed Grep's 20 s timeout); the earliest search takes 70 ms.
+test('RG-FIRST-MATCH: -l and -c over a 5 MB line answer in well under a second under tjs (both twins)', {
+  skip: needUgrep.skip || (!tjsPath() ? 'no tjs engine' : false),
+}, () => {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'rg-native-first-')));
+  try {
+    let s = 'import a from b; ';
+    for (let i = 0; s.length < 5e6; i++) s += `${i % 7 === 0 ? 'import ' : ''}x${i % 97} = y${i % 13} from z; `;
+    fs.writeFileSync(path.join(dir, 'big.js'), s + '\n');
+    const prog = path.join(dir, 'probe.cjs');
+    fs.writeFileSync(prog, `
+      const rgn = require(${JSON.stringify(path.join(__dirname, '..', 'libexec', 'rg-native.cjs'))});
+      const cp = require('child_process');
+      const ctx = { translate: () => { throw new Error('translated'); }, spawn: cp.spawn, spawnSync: cp.spawnSync, ugrep: () => ${JSON.stringify(UGREP)} };
+      const cwd = ${JSON.stringify(dir)}, out = [];
+      (async () => {
+        for (const argv of [['-l', 'import.*from', 'big.js'], ['-c', 'import.*from', 'big.js']]) {
+          let t0 = Date.now();
+          const s = rgn.runRg(argv, { ...ctx, cwd });
+          out.push({ argv, twin: 'sync', ms: Date.now() - t0, status: s.status, stdout: String(s.stdout) });
+          t0 = Date.now();
+          const a = await new Promise((res) => rgn.rgExecFile(argv, { cwd, timeout: 20000 }, (e, so) => res({ status: e ? (e.code || e.signal) : 0, stdout: String(so) }), 'rg', ctx));
+          out.push({ argv, twin: 'async', ms: Date.now() - t0, ...a });
+        }
+        process.stdout.write('PROBE:' + JSON.stringify(out) + '\\n');
+      })();
+    `);
+    const res = runLoader(prog, [], { timeout: 120000 });
+    const line = (res.stdout || '').split('\n').find((l) => l.startsWith('PROBE:'));
+    assert.ok(line, `the tjs probe printed nothing (exit ${res.status}): ${(res.stderr || '').slice(0, 1500)}`);
+    for (const r of JSON.parse(line.slice('PROBE:'.length))) {
+      // native 2.1.283: `rg -l import.*from big.js` -> big.js, `rg -c` -> 1
+      assert.deepStrictEqual([r.status, r.stdout], [0, r.argv[0] === '-l' ? 'big.js\n' : '1\n'], JSON.stringify(r));
+      assert.ok(r.ms < 2500, `${r.twin} rg ${r.argv.join(' ')}: ${r.ms} ms (deciding every match took 5.3 s)`);
+    }
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

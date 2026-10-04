@@ -60,6 +60,8 @@
 //   RG-RE-LITERAL          a plain literal matches its bytes, leftmost, without overlap
 //   RG-RE-MATCH-AT-UNTERMINATED-END  the matcher's match at the end of an unterminated last line
 //                          is reported (rg selects the line by it; its printers do not print it)
+//   RG-RE-EARLIEST         asked only whether a line matches (-l, -c), the search stops at the
+//                          first match state it reaches, as rg's own selection does
 //   RG-RE-LINEAR-TIME      ONE search is at most 2 x states x positions steps (a line, up to
 //                          states x length^2: RG-RE-REFUSE-COST bounds it)
 //   RG-RE-PREFILTER-SUPERSET  ugrep, given prefilter(), proposes every line rg selects
@@ -1054,18 +1056,18 @@ function closure(sid, p, S, T, N, start) {
 // up in prog.cur, searchRun runs it until it ends (1: a match, in prog.mStart/prog.mEnd; 0: none) or
 // has taken `limit` steps (-1: paused between two positions, to be run again). Pausing changes
 // nothing it finds: the threads, the landing set and the visited stamps all wait in prog.cur.
-function searchStart(prog, buf, from, end, at) {
+function searchStart(prog, buf, from, end, at, earliest = false) {
   const { marks } = prog;
   if (prog.stamp > 0x3fffffff - 2 * (end - at + 2)) { marks.fill(0); prog.stamp = 0; }
   const base = prog.stamp + 1 - at;        // the visited stamp for position p is base + p
   prog.stamp += end - at + 2;
-  prog.cur = { buf, from, end, base, p: at, curS: prog.aS, curT: prog.aT, landS: prog.bS, landT: prog.bT,
+  prog.cur = { buf, from, end, base, earliest, p: at, curS: prog.aS, curT: prog.aT, landS: prog.bS, landT: prog.bT,
     landN: 0, landAt: -1, hmStart: -1, hmEnd: -1 };
 }
 function searchRun(prog, limit) {
   const { kind, next, arg, cls, accel, firstAscii, firstNonAscii } = prog;
   const st0 = prog.cur;
-  const { buf, from, end } = st0;
+  const { buf, from, end, earliest } = st0;
   _cProg = prog; _cBuf = buf; _cFrom = from; _cEnd = end; _cSteps = 0; _cBase = st0.base;
   let { p, curS, curT, landS, landT, landN, landAt, hmStart, hmEnd } = st0;
   let curN = 0, steps = 0, paused = false;
@@ -1101,6 +1103,9 @@ function searchRun(prog, limit) {
       const k = cls[arg[sid]];
       if (c < 128 ? k.ascii[c] : has(k.set, c)) { landN = closure(next[sid], p + len, landS, landT, landN, curT[i]); landAt = p + len; }
     }
+    // RG-RE-EARLIEST: asked only WHETHER the line matches, the search ends at the first match state
+    // it reaches (regex-automata's earliest search), not at the end of the leftmost-first match.
+    if (earliest && hmEnd >= 0) break;
   }
   const used = steps + _cSteps;
   prog.steps += used;
@@ -1119,6 +1124,9 @@ function searchRun(prog, limit) {
 // lineVerifier(buf, start, end, compiled) -> { run(maxSteps) }: every match rg's matcher reports on
 // the line [start, end) (the terminator excluded), as [{ start, end }] in buf's offsets, once run()
 // has taken the steps it needs; until then run() returns null (paused) and is called again.
+// With { first: true } it answers only WHETHER rg selects the line: at most one match, found by an
+// earliest search (RG-RE-EARLIEST), whose span is not rg's and must not be printed (rg's -l and -c
+// stop at a line's first match too).
 // verifyLine is one run to the end. RG-EMPTY-AFTER-MATCH: an empty match at the end of the match
 // before it is skipped, and after an empty match the next search starts one BYTE on (so inside a
 // character, where only empty matches occur). An empty result means rg does not select the line.
@@ -1143,7 +1151,7 @@ function searchRun(prog, limit) {
 // 13 microseconds a byte; an ordinary one is answered whatever its length.
 const STEPS_PER_BYTE = 64, STEP_BUDGET_FLOOR = 2 ** 20;
 const lineStepBudget = (len) => STEPS_PER_BYTE * (len + 1) + STEP_BUDGET_FLOOR;
-function lineVerifier(buf, start, end, compiled) {
+function lineVerifier(buf, start, end, compiled, { first = false } = {}) {
   const prog = compiled.prog || compiled;
   if (prog.lookbehind && start < end && (buf[start] & 0xc0) === 0x80) {
     throw new RgRegexRefusal('RG-RE-REFUSE-LOOKBEHIND', `a line at byte ${start} starts with a continuation byte`);
@@ -1155,7 +1163,10 @@ function lineVerifier(buf, start, end, compiled) {
   // continuation byte, so an occurrence always starts on a character.
   if (prog.lit) {
     const line = buf.subarray(start, end), lit = prog.lit;
-    for (let i = line.indexOf(lit); i !== -1; i = line.indexOf(lit, i + lit.length)) out.push({ start: start + i, end: start + i + lit.length });
+    for (let i = line.indexOf(lit); i !== -1; i = line.indexOf(lit, i + lit.length)) {
+      out.push({ start: start + i, end: start + i + lit.length });
+      if (first) break;
+    }
     return { run: () => out };
   }
   let lastEnd = start, lastMatch = -1, searching = false, spent = 0, done = false;
@@ -1166,7 +1177,7 @@ function lineVerifier(buf, start, end, compiled) {
     for (;;) {
       if (!searching) {
         if (lastEnd > end) { done = true; return out; }
-        searchStart(prog, buf, start, end, lastEnd);
+        searchStart(prog, buf, start, end, lastEnd, first);
         searching = true;
       }
       const r = searchRun(prog, Math.min(left, budget - spent + 1));
@@ -1185,13 +1196,14 @@ function lineVerifier(buf, start, end, compiled) {
       } else lastEnd = m.end;
       lastMatch = m.end;
       out.push(m);
+      if (first) { done = true; return out; }
       if (left <= 0) return null;
     }
   };
   return { run };
 }
-function verifyLine(buf, start, end, compiled) {
-  return lineVerifier(buf, start, end, compiled).run(Infinity);
+function verifyLine(buf, start, end, compiled, opts) {
+  return lineVerifier(buf, start, end, compiled, opts).run(Infinity);
 }
 
 // ---- the prefilter: ugrep's default dialect, a superset by construction --------------------------

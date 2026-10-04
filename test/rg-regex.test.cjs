@@ -622,6 +622,40 @@ test('lineVerifier: a search run in slices finds what one run finds (the oracle,
   }
 });
 
+// RG-RE-EARLIEST (grep-native Task 6 review I-4): asked only WHETHER a line matches ({ first: true },
+// what -l, -c and the standard printer without -o need), the search stops at the first match state
+// it reaches. It selects exactly the lines the full find_iter selects (the full one equals native's
+// digest on every oracle pattern: rg-regex-oracle-property), at most one match a line, starting on
+// the line, in one run or in slices, and it never refuses where the full search answers.
+test('RG-RE-EARLIEST: { first: true } selects exactly the lines the full search selects (the oracle)', () => {
+  let lines = 0;
+  for (const [pattern, ic] of ORACLE.cases) {
+    const t = R.translateRgRegex(pattern, { ignoreCase: !!ic });
+    if (t.refuse) continue;
+    for (let ls = 0; ls < CORPUS.length;) {
+      const le = CORPUS.indexOf(0x0a, ls);
+      let whole, first, sliced;
+      try { whole = R.verifyLine(CORPUS, ls, le, t); } catch (e) { whole = e.rule; }
+      try { first = R.verifyLine(CORPUS, ls, le, t, { first: true }); } catch (e) { first = e.rule; }
+      try {
+        const v = R.lineVerifier(CORPUS, ls, le, t, { first: true });
+        let r;
+        while ((r = v.run(37)) === null) { /* paused */ }
+        sliced = r;
+      } catch (e) { sliced = e.rule; }
+      const what = `${JSON.stringify(pattern)} at ${ls}`;
+      if (typeof first === 'string') assert.strictEqual(whole, first, `${what}: the earliest search refused where the full one answered`);
+      else if (typeof whole !== 'string') {
+        assert.strictEqual(first.length, whole.length ? 1 : 0, what);
+        if (first.length) assert.ok(first[0].start >= ls && first[0].start <= le, what);
+      }
+      assert.deepStrictEqual(sliced, first, what);
+      ls = le + 1; lines++;
+    }
+  }
+  assert.ok(lines > 10000, `${lines} pattern x line pairs`);
+});
+
 test('RG-RE-PREFILTER-SUPERSET: the widening rules, stated', () => {
   const pre = (p, o) => R.translateRgRegex(p, o || {}).prefilter;
   assert.strictEqual(pre('needle'), 'needle');

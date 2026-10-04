@@ -446,22 +446,29 @@ function asUgrepError(e) {
 // One file: its matches, as rg's matcher finds them on the lines ugrep proposed.
 function decideFile(file, proposed, t, opts, all) {
   const { text, lines } = fileLines(file, proposed, opts, all);
-  return decideLines(text, lines, t, opts.deadline);
+  return decideLines(text, lines, t, opts.deadline, opts.first);
 }
 // The lines' matches, in order. With a `deadline` (the synchronous caller's own timeout, ms since the
 // epoch) each line is decided in slices and the search ends, timed out, once it passes: the
 // synchronous surfaces cannot be aborted, so the caller's timeout is what bounds them (beyond
 // RG-RE-REFUSE-COST's per-line budget, which holds with or without one).
-function decideLines(text, lines, t, deadline) {
+// `first` (FIRST_MATCH): 'file' stops at the first line with a match (-l), 'line' takes one match
+// per line (-c); either way only WHICH lines match is answered, by an earliest search
+// (rg-regex.cjs RG-RE-EARLIEST), so those spans are never printed.
+function decideLines(text, lines, t, deadline, first) {
   const out = [];
+  const vo = first ? { first: true } : undefined;
   try {
     for (let i = 0; i < lines.length; i += 2) {
-      if (!deadline) { for (const m of rgRegexModule().verifyLine(text, lines[i], lines[i + 1], t)) out.push(m); continue; }
-      const v = rgRegexModule().lineVerifier(text, lines[i], lines[i + 1], t);
       let r;
-      while ((r = v.run(DECIDE_SLICE_STEPS)) === null) if (Date.now() > deadline) throw timedOutError();
+      if (!deadline) r = rgRegexModule().verifyLine(text, lines[i], lines[i + 1], t, vo);
+      else {
+        const v = rgRegexModule().lineVerifier(text, lines[i], lines[i + 1], t, vo);
+        while ((r = v.run(DECIDE_SLICE_STEPS)) === null) if (Date.now() > deadline) throw timedOutError();
+        if (Date.now() > deadline) throw timedOutError();
+      }
       for (const m of r) out.push(m);
-      if (Date.now() > deadline) throw timedOutError();
+      if (first === 'file' && out.length) break;
     }
   } catch (e) { throw asUgrepError(e); }
   return out;
@@ -473,14 +480,19 @@ const timedOutError = () => new UgrepError('rg-native: the search passed its cal
 const DECIDE_SLICE_STEPS = 1 << 16;
 async function decideFileAsync(file, proposed, t, opts, all, between) {
   const { text, lines } = fileLines(file, proposed, opts, all);
+  return decideLinesAsync(text, lines, t, between, opts.first);
+}
+async function decideLinesAsync(text, lines, t, between, first) {
   const out = [];
+  const vo = first ? { first: true } : undefined;
   for (let i = 0; i < lines.length; i += 2) {
     let r;
     try {
-      const v = rgRegexModule().lineVerifier(text, lines[i], lines[i + 1], t);
+      const v = rgRegexModule().lineVerifier(text, lines[i], lines[i + 1], t, vo);
       while ((r = v.run(DECIDE_SLICE_STEPS)) === null) await between();
     } catch (e) { throw asUgrepError(e); }
     for (const m of r) out.push(m);
+    if (first === 'file' && out.length) break;
     await between();
   }
   return out;
@@ -682,6 +694,9 @@ function ugrepMatchesAsync(files, pattern, opts = {}) {
 //                              as a match
 //   RG-STDIN                   `-` searches what the caller piped in, named `<stdin>`; to rg it is a
 //                              NAMED path, so a NUL in it does not end the search (review I-1)
+//   RG-FIRST-MATCH             -l stops at a file's first match, -c and the standard printer
+//                              without -o at a line's first (rg-regex.cjs RG-RE-EARLIEST), as rg
+//                              does; -o and -c -o find every match
 //   RG-EXIT                    0 found, 1 not found, 2 when any path failed (its error on stderr, the
 //                              rest still searched and printed): never quaude's refusal
 //   RG-BINARY-QUIT-FIRST-READ  INTERIM (the plan's Task 8 replaces it with rg's LineBuffer): a WALKED
@@ -866,7 +881,7 @@ const FIRST_READ = 64 * 1024;   // rg's first read of a file (grep-searcher's DE
 const binaryAtFirstRead = (text) => text.subarray(0, FIRST_READ).indexOf(0) !== -1;
 
 // Every line of `text` decided by the matcher alone: stdin, and matchFilesAlone.
-function matchTextLines(text, t, deadline) { return decideLines(text, candidateLines(text, null, true), t, deadline); }
+function matchTextLines(text, t, deadline, first) { return decideLines(text, candidateLines(text, null, true), t, deadline, first); }
 // matchFilesAlone(files, pattern, opts) -> Map: the same answer as ugrepMatches with no ugrep, every
 // line of every file decided by the matcher (slower; what stdin always takes).
 function matchFilesAlone(files, pattern, opts = {}) {
@@ -874,7 +889,7 @@ function matchFilesAlone(files, pattern, opts = {}) {
   const out = new Map();
   for (const f of files) {
     if (out.has(f)) continue;
-    const m = matchTextLines(readRgText(f, opts.cwd), t, opts.deadline);
+    const m = matchTextLines(readRgText(f, opts.cwd), t, opts.deadline, opts.first);
     if (m.length) out.set(f, m);
   }
   return out;
@@ -997,10 +1012,14 @@ function* searchCore(spec, opts) {
       for (const e of [...errors, ...unknown]) entries.push({ error: e });
     }
   }
+  // FIRST_MATCH: what each mode needs to know of a file's matches. -l only whether there is one,
+  // -c (lines) and the standard printer without -o only which lines hold one, as rg itself stops
+  // there; -o and -c -o every printable match.
+  const first = spec.mode === 'files' ? 'file' : !spec.only ? 'line' : undefined;
   const files = [...new Set(entries.filter((e) => e.file).map((e) => e.file))];
   let matches = new Map(), failed = null;
   if (files.length) {
-    const r = yield { op: 'match', files, pattern };
+    const r = yield { op: 'match', files, pattern, first };
     if (r.refusal) return r.refusal;
     if (r.error) { failed = r.error; matches = r.error.matches || new Map(); } else matches = r.matches;
   }
@@ -1009,7 +1028,7 @@ function* searchCore(spec, opts) {
   for (const e of entries) {
     if (e.error) { err.push(Buffer.from(e.error + '\n')); broke = true; continue; }
     let text, m;
-    if (e.stdin) { text = rgText(toBuf(yield { op: 'stdin' })); m = yield { op: 'decide', text, t }; if (m.refusal) return m.refusal; m = m.matches; }
+    if (e.stdin) { text = rgText(toBuf(yield { op: 'stdin' })); m = yield { op: 'decide', text, t, first }; if (m.refusal) return m.refusal; m = m.matches; }
     else {
       m = matches.get(e.file);
       if (!m || !m.length) continue;
@@ -1102,12 +1121,12 @@ function searchSync(plan, opts) {
       if (r.status === null || r.signal) return { refusal: appletRejected(ugrep, r.signal || 'killed', r.stderr) };
       return { stdout: r.stdout, stderr: r.stderr, status: r.status };
     },
-    match: ({ files, pattern }) => {
-      const o = { ugrep, cwd: opts.cwd, env, ignoreCase: spec.ignoreCase, spawnSync, deadline };
+    match: ({ files, pattern, first }) => {
+      const o = { ugrep, cwd: opts.cwd, env, ignoreCase: spec.ignoreCase, spawnSync, deadline, first };
       try { return { matches: (opts.matchFiles || ugrepMatches)(files, pattern, o) }; } catch (e) { return matchOutcome(e, opts, ugrep); }
     },
     stdin: () => (typeof opts.input === 'string' ? Buffer.from(opts.input, 'utf8') : toBuf(opts.input)),
-    decide: ({ text, t }) => { try { return { matches: matchTextLines(text, t, deadline) }; } catch (e) { return matchOutcome(e, opts, ugrep); } },
+    decide: ({ text, t, first }) => { try { return { matches: matchTextLines(text, t, deadline, first) }; } catch (e) { return matchOutcome(e, opts, ugrep); } },
   };
   let res;
   try { res = driveSync(searchCore(spec, { cwd: opts.cwd, onRejected: opts.onRejected, ugrepName: ugrep && leafOf(ugrep) }), handlers); } catch (e) {
@@ -1137,18 +1156,8 @@ function runChild(spawn, bin, argv, o, onChild) {
 }
 // Every line of `text` decided by the matcher, in slices, `between()` after each (it yields to the
 // event loop and throws once the search is stopped).
-async function matchTextLinesAsync(text, t, between) {
-  const lines = candidateLines(text, null, true), out = [];
-  for (let i = 0; i < lines.length; i += 2) {
-    let r;
-    try {
-      const v = rgRegexModule().lineVerifier(text, lines[i], lines[i + 1], t);
-      while ((r = v.run(DECIDE_SLICE_STEPS)) === null) await between();
-    } catch (e) { throw asUgrepError(e); }
-    for (const m of r) out.push(m);
-    await between();
-  }
-  return out;
+function matchTextLinesAsync(text, t, between, first) {
+  return decideLinesAsync(text, candidateLines(text, null, true), t, between, first);
 }
 
 // A search's asynchronous run (rgSpawn's, for spawn, execFile and Bun.spawn): a child of node's shape
@@ -1194,16 +1203,16 @@ function searchChild(plan, opts, ctx) {
       if (r.status === null || r.signal) return { refusal: appletRejected(ugrep, r.signal || 'killed', r.stderr) };
       return r;
     },
-    match: async ({ files, pattern }) => {
+    match: async ({ files, pattern, first }) => {
       try {
-        if (ctx.matchFiles) return { matches: ctx.matchFiles(files, pattern, { cwd: opts.cwd, ignoreCase: spec.ignoreCase }) };
-        return { matches: await ugrepMatchesAsync(files, pattern, { ugrep, cwd: opts.cwd, env, ignoreCase: spec.ignoreCase, spawn: ctx.spawn,
+        if (ctx.matchFiles) return { matches: ctx.matchFiles(files, pattern, { cwd: opts.cwd, ignoreCase: spec.ignoreCase, first }) };
+        return { matches: await ugrepMatchesAsync(files, pattern, { ugrep, cwd: opts.cwd, env, ignoreCase: spec.ignoreCase, spawn: ctx.spawn, first,
           spawnSync: ctx.spawnSync, onChild: (c) => { current = c; }, signal: stopSignal }) };
       } catch (e) { if (stopped) return {}; return matchOutcome(e, ctx, ugrep); } finally { current = null; }
     },
     stdin: () => new Promise((resolve) => { wake = () => resolve(Buffer.alloc(0)); stdinP.then(resolve); }),
-    decide: async ({ text, t }) => {
-      try { return { matches: await matchTextLinesAsync(text, t, between) }; } catch (e) { if (stopped) return {}; return matchOutcome(e, ctx, ugrep); }
+    decide: async ({ text, t, first }) => {
+      try { return { matches: await matchTextLinesAsync(text, t, between, first) }; } catch (e) { if (stopped) return {}; return matchOutcome(e, ctx, ugrep); }
     },
   };
   setTimeout(async () => {
