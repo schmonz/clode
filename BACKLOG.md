@@ -400,6 +400,13 @@ Bash tool instead".
   trusts the exit status alone passes on an empty stdout (node-shim-fs-stat-identity now also
   checks that stdout is there). Measured: `Promise.reject(new Error('boom'))` under the loader,
   rc 0; node 24, rc 1.
+- **A throw in a raw-timer callback does not reach process.on('uncaughtException')** (round 3
+  review of ruling G18, 2026-10-04). node-shim's own pollers schedule on the engine's timer
+  (`__shimRawTimer`, see fs.cjs _pollerSchedule), not the loader's wrapped setTimeout, so a throw
+  there ends the process with the engine's stack and status 1 instead of being routed to the
+  program's 'uncaughtException' listeners as node routes every timer throw. Measured with
+  test/node-shim-fs-engine-floor.test.cjs's program: its listener never ran; ce62732 relies on the
+  process ending loudly instead. A general divergence from node, not specific to the floor error.
 - **NEXT PIN BUMP WALL: upstream 2.1.289 dies under quaude at `new Intl.ListFormat(...)`**
   (`TypeError: not a function`, chunk-2df325cf.js, the plugin-name check), and the unhandled
   rejection that follows exits 0 with an empty stdout (the entry above). Reported by the round 2
