@@ -960,3 +960,48 @@ test('RG-FIRST-MATCH: -l and -c over a 5 MB line answer in well under a second u
     }
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+// THE SYNC TWIN'S BOUND reaches its first ugrep run too (Task 6 review M-2): asking a ugrep its
+// version is one more spawn, and a ugrep that hangs there ends at the caller's timeout like any.
+test('runRg ends at the caller\'s timeout while asking ugrep its version', { skip: process.platform === 'win32' ? 'needs a shell stand-in' : false }, () => {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'rg-native-capstime-')));
+  try {
+    const slow = path.join(dir, 'slow-version-ugrep');
+    fs.writeFileSync(slow, '#!/bin/sh\nsleep 5\necho "ugrep 7.8.2"\n', { mode: 0o755 });
+    fs.writeFileSync(path.join(dir, 'a.txt'), 'needle\n');
+    const t0 = Date.now();
+    const r = rgn.runRg(['needle', 'a.txt'], { cwd: dir, spawnSync: cp.spawnSync, translate: NOT_TRANSLATED, ugrep: () => slow, timeout: 300 });
+    assert.ok(Date.now() - t0 < 3000, `${Date.now() - t0} ms`);
+    assert.deepStrictEqual([r.status, r.errorCode], [null, 'ETIMEDOUT']);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+// A FIFO (Task 6 review M-2). Measured against native 2.1.283: a WALKED one is skipped (`rg -l needle
+// w` over w/a.txt and w/pipe lists w/a.txt, rc 0); a NAMED one rg opens and reads until a writer
+// closes it (with none, it waits: killed at 5 s). quaude's rg cannot read one without holding the
+// caller (an open blocks, which neither twin's bounds can end), so a named path that is not a regular
+// file or a directory refuses by name (RG-REFUSE-SPECIAL-FILE), at once, on both twins.
+test('RG-REFUSE-SPECIAL-FILE: a named FIFO refuses at once; a walked one is skipped as native skips it', {
+  skip: needUgrep.skip || (process.platform === 'win32' ? 'no mkfifo' : false),
+}, async () => {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'rg-native-fifo-')));
+  try {
+    fs.mkdirSync(path.join(dir, 'w'));
+    fs.writeFileSync(path.join(dir, 'w', 'a.txt'), 'needle\n');
+    const mk = cp.spawnSync('mkfifo', [path.join(dir, 'w', 'pipe')]);
+    assert.strictEqual(mk.status, 0, String(mk.stderr));
+    const ctx = { cwd: dir, spawn: cp.spawn, spawnSync: cp.spawnSync, translate: NOT_TRANSLATED, ugrep: () => UGREP };
+    const walked = rgn.runRg(['-l', 'needle', 'w'], ctx);
+    assert.deepStrictEqual([walked.status, String(walked.stdout)], [0, 'w/a.txt\n']);
+    let t0 = Date.now();
+    const named = rgn.runRg(['-l', 'needle', 'w/pipe'], ctx);
+    assert.ok(Date.now() - t0 < 2000);
+    assert.strictEqual(named.status, 2);
+    assert.match(rgn.parseRgRefusal(named.stderr).reason, /RG-REFUSE-SPECIAL-FILE/);
+    t0 = Date.now();
+    const a = await new Promise((res) => rgn.rgExecFile(['-l', 'needle', 'w/pipe'], { cwd: dir }, (e, so, se) => res({ code: e && e.code, se }), 'rg', ctx));
+    assert.ok(Date.now() - t0 < 2000);
+    assert.strictEqual(a.code, 2);
+    assert.match(rgn.parseRgRefusal(a.se).reason, /RG-REFUSE-SPECIAL-FILE/);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});

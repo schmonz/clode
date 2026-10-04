@@ -219,7 +219,10 @@ function ugrepCapabilities(bin, opts = {}) {
   if (_ugrepCaps.has(bin)) return _ugrepCaps.get(bin);
   const spawnSync = opts.spawnSync || require('child_process').spawnSync;
   let r;
-  try { r = spawnSync(bin, ['--version'], { encoding: 'buffer', timeout: 30000 }); } catch (e) { r = { error: e }; }
+  try { r = spawnSync(bin, ['--version'], { encoding: 'buffer', timeout: opts.timeout || 30000 }); } catch (e) { r = { error: e }; }
+  // The CALLER's timeout ended it (runRg's deadline): that says nothing about this ugrep, so it is
+  // not remembered; the search ends, timed out.
+  if (opts.timeout && r && r.error && r.error.code === 'ETIMEDOUT') throw timedOutError();
   return capsFrom(bin, r);
 }
 // The same, without blocking: what the asynchronous surfaces ask (a first Grep would otherwise hold
@@ -515,6 +518,7 @@ function decideAll(files, proposed, bom, t, opts) {
   for (const f of files) {
     if (seen.has(f) || (!proposed.has(f) && !bom.has(f))) continue;
     seen.add(f);
+    if (opts.deadline && Date.now() > opts.deadline) throw timedOutError();
     const m = takesUgrepRanges(t) && !bom.has(f) ? proposed.get(f) : decideFile(f, proposed.get(f), t, opts, bom.has(f));
     if (m.length) out.set(f, m);
   }
@@ -978,8 +982,22 @@ function* searchCore(spec, opts) {
   try { t = translated(pattern, { ignoreCase: spec.ignoreCase }); } catch (e) { if (e.refused) return rgRefusal(e.message); throw e; }
   const kinds = spec.paths.map((P) => {
     if (P === '-') return { kind: 'stdin' };
-    try { return { kind: fs.statSync(path.resolve(cwd, P)).isDirectory() ? 'dir' : 'file' }; } catch (e) { return { kind: 'error', e }; }
+    try {
+      const st = fs.statSync(path.resolve(cwd, P));
+      return { kind: st.isDirectory() ? 'dir' : st.isFile() ? 'file' : 'special' };
+    } catch (e) { return { kind: 'error', e }; }
   });
+  // RG-REFUSE-SPECIAL-FILE (measured against native 2.1.283): a NAMED FIFO rg opens and reads until a
+  // writer closes it (with none, it waits); quaude's rg cannot, without an open that blocks its
+  // caller beyond any bound, so a named path that is neither a regular file nor a directory refuses.
+  // A walked one is skipped, as native skips it (ugrep's walk lists regular files only).
+  const special = spec.paths.find((P, i) => kinds[i].kind === 'special');
+  if (special !== undefined) {
+    return rgRefusal(`quaude answers rg with its own emulation over ugrep, on purpose, and ${special} is not a regular file `
+      + '(a FIFO or a device), which rg reads until it ends and quaude\'s rg cannot read without blocking its caller '
+      + '(RG-REFUSE-SPECIAL-FILE); nothing was searched');
+  }
+  const pastDeadline = () => { if (opts.deadline && Date.now() > opts.deadline) throw timedOutError(); };
   // rg walks one path that is not a directory (and anything under -j1) with walkdir, whose error for
   // a path it cannot stat says so; its parallel walker's does not (measured: nope.txt alone, with
   // -j1, and beside a.txt).
@@ -1035,6 +1053,7 @@ function* searchCore(spec, opts) {
     else {
       m = matches.get(e.file);
       if (!m || !m.length) continue;
+      pastDeadline();
       // -l reads nothing of a named file, and of a walked one only what RG-BINARY-QUIT-FIRST-READ needs.
       if (spec.mode === 'files' && !e.walked) text = Buffer.alloc(0);
       else {
@@ -1117,7 +1136,7 @@ function searchSync(plan, opts) {
   const deadline = typeof opts.timeout === 'number' && opts.timeout > 0 ? Date.now() + opts.timeout : 0;
   const { spec, ugrep } = plan;
   const handlers = {
-    caps: () => capsOutcome(ugrep && ugrepCapabilities(ugrep, { spawnSync })),
+    caps: () => capsOutcome(ugrep && ugrepCapabilities(ugrep, { spawnSync, timeout: deadline ? Math.max(1, deadline - Date.now()) : undefined })),
     list: ({ argv }) => {
       if (!ugrep) return { refusal: missingUgrep(opts) };
       const r = spawnSync(ugrep, argv, { cwd: opts.cwd, env, encoding: 'buffer', maxBuffer: RG_MAX_BUFFER,
@@ -1135,7 +1154,7 @@ function searchSync(plan, opts) {
     decide: ({ text, t, first }) => { try { return { matches: matchTextLines(text, t, deadline, first) }; } catch (e) { return matchOutcome(e, opts, ugrep); } },
   };
   let res;
-  try { res = driveSync(searchCore(spec, { cwd: opts.cwd, onRejected: opts.onRejected, ugrepName: ugrep && leafOf(ugrep) }), handlers); } catch (e) {
+  try { res = driveSync(searchCore(spec, { cwd: opts.cwd, onRejected: opts.onRejected, ugrepName: ugrep && leafOf(ugrep), deadline }), handlers); } catch (e) {
     if (e && e.timedOut) return { stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), status: null, signal: opts.killSignal || 'SIGTERM', errorCode: 'ETIMEDOUT' };
     throw e;
   }
