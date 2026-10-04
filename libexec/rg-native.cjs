@@ -1645,6 +1645,11 @@ function specialKind(p, st) {
 //                           -l lists the file when the FIRST block holds one (and stops there); a file whose
 //                           count is 0 prints nothing. The standard printer prints each line of a block as a
 //                           match (`:`), numbered from its first; -o each match's part of each line it spans.
+//                           A re-found match can reach past its block (the searcher's slice saw a `^` the printer's
+//                           haystack does not): --json then slices past the block, and rg PANICS (measured: `rg -U
+//                           --json 'a|^b|b\nc\nd'` over `ab\nc\nd\n`, "range end index 6 out of range for slice of
+//                           length 3", no exit status); quaude's rg refuses that search by name. -c, -l, -o and the
+//                           standard printer answer it, as rg's do.
 //   RG-MULTILINE-CONTEXT    -A/-B/-C count lines from a block's first line back and its last line on (core.rs
 //                           before_context_by_line / after_context_by_line), `--` between groups that do not touch
 //   RG-MULTILINE-BINARY     rg looks for a NUL in the text's first 64 KiB before it searches, then in each block
@@ -1853,13 +1858,14 @@ function mlSink(spec, e, text, t, out, state, quit) {
       begin();
       matchCount++;
       const ms = yield* printed(s, e2);
-      // A printed match reaching past its block: grep-printer would slice past the block's bytes (a panic in
-      // rg); quaude's rg refuses rather than guess (RG-MULTILINE-PRINTED). Never seen in measurement.
+      // A printed match reaching past its block: grep-printer slices past the block's bytes and rg PANICS
+      // (RG-MULTILINE-PRINTED, measured above); quaude's rg refuses rather than invent an answer.
       for (const m of ms) {
         if (m.end > e2) {
           throw new UgrepError('quaude answers rg with its own emulation over ugrep, on purpose, and under -U a match its printer found '
-            + `at byte ${m.start} reaches past the lines rg's searcher gave it (${e2}), where rg's own answer is not known `
-            + '(RG-MULTILINE-PRINTED); nothing was searched', { refused: 'RG-MULTILINE-PRINTED' });
+            + `at byte ${m.start} reaches past the lines rg's searcher gave it (byte ${e2}), where rg's --json printer panics `
+            + '(slicing past those lines; RG-MULTILINE-PRINTED); the search had started, and nothing it found is printed',
+          { refused: 'RG-MULTILINE-PRINTED' });
         }
       }
       matches += ms.length; matchedLines += mlLineCount(text, s, e2);

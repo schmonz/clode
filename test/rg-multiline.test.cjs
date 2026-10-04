@@ -222,3 +222,22 @@ test('RG-MULTILINE: locating many matches on one long line steps back over the t
   assert.deepStrictEqual([r.status, l1(r.stdout)], [0, '6000\n'], l1(r.stderr));   // native 2.1.283: 6000
   assert.ok(rgn.searchStats.scannedBack <= 2 * line.length, `stepped back over ${rgn.searchStats.scannedBack} bytes of a ${line.length}-byte text`);
 }));
+
+// RG-MULTILINE-PRINTED's refusal (review minor of Task 10's fix round): the searcher's slice sees `^b` at byte 1
+// (after `a`), so the block is line 1 alone, but the printer, reading from the text's start, re-finds `b\nc\nd`
+// there, reaching to byte 6: native 2.1.283's --json PANICS ("range end index 6 out of range for slice of length
+// 3", no exit status), so quaude's rg refuses by name; every other printer answers as native's does.
+test('RG-MULTILINE-PRINTED: where native\'s --json panics, quaude\'s rg refuses by name; -c, -l, -o, -n answer as native', { skip: POSIX }, () => withMl((root) => {
+  fs.writeFileSync(path.join(root, 'p.txt'), 'ab\nc\nd\n');
+  const run = (m) => rgn.runRg(['-U', ...m, 'a|^b|b\\nc\\nd', 'p.txt'], { cwd: root, spawnSync: cp.spawnSync, ugrep: () => null, matchFiles: rgn.matchFilesAlone });
+  const j = run(['--json']);
+  const ref = rgn.parseRgRefusal(j.stderr);
+  assert.strictEqual(j.status, 2);
+  assert.strictEqual(j.stdout.length, 0);
+  assert.ok(ref && /RG-MULTILINE-PRINTED/.test(ref.reason) && /panics/.test(ref.reason) && /search had started/.test(ref.reason), l1(j.stderr));
+  // native 2.1.283's literals
+  for (const [m, out] of [[['-c'], '2\n'], [['-l'], 'p.txt\n'], [['-n'], '1:ab\n'], [['-n', '-o'], '1:a\n1:b\n'], [['-c', '-o'], '2\n']]) {
+    const r = run(m);
+    assert.deepStrictEqual([r.status, l1(r.stdout)], [0, out], `${m.join(' ')}: ${l1(r.stderr)}`);
+  }
+}));
