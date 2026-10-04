@@ -53,6 +53,9 @@ function treeEntries(kind) {
       ['nonl.txt', 'last needle no newline'],
       ['sub/deep/nested.txt', 'nested needle\nctx\n'],
       ['uni.txt', `caf${cp(0xe9)} needle ${cp(0x4e2d, 0x6587)} needle\n${cp(0x1f600)} NEEDLE wide\nplain\n`],
+      // last, so the files above keep their mtimes: under -U rg's searcher reads from where the last match ended,
+      // so `ab|^c.d` matches `c\nd` there (RG-MULTILINE-SLICE) and widens line 1's block to line 2
+      ['sp.txt', 'abc\nd\nxab\ncd\n'],
     ];
   }
   if (kind === 'nogit') {
@@ -352,6 +355,11 @@ function carveRgArgvShapes(text) {
 const GREP_VARIANTS = [
   ['plain', {}], ['-i', { i: true }], ['glob *.txt', { glob: '*.txt' }], ['glob **/*.{ts,tsx}', { glob: '**/*.{ts,tsx}' }],
   ['type ts', { type: 'ts' }], ['multiline', { multiline: true, pattern: 'one.beta' }],
+  // -U's searcher, judged by the gate (Task 10 fix round): a match ending just after a \n ends its block there
+  // (`needle.` takes the \n of `needle\n`), adjacent lines merge into one block (`^\w` matches at every line
+  // start), and each find's haystack starts where the last match ended (`ab|^c.d`, root's sp.txt)
+  ['multiline needle.', { multiline: true, pattern: 'needle.' }], ['multiline ^\\w', { multiline: true, pattern: '^\\w' }],
+  ['multiline ab|^c.d', { multiline: true, pattern: 'ab|^c.d' }],
 ];
 const CONTENT_VARIANTS = [['-o', { o: true }], ['-C 1', { C: 1 }], ['-B 1 -A 2', { B: 1, A: 2 }]];
 const GREP_MODES = ['files_with_matches', 'count', 'content'];
@@ -370,7 +378,7 @@ const FILE_TARGETS = { bin2: 'early.dat' };
 // exclude the file makes it skip the search, so only the variants without one reach rg. The
 // root tree's a.txt stands in for the task output.
 const STDIN_FILE = { root: 'a.txt' };
-const STDIN_VARIANTS = new Set(['plain', '-i', 'multiline', '-o', '-C 1', '-B 1 -A 2']);
+const STDIN_VARIANTS = new Set(['plain', '-i', 'multiline', 'multiline needle.', 'multiline ^\\w', '-o', '-C 1', '-B 1 -A 2']);
 
 const RG_MATRIX = [];
 for (const kind of RG_TREE_KINDS) {

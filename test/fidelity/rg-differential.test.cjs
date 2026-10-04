@@ -23,7 +23,7 @@
 // other difference in them is a finding, as everywhere (the control plants both).
 //
 // THE ONE WRITTEN DIVERGENCE IN SCOPE. Rust regex and ugrep's regex dialect cannot be equal in
-// general, so the matrix's patterns (`needle`, `one.beta`) come from the dialect both read the
+// general, so the matrix's patterns (`needle`, `one.beta`, `needle.`, `^\w`, `ab|^c.d`) come from the dialect both read the
 // same way. A pattern the emulation can tell they would read differently is refused honestly
 // (rc 2, the reason on stderr), never answered differently.
 //
@@ -77,7 +77,9 @@ const { tjsPath, resolveBin } = require('../node-shim-helper.cjs');
 // Glob argv x 2 (2026-09-28); for bin2 the 21 Grep argv once more naming early.dat; for root
 // the 12 stdin-branch argv and rg --version (2026-10-03); and in each, the two -j1 walk cells
 // (RG-WALK-ORDER, 2026-10-04).
-const KIND_FLOORS = { root: 63, nogit: 50, bin2: 71 };
+// And (Task 10 fix round, 2026-10-04) the three -U variants (`needle.`, `^\w`, `ab|^c.d`: 6 cells a kind, 9 for
+// bin2, 6 stdin for root).
+const KIND_FLOORS = { root: 87, nogit: 68, bin2: 98 };
 const FLOOR = Object.values(KIND_FLOORS).reduce((a, b) => a + b, 0);
 // ANSWERED FLOORS: per kind, the cells NATIVE answered: rc 0 with output (rg's "found"). A cell
 // native answers rc 1 judges only that ours found nothing too (with --json that is a lone
@@ -86,7 +88,8 @@ const FLOOR = Object.values(KIND_FLOORS).reduce((a, b) => a + b, 0);
 // of the 178 cells (root's 47 = 34 + the 12 stdin cells + --version); with the -j1 walk cells
 // (2026-10-04) 128 of 184 (root's -l and -c, nogit's -l and -c, bin2's -l: its -c counts nothing,
 // a NUL squashing late.dat's count and early.dat holding no match before its NUL's fill).
-const ANSWERED_FLOORS = { root: 49, nogit: 44, bin2: 35 };
+// With the -U variants (Task 10 fix round, 2026-10-04): 182 of 253.
+const ANSWERED_FLOORS = { root: 73, nogit: 56, bin2: 53 };
 
 // THE TRIPWIRE: an `rg` placed FIRST on the PATH ours sees, which prints this and exits 99.
 // Bun.which('rg') then answers its absolute path, which is exactly the route on a host with
@@ -316,7 +319,7 @@ test('a tree kind under its floor makes rg-differential BROKEN, naming the kind'
     read: () => { const c = controlCells(); c.cells = c.cells.filter((x) => x.kind !== 'bin2'); return c; },
     scan: scanCells });
   assert.strictEqual(r.verdict, BROKEN, r.message);
-  assert.match(r.message, /the bin2 tree has 0 cells, under its floor of 71/);
+  assert.match(r.message, /the bin2 tree has 0 cells, under its floor of 98/);
 });
 
 test('RG_MATRIX holds every kind at or above its floor, and each cell id once', () => {
