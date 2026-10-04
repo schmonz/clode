@@ -501,18 +501,22 @@ const MMAP_EVERYWHERE = { rule: 'RG-MMAP-EVERYWHERE', cells: {
     linux: { status: 0, stdout: "{\"type\":\"begin\",\"data\":{\"path\":{\"text\":\"<TREE>/early.dat\"}}}\n{\"type\":\"match\",\"data\":{\"path\":{\"text\":\"<TREE>/early.dat\"},\"lines\":{\"text\":\"text needle before\\n\"},\"line_number\":1,\"absolute_offset\":0,\"submatches\":[{\"match\":{\"text\":\"needle\"},\"start\":5,\"end\":11}]}}\n{\"type\":\"context\",\"data\":{\"path\":{\"text\":\"<TREE>/early.dat\"},\"lines\":{\"text\":\"\\u0000\\u0001\\u0002\\n\"},\"line_number\":2,\"absolute_offset\":19,\"submatches\":[]}}\n{\"type\":\"match\",\"data\":{\"path\":{\"text\":\"<TREE>/early.dat\"},\"lines\":{\"text\":\"needle after nul\\n\"},\"line_number\":3,\"absolute_offset\":23,\"submatches\":[{\"match\":{\"text\":\"needle\"},\"start\":0,\"end\":6}]}}\n{\"type\":\"end\",\"data\":{\"path\":{\"text\":\"<TREE>/early.dat\"},\"binary_offset\":19,\"stats\":{\"elapsed\":{},\"searches\":1,\"searches_with_match\":1,\"bytes_searched\":19,\"bytes_printed\":689,\"matched_lines\":2,\"matches\":2}}}\n{\"data\":{\"elapsed_total\":{},\"stats\":{\"bytes_printed\":689,\"bytes_searched\":19,\"elapsed\":{},\"matched_lines\":2,\"matches\":2,\"searches\":1,\"searches_with_match\":1}},\"type\":\"summary\"}\n" },
   },
 } };
-// A recorded literal in this tree: <TREE> spelled as `tree`, and each file's bytes_printed (its begin,
-// match and context messages, RG-JSON) and the summary's sum counted again, since the path is in each.
+// A recorded literal in this tree, as native prints it there: <TREE> spelled as `tree` the way serde_json
+// writes a string (`"` and `\` escaped, every C0 control as \b \f \n \r \t or \u00XX, everything else
+// its UTF-8 bytes: RG-JSON-ESCAPE), and each file's bytes_printed (its begin, match and context messages,
+// RG-JSON) and the summary's sum counted again in BYTES, since the path is in each. A Buffer of those bytes.
+const serdeString = (s) => s.replace(/["\\\u0000-\u001f]/g, (c) => ({ '"': '\\"', '\\': '\\\\', '\b': '\\b', '\f': '\\f', '\n': '\\n', '\r': '\\r', '\t': '\\t' }[c]
+  || `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`));
 function inTree(literal, tree) {
-  const lines = literal.split('<TREE>').join(tree).split('\n');
+  const lines = literal.split('<TREE>').join(serdeString(tree)).split('\n');
   let file = 0, total = 0;
   for (let i = 0; i < lines.length; i++) {
     const l = lines[i];
-    if (/^\{"type":"(?:begin|match|context)"/.test(l)) file += l.length + 1;
+    if (/^\{"type":"(?:begin|match|context)"/.test(l)) file += Buffer.byteLength(l, 'utf8') + 1;
     else if (l.startsWith('{"type":"end"')) { lines[i] = l.replace(/"bytes_printed":\d+/, `"bytes_printed":${file}`); total += file; file = 0; }
     else if (/"type":"summary"\}$/.test(l)) lines[i] = l.replace(/"bytes_printed":\d+/, `"bytes_printed":${total}`);
   }
-  return lines.join('\n');
+  return Buffer.from(lines.join('\n'), 'utf8');
 }
 // What a cell is judged against on `platform` (where native ran): null when nothing is excepted, else
 // { expected: Linux native's answer in this tree, stale: a finding when macOS native no longer prints its
@@ -520,11 +524,11 @@ function inTree(literal, tree) {
 function mmapEverywhere(id, native, argv, tree, platform) {
   const rec = MMAP_EVERYWHERE.cells[id];
   if (!rec || platform !== 'darwin') return null;
-  const nat = normalizeRg(native.stdout, argv), was = normalizeRg(Buffer.from(inTree(rec.macos.stdout, tree), 'latin1'), argv);
+  const nat = normalizeRg(native.stdout, argv), was = normalizeRg(inTree(rec.macos.stdout, tree), argv);
   const stale = native.status === rec.macos.status && nat === was ? null
     : `${MMAP_EVERYWHERE.rule}'s record of native macOS no longer holds (exit ${native.status}, recorded ${rec.macos.status}; `
       + `stdout ${nat === was ? 'as recorded' : 'differs'}): re-measure the divergence`;
-  const expected = { argv, status: rec.linux.status, signal: null, stdout: Buffer.from(inTree(rec.linux.stdout, tree), 'latin1'), stderr: Buffer.alloc(0) };
+  const expected = { argv, status: rec.linux.status, signal: null, stdout: inTree(rec.linux.stdout, tree), stderr: Buffer.alloc(0) };
   return { expected, stale };
 }
 

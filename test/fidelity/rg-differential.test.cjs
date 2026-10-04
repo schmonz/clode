@@ -249,7 +249,7 @@ function controlCells({ defects = true } = {}) {
   const cells = P.RG_MATRIX.map((c) => {
     const argv = P.cellArgv(c, '/tree'), rec = P.MMAP_EVERYWHERE.cells[c.id];
     if (rec) {
-      const at = (r) => ({ argv, status: r.status, signal: null, stdout: Buffer.from(P.inTree(r.stdout, '/tree'), 'latin1'), stderr: Buffer.alloc(0) });
+      const at = (r) => ({ argv, status: r.status, signal: null, stdout: P.inTree(r.stdout, '/tree'), stderr: Buffer.alloc(0) });
       return { id: c.id, kind: c.kind, tree: '/tree', argv, native: at(rec.macos), ours: at(rec.linux) };
     }
     const r = res(argv, 'a.txt\0');
@@ -326,6 +326,43 @@ test('RG-MMAP-EVERYWHERE: equal pairs are clean; a byte off in ours, or native o
   lin.platform = 'linux';
   assert.deepStrictEqual(scanCells(lin).findings.map((f) => f.split(':')[0]).sort(), EXCEPTED.slice().sort());
 });
+
+// inTree spells a recorded literal in a real tree as native would print it there: the path JSON-escaped
+// (serde: `"` and `\` escaped, non-ASCII as its UTF-8 bytes) and bytes_printed counted in BYTES. A tree
+// whose path holds a quote or a non-ASCII letter must not make a false finding (Task 8 re-review nit).
+const ODD_TREE = `/tmp/caf${String.fromCodePoint(0xe9)} "q\\x`;
+test('RG-MMAP-EVERYWHERE: inTree JSON-escapes the tree and counts bytes_printed in bytes', () => {
+  for (const id of EXCEPTED) {
+    for (const side of ['macos', 'linux']) {
+      const lines = P.inTree(P.MMAP_EVERYWHERE.cells[id][side].stdout, ODD_TREE).toString('utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+      let printed = 0;
+      const raw = P.inTree(P.MMAP_EVERYWHERE.cells[id][side].stdout, ODD_TREE);
+      const rawLines = raw.toString('latin1').split('\n');
+      lines.forEach((m, i) => {
+        if (m.type === 'begin' || m.type === 'match' || m.type === 'context') {
+          assert.strictEqual(m.data.path.text, `${ODD_TREE}/early.dat`, `${id} ${side}`);
+          printed += rawLines[i].length + 1;     // latin1: one char per BYTE
+        }
+        if (m.type === 'end') assert.strictEqual(m.data.stats.bytes_printed, printed, `${id} ${side}: bytes_printed`);
+        if (m.type === 'summary') assert.strictEqual(m.data.stats.bytes_printed, printed, `${id} ${side}: summary bytes_printed`);
+      });
+    }
+  }
+});
+// ...and native agrees: macOS native over bin2 in such a tree prints exactly its record spelled there.
+test('RG-MMAP-EVERYWHERE: macOS native in a tree with a quote and a non-ASCII letter prints its record as inTree spells it (native, macOS)',
+  { skip: process.platform !== 'darwin' ? 'macOS only' : !providerBin(process.env) ? 'no native provider' : false }, () => {
+    const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'rg-intree-')));
+    try {
+      const tree = path.join(base, `caf${String.fromCodePoint(0xe9)} "q\\x`);
+      P.makeRgTree(tree, 'bin2');
+      const id = EXCEPTED[0], cell = P.RG_MATRIX.find((c) => c.id === id);
+      const argv = P.cellArgv(cell, tree);
+      const native = P.runNativeRg(providerBin(process.env), argv, tree, { env: { HOME: base } });
+      const ex = P.mmapEverywhere(id, native, argv, tree, 'darwin');
+      assert.strictEqual(ex.stale, null);
+    } finally { fs.rmSync(base, { recursive: true, force: true }); }
+  });
 
 test('RG-MMAP-EVERYWHERE excepts only RG_MATRIX cells, only named-binary content cells, and only where macOS and Linux differ', () => {
   const ids = new Set(P.RG_MATRIX.map((c) => c.id));
