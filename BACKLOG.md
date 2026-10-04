@@ -322,6 +322,19 @@ Bash tool instead".
   - UNMEASURED ON WINDOWS: a walked file's path joins its target with `/` (Rust's Path::join gives
     `\` there), and a path's error text is libuv's message capitalized (`No such file or directory`,
     `Permission denied` match macOS's strerror, which is what native prints; Windows' does not).
+- **quaude's rg prints --json itself (grep-native Task 7, 2026-10-04): what it leaves to later tasks.**
+  The Grep tool's content mode is answered, message for message (RG-JSON and its siblings in
+  libexec/rg-native.cjs); driven end to end through the real 2.1.283 bundle under tjs, its
+  tool_results equal native's up to rg's own (nondeterministic) file order. Left:
+  - `binary_offset` is always null and a NAMED binary is printed as text: native's convert mode (a
+    NUL is a line break, so later line numbers shift; `binary_offset` set) and a walked file's quit
+    after its first 64 KiB are Task 8's (rg-differential: early.dat 7 cells, late.dat 10).
+  - A path that is not UTF-8 would be `{"bytes": ...}` in native's JSON; the interim walk reads
+    ugrep's listing as UTF-8 (lossy), so such a name cannot reach the printer as its bytes. Task 9's
+    walk must carry names as bytes. `--type` beside `--json` refuses naming `--type` (Task 9).
+  - SPEED: linear, but every match of a 5 MB minified line (275,822 of them, a 20 MB answer: past
+    the Grep tool's maxBuffer anyway) takes ~2.4 s under tjs on this Mac, 0.7 s of it reading
+    ugrep's records; native ~100 ms.
 - **The Grep tool's files_with_matches ORDER differs from native's under quaude: node-shim's stat
   has whole-second mtimes** (found driving the real 2.1.283 bundle end to end, grep-native Task 6,
   2026-10-03). The tool sorts -l's files in JS, newest mtime first, then by name; node-shim's
