@@ -22,12 +22,23 @@ on macOS, NetBSD and Linux, and CI's linux-x64-pty judges both rg gates against 
   flags still refused by name: --sort path/accessed/created, --files -); binary files;
 - under "`net.createServer` is ABSENT": sandboxed Bash never runs under quaude (measured in Task 11);
 - under "Ten agentic rows": every quaude still creates ~/.tjs.
-- **The native-literal rg unit rows run on dev boxes only.** CI's suite stages a MINIMISED provider, which cannot run
-  as rg, so every "(native)" row in rg-entry, rg-walk, rg-files and rg-native skips there, by name (rgOracleSkip;
-  before Task 11 they failed with EACCES and would have been red). linux-x64-pty has a runnable native (the rg step's
-  oracle) and tjs; adding those four files to that step, with the macOS-only rows as its named skips, would judge
-  them on every push. They passed in an ubuntu:24.04 container with a real native (212 pass, 1 macOS-only skip), but
-  the combination with the step was not run, so it was not added blind.
+- **Some rg unit rows run on dev boxes only.** In CI's ubuntu suite (ugrep installed, no tjs, a MINIMISED provider)
+  the literal rows DO run under node: rg-walk's P9 rows (RG-ERROR-TEXT read through libuv's words, node's named
+  divergence), rg-native's, rg-files', rg-entry's in-process rows. What does not run there: every row that SPAWNS the
+  native oracle (a minimised carve cannot run; those skip by name, rgOracleSkip; before Task 11 they failed with
+  EACCES and would have been red), and every tjs variant (the suite has no engine). linux-x64-pty has both, a runnable
+  native (the rg step's oracle) and tjs-linux-x64-musl: adding rg-entry, rg-walk, rg-files and rg-native to that step
+  would judge them on every push, with the macOS-only rows as its named skips. Its engine is MUSL, so that needed
+  RG-ERROR-TEXT's libc keying (done in Task 11's fix round: rg-walk tells a musl engine by its strerror(0) and reads
+  native's glibc rows through musl's words; red then green on a musl engine in an alpine container). Measured
+  pieces: a real native with a glibc engine, 212 pass and 1 macOS-only skip; the musl engine, rg-walk 35 pass and
+  rg-entry + rg-native 119 pass. The combination with the step itself was not run, so it was not added blind.
+- **every-tool-driven reads the end to end's drivers as FIRM, and the end to end can skip.** tool-coverage-gates
+  counts agentic-grep-glob's Grep and Glob uses as drivers that cannot skip (no skip( after their controls), but the
+  test is declared skipped on win32 and skips when builtQuaude() cannot build (no provider, no engine). So "Grep and
+  Glob are driven" is honest only where that test RUNS: the dev box (the suite) and CI's linux-x64-pty, whose rg step
+  accepts exactly one named skip (`# macOS only`) and so fails if the end to end skips. In the ubuntu and windows
+  suite legs it skips, and the gate cannot tell: it reads a test's source, not where it ran.
 
 grep-native Task 10c (user ruling 2026-10-04) made the Bash tool's `rg` quaude's own tested rg, run as native runs
 its embedded one (the entry under "The Grep tool in quaude, and the Glob tool" says how). Left open:
@@ -406,8 +417,12 @@ Bash tool instead".
     rc-2 output to the model as the whole answer. Only ugrep's per-path warnings (`cannot read X:
     ...`, `X: No such file or directory`, naming a path it was given) are rg's own errors, the rest
     answered, rc 2.
-  - ERROR TEXT IS LIBUV'S, NOT rg's strerror: CLOSED by grep-native Task 10's fix round 2 (review N1) for tjs,
-    the engine quaude ships: txiki-strerror.patch adds __tjs_fs_sync.strerror (the platform libc's strerror(3);
+  - ERROR TEXT IS LIBUV'S, NOT rg's strerror: CLOSED by grep-native Task 10's fix round 2 (review N1) for tjs on
+    darwin, NetBSD and a glibc Linux engine; NOT on quaude's published Linux engine, which is static MUSL: there the
+    words are musl's strerror, a NAMED DIVERGENCE (Task 11 review I1; stated in rg-native.cjs RG-ERROR-TEXT; 74 of
+    errnos 0..133 differ, e.g. ELOOP "Symbolic link loop" for glibc's "Too many levels of symbolic links",
+    ENAMETOOLONG "Filename too long", EIO "I/O error"). Closing it would mean glibc's table in our code, or a glibc
+    engine. For tjs, the engine quaude ships: txiki-strerror.patch adds __tjs_fs_sync.strerror (the platform libc's strerror(3);
     engine-api-floor refuses an engine without it), and rg-native prints that text (RG-ERROR-TEXT; native rows per
     platform, darwin and linux; NetBSD's binding checked on the VM). Still libuv's wording under NODE (naude, the
     test runner): node exposes no strerror, a named divergence of the node engine. NAUDE IS PRODUCTION, NOT A TEST
