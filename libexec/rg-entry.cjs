@@ -125,7 +125,12 @@ function findUgrep(env) {
 // kqueue hosts and EINVAL on Linux's epoll) writes nothing, the
 // search going on to its own status (native: rc 0 for a match). stderr's failures change nothing (rc 2 stays 2).
 const sinkClosed = () => Object.assign(new Error('rg: the reader went away'), { sinkClosed: true });
-function fdWriter(fd, { quiet = false, writeSync = (...a) => fsm().writeSync(...a) } = {}) {
+// Is `fd` the engine's own event-loop descriptor? On Linux libuv's epoll fd reads `anon_inode:[eventpoll]` through
+// /proc/self/fd; nothing else does, and a host with no /proc answers no.
+function isLoopFd(fd, { readlink = (p) => fsm().readlinkSync(p) } = {}) {
+  try { return readlink(`/proc/self/fd/${fd}`) === 'anon_inode:[eventpoll]'; } catch { return false; }
+}
+function fdWriter(fd, { quiet = false, writeSync = (...a) => fsm().writeSync(...a), isLoopFd: loopFd = isLoopFd } = {}) {
   let gone = false;
   return (buf) => {
     let off = 0;
@@ -134,8 +139,10 @@ function fdWriter(fd, { quiet = false, writeSync = (...a) => fsm().writeSync(...
       try { n = writeSync(fd, buf, off, buf.length - off); } catch (e) {
         if (e && e.code === 'EAGAIN') continue;
         // a closed fd under tjs is libuv's own event-loop descriptor by now, as a closed fd 0 is (above): kqueue on
-        // darwin and NetBSD (writing it fails ENXIO), epoll on Linux (anon_inode:[eventpoll]: EINVAL)
-        if (quiet || (e && (e.code === 'EBADF' || e.code === 'ENXIO' || e.code === 'EINVAL'))) { gone = true; return; }
+        // darwin and NetBSD (writing it fails ENXIO), epoll on Linux (anon_inode:[eventpoll]: EINVAL). EINVAL is that
+        // case only where the fd IS the epoll descriptor; any other EINVAL is a real failure, rg's to report.
+        const closed = e && (e.code === 'EBADF' || e.code === 'ENXIO' || (e.code === 'EINVAL' && loopFd(fd)));
+        if (quiet || closed) { gone = true; return; }
         if (e && e.code === 'EPIPE') throw sinkClosed();
         throw e;
       }
@@ -194,6 +201,6 @@ function finish(r, err, exit) {
   exit(typeof r.status === 'number' ? r.status : 2);
 }
 
-module.exports = { RG_ARGV0, isRgInvocation, rgShadowFunction, implicitPath, stdinPieces, findUgrep, fdWriter, main };
+module.exports = { RG_ARGV0, isRgInvocation, rgShadowFunction, implicitPath, stdinPieces, findUgrep, fdWriter, isLoopFd, main };
 
 if (require.main === module) main();

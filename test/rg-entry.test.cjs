@@ -310,11 +310,20 @@ test('fdWriter: a stdout that is libuv\'s own descriptor (ENXIO on kqueue, EINVA
   const { fdWriter } = require('../libexec/rg-entry.cjs');
   for (const code of ['EBADF', 'ENXIO', 'EINVAL']) {
     let calls = 0;
-    const out = fdWriter(1, { writeSync: () => { calls++; throw Object.assign(new Error(code), { code }); } });
+    const out = fdWriter(1, { writeSync: () => { calls++; throw Object.assign(new Error(code), { code }); }, isLoopFd: () => true });
     assert.doesNotThrow(() => { out(Buffer.from('a.txt:needle\n')); out(Buffer.from('more\n')); }, code);
     assert.strictEqual(calls, 1, `${code}: gone after the first failed write`);
   }
   // ...and anything else is still rg's to report (EPIPE ends rg as SIGPIPE would, an unknown failure throws)
   assert.throws(() => fdWriter(1, { writeSync: () => { throw Object.assign(new Error('EPIPE'), { code: 'EPIPE' }); } })(Buffer.from('x')), (e) => e.sinkClosed === true);
-  assert.throws(() => fdWriter(1, { writeSync: () => { throw Object.assign(new Error('EIO'), { code: 'EIO' }); } })(Buffer.from('x')), /EIO/);
+  assert.throws(() => fdWriter(1, { writeSync: () => { throw Object.assign(new Error('EIO'), { code: 'EIO' }); } })(Buffer.from('x')), /EIO/);  // EINVAL is quiet ONLY where fd 1 is the engine's own epoll descriptor (review M6): anywhere else it is a real
+  // failure, rg's to report
+  assert.throws(() => fdWriter(1, { writeSync: () => { throw Object.assign(new Error('EINVAL'), { code: 'EINVAL' }); }, isLoopFd: () => false })(Buffer.from('x')), /EINVAL/);
+});
+
+test('fdWriter: the engine\'s own epoll descriptor is told by its /proc name, and nothing else is (Linux, else none)', () => {
+  const { isLoopFd } = require('../libexec/rg-entry.cjs');
+  assert.strictEqual(isLoopFd(1, { readlink: () => 'anon_inode:[eventpoll]' }), true);
+  for (const link of ['pipe:[938032]', '/dev/null', 'anon_inode:[eventfd]', 'socket:[1]']) assert.strictEqual(isLoopFd(1, { readlink: () => link }), false, link);
+  assert.strictEqual(isLoopFd(1, { readlink: () => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); } }), false);
 });
