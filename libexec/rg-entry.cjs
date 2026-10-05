@@ -121,20 +121,21 @@ function findUgrep(env) {
 }
 
 // rg's stdout and stderr, as Rust's std writes them. EPIPE (a reader that went away: `rg x | head -1`) ends rg at
-// once and quietly (native dies of SIGPIPE: the shell's 141); a closed fd (`rg x >&-`: EBADF, or ENXIO under tjs) writes nothing, the
+// once and quietly (native dies of SIGPIPE: the shell's 141); a closed fd (`rg x >&-`: EBADF, or under tjs ENXIO on
+// kqueue hosts and EINVAL on Linux's epoll) writes nothing, the
 // search going on to its own status (native: rc 0 for a match). stderr's failures change nothing (rc 2 stays 2).
 const sinkClosed = () => Object.assign(new Error('rg: the reader went away'), { sinkClosed: true });
-function fdWriter(fd, { quiet = false } = {}) {
-  const fs = fsm();
+function fdWriter(fd, { quiet = false, writeSync = (...a) => fsm().writeSync(...a) } = {}) {
   let gone = false;
   return (buf) => {
     let off = 0;
     while (!gone && off < buf.length) {
       let n;
-      try { n = fs.writeSync(fd, buf, off, buf.length - off); } catch (e) {
+      try { n = writeSync(fd, buf, off, buf.length - off); } catch (e) {
         if (e && e.code === 'EAGAIN') continue;
-        // a closed fd under tjs is libuv's kqueue by now (writing it fails ENXIO), as a closed fd 0 is (above)
-        if (quiet || (e && (e.code === 'EBADF' || e.code === 'ENXIO'))) { gone = true; return; }
+        // a closed fd under tjs is libuv's own event-loop descriptor by now, as a closed fd 0 is (above): kqueue on
+        // darwin and NetBSD (writing it fails ENXIO), epoll on Linux (anon_inode:[eventpoll]: EINVAL)
+        if (quiet || (e && (e.code === 'EBADF' || e.code === 'ENXIO' || e.code === 'EINVAL'))) { gone = true; return; }
         if (e && e.code === 'EPIPE') throw sinkClosed();
         throw e;
       }
@@ -193,6 +194,6 @@ function finish(r, err, exit) {
   exit(typeof r.status === 'number' ? r.status : 2);
 }
 
-module.exports = { RG_ARGV0, isRgInvocation, rgShadowFunction, implicitPath, stdinPieces, findUgrep, main };
+module.exports = { RG_ARGV0, isRgInvocation, rgShadowFunction, implicitPath, stdinPieces, findUgrep, fdWriter, main };
 
 if (require.main === module) main();

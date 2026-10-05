@@ -301,3 +301,20 @@ test('RG-STREAM: yes | rg | head -1 ends, and a big file under | head -1 prints 
   const b = bash(`${c} -n needle ${q(bigFile())} </dev/null | head -1`);
   assert.strictEqual(b.stdout, '1:a line with a needle in it\n');
 });
+
+// A CLOSED stdout under tjs is not closed by the time any JS runs: libuv's own event-loop descriptor takes the lowest
+// free number at start-up. On darwin and NetBSD that is kqueue (a write fails ENXIO); on Linux it is epoll
+// (`readlink /proc/self/fd/1` = anon_inode:[eventpoll], measured in an ubuntu:24.04 container 2026-10-05), and a write
+// to it fails EINVAL. Native's `rg needle >&-` writes nothing and exits 0 (above); so must ours on each, not throw.
+test('fdWriter: a stdout that is libuv\'s own descriptor (ENXIO on kqueue, EINVAL on epoll) writes nothing, quietly', () => {
+  const { fdWriter } = require('../libexec/rg-entry.cjs');
+  for (const code of ['EBADF', 'ENXIO', 'EINVAL']) {
+    let calls = 0;
+    const out = fdWriter(1, { writeSync: () => { calls++; throw Object.assign(new Error(code), { code }); } });
+    assert.doesNotThrow(() => { out(Buffer.from('a.txt:needle\n')); out(Buffer.from('more\n')); }, code);
+    assert.strictEqual(calls, 1, `${code}: gone after the first failed write`);
+  }
+  // ...and anything else is still rg's to report (EPIPE ends rg as SIGPIPE would, an unknown failure throws)
+  assert.throws(() => fdWriter(1, { writeSync: () => { throw Object.assign(new Error('EPIPE'), { code: 'EPIPE' }); } })(Buffer.from('x')), (e) => e.sinkClosed === true);
+  assert.throws(() => fdWriter(1, { writeSync: () => { throw Object.assign(new Error('EIO'), { code: 'EIO' }); } })(Buffer.from('x')), /EIO/);
+});
