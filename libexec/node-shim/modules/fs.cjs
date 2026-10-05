@@ -73,15 +73,16 @@ function _refuseProcFdOffLinux(op, p, flags) {
   if (!platform || platform === 'linux') return;
   if (m[1] !== 'self' && m[1] !== String(proc.pid)) return;   // not OUR descriptors
   if (op === 'open' && flags === 'r' && /^\d+$/.test(m[2] || '')) return;  // reading one descriptor
+  // the engine's own shape, reshaped as node's like every engine error (internal/node-errors.cjs)
   const e = new Error(`ENOENT, ${op} '${p}'`);
   e.code = 'ENOENT';
   e.errno = require('./../internal/engine-constants.cjs').errno.ENOENT;
   e.syscall = op;
-  e.path = p;
-  throw e;
+  throw require('../internal/node-errors.cjs').asNodeError(e, op, [p]);
 }
 const FSS = (() => {
-  const raw = globalThis.__tjs_fs_sync;
+  // every error the engine throws, node's shape (internal/node-errors.cjs)
+  const raw = require('../internal/node-errors.cjs').nodeErrorsFss(globalThis.__tjs_fs_sync);
   if (!raw) return raw;
   const gated = Object.create(raw);   // every other primitive is inherited untouched
   for (const [op, at] of Object.entries(_FSS_PATH_ARGS)) {

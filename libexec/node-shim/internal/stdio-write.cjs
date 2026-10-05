@@ -5,7 +5,8 @@
 // write(2) on a blocking pipe/tty may short-write large payloads — loop until
 // every byte lands.
 const te = new TextEncoder();
-const FSS = globalThis.__tjs_fs_sync;
+// errors in node's shape (EPIPE when the reader went away: internal/node-errors.cjs)
+const FSS = require('./node-errors.cjs').nodeErrorsFss(globalThis.__tjs_fs_sync);
 // BYTES, not a string. child_process.spawnSync replays a captured child's output here to
 // emulate stdio:'inherit' (the C primitive cannot inherit an fd), and that output is
 // arbitrary bytes: routing it through String() would put U+FFFD wherever a compiler
