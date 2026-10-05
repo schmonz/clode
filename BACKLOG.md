@@ -21,11 +21,27 @@ its embedded one (the entry above, under "The Grep tool in quaude", says how). L
   suggests seconds per Bash `rg`: UNMEASURED there, and the doctrine is to profile on that box before a lever.
   The lever it would point at is compiling rg-entry.cjs, its companions and the node-shim modules to bytecode, as
   the bundle already is.
-- **A closed fd 0 under tjs.** Native's `rg x <&-` finds no readable stdin and searches ./. Under tjs, by the time
-  any JS runs, libuv's own first pipe has taken fd 0, and it reads as a FIFO; rg-entry.cjs runs the search again as
-  ./ when that stdin could not be read at all (measured on darwin: the read fails at once). Where the read would
-  instead return EAGAIN forever (a non-blocking pipe end with nothing to come), it would spin. The root fix is
-  the engine's: reopen a closed 0, 1 or 2 on /dev/null at startup, as node does. naude (node) is unaffected.
+- **A closed fd 0 (or 1) under tjs.** Native's `rg x <&-` finds no readable stdin and searches ./. CORRECTED in the
+  fix round (review M-3; this item first said libuv's first PIPE took the number): by the time any JS runs, libuv's
+  KQUEUE has taken a closed fd 0 on darwin and NetBSD (lsof `0u KQUEUE`; ktrace), which fstat reads as a FIFO and
+  read(2) fails with ENXIO; on Linux it is the epoll fd, which reads as no FIFO, so the search is ./ at once. The
+  rg command reads ENXIO (and EBADF) as the end of stdin, as Rust's stdin does, and a pathless search that meets
+  it first searches ./ (native's answer); nothing spins (EAGAIN, a non-blocking stdin with nothing yet, is rg's
+  `<stdin>` error, as native's). A closed fd 1 is the same kqueue (writes fail ENXIO): read as a closed stdout. The
+  root fix is still the engine's: reopen a closed 0, 1 or 2 on /dev/null at startup, as node does (naude is
+  unaffected).
+- **Streaming (RG-STREAM, fix round, review I-2).** The rg command searches stdin and named files as they arrive:
+  `yes needle | rg needle | head -1` 0.32 s (native 0.01 s; naude 0.08 s; before: never ended); a 150 MB file under
+  `| head -1` 2.03 s, 88 MB RSS (native 0.02 s, 6.9 MB; naude 0.24 s; the reviewer's 138 MB before: 117 s, 1.77
+  GB). Left: (1) a streamed file is decided by the JS matcher alone (no ugrep proposals), so a FULL search of a big
+  file is slow: `rg -c needle` over those 150 MB, every line a match, 86 s (native 0.25 s); ugrep proposals per
+  window are the lever. (2) WALKED files are still read whole, one at a time (memory: the largest file walked).
+  (3) The built quaude runs the same matcher about 3 times slower than the same engine binary under `tjs run`
+  (2 MB: 1.26 s against 0.42 s; same template sha256): unexplained, worth measuring before a bytecode lever.
+  (4) A slow stdin under the standard printer prints a fill (64 KiB) at a time, as the all-there read model
+  RG-STDIN-ALL-THERE says rg's reads go; native over a trickling pipe prints as each read ends.
+- **A `-U` stdin read error.** The multi-line search still reads stdin whole; a read error there (EAGAIN)
+  is thrown rather than printed as rg's `<stdin>` error.
 - **RIPGREP_CONFIG_PATH is refused.** Native's shell function passes no --no-config, so native's Bash `rg` reads
   the config file; quaude's rg reads none, so with RIPGREP_CONFIG_PATH set (and no --no-config) it refuses by
   name (RG-CONFIG). Reading the file (one argument per line, `#` comments) is small; it needs native rows.
@@ -83,7 +99,9 @@ fail-closed. Proved: the full default suite with HOME/USERPROFILE/CLAUDE_CONFIG_
 hooks that would touch a marker: RC 0, the sentinel byte-untouched, no hook ran, and ~/.claude.json and
 ~/.claude/plugins/known_marketplaces.json did not move. (CHANGELOG material for Task 11's record: `clode build` no
 longer runs your hooks or writes into your home.) Left: a quaude RUN (not a build) still creates ~/.tjs (txiki's own
-home: cookies.txt, localStorage.db) in the user's home, as it always has.
+home: cookies.txt, localStorage.db) in the user's home, as it always has. And (grep-native Task 10c, review M-4) EVERY
+run of a quaude as rg creates $HOME/.tjs too (measured: an empty `.tjs` after `ARGV0=rg quaude --version` in a fresh
+home): each Bash tool `rg` touches the user's home.
 FIX ROUND 4: run.mjs removed `process.env.HOME` at exit, and with CLODE_TEST_REAL_HOME preset (a runner under a suite
 child, a developer exporting it) that was the REAL home: it would have deleted it. Now only suite-home.cjs removes a
 suite home, the one its own process made, under os.tmpdir(), with the clode-test-home- prefix, never the real home or an
