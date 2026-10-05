@@ -991,12 +991,15 @@ function bashToolCommand(shellName, snapshot, command) {
 }
 // BASH_IO (review I-1): rg's own I/O through the Bash tool, measured against native 2.1.283 (darwin-arm64, 2026-10-04):
 // more output than a pipe holds into `| head -1` (rg's status on stderr: native dies of SIGPIPE, 141), a closed stdout
-// (rc 0, nothing written) and a closed stderr (rc 2). `BIG` is a file of 200,000 matching lines beside the trees.
+// (rc 0, nothing written) and a closed stderr (rc 2); and a SLOW writer into rg (fix round 2: a pipe whose data is not
+// all there at once; native prints both lines, where a naude that made fd 0 non-blocking failed EAGAIN; the matrix's
+// stdin cells pipe a file, all there at once). `BIG` is a file of 200,000 matching lines beside the trees.
 // Judged on stdout, stderr and status alike: no normalization.
 const BASH_IO = [
   ['| head -1 over more than a pipe holds', '{ rg needle BIG; echo "rg=$?" >&2; } | head -1'],
   ['a closed stdout', 'rg needle a.txt >&-; echo "rc=$?"'],
   ['a closed stderr', 'rg needle zzz-absent-path 2>&-; echo "rc=$?"'],
+  ['a slow writer', '(echo needle 1; sleep 0.3; echo needle 2) | rg needle; echo "rc=$?"'],
 ];
 function bashIoCells(treeDir, bigFile) {
   return BASH_IO.map(([label, cmd]) => ({ id: `root Bash IO ${label}`, kind: 'root', io: true, argv: [cmd], cwd: treeDir, command: cmd.replace(/\bBIG\b/, shq(bigFile)) }));

@@ -110,12 +110,12 @@ const FLOOR = Object.values(KIND_FLOORS).reduce((a, b) => a + b, 0);
 // With the -U variants (Task 10 fix round, 2026-10-04): 182 of 253.
 const ANSWERED_FLOORS = { root: 73, nogit: 56, bin2: 53 };
 // THE BASH ROUTE's floors, per shell: every matrix cell plus every BASH_CELLS row (14 a tree kind, 2026-10-04) and the
-// 3 BASH_IO rows (review I-1); the BASH_CELLS rows native answered (measured 2026-10-04, native 2.1.283, darwin-arm64:
-// 35 of 42, both shells alike; root 13, nogit 12, bin2 10 of 14 each); and the built naude's rows (root's 14 + the 3
-// I/O rows, review M-5).
-const BASH_FLOOR = FLOOR + 42 + 3;
+// 4 BASH_IO rows (review I-1; the slow writer, fix round 2); the BASH_CELLS rows native answered (measured 2026-10-04,
+// native 2.1.283, darwin-arm64: 35 of 42, both shells alike; root 13, nogit 12, bin2 10 of 14 each); and the built
+// naude's rows (root's 14 + the 4 I/O rows, review M-5).
+const BASH_FLOOR = FLOOR + 42 + 4;
 const BASH_ANSWERED_FLOOR = 35;
-const NAUDE_FLOOR = 14 + 3;
+const NAUDE_FLOOR = 14 + 4;
 
 // THE TRIPWIRE: an `rg` placed FIRST on the PATH ours sees, which prints this and exits 99. Until
 // grep-native Task 10b, Bun.which('rg') then answered ITS absolute path (the route a host with

@@ -86,6 +86,17 @@ function build({ cache = STABLE_CACHE, naude = false } = {}) {
     return { skip: 'no tjs engine binary (CLODE_TJS, or build one with scripts/build-tjs.cjs) to build a quaude with' };
   }
 
+  // A naude is assembled from the PREBUILT build/bundle/naude-entry.bundle.cjs (scripts/build-clode-main.mjs), which
+  // nothing rebuilds when libexec/naude-entry.cjs changes: a naude built from a stale one is not this tree's (it
+  // hid a naude regression in grep-native Task 10c's fix round 2). So it is rebuilt first, as CI's build does; on a
+  // clean checkout the build/ it creates is removed again at exit (run.mjs's hermeticity guard).
+  if (naude) {
+    const buildDir = path.join(REPO, 'build');
+    const preexisted = fs.existsSync(buildDir);
+    const pre = spawnSync(process.execPath, [path.join(REPO, 'scripts', 'build-clode-main.mjs')], { cwd: REPO, encoding: 'utf8', timeout: 300000 });
+    if (!preexisted) process.on('exit', () => { try { fs.rmSync(buildDir, { recursive: true, force: true }); } catch { /* best effort */ } });
+    if (pre.status !== 0) return { skip: `scripts/build-clode-main.mjs could not rebuild the naude entry bundle: ${(pre.stderr || pre.error || '').toString().slice(0, 400)}` };
+  }
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'built-binary-'));
   const name = naude ? 'naude' : 'quaude';
   const out = path.join(dir, process.platform === 'win32' ? `${name}.exe` : name);
