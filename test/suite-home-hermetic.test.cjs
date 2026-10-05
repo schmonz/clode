@@ -12,7 +12,14 @@
 //      keeps them, the runner (it watches the real dirs), and the one opt-in run that exists to use the developer's
 //      own credentials;
 //   3. no file sets HOME, USERPROFILE or CLAUDE_CONFIG_DIR from os.homedir(), os.userInfo().homedir, or the real
-//      values, in any spelling.
+//      values, in any spelling;
+//   4. no env handed straight to a spawn is built from nothing without a HOME, and no file deletes HOME or USERPROFILE
+//      from an env (either way the child asks the OS, which answers the real home);
+//   5. no file but suite-home.cjs removes a dir read back from HOME (run.mjs's old exit cleanup deleted the REAL home
+//      whenever CLODE_TEST_REAL_HOME was preset; suite-home.cjs removes only the dir it made).
+// LIMITS, stated: the scan is per line (a `userInfo()` split from its `.homedir` across lines, or a real path
+// hard-coded as a string, slips through); the central default is the protection, this keeps the obvious ways back
+// closed.
 // Read: every JS file under test/ (test/.harness and test/fixtures aside) and scripts/lib/. Comments are stripped first.
 // CONTROL: one planted file per way back, each named.
 const { test } = require('node:test');
@@ -29,11 +36,54 @@ const READERS = new Map([
   ['suite-home.cjs', 'keeps the real values under CLODE_TEST_REAL_HOME and hands out explicit paths'],
   ['run.mjs', 'watches the REAL home\'s dirs for writes (the hermetic guard), so it must know where they are'],
   ['fidelity/interactive-live-turn.test.cjs', 'the opt-in (CLODE_LIVE_ONLINE) turn with the developer\'s REAL credentials and config'],
+  ['suite-home-cleanup.test.cjs', 'SETS CLODE_TEST_REAL_HOME, to a SENTINEL, to prove the cleanup never removes the real home'],
 ]);
 const LAUNCH_HELPERS = ['provider-resolve.cjs', 'oracle-models.cjs', 'node-shim-helper.cjs', 'e2e.cjs'];
 const READS_REAL = /\bCLODE_TEST_REAL_HOME\b|(?<![\w$.])realHome\s*\(/;
 const HOME_KEY = String.raw`(?:HOME|USERPROFILE|CLAUDE_CONFIG_DIR)`;
 const REAL_SOURCE = String.raw`[^,;}\n]*(?:homedir\s*\(|userInfo\s*\([^)]*\)\s*\.\s*homedir|CLODE_TEST_REAL_HOME|realHome\s*\()`;
+// `delete env.HOME` / `delete env['USERPROFILE']`: a child with no HOME asks the OS, which answers the real one
+const DELETES_HOME = /\bdelete\s+[\w$.]+\s*(?:\.\s*(?:HOME|USERPROFILE)\b|\[\s*['"`](?:HOME|USERPROFILE)['"`]\s*\])/;
+// removing a dir read back from HOME (test/run.mjs's old exit cleanup, which deleted the REAL home whenever
+// CLODE_TEST_REAL_HOME was preset): only suite-home.cjs removes a suite home, and only the one it made
+const REMOVES_HOME = /\brm(?:dir)?(?:Sync)?\s*\(\s*(?:process\.env\s*(?:\.\s*HOME\b|\[\s*['"`]HOME['"`]\s*\])|SUITE_HOME\b|[\w$]+\s*\.\s*env\s*\.\s*HOME\b|(?:os\s*\.\s*)?homedir\s*\()/;
+const SPAWNS = new Set(['spawn', 'spawnSync', 'execFile', 'execFileSync', 'fork', 'exec', 'execSync']);
+// the env literals handed straight to a spawn that are built from nothing (no spread) and set no HOME: the child then
+// has no HOME, and the OS answers the real one
+function homelessSpawnEnvs(code) {
+  const out = [];
+  const close = (t, i) => {
+    let d = 0;
+    for (let j = i; j < t.length; j++) {
+      const c = t[j];
+      if (c === '"' || c === "'" || c === '`') { for (j++; j < t.length && t[j] !== c; j++) if (t[j] === '\\') j++; continue; }
+      if (c === '{') d++; else if (c === '}' && --d === 0) return j;
+    }
+    return -1;
+  };
+  const callee = (t, at) => {
+    let d = 0;
+    for (let j = at; j >= 0; j--) {
+      const c = t[j];
+      if (c === ')' || c === ']' || c === '}') d++;
+      else if (c === '(' || c === '[' || c === '{') {
+        if (d) { d--; continue; }
+        if (c !== '(') continue;
+        const m = /([A-Za-z_$][\w$]*)\s*$/.exec(t.slice(Math.max(0, j - 40), j));
+        return m ? m[1] : null;
+      }
+    }
+    return null;
+  };
+  for (const m of code.matchAll(/(?<![\w$.])env\s*:\s*\{/g)) {
+    const o = m.index + m[0].length - 1, e = close(code, o);
+    if (e === -1) continue;
+    const lit = code.slice(o, e + 1);
+    if (/\.\.\./.test(lit) || /(?<![\w$.])HOME\s*[:,}]/.test(lit)) continue;
+    if (SPAWNS.has(callee(code, m.index))) out.push({ line: code.slice(0, m.index).split('\n').length, lit });
+  }
+  return out;
+}
 const SETS_HOME = new RegExp(String.raw`(?:\b${HOME_KEY}\b|\[\s*['"\x60]${HOME_KEY}['"\x60]\s*\])\s*[:=](?!=)${REAL_SOURCE}`);
 
 function jsFiles(dir, rel = '') {
@@ -74,7 +124,10 @@ function scan({ files, what }) {
     lines.forEach((l, i) => {
       if (!READERS.has(file) && READS_REAL.test(l)) findings.push(`${file}:${i + 1}: reads the developer's real home (CLODE_TEST_REAL_HOME/realHome()); only ${[...READERS.keys()].join(', ')} may`);
       if (!READERS.has(file) && SETS_HOME.test(l)) findings.push(`${file}:${i + 1}: sets HOME, USERPROFILE or CLAUDE_CONFIG_DIR from the real home (os.homedir(), os.userInfo().homedir or the real values): ${l.trim().slice(0, 120)}`);
+      if (DELETES_HOME.test(l)) findings.push(`${file}:${i + 1}: deletes HOME or USERPROFILE from an env: the child asks the OS, which answers the real home: ${l.trim().slice(0, 120)}`);
+      if (file !== 'suite-home.cjs' && REMOVES_HOME.test(l)) findings.push(`${file}:${i + 1}: removes a dir read back from HOME: with CLODE_TEST_REAL_HOME preset that is the REAL home (only suite-home.cjs removes a suite home, the one it made): ${l.trim().slice(0, 120)}`);
     });
+    for (const h of homelessSpawnEnvs(code)) findings.push(`${file}:${h.line}: hands a spawn an env built from nothing with no HOME (${h.lit.replace(/\s+/g, ' ').slice(0, 80)}): the child asks the OS, which answers the real home`);
   }
   return { findings, examined, note: `${what}; readers of the real home: ${[...READERS.keys()].join(', ')}` };
 }
@@ -85,6 +138,11 @@ const PLANTS = {
   'planted-userprofile.test.cjs': "const env = { ...process.env };\nenv.USERPROFILE = require('node:os').homedir();",
   'planted-config-dir.test.cjs': "spawnSync(bin, [], { env: { ...process.env, CLAUDE_CONFIG_DIR: path.join(os.homedir(), '.claude') } });",
   'planted-userinfo.test.cjs': "env['HOME'] = os.userInfo().homedir;",
+  'planted-homeless-env.test.cjs': "spawnSync('sh', ['-c', 'true'], {\n  env: { PATH: '/usr/bin' },\n});",
+  'planted-delete-home.test.cjs': "const env = { ...process.env };\ndelete env['HOME'];",
+  'planted-delete-userprofile.test.cjs': "delete env.USERPROFILE;",
+  'planted-removes-home.test.cjs': "const SUITE_HOME = process.env.HOME;\nfs.rmSync(SUITE_HOME, { recursive: true, force: true });",
+  'planted-removes-env-home.test.cjs': "fs.rmSync(process.env.HOME, { recursive: true });",
 };
 const RUN_LATE = { file: 'run.mjs', src: "const x = require('./guard.cjs');\nconst { realHome } = require('./suite-home.cjs');\n" };
 const HELPER_WITHOUT = { file: 'e2e.cjs', src: "'use strict';\nconst fs = require('node:fs');\n" };

@@ -34,6 +34,9 @@ const os = require('node:os');
 const path = require('node:path');
 
 const REAL_NAME = 'CLODE_TEST_REAL_HOME';
+const PREFIX = 'clode-test-home-';
+// the suite home THIS process made (null in a child, which inherits its parent's): the only dir cleanup may remove
+let made = null;
 
 function applySuiteHome(env = process.env) {
   if (env[REAL_NAME]) return JSON.parse(env[REAL_NAME]);
@@ -48,8 +51,10 @@ function applySuiteHome(env = process.env) {
   env[`GIT_CONFIG_KEY_${n}`] = 'safe.directory';
   env[`GIT_CONFIG_VALUE_${n}`] = path.resolve(__dirname, '..');
   env.GIT_CONFIG_COUNT = String(n + 1);
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-test-home-'));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), PREFIX));
   fs.mkdirSync(path.join(home, '.claude'));
+  made = home;
+  process.once('exit', () => { removeOwnSuiteHome(home); });
   env.HOME = home;
   env.USERPROFILE = home;
   env.CLAUDE_CONFIG_DIR = path.join(home, '.claude');
@@ -65,8 +70,27 @@ function realHome(env = process.env) {
   return env[REAL_NAME] ? JSON.parse(env[REAL_NAME]) : null;
 }
 
+// CLEANUP, owned here and nowhere else (fix round 4). test/run.mjs once removed `process.env.HOME` at exit, read back
+// after this module ran; but with CLODE_TEST_REAL_HOME already set this module leaves HOME alone, so that was the REAL
+// home. Remove a dir only if THIS process made it, it lies directly under os.tmpdir(), it carries the prefix, and it is
+// neither the real home nor an ancestor of it. Returns whether it removed anything.
+function removeOwnSuiteHome(dir) {
+  if (!dir || !made) return false;
+  const abs = path.resolve(String(dir));
+  if (abs !== made) return false;
+  if (path.dirname(abs) !== path.resolve(os.tmpdir()) || !path.basename(abs).startsWith(PREFIX)) return false;
+  const real = realHome();
+  if (real && real.HOME) {
+    const r = path.resolve(real.HOME);
+    if (r === abs || r.startsWith(abs + path.sep)) return false;
+  }
+  fs.rmSync(abs, { recursive: true, force: true });
+  made = null;
+  return true;
+}
+
 applySuiteHome();
 
 const userCacheDir = (env = process.env) => env.CLODE_TEST_USER_CACHE || path.join(os.homedir(), '.cache', 'clode');
 
-module.exports = { applySuiteHome, realHome, REAL_NAME, userCacheDir };
+module.exports = { applySuiteHome, realHome, removeOwnSuiteHome, REAL_NAME, userCacheDir };

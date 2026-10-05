@@ -144,7 +144,7 @@ test('a COLD checkout builds the same bundles as a warm one, with no npm and no 
   // node to run a wrapper with, so this is load-bearing rather than cosmetic.
   const esb = path.join(cold.checkout, 'node_modules/.bin/esbuild');
   assert.ok(fs.existsSync(esb), `no provisioned bundler at ${esb}`);
-  const ver = spawnSync(esb, ['--version'], { encoding: 'utf8', env: { PATH: pre.bare } });
+  const ver = spawnSync(esb, ['--version'], { encoding: 'utf8', env: { PATH: pre.bare, HOME: process.env.HOME } });
   assert.strictEqual(ver.stdout.trim(), '0.28.1',
     `the provisioned bundler is not the pin:\n${ver.stdout}${ver.stderr}`);
 

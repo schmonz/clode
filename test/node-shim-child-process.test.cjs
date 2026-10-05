@@ -189,7 +189,7 @@ test('spawnSync: env passthrough matches node (printenv)', (t) => {
   assert.ok(printenv, `no 'printenv' on PATH (${process.env.PATH}) — cannot run the env-passthrough differential`);
   const body = `
     const cp = require('node:child_process');
-    const r = cp.spawnSync(${JSON.stringify(printenv)}, ['CLODE_X'], { env: { CLODE_X: 'yes' }, encoding: 'utf8' });
+    const r = cp.spawnSync(${JSON.stringify(printenv)}, ['CLODE_X'], { env: { CLODE_X: 'yes', HOME: process.env.HOME }, encoding: 'utf8' });
     console.log(JSON.stringify({ status: r.status, out: (r.stdout||'').trim() }));`;
   const f = prog(body);
   const node = JSON.parse(require('node:child_process').execFileSync(process.execPath, [f], { encoding: 'utf8' }).trim());

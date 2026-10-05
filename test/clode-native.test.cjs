@@ -138,7 +138,7 @@ before(() => {
   // a node THERE, the proof is unavailable — skip rather than lie.
   if (!SKIP_PRODUCT) {
     const probe = spawnSync('sh', ['-c', 'command -v node'], {
-      encoding: 'utf8', env: { PATH: '/usr/bin:/bin' },
+      encoding: 'utf8', env: { PATH: '/usr/bin:/bin', HOME: process.env.HOME },
     });
     if (probe.status === 0) SKIP_PRODUCT = `node exists on the minimal PATH (${(probe.stdout || '').trim()}); cannot prove node-freeness here`;
   }

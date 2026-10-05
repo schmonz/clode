@@ -289,7 +289,7 @@ function nodeFreePreflight(t, farmDir) {
   }
   const bare = nodeFreePath(farmDir);
   const probe = spawnSync('sh', ['-c', 'command -v node || true'],
-    { env: { PATH: bare }, encoding: 'utf8' });
+    { env: { PATH: bare, HOME: process.env.HOME }, encoding: 'utf8' });
   if (probe.stdout.trim()) {
     t.skip(`node is still reachable at ${probe.stdout.trim()} on the synthesized node-free PATH `
       + `(it is inside the POSIX floor ${POSIX_FLOOR}, which this gate cannot drop without `

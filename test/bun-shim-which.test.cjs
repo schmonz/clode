@@ -292,7 +292,7 @@ test('rg: Bun.which of quaude\'s own path answers itself (the sandbox asks Bun.w
 
 test('rg: a route that execs quaude\'s own path for real meets ENOENT, never a host rg', posixOnly, () => {
   const trip = tripwireDir();
-  const r = require('node:child_process').spawnSync('/bin/sh', ['-c', 'exec "$0"', QUAUDE_RG], { encoding: 'utf8', env: { PATH: trip } });
+  const r = require('node:child_process').spawnSync('/bin/sh', ['-c', 'exec "$0"', QUAUDE_RG], { encoding: 'utf8', env: { PATH: trip, HOME: process.env.HOME } });
   // the shell's `exec` of a missing file: 127 (dash, zsh), 126 (bash as /bin/sh); ENOENT's own words either way
   assert.ok(r.status === 126 || r.status === 127, `${r.status}: ${r.stdout}${r.stderr}`);
   assert.match(r.stderr, /No such file or directory|not found/);

@@ -20,8 +20,8 @@ process.chdir(ROOT);
 // THE SUITE'S OWN HOME (ruling G33): HOME, USERPROFILE and CLAUDE_CONFIG_DIR point at a throwaway dir for this runner
 // and every child, the real values kept under one name (test/suite-home.cjs says why, and what the suite still takes
 // from the real home as explicit paths). FIRST, before anything below resolves a path off HOME.
+// It also removes, at exit, the home it made here, and nothing else: this runner deletes nothing by reading HOME.
 const { realHome } = require('./suite-home.cjs');
-const SUITE_HOME = process.env.HOME;
 
 // Offline gate: the runner is the single source of truth; an ambient CLODE_OFFLINE never leaks in.
 const arg = process.argv[2] || '--offline';
@@ -825,5 +825,4 @@ if (treeChanged.length) {
         .map((k) => [k, process.env[k]])),
   }));
 }
-try { fs.rmSync(SUITE_HOME, { recursive: true, force: true }); } catch { /* best effort */ }
 process.exit(process.exitCode === 2 ? 2 : (fails ? 1 : 0));
