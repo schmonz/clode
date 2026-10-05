@@ -144,13 +144,14 @@ function appletRejected(bin, status, stderr) {
 // name. quaude's rg runs inside the caller, where N names the same directory now: a cwd naming a descriptor is
 // resolved once, up front, to the directory it names, and the search runs from there, as rg's does. Any other cwd is
 // taken as given (it names its directory the same way before and after a chdir). One that does not resolve to a
-// plain path stays as it was, and its target is refused as before (RG-REFUSE-SPECIAL-FILE).
+// plain ABSOLUTE path stays as it was, and its target is refused as before (RG-REFUSE-SPECIAL-FILE).
 const DESCRIPTOR_CWD = /^\/(?:dev\/fd|proc\/(?:self|thread-self|\d+)\/fd)\/\d+$/;
 function rgSpawnCwd(cwd, { realpath = (p) => require('fs').realpathSync(p) } = {}) {
   if (typeof cwd !== 'string' || !DESCRIPTOR_CWD.test(cwd)) return cwd;
   let real;
   try { real = realpath(cwd); } catch { return cwd; }
-  return typeof real === 'string' && real && !DESCRIPTOR_PATH.test(real) ? real : cwd;
+  // an absolute path that is no descriptor name, or nothing: a relative answer would move the search
+  return typeof real === 'string' && require('path').isAbsolute(real) && !DESCRIPTOR_PATH.test(real) ? real : cwd;
 }
 const withSpawnCwd = (opts) => {
   const cwd = rgSpawnCwd(opts && opts.cwd);

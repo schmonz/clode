@@ -1723,6 +1723,9 @@ test('RG-SPAWN-CWD: a cwd naming a descriptor is the directory it resolves to; a
   // a name that does not resolve, or resolves to another descriptor, is left as it was (and refused as before)
   assert.strictEqual(rgn.rgSpawnCwd('/proc/self/fd/17', { realpath: () => { throw Object.assign(new Error('x'), { code: 'ENOENT' }); } }), '/proc/self/fd/17');
   assert.strictEqual(rgn.rgSpawnCwd('/proc/self/fd/17', { realpath: () => '/dev/fd/0' }), '/proc/self/fd/17');
+  // ...and so does one that resolves to no absolute path (review M4): a relative answer would move the search
+  assert.strictEqual(rgn.rgSpawnCwd('/proc/self/fd/17', { realpath: () => 'relative/dir' }), '/proc/self/fd/17');
+  assert.strictEqual(rgn.rgSpawnCwd('/proc/self/fd/17', { realpath: () => '' }), '/proc/self/fd/17');
 });
 test('RG-SPAWN-CWD: rg spawned with cwd /proc/self/fd/N searches that directory, as the 2.1.283 bundle on Linux spawns it (both twins)', {
   skip: needUgrep.skip || (!fs.existsSync('/proc/self/fd') ? 'no /proc/self/fd on this host (the bundle passes such a cwd on Linux only)' : false),
