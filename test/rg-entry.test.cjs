@@ -316,7 +316,8 @@ test('fdWriter: a stdout that is libuv\'s own descriptor (ENXIO on kqueue, EINVA
   }
   // ...and anything else is still rg's to report (EPIPE ends rg as SIGPIPE would, an unknown failure throws)
   assert.throws(() => fdWriter(1, { writeSync: () => { throw Object.assign(new Error('EPIPE'), { code: 'EPIPE' }); } })(Buffer.from('x')), (e) => e.sinkClosed === true);
-  assert.throws(() => fdWriter(1, { writeSync: () => { throw Object.assign(new Error('EIO'), { code: 'EIO' }); } })(Buffer.from('x')), /EIO/);  // EINVAL is quiet ONLY where fd 1 is the engine's own epoll descriptor (review M6): anywhere else it is a real
+  assert.throws(() => fdWriter(1, { writeSync: () => { throw Object.assign(new Error('EIO'), { code: 'EIO' }); } })(Buffer.from('x')), /EIO/);
+  // EINVAL is quiet ONLY where fd 1 is the engine's own epoll descriptor (review M6): anywhere else it is a real
   // failure, rg's to report
   assert.throws(() => fdWriter(1, { writeSync: () => { throw Object.assign(new Error('EINVAL'), { code: 'EINVAL' }); }, isLoopFd: () => false })(Buffer.from('x')), /EINVAL/);
 });
