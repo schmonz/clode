@@ -49,8 +49,11 @@ error with the help under it, not a silent translation:
   2.1.185: files_with_matches and count said "No files found", content mode and Glob said
   "ripgrep not found on PATH. Install it", a search outside the working directory said to
   install ripgrep, and a ripgrep on your PATH answered instead of Claude Code's. Every call
-  the tools make is now answered as native Claude Code's own embedded ripgrep answers it,
-  byte for byte, in every output mode (checked on macOS, NetBSD and Linux)
+  the tools make is now answered as native Claude Code's own embedded ripgrep answers it, in
+  every output mode: byte for byte on macOS arm64 and NetBSD arm64, and on Linux x64 with a
+  glibc engine. The published Linux build (static musl) is checked by CI from this release
+  on, and words a few error messages as musl does (`Symbolic link loop` where native says
+  `Too many levels of symbolic links`). Windows is not yet measured
 - The Grep and Glob tools never run a ripgrep from your PATH and never ask the model to
   install one. They search with your `ugrep` (5.0.0 or newer), on purpose: quaude decides
   each match the way ripgrep does, and a pattern it cannot decide that way is refused by
