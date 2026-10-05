@@ -310,8 +310,10 @@ test('RG-ARGV0: the quaude invoked as rg answers as rg, before its bundle or its
   assert.strictEqual(a.status, 2, a.stdout);
   assert.doesNotMatch(a.stdout, /all members verified/);
   assert.match(a.stderr, /^rg: error parsing flag --clode-attest: quaude answers rg/);
-  // not invoked as rg: Claude Code's own --version
-  assert.match(runAsRg(['--version'], { argv0: QUAUDE }).stdout, /\(Claude Code\)/);
+  // not invoked as rg: Claude Code's own --version (review M-1: neither is `a\rg` nor `C:rg` off Windows, as native)
+  for (const argv0 of [QUAUDE, 'RG', 'rg.exe', ...(process.platform === 'win32' ? [] : ['a\\rg', 'C:rg'])]) {
+    assert.match(runAsRg(['--version'], { argv0 }).stdout, /\(Claude Code\)/, argv0);
+  }
 });
 
 // The retired spelling is GONE, not aliased: it is now an ordinary argument, so it reaches

@@ -79,15 +79,6 @@ function attestReport({ manifestText, members, bom, notes }) {
 }
 // <<< clodeAttest <<<
 
-// RG-ARGV0 (grep-native Task 10c): a quaude invoked as rg IS rg, as native's claude binary is (2.1.283 answers as
-// its embedded ripgrep when argv[0]'s last path component is exactly `rg`, or the environment's ARGV0 is exactly
-// `rg`). The Bash tool's `rg` is upstream's shell function run against this binary that way (libexec/rg-entry.cjs,
-// which states the rule; this is its copy, since this file can require nothing, and test/rg-entry.test.cjs holds
-// both to native's table).
-export function isRgInvocation(argv0, env) {
-  if (env && env.ARGV0 === 'rg') return true;
-  return typeof argv0 === 'string' && argv0.split(/[\\/]/).pop().replace(/^[A-Za-z]:/, '') === 'rg';
-}
 // What rg reads of the archive: everything but the bundle (graph.*, cli.qbc), the pristine engine template and the
 // bundle's npm packages, none of which rg-entry.cjs or its companions load. Every rg the Bash tool runs pays this
 // read, so it skips ~74 MB of a 2.1.283 quaude's 80.
@@ -225,21 +216,64 @@ async function main() {
   const dec = new TextDecoder();
   const die = (msg, code) => { console.error(`quaude: ${msg}`); tjs.exit(code); };
 
+  const g = tjs.args.slice(1);
+  const exef = await tjs.open(tjs.exePath, 'rb');
+  const exeSize = (await exef.stat()).size;
+
+  // 1) tx1k1 trailer -> where our bootstrap bytecode starts.
+  const trailer = new Uint8Array(12);
+  await exef.read(trailer, exeSize - 12);
+  if (dec.decode(trailer.subarray(0, 8)) !== 'tx1k1.js') die('missing tx1k1.js trailer (not a blobulated binary?)', 70);
+  const bcOffset = new DataView(trailer.buffer, 8, 4).getUint32(0, true);
+
+  // 2) quaude footer: the 32 bytes immediately before the bootstrap bytecode.
+  const footer = new Uint8Array(32);
+  await exef.read(footer, bcOffset - 32);
+  if (dec.decode(footer.subarray(0, 8)) !== 'QAUDEv0\0') die('bad archive footer magic', 70);
+  const fdv = new DataView(footer.buffer);
+  const indexOff = Number(fdv.getBigUint64(8, true));
+  const indexLen = Number(fdv.getBigUint64(16, true));
+
+  // 3) index.
+  const indexBuf = new Uint8Array(indexLen);
+  await exef.read(indexBuf, indexOff);
+  const index = JSON.parse(dec.decode(indexBuf));
+
+  // 3.5) RG-ARGV0 (grep-native Task 10c): a quaude invoked as rg IS rg, as native's claude binary is; the Bash tool's
+  // `rg` is upstream's shell function run against this binary that way. The rule is rg-entry.cjs's, stated once:
+  // its member is evaluated here (its top level requires nothing), on the platform target-env.cjs's mapPlatform
+  // names (path separators are a platform's). Every argument is then rg's, `--clode-*` included (native's rg has
+  // no such flags either).
+  const smallMember = async (name) => {
+    const m = index.members.find((x) => x.name === name);
+    if (!m) return null;
+    const b = new Uint8Array(m.len);
+    await exef.read(b, m.offset);
+    return dec.decode(b);
+  };
+  const evalMember = (src) => {
+    const mod = { exports: {} };
+    (0, new Function('module', 'exports', 'require', src))(mod, mod.exports, () => ({}));   // nothing to require yet
+    return mod.exports;
+  };
+  const tem0 = evalMember(await smallMember('target-env.cjs'));
+  const rgEntrySrc = await smallMember('rg-entry.cjs');
+  const uaPlatform = typeof navigator !== 'undefined' && navigator.userAgentData && navigator.userAgentData.platform;
+  const asRg = !!rgEntrySrc && evalMember(rgEntrySrc).isRgInvocation(tjs.args[0], tjs.env, tjsPlatform(uaPlatform, tem0.mapPlatform));
+
   // 0) Guard dispatch: quaude's own patched updater hook calls back
   // `"<quaude>" --clode-update-guard` as a PreToolUse(Bash) command (wired by
   // the --settings injection below, step 8). Read the whole hook-input JSON
   // off tjs.stdin, ask the pure guardVerdict above, and emit its answer (or
-  // nothing, on any parse failure — fail OPEN) — all BEFORE the archive is
-  // ever read. Mirrors naude-entry.cjs's runNaude guard-dispatch branch.
+  // nothing, on any parse failure — fail OPEN) — BEFORE any member but the two
+  // small ones RG-ARGV0 needs is read. Mirrors naude-entry.cjs's runNaude guard-dispatch branch.
   // Write via the synchronous __tjs_fs_sync patch (a raw-engine global, not
   // a node-shim addition — see mod_fs_sync.c), NOT tjs.stdout.getWriter():
   // process.cjs documents that an unawaited writer.write() immediately
   // followed by exit() can lose bytes; a synchronous write(2) before exit()
   // cannot.
-  const g = tjs.args.slice(1);
-  // Invoked as rg: every argument is rg's, `--clode-*` included (native's rg has no such flags either).
-  const asRg = isRgInvocation(tjs.args[0], tjs.env);
   if (!asRg && g[0] === '--clode-update-guard') {
+    await exef.close();
     let text = '';
     try {
       const reader = tjs.stdin.getReader();
@@ -277,28 +311,6 @@ async function main() {
     tjs.exit(0);
     return;
   }
-
-  const exef = await tjs.open(tjs.exePath, 'rb');
-  const exeSize = (await exef.stat()).size;
-
-  // 1) tx1k1 trailer -> where our bootstrap bytecode starts.
-  const trailer = new Uint8Array(12);
-  await exef.read(trailer, exeSize - 12);
-  if (dec.decode(trailer.subarray(0, 8)) !== 'tx1k1.js') die('missing tx1k1.js trailer (not a blobulated binary?)', 70);
-  const bcOffset = new DataView(trailer.buffer, 8, 4).getUint32(0, true);
-
-  // 2) quaude footer: the 32 bytes immediately before the bootstrap bytecode.
-  const footer = new Uint8Array(32);
-  await exef.read(footer, bcOffset - 32);
-  if (dec.decode(footer.subarray(0, 8)) !== 'QAUDEv0\0') die('bad archive footer magic', 70);
-  const fdv = new DataView(footer.buffer);
-  const indexOff = Number(fdv.getBigUint64(8, true));
-  const indexLen = Number(fdv.getBigUint64(16, true));
-
-  // 3) index.
-  const indexBuf = new Uint8Array(indexLen);
-  await exef.read(indexBuf, indexOff);
-  const index = JSON.parse(dec.decode(indexBuf));
 
   // 4) members (eager read; lazy/mmap is a rung-2 optimization). The manifest and
   // the loader first: they decide the role, and with it what else is read.

@@ -23,19 +23,23 @@
 //
 // bun-shim.cjs requires this file (for rgShadowFunction), so it travels beside bun-shim in every packaging
 // (test/shim-companions.test.cjs); its own companion is rg-native.cjs, required on first use. Node builtins only.
-const fs = require('fs');
-const path = require('path');
+// Node builtins are required where they are used, never at the top: the quaude bootstrap evaluates this file before
+// any module system exists, for isRgInvocation alone (libexec/quaude-bootstrap.mjs).
+const fsm = () => require('fs');
+const pathm = () => require('path');
 
 // RG-ARGV0: native 2.1.283 (darwin-arm64, measured 2026-10-04, `--version` under each spelling) answers as rg when
 // argv[0]'s last path component is exactly `rg` (`rg`, `/x/rg`, a symlink named rg), or when the environment's
 // ARGV0 is exactly `rg` (bash's `ARGV0=rg cmd` exports it; upstream's msys branch spells rg that way); not `RG`,
-// not `rg.exe`, not ARGV0=/x/rg. The leaf is rg-native.cjs leafOf's rule (both separators, a drive prefix off), one
-// rule on every platform. libexec/quaude-bootstrap.mjs carries a copy (it cannot require anything); the test holds
-// the copies to the same table.
+// not `rg.exe`, not ARGV0=/x/rg, not `a\rg` or `C:rg` (a backslash and a drive are no separators off Windows). A path
+// component is the platform's: `/` off Windows; on Windows `\` and `/`, after any drive (unmeasured there). Stated
+// ONCE: naude's entry requires it, and the quaude bootstrap evaluates this file's member for it.
 const RG_ARGV0 = 'rg';
-function isRgInvocation(argv0, env) {
+function isRgInvocation(argv0, env, platform = typeof process !== 'undefined' ? process.platform : '') {
   if (env && env.ARGV0 === RG_ARGV0) return true;
-  return typeof argv0 === 'string' && argv0.split(/[\\/]/).pop().replace(/^[A-Za-z]:/, '') === RG_ARGV0;
+  if (typeof argv0 !== 'string') return false;
+  const leaf = platform === 'win32' ? argv0.split(/[\\/]/).pop().replace(/^[A-Za-z]:/, '') : argv0.split('/').pop();
+  return leaf === RG_ARGV0;
 }
 
 // The shell function the snapshot defines rg as: upstream's own writer (2.1.283's dbe) called as dbe("rg", "rg")
@@ -69,35 +73,39 @@ function rgShadowFunction(execPath, platform = process.platform) {
 // RG-IMPLICIT-PATH: a pathless rg searches its stdin when that is a regular file, a FIFO or a socket, and ./
 // otherwise (a terminal, a character device such as the /dev/null the Bash tool gives every command, a closed
 // fd 0): ripgrep 14.1.1's hiargs.rs over grep-cli's is_readable_stdin. --files always lists ./ (rg-native.cjs).
-function implicitPath(fstat0 = () => fs.fstatSync(0)) {
+function implicitPath(fstat0 = () => fsm().fstatSync(0)) {
   try {
     const st = fstat0();
     return st.isFile() || st.isFIFO() || st.isSocket() ? 'stdin' : 'cwd';
   } catch { return 'cwd'; }
 }
 
-// fd 0, whole, read only when the search reaches it: { bytes, failed }. A read that fails is the end of the input,
-// as Rust's stdin reads a closed fd 0 (native 2.1.283, `rg needle - <&-`: nothing read, rc 1, no message).
-// `failed` with nothing read tells main() fd 0 was never a readable stdin (below).
-function readStdin(fd = 0) {
-  const chunks = [];
-  const buf = Buffer.alloc(64 * 1024);
-  for (;;) {
+// fd 0, a piece at a time (RG-STREAM: rg searches its stdin as it arrives). A read that fails with ENXIO or EBADF is
+// the END of the input, as Rust's stdin reads a closed fd 0 (native 2.1.283, `rg needle - <&-`: nothing read, rc 1, no
+// message): under tjs a closed fd 0 is not closed by the time any JS runs (libuv's kqueue takes the number on darwin
+// and NetBSD, reading as a FIFO and failing ENXIO; Linux's epoll reads as no FIFO, so it is ./ at once). Any other
+// failure (EAGAIN from a non-blocking stdin with nothing in it) is rg's error for <stdin>, as native's
+// (`rg: <stdin>: Resource temporarily unavailable (os error 35)`, rc 2): never waited out.
+const closedStdin = (e) => !!e && (e.code === 'ENXIO' || e.code === 'EBADF');
+function stdinPieces(readFd = (b) => fsm().readSync(0, b, 0, b.length, null)) {
+  const piece = Buffer.alloc(64 * 1024);
+  let ended = false;
+  const next = () => {
+    if (ended) return null;
     let n;
-    try { n = fs.readSync(fd, buf, 0, buf.length, null); } catch (e) {
-      if (e && e.code === 'EAGAIN') continue;
-      return { bytes: Buffer.concat(chunks), failed: true };
-    }
-    if (!n) break;
-    chunks.push(Buffer.from(buf.subarray(0, n)));
-  }
-  return { bytes: Buffer.concat(chunks), failed: false };
+    try { n = readFd(piece); } catch (e) { if (closedStdin(e)) { ended = true; next.closed = true; return null; } throw e; }
+    if (!n) { ended = true; return null; }
+    return Buffer.from(piece.subarray(0, n));
+  };
+  next.closed = false;            // the end was a closed fd 0
+  return next;
 }
 
 // The ugrep quaude's rg searches with: CLODE_UGREP, else the first executable `ugrep` on PATH (bun-shim's which()
 // rule, without the bundle-facing rg special case: rg is never looked up).
 function findUgrep(env) {
   if (env.CLODE_UGREP) return env.CLODE_UGREP;
+  const fs = fsm(), path = pathm();
   const win = process.platform === 'win32';
   const leaves = win ? (env.PATHEXT || '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean).map((x) => 'ugrep' + x.toLowerCase()) : ['ugrep'];
   for (let dir of String(env.PATH || '').split(path.delimiter)) {
@@ -112,19 +120,27 @@ function findUgrep(env) {
   return null;
 }
 
-// Everything written, or the reader gone (EPIPE): a reader that went away ends rg, quietly.
-function writeAll(fd, buf) {
-  let off = 0;
-  while (off < buf.length) {
-    let n;
-    try { n = fs.writeSync(fd, buf, off, buf.length - off); } catch (e) {
-      if (e && e.code === 'EAGAIN') continue;
-      if (e && e.code === 'EPIPE') return false;
-      throw e;
+// rg's stdout and stderr, as Rust's std writes them. EPIPE (a reader that went away: `rg x | head -1`) ends rg at
+// once and quietly (native dies of SIGPIPE: the shell's 141); a closed fd (`rg x >&-`: EBADF, or ENXIO under tjs) writes nothing, the
+// search going on to its own status (native: rc 0 for a match). stderr's failures change nothing (rc 2 stays 2).
+const sinkClosed = () => Object.assign(new Error('rg: the reader went away'), { sinkClosed: true });
+function fdWriter(fd, { quiet = false } = {}) {
+  const fs = fsm();
+  let gone = false;
+  return (buf) => {
+    let off = 0;
+    while (!gone && off < buf.length) {
+      let n;
+      try { n = fs.writeSync(fd, buf, off, buf.length - off); } catch (e) {
+        if (e && e.code === 'EAGAIN') continue;
+        // a closed fd under tjs is libuv's kqueue by now (writing it fails ENXIO), as a closed fd 0 is (above)
+        if (quiet || (e && (e.code === 'EBADF' || e.code === 'ENXIO'))) { gone = true; return; }
+        if (e && e.code === 'EPIPE') throw sinkClosed();
+        throw e;
+      }
+      off += n;
     }
-    off += n;
-  }
-  return true;
+  };
 }
 
 // The command. io is injectable for tests; the defaults are this process's own.
@@ -132,42 +148,51 @@ function main(io = {}) {
   const rgn = require(__dirname + '/rg-native.cjs');
   const {
     argv = process.argv.slice(2), env = process.env, cwd = process.cwd(),
-    fstat0, stdin = () => readStdin(0), out = (b) => writeAll(1, b), err = (b) => writeAll(2, b),
+    fstat0, readFd, out = fdWriter(1), err = fdWriter(2, { quiet: true }),
     exit = (c) => process.exit(c),
   } = io;
   const debug = (args, verdict) => { if (env.CLODE_RG_DEBUG) err(Buffer.from(`clode rg-debug: rg ${args.join(' ')} ${verdict}\n`)); };
+  let implicit = implicitPath(fstat0);
+  const parsed = rgn.parseRgSearch(argv, { implicit });
   // RG-CONFIG: native's shell function runs its rg without --no-config, so native's Bash `rg` reads the file
   // RIPGREP_CONFIG_PATH names (an empty value names none); quaude's rg reads no config file.
-  const implicit = implicitPath(fstat0);
-  const parsed = rgn.parseRgSearch(argv, { implicit });
   if (env.RIPGREP_CONFIG_PATH && !(parsed.spec && parsed.spec.noConfig)) {
-    const r = rgn.rgRefusal(`quaude answers rg with its own emulation over ugrep, on purpose, and it cannot yet read the config file `
+    return finish(rgn.rgRefusal(`quaude answers rg with its own emulation over ugrep, on purpose, and it cannot yet read the config file `
       + `RIPGREP_CONFIG_PATH names (${env.RIPGREP_CONFIG_PATH}), which native's rg reads, so it refuses rather than search `
-      + 'without it (unset it, or pass --no-config); nothing was searched');
-    return finish(r, out, err, exit);
+      + 'without it (unset it, or pass --no-config); nothing was searched'), err, exit);
   }
-  const search = (implicit) => {
-    let neverReadable = false;
-    const input = () => { const s = stdin(); neverReadable = s.failed && !s.bytes.length; return s.bytes; };
-    const r = rgn.runRg(argv, { cwd, env, implicit, input, ugrep: () => findUgrep(env), debug });
-    return { r, neverReadable };
+  const pieces = stdinPieces(readFd);
+  // RG-IMPLICIT-PATH, a closed fd 0: native finds no readable stdin there and searches ./ (`rg needle <&-`). Under tjs
+  // that fd 0 reads as a FIFO (above), so a pathless search reads its first piece before it starts: one that meets a
+  // closed fd 0 is the ./ search native makes.
+  let ahead = null;
+  if (parsed.spec && parsed.spec.implicitStdin) {
+    let piece = null, error = null;
+    try { piece = pieces(); } catch (e) { error = e; }
+    if (!error && piece === null && pieces.closed) implicit = 'cwd';
+    else ahead = { piece, error };
+  }
+  const stdinChunk = () => {
+    if (ahead) { const a = ahead; ahead = null; if (a.error) throw a.error; return a.piece; }
+    return pieces();
   };
-  let { r, neverReadable } = search(implicit);
-  // RG-IMPLICIT-PATH, a closed fd 0: native's rg finds no readable stdin there and searches ./ (`rg needle <&-`).
-  // Under tjs a closed fd 0 is not closed by the time any JS runs: libuv's own first pipe takes the number, and it
-  // reads as a FIFO. Reading it fails, so a pathless search whose stdin could not be read at all is run again as
-  // the ./ search it was. (node, naude's engine, reopens a closed fd 0 on /dev/null at startup, as a character device.)
-  if (neverReadable && parsed.spec && parsed.spec.implicitStdin) ({ r } = search('cwd'));
-  return finish(r, out, err, exit);
+  const input = () => { const all = []; for (let c; (c = stdinChunk());) all.push(c); return Buffer.concat(all); };
+  let r;
+  try {
+    r = rgn.runRg(argv, { cwd, env, implicit, input, stdinChunk, stream: true, sink: out, ugrep: () => findUgrep(env), debug });
+  } catch (e) {
+    if (e && e.sinkClosed) { exit(141); return; }
+    throw e;
+  }
+  try { out(r.stdout || Buffer.alloc(0)); } catch (e) { if (e && e.sinkClosed) { exit(141); return; } throw e; }
+  return finish(r, err, exit);
 }
 
-function finish(r, out, err, exit) {
-  // A reader that went away (`rg x | head -1`): native's rg dies of SIGPIPE, which the shell reports as 141.
-  if (out(r.stdout || Buffer.alloc(0)) === false) { exit(141); return; }
+function finish(r, err, exit) {
   err(r.stderr || Buffer.alloc(0));
   exit(typeof r.status === 'number' ? r.status : 2);
 }
 
-module.exports = { RG_ARGV0, isRgInvocation, rgShadowFunction, implicitPath, readStdin, findUgrep, main };
+module.exports = { RG_ARGV0, isRgInvocation, rgShadowFunction, implicitPath, stdinPieces, findUgrep, main };
 
 if (require.main === module) main();

@@ -46,9 +46,11 @@ const NATIVE = providerBin(process.env);
 
 // RG-ARGV0: native 2.1.283 (darwin-arm64), `--version` run under each spelling, 2026-10-04: `ripgrep 14.1.1 ...`
 // (rg) or `2.1.283 (Claude Code)` (not rg).
+// `a\rg` and `C:rg` are Claude Code too off Windows (review M-1: a backslash and a drive are no separators there).
 const ARGV0_ROWS = [
   ['rg', {}, true], ['/x/rg', {}, true], ['RG', {}, false], ['rg.exe', {}, false], ['claude', {}, false],
   ['/x/claude', { ARGV0: 'rg' }, true], ['/x/claude', { ARGV0: '/x/rg' }, false], ['/x/claude', { ARGV0: 'xx' }, false],
+  ['a\\rg', {}, false], ['C:rg', {}, false],
 ];
 
 // RG-IMPLICIT-PATH: [argv, stdin, rc, stdout, stderr], native 2.1.283's embedded rg (ripgrep 14.1.1, darwin-arm64)
@@ -105,23 +107,26 @@ function underTjs(argv, stdin, opts) {
 }
 const nativeRun = (argv, stdin) => runWith(NATIVE, argv, stdin, { argv0: 'rg' });
 
-test('RG-ARGV0: isRgInvocation reads argv[0] and ARGV0 as native does', () => {
+test('RG-ARGV0: isRgInvocation reads argv[0] and ARGV0 as native does (off Windows)', () => {
   const { isRgInvocation } = require('../libexec/rg-entry.cjs');
-  for (const [argv0, env, want] of ARGV0_ROWS) assert.strictEqual(isRgInvocation(argv0, env), want, `${argv0} ${JSON.stringify(env)}`);
-});
-
-// The quaude bootstrap cannot require anything (it is compiled raw to bytecode), so it carries its own copy of the
-// predicate; naude's entry requires rg-entry.cjs's. All three must answer the native table alike.
-test('RG-ARGV0: the quaude bootstrap\'s copy and naude\'s entry answer the native table alike', async () => {
-  const boot = await import(path.join(REPO, 'libexec', 'quaude-bootstrap.mjs'));
-  const naude = require('../libexec/naude-entry.cjs');
-  for (const [argv0, env, want] of ARGV0_ROWS) {
-    assert.strictEqual(boot.isRgInvocation(argv0, env), want, `bootstrap: ${argv0} ${JSON.stringify(env)}`);
-    assert.strictEqual(naude.isRgInvocation(argv0, env), want, `naude: ${argv0} ${JSON.stringify(env)}`);
+  for (const platform of ['darwin', 'linux', 'netbsd']) {
+    for (const [argv0, env, want] of ARGV0_ROWS) assert.strictEqual(isRgInvocation(argv0, env, platform), want, `${platform}: ${argv0} ${JSON.stringify(env)}`);
   }
 });
+// On Windows a path component ends at either separator, after any drive (unmeasured against native there).
+test('RG-ARGV0: on Windows, `\\` and a drive end the directory part too', () => {
+  const { isRgInvocation } = require('../libexec/rg-entry.cjs');
+  for (const [argv0, want] of [['C:\\x\\rg', true], ['C:rg', true], ['a/rg', true], ['rg.exe', false], ['C:\\x\\claude.exe', false]]) {
+    assert.strictEqual(isRgInvocation(argv0, {}, 'win32'), want, argv0);
+  }
+});
+// Stated ONCE (review M-1): naude's entry requires it, and the quaude bootstrap evaluates rg-entry.cjs's own member for
+// it (test/quaude-build.test.cjs drives the built quaude through the table's rows), so no copy can drift.
+test('RG-ARGV0: naude\'s entry is rg-entry\'s rule', () => {
+  assert.strictEqual(require('../libexec/naude-entry.cjs').isRgInvocation, require('../libexec/rg-entry.cjs').isRgInvocation);
+});
 
-test('RG-ARGV0: native answers as rg exactly where the table says (native)', { skip: POSIX || (!NATIVE ? 'no native provider' : false) }, () => {
+test('RG-ARGV0: native answers as rg exactly where the table says (native, off Windows)', { skip: POSIX || (!NATIVE ? 'no native provider' : false) }, () => {
   for (const [argv0, env, want] of ARGV0_ROWS) {
     const r = cp.spawnSync(NATIVE, ['--version'], { argv0, env: { HOME: os.tmpdir(), PATH: '/usr/bin:/bin', ...env }, encoding: 'utf8', timeout: 60000 });
     assert.strictEqual(r.stdout.startsWith('ripgrep '), want, `${argv0} ${JSON.stringify(env)}: ${r.stdout.split('\n')[0]}`);
@@ -236,13 +241,63 @@ test('rg-entry with no ugrep refuses by name, rc 2, never a host rg', { skip: PO
   assert.ok(fs.existsSync(t));
 });
 
-// A reader that goes away (`rg x | head -1`) ends rg quietly: no message.
-test('rg-entry writing into a closed pipe ends quietly (tjs)', { skip: NEED.skip || (!tjsPath() ? 'no tjs engine' : false) }, () => {
-  const t = tree();
-  const [cmd, a] = engineSpawn(['run', LOADER, ENTRY, '-j1', '--files']);
-  const q = (s) => `'${String(s).replace(/'/g, "'\\''")}'`;
-  const r = cp.spawnSync('/bin/sh', ['-c', `${[cmd, ...a].map(q).join(' ')} </dev/null | head -1`], { cwd: t, env: { HOME: BASE, PATH: process.env.PATH, CLODE_UGREP: UGREP }, encoding: 'utf8' });
-  assert.strictEqual(r.status, 0);
-  assert.strictEqual(r.stdout.split('\n').filter(Boolean).length, 1);
-  assert.strictEqual(r.stderr, '');
+// I/O AS NATIVE'S (grep-native Task 10c fix round, review I-1, M-2): measured against native 2.1.283 on darwin-arm64,
+// 2026-10-04, each through bash so the shell reports what it saw:
+//   `rg needle BIG | head -1`   native dies of SIGPIPE: the producer's status 141, stderr empty
+//   `rg needle >&-`             a closed stdout writes nothing: rc 0 (a match), stderr empty
+//   `rg needle zzz 2>&-`        a closed stderr: rc 2
+//   a non-blocking empty stdin  `rg: <stdin>: Resource temporarily unavailable (os error 35)`, rc 2 (never waited out)
+// The big file is more than any pipe holds (> 64 KiB of output), so the reader is gone while rg still writes.
+const q = (s) => `'${String(s).replace(/'/g, "'\\''")}'`;
+const bigFile = () => {
+  const f = path.join(BASE || (tree(), BASE), 'big.txt');
+  if (!fs.existsSync(f)) fs.writeFileSync(f, Buffer.from('a line with a needle in it\n'.repeat(400000)));   // 10.8 MB
+  return f;
+};
+const asCmd = (label) => (label === 'native' ? `ARGV0=rg ${q(NATIVE)}` : engineSpawn(['run', LOADER, ENTRY]).flat().map(q).join(' '));
+const bash = (script) => cp.spawnSync('bash', ['-c', script], { cwd: tree(), env: { HOME: BASE, PATH: process.env.PATH, CLODE_UGREP: UGREP || '' }, encoding: 'utf8', timeout: 120000 });
+const IO_ROWS = [
+  ['| head -1, more than a pipe holds', (c) => `${c} needle ${q(bigFile())} </dev/null 2>"$E" | head -1 >/dev/null; echo "rc=\${PIPESTATUS[0]} err=$(cat "$E")"`, 'rc=141 err=\n'],
+  ['a closed stdout', (c) => `${c} needle a.txt </dev/null >&- 2>"$E"; echo "rc=$? err=$(cat "$E")"`, 'rc=0 err=\n'],
+  ['a closed stderr', (c) => `${c} needle zzz </dev/null 2>&-; echo "rc=$?"`, 'rc=2\n'],
+];
+for (const [label, run] of [['tjs', 'tjs'], ['native', 'native']]) {
+  test(`rg-entry's I/O is native's: a reader that goes away, a closed stdout, a closed stderr (${label})`,
+    { skip: POSIX || (label === 'tjs' ? NEED.skip || (!tjsPath() ? 'no tjs engine' : false) : !NATIVE ? 'no native provider' : false) }, () => {
+      for (const [what, script, want] of IO_ROWS) {
+        const r = bash(`E=$(mktemp); ${script(asCmd(run))}; rm -f "$E"`);
+        assert.strictEqual(r.stdout, want, `${what}: ${r.stderr}`);
+      }
+    });
+}
+const NONBLOCK = `import os, fcntl, subprocess, sys
+r, w = os.pipe()
+fcntl.fcntl(r, fcntl.F_SETFL, fcntl.fcntl(r, fcntl.F_GETFL) | os.O_NONBLOCK)
+p = subprocess.run(sys.argv[1:], stdin=r, capture_output=True, timeout=60)
+sys.stdout.write('%d %s' % (p.returncode, p.stderr.decode()))
+os.close(w)
+`;
+const HAS_PY = (() => { try { return cp.spawnSync('python3', ['-c', 'pass']).status === 0; } catch { return false; } })();
+test('rg-entry with a non-blocking stdin holding nothing yet: rg\'s error for <stdin>, rc 2, at once (tjs and native)', { skip: POSIX || NEED.skip || (!tjsPath() ? 'no tjs engine' : !HAS_PY ? 'no python3 to make the pipe' : false) }, () => {
+  const run = (argv) => cp.spawnSync('python3', ['-c', NONBLOCK, ...argv], { cwd: tree(), encoding: 'utf8', timeout: 90000,
+    env: { HOME: BASE, PATH: process.env.PATH, CLODE_UGREP: UGREP, ARGV0: 'rg' } }).stdout;
+  const [cmd, a] = engineSpawn(['run', LOADER, ENTRY]);
+  const errno = require('node:os').constants.errno.EAGAIN;
+  for (const argv of [['-n', 'needle'], ['-c', 'needle', '-']]) {
+    const ours = run([cmd, ...a, ...argv]);
+    assert.match(ours, new RegExp(`^2 rg: <stdin>: [A-Z][^\\n]* \\(os error ${errno}\\)\\n$`), argv.join(' '));
+    if (NATIVE) assert.strictEqual(ours, run([NATIVE, ...argv]), `${argv.join(' ')} vs native`);
+  }
+});
+
+// RG-STREAM, as a process: `yes needle | rg needle | head -1` ends (native at once; ours read its stdin to the end,
+// which never comes), and a 10.8 MB file under `| head -1` is not read whole first. Bounded by the run's timeout
+// (a search that waited for the end would be killed at it) and by what the shell saw.
+test('RG-STREAM: yes | rg | head -1 ends, and a big file under | head -1 prints its first line (tjs)', { skip: POSIX || NEED.skip || (!tjsPath() ? 'no tjs engine' : false) }, () => {
+  const c = asCmd('tjs');
+  const y = bash(`yes needle | ${c} needle | head -1; echo "rc=\${PIPESTATUS[1]}"`);
+  assert.strictEqual(y.status, 0, `yes | rg | head -1 did not end: ${y.signal} ${y.stderr}`);
+  assert.strictEqual(y.stdout, 'needle\nrc=141\n');
+  const b = bash(`${c} -n needle ${q(bigFile())} </dev/null | head -1`);
+  assert.strictEqual(b.stdout, '1:a line with a needle in it\n');
 });
