@@ -81,6 +81,7 @@ Claude), so it needs no pin. See row A2.
 | B2 | ? each tool exercised once and compared: Read, Write, Edit, Grep, Glob, Bash, WebFetch (and TodoWrite / Task where relevant) | each tool's output matches upstream | applets on Grep/Glob | NEW |
 | B4 | → agentic tool round-trips (Bash, Edit, Write, and a search: `grep` through the Bash tool, as scripts/floor-probe.mjs B4 drives it, since 2.1.283 answers a Grep tool_use with "No such tool available: Grep") produce the correct client-observable under quaude | tool dispatched, side effect / tool_result correct | applets on the grep shadow | test/fidelity/agentic-tools.test.cjs |
 | B3 | ? a tool that writes then a tool that reads back (round-trip integrity) | write-then-read round-trips correctly | - | NEW |
+| B5 | → the Grep and Glob tools (kept by `--allowedTools Grep,Glob`) in every output mode, and `rg` typed into the Bash tool, one canned-mock turn in a BUILT quaude, on a PATH with no rg and with a tripwire rg first: every tool_result equals native's (they were broken in every mode since 2.1.185) | each tool_result byte-equal to native's recorded answer; no host rg run by Grep or Glob | platform, applets | test/fidelity/agentic-grep-glob.test.cjs |
 
 ## C. File I/O across sizes
 

@@ -45,6 +45,29 @@ error with the help under it, not a silent translation:
   PowerPC G4 a reply now takes about 23 s less (40 s to 17 s), and 0.4 s less on
   `macos-arm64`
 
+- Fix the Grep and Glob tools, broken in every mode in every release since Claude Code
+  2.1.185: files_with_matches and count said "No files found", content mode and Glob said
+  "ripgrep not found on PATH. Install it", a search outside the working directory said to
+  install ripgrep, and a ripgrep on your PATH answered instead of Claude Code's. Every call
+  the tools make is now answered as native Claude Code's own embedded ripgrep answers it,
+  byte for byte, in every output mode (checked on macOS, NetBSD and Linux)
+- The Grep and Glob tools never run a ripgrep from your PATH and never ask the model to
+  install one. They search with your `ugrep` (5.0.0 or newer), on purpose: quaude decides
+  each match the way ripgrep does, and a pattern it cannot decide that way is refused by
+  name rather than answered differently
+- `rg` typed into the Bash tool runs quaude's own tested ripgrep emulation, as native runs
+  its embedded one, unless you installed a ripgrep yourself, which then runs, as in native.
+  `rg --version` answers native's ripgrep version (/doctor no longer reports rg broken)
+- `clode build` no longer runs your Claude Code hooks or writes into your home
+  (`~/.claude.json`, `~/.claude/backups`, `~/.tjs`) while it checks the product it built
+- (`quaude` only) Fix `CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR`, `CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR`
+  and the other `*_FILE_DESCRIPTOR` credentials being refused on Linux ("not a pipe or socket")
+- (`quaude` only) Fix file-identity checks that every file passed: files reported no device
+  or inode, so Claude Code's checks that a file is still the one you approved, or that a git
+  worktree is the one it claims, could not tell two files apart
+- Fix `clode build naude` from a source checkout silently building from a stale prebuilt
+  entry bundle; it now refuses and names `node scripts/build-clode-main.mjs`
+
 ## 0.20260831.1
 
 Tested with Claude Code 2.1.251, including an interactive turn on `macos-arm64`.
