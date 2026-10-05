@@ -38,6 +38,21 @@ WHAT IS SPAWNED (test/bundle-spawn-scan.cjs: derived from a few seeds through bi
 test/ and scripts/lib/; 81 spawns) and judges the env it gets; 27 more were given their own home. Known limit: a
 launcher handed in as a callback (frame-oracle's capture) is not followed; its captures are hermetic by construction
 (test/e2e.cjs sandbox()).
+SUPERSEDED (fix round 3, ruling G33): the evaluator and its guard are retired; inferring every spawn left holes (shell
+strings, sh -c, callbacks, a pty spawn, unseeded names), and a live one in PRODUCTION: `clode build`'s PONG smoke booted
+the freshly built bundle with clode's inherited HOME, so every build (and every test that builds a quaude) ran the
+user's ~/.claude/settings.json hooks and left ~/.claude.json, ~/.claude/backups, ~/.claude/projects and
+~/.tjs/{localStorage.db,cookies.txt} in the user's home. FIXED (c9826cd): the smoke runs in a home of its own, every tjs
+child of a build gets a TJS_HOME of the build's own, naude's self-check too; quaude-build proves a real build leaves a
+sentinel HOME byte-untouched. The SUITE now runs under its own HOME, USERPROFILE and CLAUDE_CONFIG_DIR
+(test/suite-home.cjs, applied first by test/run.mjs and by every bundle-launching helper), the real values kept under
+CLODE_TEST_REAL_HOME, what the suite needs from the real home handed over as explicit paths (provider store, clode
+cache, tjs vendor, native install, git safe.directory); test/suite-home-hermetic.test.cjs keeps the way back closed,
+fail-closed. Proved: the full default suite with HOME/USERPROFILE/CLAUDE_CONFIG_DIR pointed at a sentinel dir holding
+hooks that would touch a marker: RC 0, the sentinel byte-untouched, no hook ran, and ~/.claude.json and
+~/.claude/plugins/known_marketplaces.json did not move. (CHANGELOG material for Task 11's record: `clode build` no
+longer runs your hooks or writes into your home.) Left: a quaude RUN (not a build) still creates ~/.tjs (txiki's own
+home: cookies.txt, localStorage.db) in the user's home, as it always has.
 
 ## 87 of the 90 tools the carve can register have no driver that can fail (2026-09-28)
 
