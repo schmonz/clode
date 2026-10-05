@@ -124,6 +124,9 @@ function appletRejected(bin, status, stderr) {
 //                         answering it, called only when the search reaches stdin (a command's fd 0: rg-entry.cjs)
 //   implicit              what a pathless search searches, 'stdin' or 'cwd' (RG-IMPLICIT-PATH: a command's
 //                         question, rg-entry.cjs); absent, a pathless search refuses
+//   stream, sink,         RG-STREAM (a command's search): stdin and named files searched as they are read, the
+//   stdinChunk            output handed to sink(buf) as it is printed (stdout comes back empty), stdin pulled a
+//                         piece at a time from stdinChunk() (a Buffer, null at its end; a throw is rg's error)
 //   timeout, maxBuffer,   the caller's own bounds, when it named them
 //   killSignal
 //   ugrep()               the ugrep a search runs (null: this host has none)
@@ -1342,11 +1345,11 @@ function* selectedLines(text, matches) {
 // after-context line's own start, a before-context line's match's, RG-BINARY-QUIT's and -CONVERT's fills),
 // and GAP before a line that does not follow the one printed before it in this file (and before the first).
 const GAP = { gap: true };
-function* eachPrintedLine(text, sel, spec) {
+function* eachPrintedLine(text, sel, spec, firstNum = 1) {
   const next = (ls) => { const i = text.indexOf(0x0a, ls); return i === -1 || i + 1 >= text.length ? -1 : i + 1; };
   const prev = (ls) => (ls === 0 ? -1 : ls < 2 ? 0 : text.lastIndexOf(0x0a, ls - 2) + 1);
-  // Line numbers, counted forward once.
-  let at = 0, atNum = 1;
+  // Line numbers, counted forward once, from the number of the text's first line (a window's, streamed).
+  let at = 0, atNum = firstNum;
   const numAt = (ls) => { for (let i = text.indexOf(0x0a, at); i !== -1 && i < ls; i = text.indexOf(0x0a, i + 1)) atNum++; at = ls; return atNum; };
   let cur = -1, curNum = 0, pend = 0;
   const drainAfter = (upTo) => {
@@ -1394,10 +1397,24 @@ function lineStart(text, at, floor) {
 const TICK = { op: 'tick' }, TICK_EVERY = 256;
 // What a search prints, written into one growing buffer as it goes (its length is what stops a search
 // past the caller's maxBuffer; a list of every piece, concatenated at the end, held the loop a second
-// for the 5 million pieces of -n -o over 200,000 lines).
-function outBuffers() {
-  const w = new ByteWriter(64 * 1024);
-  return { get len() { return w.len; }, push(...bs) { for (const b of bs) w.bytes(b); }, done: () => w.done() };
+// for the 5 million pieces of -n -o over 200,000 lines). With a `sink` (a command's stdout: rg-entry.cjs) it
+// is handed on as it goes instead, every 64 KiB and at each flush(), as rg writes as it searches; the sink
+// throwing (a reader that went away) ends the search there. len counts everything printed either way.
+const OUT_FLUSH = 64 * 1024;
+function outBuffers(sink) {
+  let w = new ByteWriter(OUT_FLUSH), handed = 0;
+  // what the sink throws is the caller's (marked, so no search reads it as a file's error)
+  const flush = () => {
+    if (!sink || !w.len) return;
+    const b = w.done(); handed += b.length; w = new ByteWriter(OUT_FLUSH);
+    try { sink(b); } catch (e) { if (e && typeof e === 'object') e.fromSink = true; throw e; }
+  };
+  return {
+    get len() { return handed + w.len; },
+    push(...bs) { for (const b of bs) w.bytes(b); if (sink && w.len >= OUT_FLUSH) flush(); },
+    flush,
+    done: () => { if (!sink) return w.done(); flush(); return Buffer.alloc(0); },
+  };
 }
 // A line's end: the index of its \n, or the text's end.
 function lineEndAt(text, ls) { const i = text.indexOf(0x0a, ls); return i === -1 ? text.length : i; }
@@ -1417,15 +1434,31 @@ function* printFile(spec, e, out, state) {
   }
   const sel = e.sel;
   if (!sel.length) return false;
-  if (spec.mode === 'json') { yield* printJson(spec, e, sel, out, state); return true; }
-  const path = e.withFilename ? Buffer.from(e.disp) : null;
   // A file with a selected line prints its count, even a -c -o count of 0 (its only match was the
   // unprintable one at an unterminated end: native prints `0`); a file with none prints nothing.
-  if (spec.mode === 'count') {
-    const n = spec.countMatches ? sel.reduce((a, L) => a + L.ms.length, 0) : sel.length;
-    out.push(...(path ? [path, Buffer.from(spec.nul ? '\0' : ':')] : []), Buffer.from(`${n}\n`));
-    return true;
-  }
+  if (spec.mode === 'count') { printCount(spec, e, out, countOf(spec, sel)); return true; }
+  const p = linePrinter(spec, e, out, state, e.bin);
+  for (const ev of eachPrintedLine(text, sel, spec)) if (!(yield* p.event(ev, text, 0))) break;
+  return yield* p.end(text.length);
+}
+// -c's count of a file's selected lines (-c -o: of their printable matches), and its line.
+const countOf = (spec, sel) => (spec.countMatches ? sel.reduce((a, L) => a + L.ms.length, 0) : sel.length);
+function printCount(spec, e, out, n) {
+  out.push(...(e.withFilename ? [Buffer.from(e.disp), Buffer.from(spec.nul ? '\0' : ':')] : []), Buffer.from(`${n}\n`));
+}
+// THE PRINTERS OF LINES, stated once for the whole-text search (printFile) and the streamed one (streamEntry):
+// the standard printer and the JSON printer, fed eachPrintedLine's events in order, a window of the file at a
+// time. event(ev, text, base): `text` holds the event's line, `base` is the text's offset in the file (rg's
+// absolute_offset); false once the printer stopped (RG-BINARY-*'s stop, or the caller's maxBuffer). end(textLen)
+// writes what follows the last line (the binary message; JSON's end message, textLen the file's whole text)
+// and answers whether rg found something. `bin` (binaryOutcome's report, null for text) may be set later, by
+// setBin, before the events it governs (streamEntry learns of a NUL as it reads).
+function linePrinter(spec, e, out, state, bin) {
+  return spec.mode === 'json' ? jsonPrinter(spec, e, out, state, bin) : standardPrinter(spec, e, out, state, bin);
+}
+function standardPrinter(spec, e, out, state, binAt) {
+  let bin = binAt;
+  const path = e.withFilename ? Buffer.from(e.disp) : null;
   const cols = spec.maxColumns;
   const prefix = (num, sep) => {
     const p = [];
@@ -1437,51 +1470,58 @@ function* printFile(spec, e, out, state) {
   // RG-BINARY-CONVERT and RG-BINARY-MMAP: the first line rg would print once it has seen binary data
   // ends the file (a match among them counts toward its last line); RG-BINARY-MMAP finds a NUL past its
   // first 64 KiB in the lines it prints.
-  const bin = e.bin;
   let off = bin ? bin.offset : -1;
-  const nulIn = bin && bin.mmap && !bin.window ? nulFinder(text) : null;
-  const stops = (ev) => {
+  let nulIn = null, nulText = null;
+  const stops = (ev, text) => {
     if (!bin) return false;
     if (bin.stopAt >= 0) return ev.at >= bin.stopAt;
     if (!bin.mmap) return false;
     if (bin.window) return true;
     if (off !== -1) return true;
+    if (nulText !== text) { nulIn = nulFinder(text); nulText = text; }
     const le = lineEndAt(text, ev.ls), z = nulIn(ev.ls, le < text.length ? le + 1 : le);
-    if (z !== -1) off = z;
+    if (z !== -1) off = z + ev.base;
     return z !== -1;
   };
   // `--` before a group: between files only once the file prints a line (grep-printer's search
   // separator), inside a file at once (the searcher's context break, written before the line it precedes
-  // is judged).
-  let n = 0, matches = 0, wrote = false, pendingSep = false;
-  for (const ev of eachPrintedLine(text, sel, spec)) {
-    if (ev === GAP) {
-      if (ctx && state.printed) { if (wrote) out.push(SEP); else pendingSep = true; }
-      continue;
-    }
-    const { ls, num, L } = ev;
-    if (stops(ev)) { if (L) matches++; break; }
-    if (pendingSep) { out.push(SEP); pendingSep = false; }
-    wrote = true;
-    const ms = L && L.ms;
-    const sep = ms ? ':' : '-';
-    if (ms) { state.printed = true; matches++; }
-    if (ms && spec.only && ms.length) {
-      for (const m of ms) {
-        out.push(...prefix(num, sep), cols && m.end - m.start > cols ? OMITTED_MATCH : text.subarray(m.start, m.end), NL);
-        if (out.len > state.limit) return true;
-        if (++n % TICK_EVERY === 0) yield TICK;
+  // is judged). A GAP is acted on at the line it precedes: nothing it reads changes between the two.
+  let n = 0, matches = 0, wrote = false, pendingSep = false, gap = false, done = false;
+  return {
+    setBin(b) { bin = b; off = b ? b.offset : -1; },
+    *event(ev, text, base) {
+      if (done) return false;
+      if (ev === GAP) { gap = true; return true; }
+      if (gap) { gap = false; if (ctx && state.printed) { if (wrote) out.push(SEP); else pendingSep = true; } }
+      const { ls, num, L } = ev;
+      if (stops({ ...ev, base }, text)) { if (L) matches++; done = true; return false; }
+      if (pendingSep) { out.push(SEP); pendingSep = false; }
+      wrote = true;
+      const ms = L && L.ms;
+      const sep = ms ? ':' : '-';
+      if (ms) { state.printed = true; matches++; }
+      if (ms && spec.only && ms.length) {
+        for (const m of ms) {
+          out.push(...prefix(num, sep), cols && m.end - m.start > cols ? OMITTED_MATCH : text.subarray(m.start, m.end), NL);
+          if (out.len > state.limit) { done = true; return false; }
+          if (++n % TICK_EVERY === 0) yield TICK;
+        }
+        return true;
       }
-      continue;
-    }
-    const le = lineEndAt(text, ls), end = le < text.length ? le + 1 : le;
-    if (cols && end - ls > cols) out.push(...prefix(num, sep), ms ? OMITTED_MATCH : OMITTED_CONTEXT, NL);
-    else { out.push(...prefix(num, sep), text.subarray(ls, end)); if (end === le) out.push(NL); }
-    if (out.len > state.limit) return true;
-    if (++n % TICK_EVERY === 0) yield TICK;
-  }
-  if (bin && off !== -1 && matches > 0) { out.push(binaryMessage(bin, e.withFilename ? e.disp : null, off)); state.printed = true; }
-  return matches > 0;
+      const le = lineEndAt(text, ls), end = le < text.length ? le + 1 : le;
+      if (cols && end - ls > cols) out.push(...prefix(num, sep), ms ? OMITTED_MATCH : OMITTED_CONTEXT, NL);
+      else { out.push(...prefix(num, sep), text.subarray(ls, end)); if (end === le) out.push(NL); }
+      if (out.len > state.limit) { done = true; return false; }
+      if (++n % TICK_EVERY === 0) yield TICK;
+      return true;
+    },
+    // eslint-disable-next-line require-yield
+    *end() {
+      if (bin && off !== -1 && matches > 0) { out.push(binaryMessage(bin, e.withFilename ? e.disp : null, off)); state.printed = true; }
+      return matches > 0;
+    },
+    get matches() { return matches; },
+  };
 }
 
 // ---- rg's JSON Lines printer (grep-native Task 7) -------------------------------------------------
@@ -1581,56 +1621,74 @@ function jsonDuration(ns, sorted) {
 }
 // The running totals the summary sums (only files that printed add to them).
 const jsonTotals = () => ({ startNs: clockNs(), elapsedNs: 0, searches: 0, withMatch: 0, bytesSearched: 0, bytesPrinted: 0, matchedLines: 0, matches: 0 });
-function* printJson(spec, e, sel, out, state) {
+function jsonPrinter(spec, e, out, state, binAt) {
+  let bin = binAt;
   const totals = state.json;
   const t0 = clockNs();
-  const { text } = e;
   const pw = new ByteWriter(64);
   jsonData(pw, Buffer.from(e.disp));
   const path = Buffer.from(pw.done());
-  const w = new ByteWriter();
-  w.ascii('{"type":"begin","data":{"path":'); w.bytes(path); w.ascii('}}\n');
+  // One writer for this file's messages, handed to `out` a window at a time (flush) and at the end;
+  // `printed` counts what it held (bytes_printed: the begin, match and context messages).
+  let w = new ByteWriter(), printed = 0, begun = false, stopped = false;
   let matchedLines = 0, matches = 0, n = 0;
   // RG-BINARY-*: the end message's binary_offset (RG-BINARY-MMAP: found in the first line printed that
   // holds a NUL, past its first 64 KiB) and bytes_searched.
-  const bin = e.bin;
   let off = bin ? bin.offset : -1;
-  const nulIn = bin && bin.mmap && off === -1 ? nulFinder(text) : null;
+  let nulIn = null, nulText = null;
   // Past the caller's maxBuffer the rest is never printed: what is written so far goes out, unfinished,
   // as a killed rg's would.
   const full = () => out.len + w.len > state.limit;
-  for (const ev of eachPrintedLine(text, sel, spec)) {
-    if (ev === GAP) continue;
-    const { ls, num, L } = ev;
-    const le = lineEndAt(text, ls), end = le < text.length ? le + 1 : le;
-    if (nulIn && off === -1) off = nulIn(ls, end);
-    w.ascii(L ? '{"type":"match","data":{"path":' : '{"type":"context","data":{"path":'); w.bytes(path);
-    w.ascii(',"lines":');
-    // a line longer than what is left of maxBuffer stops inside it, as a killed rg's output would
-    for (const slice of jsonDataGen(w, text, ls, end)) { if (full()) { out.push(w.done()); return; } yield slice || TICK; }
-    w.ascii(`,"line_number":${spec.lineNumber ? num : 'null'},"absolute_offset":${ls},"submatches":[`);
-    if (L) {
-      matchedLines++; matches += L.ms.length;
-      for (let i = 0; i < L.ms.length; i++) {
-        const m = L.ms[i];
-        w.ascii(i ? ',{"match":' : '{"match":'); jsonData(w, text, m.start, m.end); w.ascii(`,"start":${m.start - ls},"end":${m.end - ls}}`);
-        if (++n % TICK_EVERY === 0) { if (full()) { out.push(w.done()); return; } yield TICK; }
+  const stop = () => { out.push(w.done()); w = new ByteWriter(); stopped = true; return false; };
+  return {
+    setBin(b) { bin = b; off = b ? b.offset : -1; },
+    flush() { if (w.len) { printed += w.len; out.push(w.done()); w = new ByteWriter(); } },
+    *event(ev, text, base) {
+      if (stopped) return false;
+      if (ev === GAP) return true;
+      if (!begun) { begun = true; w.ascii('{"type":"begin","data":{"path":'); w.bytes(path); w.ascii('}}\n'); }
+      const { ls, num, L } = ev;
+      const le = lineEndAt(text, ls), end = le < text.length ? le + 1 : le;
+      if (bin && bin.mmap && off === -1) {
+        if (nulText !== text) { nulIn = nulFinder(text); nulText = text; }
+        const z = nulIn(ls, end);
+        if (z !== -1) off = z + base;
       }
-    }
-    w.ascii(']}}\n');
-    if (full()) { out.push(w.done()); return; }
-    if (++n % TICK_EVERY === 0) yield TICK;
-  }
-  const printed = w.len;
-  const ns = clockNs() - t0;
-  w.ascii('{"type":"end","data":{"path":'); w.bytes(path);
-  const searched = !bin ? text.length : bin.mmap ? (off !== -1 ? off : text.length) : bin.bytes;
-  w.ascii(`,"binary_offset":${off !== -1 ? off : 'null'},"stats":{"elapsed":${jsonDuration(ns, false)},"searches":1,"searches_with_match":1,"bytes_searched":${searched},`
-    + `"bytes_printed":${printed},"matched_lines":${matchedLines},"matches":${matches}}}}\n`);
-  out.push(w.done());
-  Object.assign(totals, { elapsedNs: totals.elapsedNs + ns, searches: totals.searches + 1, withMatch: totals.withMatch + 1,
-    bytesSearched: totals.bytesSearched + searched, bytesPrinted: totals.bytesPrinted + printed,
-    matchedLines: totals.matchedLines + matchedLines, matches: totals.matches + matches });
+      w.ascii(L ? '{"type":"match","data":{"path":' : '{"type":"context","data":{"path":'); w.bytes(path);
+      w.ascii(',"lines":');
+      // a line longer than what is left of maxBuffer stops inside it, as a killed rg's output would
+      for (const slice of jsonDataGen(w, text, ls, end)) { if (full()) return stop(); yield slice || TICK; }
+      w.ascii(`,"line_number":${spec.lineNumber ? num : 'null'},"absolute_offset":${ls + base},"submatches":[`);
+      if (L) {
+        matchedLines++; matches += L.ms.length;
+        for (let i = 0; i < L.ms.length; i++) {
+          const m = L.ms[i];
+          w.ascii(i ? ',{"match":' : '{"match":'); jsonData(w, text, m.start, m.end); w.ascii(`,"start":${m.start - ls},"end":${m.end - ls}}`);
+          if (++n % TICK_EVERY === 0) { if (full()) return stop(); yield TICK; }
+        }
+      }
+      w.ascii(']}}\n');
+      if (full()) return stop();
+      if (++n % TICK_EVERY === 0) yield TICK;
+      return true;
+    },
+    // eslint-disable-next-line require-yield
+    *end(textLen) {
+      if (stopped) return begun;
+      if (!begun) return false;
+      printed += w.len;
+      const ns = clockNs() - t0;
+      w.ascii('{"type":"end","data":{"path":'); w.bytes(path);
+      const searched = !bin ? textLen : bin.mmap ? (off !== -1 ? off : textLen) : bin.bytes;
+      w.ascii(`,"binary_offset":${off !== -1 ? off : 'null'},"stats":{"elapsed":${jsonDuration(ns, false)},"searches":1,"searches_with_match":1,"bytes_searched":${searched},`
+        + `"bytes_printed":${printed},"matched_lines":${matchedLines},"matches":${matches}}}}\n`);
+      out.push(w.done()); w = new ByteWriter(); stopped = true;
+      Object.assign(totals, { elapsedNs: totals.elapsedNs + ns, searches: totals.searches + 1, withMatch: totals.withMatch + 1,
+        bytesSearched: totals.bytesSearched + searched, bytesPrinted: totals.bytesPrinted + printed,
+        matchedLines: totals.matchedLines + matchedLines, matches: totals.matches + matches });
+      return true;
+    },
+  };
 }
 // ripgrep's summary: serde_json's json! value, so every object's keys are sorted.
 function jsonSummary(t) {
@@ -2033,8 +2091,8 @@ function* sortedByModified(spec, entries, cwd) {
   });
   return [...rest, ...keyed.map((k) => k.e)];
 }
-function* printListing(spec, entries, cwd) {
-  const out = outBuffers(), err = [];
+function* printListing(spec, entries, cwd, sink) {
+  const out = outBuffers(sink), err = [];
   let broke = false, listed = 0;
   const list = spec.sort ? yield* sortedByModified(spec, entries, cwd) : entries;
   const term = spec.nul ? '\0' : '\n';
@@ -2046,6 +2104,235 @@ function* printListing(spec, entries, cwd) {
     if (++listed % TICK_EVERY === 0) { searchStats.ticks.list++; yield TICK; }
   }
   return { stdout: out.done(), stderr: spec.noMessages ? Buffer.alloc(0) : Buffer.concat(err), status: broke ? 2 : listed ? 0 : 1, signal: null };
+}
+
+// ---- RG-STREAM: a search as rg makes it, as the bytes arrive (grep-native Task 10c fix round, review I-2) ----
+// rg searches as it reads: a 64 KiB line buffer at a time, printing as it goes, its memory bounded by that buffer
+// (and the longest line), `yes needle | rg needle | head -1` ending at once. quaude's rg answered a search whole:
+// stdin read to its end, every match found, then everything printed, so `yes | rg | head -1` never ended and a
+// 138 MB file under `| head -1` took 117 s and 1.77 GB. A COMMAND's search (rg-entry.cjs) streams stdin and every
+// named file instead: windows of whole lines, each searched by the matcher (rg-regex.cjs decides every line, as
+// stdin always was), printed by the same printers (linePrinter, printCount) with what the window must carry
+// (line numbers, offsets, the context lines it may still print, the `--` state), and handed to the command's
+// stdout as they finish. What a later byte could still change is held back until it cannot:
+//   RG-BINARY-CONVERT  (stdin; a named file rg does not map) the standard printer stops at the fill that meets
+//              the first NUL, so lines are printed only once the fill they were searched in has ended without one:
+//              StreamFills is lineBufferFills, run as the bytes arrive (rg's own buffer: what is held is what rg holds)
+//   RG-BINARY-MMAP  (a named file rg maps) a NUL in its first 64 KiB stops before the first line: nothing is
+//              printed before 64 KiB (or the end) is read
+// Context needs no holding back: each line is printed once (the window remembers the last it printed), and a window
+// keeps the -A + -B + 2 lines before what it has not printed, so it derives their context, and the `--` between
+// groups, as the whole text does. Everything else of a line is the line's own. The answer is the whole-text search's, byte for byte, which
+// test/rg-stream.test.cjs holds over every printer, window and NUL position; the gate judges both against native.
+// NOT STREAMED: a multi-line search (rg reads those whole too), a UTF-16 text (rg's decoder; searched whole), and a
+// WALKED file (each read whole, as before: its binary quit reads in fills a walk's ugrep pass has already looked at).
+const STREAM_READ = 1024 * 1024;
+const utf16Head = (h) => h.length >= 2 && ((h[0] === 0xff && h[1] === 0xfe) || (h[0] === 0xfe && h[1] === 0xff));
+
+// lineBufferFills (RG-BINARY-CONVERT, quit false), as the text arrives: advance() runs rg's fills as far as the
+// bytes so far allow (a read is as long as there is room, RG-STDIN-ALL-THERE, so a fill waits for that room or the
+// end), and answers { wait } (searchStart: where the fill being read began its search; everything before it was
+// searched by fills that held no NUL), { met: stopAt } (the fill that met the first NUL began its search there),
+// or { done } (the end, no NUL). `T(abs)`: the window, (text, base). visited(from, to) as lineBufferFills'.
+class StreamFills {
+  constructor(read, maxContext) {
+    this.bounds = read.bounds; this.bi = 0; this.maxContext = maxContext;
+    this.A = 0; this.end = 0; this.lastLT = 0; this.at = 0; this.from = 0; this.cap = RG_BUFFER;
+    this.top = true; this.searchStart = 0; this.searched = 0; this.oldLen = 0; this.consumed = 0; this.met = false; this.didread = false;
+  }
+  advance(text, base, avail, eof, nul, visited) {
+    const rel = (x) => x - base;
+    for (;;) {
+      if (this.top) {
+        let consumed = this.lastLT;
+        if (this.maxContext > 0 && this.lastLT > 0) {
+          const lv = visited(this.from, this.A + this.lastLT);
+          consumed = Math.max(precedingStart(text, rel(this.A), rel(this.A + this.lastLT), this.maxContext) + base - this.A, lv < 0 ? 0 : lv - this.A);
+        }
+        this.oldLen = this.lastLT; this.searched = this.A + this.lastLT; this.consumed = consumed;
+        this.A += consumed; this.end -= consumed; this.lastLT = this.end;
+        this.didread = false; this.met = false; this.top = false; this.searchStart = this.searched;
+      }
+      for (;;) {
+        if (this.cap - this.end === 0) this.cap += Math.max(1, this.cap) * 2;
+        while (this.bi < this.bounds.length && this.bounds[this.bi] <= this.at) this.bi++;
+        const lim = this.bi < this.bounds.length ? this.bounds[this.bi] : Infinity;
+        const want = Math.min(this.cap - this.end, lim - this.at);
+        if (avail - this.at < want && !eof) return { wait: true, searchStart: this.searchStart };
+        const n = Math.min(want, avail - this.at);
+        if (n <= 0) { this.lastLT = this.end; this.didread = this.lastLT > 0; break; }
+        const oldend = this.end;
+        this.end += n; this.at += n;
+        searchStats.filled += n;
+        if (nul !== -1 && nul < this.A + this.end) this.met = true;
+        const ls = lineStart(text, rel(this.A + this.end), rel(this.A + oldend)) + base;
+        if (ls > this.A + oldend) { this.lastLT = ls - this.A; this.didread = true; break; }
+      }
+      this.top = true;
+      if (this.met) return { met: true, stopAt: this.searched };
+      if (!this.didread || (this.consumed === 0 && this.oldLen === this.lastLT)) return { done: true };
+      this.from = this.searched;
+    }
+  }
+}
+
+// One streamed target (stdin, or a named file), into `out`: { found, error (stderr bytes), whole (a UTF-16 stdin's
+// bytes, to be searched whole) }. ctx: { cwd, how ('convert' or 'mmap'), first, deadline }.
+function* streamEntry(spec, e, t, out, state, ctx) {
+  const fs = require('fs'), path = require('path');
+  let how = ctx.how;
+  // the source: stdin through the command (op stdinChunk: a Buffer, null at its end, or { error }), a named file here
+  let fd = null, closed = false;
+  const errorLine = (x) => Buffer.from(`rg: ${e.disp}: ${osErrorText(x)}\n`);
+  if (!e.stdin) {
+    try { fd = fs.openSync(path.resolve(ctx.cwd, e.file), 'r'); } catch (x) { return { error: errorLine(x) }; }
+  }
+  const chunkBuf = e.stdin ? null : Buffer.alloc(ctx.readSize || STREAM_READ);
+  const next = function* () {
+    if (closed) return null;
+    if (e.stdin) {
+      const r = yield { op: 'stdinChunk' };
+      if (r && r.error) throw r.error;
+      if (!r || !r.length) { closed = true; return null; }
+      return toBuf(r);
+    }
+    const n = fs.readSync(fd, chunkBuf, 0, chunkBuf.length, null);
+    if (!n) { closed = true; return null; }
+    return Buffer.from(chunkBuf.subarray(0, n));
+  };
+  try {
+    // RG-TEXT-BOM: a UTF-8 BOM is dropped; UTF-16 is searched whole (rg's decoder); the reads' bounds are rgTextRead's
+    let head = Buffer.alloc(0);
+    while (head.length < 3) { const c = yield* next(); if (!c) break; head = Buffer.concat([head, c]); }
+    if (utf16Head(head)) {
+      const all = [head];
+      for (let c; (c = yield* next());) all.push(c);
+      return { whole: Buffer.concat(all) };
+    }
+    const bom8 = head.length >= 3 && head[0] === 0xef && head[1] === 0xbb && head[2] === 0xbf;
+    const read = bom8 ? { bounds: e.stdin ? [STDIN_BUF - 3] : [] } : { bounds: e.stdin ? [3, STDIN_BUF] : [3] };
+    if (bom8 && how === 'mmap') how = 'convert';            // a file with a BOM is read, never mapped (rgView)
+    const convert = how === 'convert';
+    const ctxLines = Math.max(spec.before, spec.after);
+    const lead = spec.before + spec.after + 2;
+    // the window: rg's text (a convert search's NULs made newlines) from `base`; lineBase the number of its first line
+    let buf = Buffer.alloc(0), base = 0, total = 0, lineBase = 1, nul = -1, eof = false, wm = -1, pending = [];
+    // pieces wait in `pending` until the next window is searched (joined once, not a piece at a time)
+    const append = (c) => {
+      const z = c.indexOf(0);
+      if (nul === -1 && z !== -1) nul = total + z;
+      let v = c;
+      if (convert && z !== -1) { v = Buffer.from(c); for (let i = z; i !== -1; i = v.indexOf(0, i + 1)) v[i] = 0x0a; }
+      pending.push(v);
+      total += c.length;
+    };
+    const join = () => { if (pending.length) { buf = Buffer.concat([buf, ...pending]); pending = []; } };
+    append(bom8 ? head.subarray(3) : head);
+    const mode = spec.mode;
+    const printer = mode === 'standard' || mode === 'json' ? linePrinter(spec, e, out, state, how === 'mmap' ? { offset: -1, mmap: true, window: false } : null) : null;
+    const fills = convert && mode === 'standard' ? new StreamFills(read, ctxLines) : null;
+    let met = false, stopAtAbs = -1, finished = false, found = false, counted = 0, countSeen = false, mmapDecided = how !== 'mmap';
+    // drop what no later window can need: before `keep` (absolute, a line start)
+    const dropTo = (keep) => {
+      if (keep <= base) return;
+      const k = keep - base;
+      for (let i = buf.indexOf(0x0a); i !== -1 && i < k; i = buf.indexOf(0x0a, i + 1)) lineBase++;
+      buf = buf.subarray(k); base = keep;
+    };
+    const backLines = (absPos, n) => {      // the start of the line n lines before the one holding absPos
+      let p = Math.max(0, Math.min(absPos, base + buf.length) - base);
+      p = lineStart(buf, p, 0);
+      for (let i = 0; i < n && p > 0; i++) p = lineStart(buf, p - 1, 0);
+      return p + base;
+    };
+    // A window is searched once what arrived since the last one is at least as much as what that one kept (and 4 KiB):
+    // every byte is searched a bounded number of times, however small the pieces stdin hands over.
+    let fresh = 0;
+    while (!finished) {
+      const c = yield* next();
+      if (c) { append(c); fresh += c.length; } else eof = true;
+      if (!eof && fresh < Math.max(4096, buf.length)) continue;
+      join();
+      fresh = 0;
+      // whole lines only, until the end (lineStart: the start of the line after the last newline, 0 for none)
+      const complete = eof ? buf.length : lineStart(buf, buf.length, 0);
+      if (!complete && !eof) continue;
+      const text = buf.subarray(0, complete);
+      if (ctx.deadline && Date.now() > ctx.deadline) throw timedOutError();
+      const ms = matchTextLines(text, t, ctx.deadline, ctx.first);
+      const sel = yield* selectedLines(text, ms);
+      if (mode === 'files') {
+        if (sel.some((L) => L.ls + base > wm)) { out.push(Buffer.from(e.disp + (spec.nul ? '\0' : '\n'))); found = true; finished = true; break; }
+        wm = base + complete - 1;
+        dropTo(base + complete);
+        if (eof) break;
+        continue;
+      }
+      if (mode === 'count') {
+        for (const L of sel) if (L.ls + base > wm) { counted += spec.countMatches ? L.ms.length : 1; countSeen = true; }
+        if (complete) wm = base + complete - 1;
+        dropTo(base + complete);
+        if (eof) break;
+        continue;
+      }
+      // the standard and JSON printers: which events are final
+      if (!mmapDecided && (eof || total >= RG_BUFFER)) {
+        mmapDecided = true;
+        if (nul !== -1 && nul < Math.min(total, RG_BUFFER)) printer.setBin({ offset: nul, mmap: true, window: true });
+      }
+      const events = [...eachPrintedLine(text, sel, spec, lineBase)];
+      let cut = Infinity;
+      if (!eof && !mmapDecided) cut = 0;
+      if (fills && !met) {
+        const visited = (from, to) => {
+          let last = -1;
+          for (const ev of events) {
+            if (ev === GAP) continue;
+            const at = ev.at + base;
+            if (at >= to) break;
+            if (at >= from) { const le = lineEndAt(text, ev.ls); last = (le < text.length ? le + 1 : le) + base; }
+          }
+          return last;
+        };
+        const f = fills.advance(buf, base, total, eof, nul, visited);
+        if (f.met) { met = true; stopAtAbs = f.stopAt; }
+        else if (f.wait) cut = Math.min(cut, f.searchStart - base);
+      }
+      // the printer's stop compares a window's own offsets
+      if (met) printer.setBin({ offset: nul, bytes: total, stopAt: stopAtAbs - base });
+      let gap = false;
+      for (const ev of events) {
+        if (ev === GAP) { gap = true; continue; }
+        if (ev.ls + base <= wm) { gap = false; continue; }
+        if (ev.at >= cut) break;
+        if (gap) { gap = false; yield* printer.event(GAP, text, base); }
+        if (!(yield* printer.event(ev, text, base))) { finished = true; break; }
+        wm = ev.ls + base;
+      }
+      if (printer.flush) printer.flush();
+      out.flush();
+      if (finished || eof) break;
+      // keep: the lines a later window may print or need (lead lines before what is not yet final), and rg's buffer
+      const anchor = Math.min(cut === Infinity ? base + complete : base + cut, base + complete);
+      let keep = backLines(anchor, lead);
+      if (fills) keep = Math.min(keep, backLines(fills.A, ctxLines + 2));
+      dropTo(keep);
+    }
+    if (mode === 'files') return { found };
+    if (mode === 'count') { if (countSeen) { printCount(spec, e, out, counted); found = true; } out.flush(); return { found }; }
+    if (convert && mode === 'json' && nul !== -1) printer.setBin({ offset: nul, bytes: total });
+    found = yield* printer.end(total);
+    if (printer.flush) printer.flush();
+    out.flush();
+    return { found };
+  } catch (x) {
+    if (x && x.timedOut) throw x;
+    if (x && (x.sinkClosed || x.fromSink)) throw x;
+    if (x instanceof Error && typeof x.errno === 'number') return { error: errorLine(x) };
+    throw x;
+  } finally {
+    if (fd !== null) try { fs.closeSync(fd); } catch { /* closed */ }
+  }
 }
 
 // ---- the search, once: a generator both twins drive --------------------------------------------------
@@ -2136,7 +2423,7 @@ function* searchCore(spec, opts) {
       }
     }
   }
-  if (spec.mode === 'list') return yield* printListing(spec, entries, cwd);
+  if (spec.mode === 'list') return yield* printListing(spec, entries, cwd, opts.sink);
   // RG-SORT-MODIFIED: a search under --sort=modified searches (and prints) its files in that order too
   if (spec.sort) entries.splice(0, entries.length, ...(yield* sortedByModified(spec, entries, cwd)));
   // FIRST_MATCH: what each mode needs to know of a file's matches. -l only whether there is one,
@@ -2144,10 +2431,15 @@ function* searchCore(spec, opts) {
   // there; -o and -c -o every printable match.
   // --json reports every match on a selected line (-o or not: RG-JSON-ONLY-MATCHING).
   const first = spec.mode === 'files' ? 'file' : spec.mode !== 'json' && !spec.only ? 'line' : undefined;
-  const files = [...new Set(entries.filter((e) => e.file).map((e) => e.file))];
+  // RG-STREAM (a command's search: rg-entry.cjs): stdin and every NAMED file are searched as they are read
+  // (streamEntry), never whole, so they take no part in the match pass; a UTF-16 file (rg's decoder) and a
+  // multi-line search (rg reads those whole too) are searched as before.
+  const streams = (en) => !!opts.stream && !t.multiLine && (en.stdin || (en.file && !en.walked && !utf16Head(readHead(path.resolve(cwd, en.file)))));
+  for (const en of entries) if (streams(en)) en.streamed = true;
+  const files = [...new Set(entries.filter((e) => e.file && !e.streamed).map((e) => e.file))];
   let matches = new Map();
   searchStats.printed = 0; searchStats.scannedBack = 0; searchStats.read = 0; searchStats.filled = 0;
-  const out = outBuffers(), err = [], state = { printed: false, json: spec.mode === 'json' ? jsonTotals() : null,
+  const out = outBuffers(opts.sink), err = [], state = { printed: false, json: spec.mode === 'json' ? jsonTotals() : null,
     limit: typeof opts.maxBuffer === 'number' && opts.maxBuffer >= 0 ? opts.maxBuffer : Infinity };
   let found = false, broke = false;
   // RG-STDERR-ORDER: what ugrep could not read is written where the walk met that file (below), so on one thread a
@@ -2179,6 +2471,13 @@ function* searchCore(spec, opts) {
     if (e.error) { err.push(Buffer.from(e.error + '\n')); broke = true; continue; }
     // RG-IGNORE-FILE-ERRORS: rg's message about an ignore file it read, which leaves the exit status be
     if (e.message) { err.push(Buffer.from(e.message + '\n')); continue; }
+    if (e.streamed) {
+      const r = yield* streamEntry(spec, { ...e, withFilename }, t, out, state, { cwd, how: binaryHow(e, mmap), first, deadline: opts.deadline, readSize: opts.streamRead });
+      if (r.error) { err.push(r.error); broke = true; }
+      if (r.found) found = true;
+      if (!r.whole) { if (out.len > state.limit) break; yield TICK; continue; }
+      e.wholeStdin = r.whole;                 // a UTF-16 stdin: searched whole, below
+    }
     if (e.file && pathErrors.has(e.file)) { err.push(...pathErrors.get(e.file)); pathErrors.delete(e.file); broke = true; }
     if (t.multiLine) {
       // RG-MULTILINE: each file ugrep proposed (stdin always), read whole and searched as rg's multi-line
@@ -2205,7 +2504,7 @@ function* searchCore(spec, opts) {
     let v = null, m;
     const how = binaryHow(e, mmap);
     if (e.stdin) {
-      v = rgView(toBuf(yield { op: 'stdin' }), how, { stdin: true });
+      v = rgView(e.wholeStdin || toBuf(yield { op: 'stdin' }), how, { stdin: true });
       m = yield { op: 'decide', text: v.text, t, first };
       if (m.refusal) return m.refusal;
       m = m.matches;
@@ -2327,12 +2626,15 @@ function searchSync(plan, opts) {
     },
     // input: the bytes, or (a command's fd 0: rg-entry.cjs) a function read only when the search reaches stdin
     stdin: () => { const i = typeof opts.input === 'function' ? opts.input() : opts.input; return typeof i === 'string' ? Buffer.from(i, 'utf8') : toBuf(i); },
+    // RG-STREAM: the next piece of a command's stdin (a Buffer, null at its end), or { error } (rg's for <stdin>)
+    stdinChunk: () => { try { return opts.stdinChunk ? opts.stdinChunk() : null; } catch (e) { return { error: e }; } },
     decide: ({ text, t, first }) => { try { return { matches: matchTextLines(text, t, deadline, first) }; } catch (e) { return matchOutcome(e, opts, ugrep); } },
     // printing: the caller's timeout is checked as it goes
     tick: () => { if (deadline && Date.now() > deadline) throw timedOutError(); return null; },
   };
   let res;
-  try { res = driveSync(searchCore(spec, { cwd: opts.cwd, env, onRejected: opts.onRejected, ugrepName: ugrep && leafOf(ugrep), deadline, maxBuffer: opts.maxBuffer }), handlers); } catch (e) {
+  try { res = driveSync(searchCore(spec, { cwd: opts.cwd, env, onRejected: opts.onRejected, ugrepName: ugrep && leafOf(ugrep), deadline, maxBuffer: opts.maxBuffer,
+    stream: !!opts.stream, sink: opts.sink, streamRead: opts.streamRead }), handlers); } catch (e) {
     if (e && e.timedOut) return { stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), status: null, signal: opts.killSignal || 'SIGTERM', errorCode: 'ETIMEDOUT' };
     throw e;
   }
