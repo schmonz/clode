@@ -53,6 +53,15 @@ hooks that would touch a marker: RC 0, the sentinel byte-untouched, no hook ran,
 ~/.claude/plugins/known_marketplaces.json did not move. (CHANGELOG material for Task 11's record: `clode build` no
 longer runs your hooks or writes into your home.) Left: a quaude RUN (not a build) still creates ~/.tjs (txiki's own
 home: cookies.txt, localStorage.db) in the user's home, as it always has.
+FIX ROUND 4: run.mjs removed `process.env.HOME` at exit, and with CLODE_TEST_REAL_HOME preset (a runner under a suite
+child, a developer exporting it) that was the REAL home: it would have deleted it. Now only suite-home.cjs removes a
+suite home, the one its own process made, under os.tmpdir(), with the clode-test-home- prefix, never the real home or an
+ancestor (test/suite-home-cleanup.test.cjs, sentinel only); standalone runs stop leaking clode-test-home-* dirs.
+KNOWN LIMITS of suite-home-hermetic: it is line-based, so a `userInfo()` split from its `.homedir` across lines, or a
+real home path hard-coded as a string, slips through; the central default (the suite home) is the protection, the guard
+only keeps the obvious ways back closed. A standalone `node --test file` gets the suite home only through the four
+launch helpers that require suite-home.cjs (provider-resolve, oracle-models, node-shim-helper, e2e); a test that spawns
+the bundle without any of them, run standalone, runs it under the real home.
 
 ## 87 of the 90 tools the carve can register have no driver that can fail (2026-09-28)
 
