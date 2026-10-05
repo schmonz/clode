@@ -177,9 +177,9 @@ function _warnUnparsedShadows(shadows){
     if (_unparsedWarned.has(key)) continue;
     _unparsedWarned.add(key);
     const known = CLODE_SHADOWS[sh.name];
-    // rg never uses upstream's flags: it is always the rg->ugrep translation, by design.
-    const effect = known && known.translate
-      ? `rg is translated to ugrep and never uses upstream's flags, so nothing changes`
+    // rg never uses upstream's flags: it is always quaude's own rg (rg-entry.cjs), by design.
+    const effect = known && known.entry
+      ? `rg is quaude's own rg and never uses upstream's flags, so nothing changes`
       : `it runs ${sh.applet} without them`;
     const issue = `clode could not read upstream's flags for the ${sh.name} shadow (${sh.unparsed}); ${effect}`;
     const fix = 'report this with your Claude Code version';
@@ -215,6 +215,9 @@ const _rawSpawnSync = cp.spawnSync;
 // node's under naude). Wiring this into node-shim would have made quaude answer rg while
 // naude did not — inventing the divergence this project exists to remove.
 const _rgNative = require(__dirname + '/rg-native.cjs');
+// quaude's rg as a COMMAND (grep-native Task 10c): the Bash tool's `rg` is the shell function rgShadowFunction
+// writes, which runs this very binary as rg, and the binary answers as rg-entry.cjs before the bundle loads.
+const _rgEntry = require(__dirname + '/rg-entry.cjs');
 
 // QUAUDE'S OWN rg PATH: what Bun.which('rg') answers, always, whatever PATH holds (grep-native Task 10b; user ruling
 // 2026-10-03: a PATH STRING ONLY, no file is ever created there). `rg` beside the binary running the bundle (the
@@ -235,9 +238,9 @@ const _rawSpawn = cp.spawn;
 
 // How quaude's rg reaches its applet: the ugrep it searches with (resolved per call), the unwrapped
 // spawns, the refusal when this host has no ugrep, the operator-side surfacing when ugrep fails a search,
-// and the CLODE_RG_DEBUG line every call gets. The old rg->ugrep translation of a spawned rg is gone
-// (grep-native Task 10): quaude's rg answers every search and listing itself, or refuses by name. rgToUgrep
-// below stays the spec of the shell snapshot's `rg` function (rgShadowBody, its shell twin).
+// and the CLODE_RG_DEBUG line every call gets. The old rg->ugrep translation is gone, for the spawned rg
+// (grep-native Task 10) and for the shell's (Task 10c: the Bash tool's `rg` is rg-entry.cjs): quaude's rg
+// answers every search and listing itself, or refuses by name.
 const _rgCtx = {
   spawn: _rawSpawn, spawnSync: _rawSpawnSync,
   ugrep: () => process.env.CLODE_UGREP || which('ugrep'),
@@ -387,96 +390,11 @@ const CLODE_SHADOWS = {
           // FIND_WITHOUT_ONIGURUMA (see warnAppletSkew): the one flag a bfs without
           // Oniguruma cannot take, and the find arguments that depend on it.
           degrade: { drop: ['-regextype', 'findutils-default'], refuseArgs: ['-regex', '-iregex', '-regextype'] } },
-  rg:   { applet: 'rg',    env: 'CLODE_UGREP', translate: true,
-          fix: 'set CLODE_UGREP to a compatible ugrep, or upgrade it',
-          probe: (f) => ({ args: ['--version'],                  skew: (c) => c >= 2 }),
-          skewRcTest: '[ "$_rc" -ge 2 ]' },
+  // rg: quaude's own rg, the COMMAND (rg-entry.cjs; grep-native Task 10c, user ruling 2026-10-04): the shadow is
+  // upstream's own shape run against this binary as rg, so there is no host applet to name, override or probe, and
+  // upstream's flags (it bakes in none for rg) are never used.
+  rg:   { applet: 'rg', entry: true },
 };
-
-// rg → ugrep argv translation. Spec: docs/superpowers/specs/2026-07-24-rg-to-ugrep-routing-design.md
-// Faithful for the common set; throws on rg-only flags rather than mis-search.
-class RgTranslateError extends Error {
-  constructor(flag) {
-    super(`clode: rg→ugrep shim doesn't translate ${flag} (rg-only); use ugrep directly`);
-    this.name = 'RgTranslateError'; this.flag = flag; this.code = 'CLODE_RG_UNTRANSLATABLE';
-  }
-}
-// rg-only, no faithful ugrep spelling.
-const _RG_DENY_LONG = new Set(['--json', '--files', '--vimgrep', '--stats', '--type']);
-// short flags that consume the next argv as their value (pass verbatim, kept adjacent).
-const _RG_VALUE_SHORT = new Set(['A', 'B', 'C', 'm', 'e', 'f']);
-function _pushGlob(tail, g) {
-  if (g == null) throw new RgTranslateError('--glob (missing value)');
-  tail.push(_rgNative.ugrepGlobArg('glob', g));
-}
-function rgToUgrep(argv) {
-  const tail = [], pos = [];
-  let injectIgnore = true, endOpts = false;
-  for (let i = 0; i < argv.length; i++) {
-    const a = argv[i];
-    if (endOpts || a === '-' || a[0] !== '-') { pos.push(a); continue; }
-    if (a === '--') { endOpts = true; pos.push(a); continue; }
-    if (a.startsWith('--')) {
-      const eq = a.indexOf('=');
-      const name = eq === -1 ? a : a.slice(0, eq);
-      const inline = eq === -1 ? null : a.slice(eq + 1);
-      if (name === '--no-ignore') { injectIgnore = false; continue; }
-      if (name === '--smart-case') { tail.push('-j'); continue; }
-      if (name === '--hidden') { tail.push('-.'); continue; }
-      if (name === '--glob') { _pushGlob(tail, inline != null ? inline : argv[++i]); continue; }
-      if (_RG_DENY_LONG.has(name)) throw new RgTranslateError(name);
-      tail.push(a); continue; // pass verbatim
-    }
-    const ch = a[1];
-    if (a === '-S') { tail.push('-j'); continue; }
-    if (ch === 't') throw new RgTranslateError('-t');
-    if (ch === 'g') { _pushGlob(tail, a.length > 2 ? a.slice(2) : argv[++i]); continue; }
-    if (_RG_VALUE_SHORT.has(ch) && a.length === 2) { tail.push(a, argv[++i]); continue; }
-    tail.push(a); continue; // pass verbatim (-i, -n, -A3, …)
-  }
-  const pre = ['-r'];
-  if (injectIgnore) pre.push('--ignore-files');
-  pre.push('-I');
-  return [...pre, ...tail, ...pos];
-}
-
-// Shell twin of rgToUgrep — the body of the injected/rewritten `function rg`.
-// Uses bash/zsh arrays (the snapshot is sourced by bash/zsh, never dash). Must
-// stay byte-identical in output to rgToUgrep; test/rg-to-ugrep.test.cjs locks it.
-// Runs ugrep as a CHILD, never `exec` — see SHADOW_KEEPS_THE_SHELL below.
-function rgShadowBody() {
-  return [
-    'function rg {',
-    '  local _bin="${CLODE_UGREP:-$(command -v ugrep 2>/dev/null)}"',
-    `  [ -n "$_bin" ] || { echo "clode: rg needs 'ugrep' (set CLODE_UGREP or install it)" >&2; return 127; }`,
-    '  local -a _tail _pos; local _ignore=1 _end=0 _a _g',
-    '  while [ $# -gt 0 ]; do',
-    '    _a=$1',
-    '    if [ $_end -eq 1 ]; then _pos+=("$_a"); shift; continue; fi',
-    '    case "$_a" in',
-    '      --) _end=1; _pos+=("$_a") ;;',
-    '      --no-ignore) _ignore=0 ;;',
-    '      --smart-case) _tail+=(-j) ;;',
-    '      --hidden) _tail+=(-.) ;;',
-    '      --glob=*) _g=${_a#--glob=}; case "$_g" in "!"*) _tail+=("--exclude=${_g#!}");; *) _tail+=("--include=$_g");; esac ;;',
-    '      --glob) shift; _g=$1; case "$_g" in "!"*) _tail+=("--exclude=${_g#!}");; *) _tail+=("--include=$_g");; esac ;;',
-    `      --json|--files|--vimgrep|--stats|--type|--type=*) echo "clode: rg→ugrep shim doesn't translate \${_a%%=*} (rg-only); use ugrep directly" >&2; return 2 ;;`,
-    '      -S) _tail+=(-j) ;;',
-    `      -t|-t*) echo "clode: rg→ugrep shim doesn't translate -t (rg-only); use ugrep directly" >&2; return 2 ;;`,
-    '      -g) shift; _g=$1; case "$_g" in "!"*) _tail+=("--exclude=${_g#!}");; *) _tail+=("--include=$_g");; esac ;;',
-    '      -g*) _g=${_a#-g}; case "$_g" in "!"*) _tail+=("--exclude=${_g#!}");; *) _tail+=("--include=$_g");; esac ;;',
-    '      -A|-B|-C|-m|-e|-f) _tail+=("$_a" "$2"); shift ;;',
-    '      -) _pos+=("$_a") ;;',
-    '      -*) _tail+=("$_a") ;;',
-    '      *) _pos+=("$_a") ;;',
-    '    esac',
-    '    shift',
-    '  done',
-    '  local -a _pre=(-r); [ $_ignore -eq 1 ] && _pre+=(--ignore-files); _pre+=(-I)',
-    '  "$_bin" "${_pre[@]}" "${_tail[@]}" "${_pos[@]}"',
-    '}',
-  ].join('\n');
-}
 
 // A shadow body is the upstream multiplexer if it invokes an applet via argv0
 // against the provider binary. We detect the applet from ARGV0=/exec -a.
@@ -586,7 +504,7 @@ function shQuote(s){ return "'" + String(s).replace(/'/g, "'\\''") + "'"; }
 // a signal, never skew: `grep ... | head -1` ends the applet with SIGPIPE (141),
 // which `[ "$_rc" -ge 2 ]` alone read as a usage error.
 function buildShadow(name, known, parsed, finding){
-  if (known.translate) return rgShadowBody(); // rg → full ugrep-translating body; upstream flags dropped
+  if (known.entry) return _rgEntry.rgShadowFunction(process.execPath); // rg: quaude's own rg, run as rg (rg-entry.cjs)
   const { applet, env } = known;
   const flags = parsed.flags ? ' ' + parsed.flags : '';
   const head = `function ${name} {\n` +
@@ -649,7 +567,7 @@ function _eachShadow(text, cb){
 function rewriteSnapshot(text, findings){
   text = String(text);
   const byName = new Map((findings || []).map((f) => [f.name, f]));
-  let out = '', i = 0, sawAny = false, sawRg = false, lastEnd = -1;
+  let out = '', i = 0;
   _eachShadow(text, ({ name, parsed, mIndex, endIdx }) => {
     // Body looks like an upstream multiplexer shadow.
     const known = CLODE_SHADOWS[name];
@@ -658,13 +576,11 @@ function rewriteSnapshot(text, findings){
         `update CLODE_SHADOWS in bun-shim.cjs`);
     }
     out += text.slice(i, mIndex) + buildShadow(name, known, parsed, byName.get(name));
-    i = endIdx; lastEnd = out.length; sawAny = true;
-    if (name === 'rg') sawRg = true;
+    i = endIdx;
   });
   out += text.slice(i);
-  // Additive: a real snapshot that shadows find/grep but not rg gets an injected
-  // ugrep-translating rg shadow, spliced right after the last rewritten shadow.
-  if (sawAny && !sawRg) out = out.slice(0, lastEnd) + '\n' + rgShadowBody() + out.slice(lastEnd);
+  // rg is never ADDED (grep-native Task 10c): the writer's own rg line, inside upstream's "is rg installed?" guard,
+  // is where rg is defined, in every mode, as native defines it (_rewriteRgOwnAlias, below). A host rg wins there.
   return _rewriteRgOwnAlias(out);
 }
 
@@ -673,9 +589,13 @@ function rewriteSnapshot(text, findings){
 // `alias rg='<rgPath>'`, and that path is RG_PATH: a path string with no file. zsh expands aliases in the sourced
 // snapshot, and so does bash (the writer starts its snapshot with `shopt -s expand_aliases`), so `rg` would run the
 // missing file; with --allowedTools naming Grep or Glob there are no find/grep shadows either, so nothing else
-// defines rg. That line, recognised by its value being RG_PATH, becomes quaude's rg shadow, in the generator (a
-// heredoc into $SNAPSHOT_FILE, as upstream writes its own) and in a written snapshot alike. Any other rg alias,
-// a user's own above all, is left alone: native honours it, and so must we.
+// defines rg. That line, recognised by its value being RG_PATH, becomes quaude's rg shadow, in the generator and in a
+// written snapshot alike. Any other rg alias, a user's own above all, is left alone: native honours it, and so must we.
+// THE SHADOW IS NATIVE'S (grep-native Task 10c, user ruling 2026-10-04): with an argv0 the writer spells rg as the
+// function dbe("rg", argv0), written by the heredoc below (`cat >> "$SNAPSHOT_FILE" << 'RIPGREP_FUNC_END'`, the
+// function indented two spaces as the writer's template indents it), and rg-entry.cjs's rgShadowFunction is that
+// function run against this binary. It stays where the alias was, INSIDE upstream's guard, so a host rg wins, in
+// every mode, as it wins for native; it is never added anywhere else (rewriteSnapshot).
 const _RG_ALIAS_LINE = /^([ \t]*)(?:echo '  alias rg='"'((?:[^'"\n]|'\\'')*)'" >> "\$SNAPSHOT_FILE"|alias rg='((?:[^'\n]|'\\'')*)')[ \t]*$/gm;
 function _rgAliasValue(m) {
   let v = (m[2] !== undefined ? m[2] : m[3]).split("'\\''").join("'");
@@ -690,9 +610,10 @@ function _rewriteRgOwnAlias(text) {
   return String(text).replace(_RG_ALIAS_LINE, (...a) => {
     const m = a.slice(0, 4);
     if (_rgAliasValue(m) !== RG_PATH) return a[0];
+    const fn = _rgEntry.rgShadowFunction(process.execPath);
     return m[2] !== undefined
-      ? `${m[1]}cat >> "$SNAPSHOT_FILE" << 'QUAUDE_RG_FUNC_END'\n${rgShadowBody()}\nQUAUDE_RG_FUNC_END`
-      : rgShadowBody();
+      ? `${m[1]}cat >> "$SNAPSHOT_FILE" << 'RIPGREP_FUNC_END'\n  ${fn}\nRIPGREP_FUNC_END`
+      : `${m[1]}${fn}`;
   });
 }
 
@@ -846,10 +767,10 @@ hash.wyhash = hash; hash.crc32 = (b)=>{ const z=require('zlib'); return z.crc32 
 // reason we translate at all: ugrep and bfs are portable to every target quaude
 // supports and rg is not, so rg is precisely the thing we cannot build on.
 //
-// The shell path already decided this. The rg shadow refuses with 127 and
-// "clode: rg needs 'ugrep'" rather than calling a host rg; this makes the spawn
-// path agree, which is the same two-routes-disagreeing bug fixed in e356a20,
-// one level up.
+// The shell path agrees: the Bash tool's `rg` is quaude's own rg too (rg-entry.cjs,
+// grep-native Task 10c), whose refusal with no ugrep is this one (rg-native.cjs's),
+// never a host rg; the same two-routes-disagreeing bug fixed in e356a20, one level up,
+// stays fixed.
 //
 // It is a REFUSAL (rg-native.cjs rgRefusal: rc 2, the reason on stderr), not an argv
 // that cannot resolve. The unresolvable argv this used to return made the bundle's own
@@ -2000,9 +1921,6 @@ module.exports.warnAppletSkew = warnAppletSkew;
 module.exports.awaitSkewProbe = awaitSkewProbe;
 module.exports._markSnapshotProbed = _markSnapshotProbed;   // for test/extract-hooks.test.cjs
 module.exports.CLODE_SHADOWS = CLODE_SHADOWS;
-module.exports.rgToUgrep = rgToUgrep;
-module.exports.RgTranslateError = RgTranslateError;
-module.exports.rgShadowBody = rgShadowBody;
 module.exports.RG_PATH = RG_PATH;               // quaude's own rg path, stated once above (test/bun-shim-which.test.cjs, rg-differential)
 module.exports._whichLeaves = _whichLeaves;     // exported for test/bun-shim-which.test.cjs
 module.exports._exeIsPathed = _exeIsPathed;     //   (the win32 seams, driven from a Mac)

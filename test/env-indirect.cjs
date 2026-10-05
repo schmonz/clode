@@ -79,7 +79,6 @@ const INDIRECT_SITES = [
       + 'row and `.env` is that applet\'s override variable — the same names the direct scan '
       + 'already sees elsewhere in this file, reached here through the table.',
     notEnv: {
-      CLODE_RG_UNTRANSLATABLE: 'an Error `code` on RgTranslateError, not a variable',
       CLODE_YAML_MISSING: 'an Error `code` thrown when the yaml dep is absent, not a variable',
     },
   },

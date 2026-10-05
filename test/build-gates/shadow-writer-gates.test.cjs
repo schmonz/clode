@@ -42,7 +42,7 @@
 // `dbe("grep","ugrep",["-G","--ignore-files","--hidden","-I",...lAn.map(e=>`--exclude-dir=${e}`)],
 // [...])`, and `dbe("rg",e.argv0)` (rg's applet argument is a RUNTIME expression — Claude's
 // own embedded-rg argv0 — never a literal; rg never carries upstream flags either way,
-// by clode's own design: CLODE_SHADOWS.rg.translate, bun-shim.cjs).
+// by clode's own design: CLODE_SHADOWS.rg.entry, bun-shim.cjs).
 //
 // THE EXTRACTION RULE, by structure, never by minified names (dbe/tbe/whatever the next
 // carve's minifier picks; same discipline as reset-patch-gates.test.cjs and
@@ -78,7 +78,7 @@
 // as real generated shell text, through the REAL parseShadow/collectShadows/
 // rewriteSnapshot (libexec/bun-shim.cjs, imported — never reimplemented): an unrecognised
 // spelling, an applet that does not match CLODE_SHADOWS, or (for grep/find, which are NOT
-// CLODE_SHADOWS.*.translate) a shadow with no baked-in flags are each a finding naming the
+// CLODE_SHADOWS.*.entry) a shadow with no baked-in flags are each a finding naming the
 // shadow. rewriteSnapshot() must not throw over the whole synthesized snapshot, and
 // collectShadows() must see exactly as many shadows as were synthesized.
 //
@@ -95,6 +95,7 @@ const { spawnSync } = require('node:child_process');
 const test = require('node:test');
 const assert = require('node:assert');
 const { defineGuard, guardTests } = require('../guard.cjs');
+const { rgShadowFunction } = require('../../libexec/rg-entry.cjs');
 const { parseShadow, collectShadows, rewriteSnapshot, SHADOW_ARG_SPELLINGS, CLODE_SHADOWS } =
   require('../../libexec/bun-shim.cjs');
 const { decodeGraphRunner } = require('../../libexec/inspect-claude-bundle.cjs');
@@ -384,7 +385,18 @@ function scanShadowWriter({ bundle, what }) {
         + `bun-shim.cjs's CLODE_SHADOWS expects`);
       continue;
     }
-    if (!known.translate && parsed.flags === '') {
+    // rg (grep-native Task 10c): quaude's rg shadow is the writer's own rg function run against this binary as rg
+    // (libexec/rg-entry.cjs rgShadowFunction), so it must run each of the writer's own invocation lines, verbatim.
+    if (known.entry) {
+      const ours = rgShadowFunction('/x').split('\n');
+      for (const line of [fillInvocation(zsh, appletVal, tail), fillInvocation(exec, appletVal, tail)]) {
+        if (!ours.includes(line)) {
+          findings.push(`the ${name} shadow in ${what} runs \`${line.trim()}\`, and quaude's rg function (rg-entry.cjs `
+            + 'rgShadowFunction) does not: it no longer mirrors the writer');
+        }
+      }
+    }
+    if (!known.entry && parsed.flags === '') {
       findings.push(`the ${name} shadow in ${what} carries no flags — upstream's ${name} always bakes `
         + `some in; a writer that stopped would silently run ${known.applet} bare`);
     }
@@ -501,6 +513,20 @@ test('scanShadowWriter: a shadow present for one call site but missing for anoth
   assert.strictEqual(r.examined, 2);
   assert.strictEqual(r.findings.length, 1);
   assert.match(r.findings[0], /grep shadow call site .* occurs 0 time\(s\) in x, not exactly once/);
+});
+
+// grep-native Task 10c: a writer whose rg invocation is not the one quaude's rg function runs (here: native's rg
+// gaining a baked-in flag) is a finding naming rg, so quaude's Bash `rg` cannot drift from native's unseen.
+test('scanShadowWriter: an rg invocation quaude\'s rg function does not run is a finding naming rg', () => {
+  const same = scanShadowWriter({ bundle: CARVE_2_1_283, what: 'x' });
+  assert.deepStrictEqual(same.findings, []);
+  assert.strictEqual(same.examined, 3);
+  const drifted = CARVE_2_1_283.replaceAll('`    ARGV0=${n} "$_cc_bin" ${g}`', '`    ARGV0=${n} "$_cc_bin" --no-config ${g}`')
+    .replace('`    (exec -a ${n} "$_cc_bin" ${g})`', '`    (exec -a ${n} "$_cc_bin" --no-config ${g})`');
+  const r = scanShadowWriter({ bundle: drifted, what: 'x' });
+  const mirror = (line) => `the rg shadow in x runs \`${line}\`, and quaude's rg function (rg-entry.cjs rgShadowFunction) does not: `
+    + 'it no longer mirrors the writer';
+  assert.deepStrictEqual(r.findings, [mirror('ARGV0=rg "$_cc_bin" --no-config ${1+"$@"}'), mirror('(exec -a rg "$_cc_bin" --no-config ${1+"$@"})')]);
 });
 
 test('resolveArrayLiteral: grep\'s spread-map --exclude-dir list resolves against the NEAREST array definition', () => {

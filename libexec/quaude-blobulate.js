@@ -516,6 +516,10 @@ members.push({ name: 'rg-regex.cjs', data: await mustRead(path.join(libexecDir, 
 // rg-native.cjs requires as its siblings too (grep-native Task 9): at the archive ROOT beside it, the same way.
 members.push({ name: 'rg-walk.cjs', data: await mustRead(path.join(libexecDir, 'rg-walk.cjs'), 'rg-walk.cjs member') });
 members.push({ name: 'rg-types.cjs', data: await mustRead(path.join(libexecDir, 'rg-types.cjs'), 'rg-types.cjs member') });
+// rg-entry.cjs, the rg COMMAND (grep-native Task 10c): what a quaude invoked as rg runs (the bootstrap names it the
+// entry, libexec/quaude-bootstrap.mjs), and what bun-shim.cjs requires as its sibling for the shell function the Bash
+// tool's `rg` is. At the archive ROOT beside rg-native.cjs, which it requires, for the same reasons.
+members.push({ name: 'rg-entry.cjs', data: await mustRead(path.join(libexecDir, 'rg-entry.cjs'), 'rg-entry.cjs member') });
 
 // ext-dep closure (DEPS = extras.deps, derived node-side — see above). The
 // node side already fails the build if a listed package is missing from

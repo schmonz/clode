@@ -668,11 +668,23 @@ test('the controlled set is EXACTLY the modules a guard was deliberately written
   // own staleness()), so uncontrolled stayed at 27; without it it reads 28. Its companions
   // libexec/rg-walk.cjs (pattern-matches but returns, never refuses) and libexec/rg-types.cjs (no
   // verdict) are not gate-shaped. The baseline did not move.
+  //
+  // libexec/rg-entry.cjs ADDED 2026-10-04 (grep-native plan, task 10c), the mechanism a fourteenth
+  // time, gate-shaped on the day it was written: quaude's rg as a COMMAND (what the Bash tool's
+  // `rg` runs): it derives a verdict from text (a `.test(` deciding how to quote a path into the
+  // shell function it writes) and exits with a computed status, rg's, refusing by name (rc 2)
+  // what quaude's rg cannot answer. It landed with its guard: the shell
+  // function it states (rgShadowFunction) is held by test/build-gates/shadow-writer-gates.test.cjs
+  // (shadow-writer-from-carve) to the pinned carve's own writer, invocation line for invocation
+  // line, so uncontrolled stayed at 27 (measured: 49 gate-shaped, 20 controlled); without that
+  // guard it reads 28. Its answers are judged by test/fidelity/rg-differential.test.cjs's Bash-route
+  // column. The baseline did not move.
   assert.deepStrictEqual([...controlledProductionModules().keys()].sort(), [
     'libexec/bun-shim.cjs',
     'libexec/clode-build.cjs',
     'libexec/host-provision.cjs',
     'libexec/inspect-claude-bundle.cjs',
+    'libexec/rg-entry.cjs',
     'libexec/rg-regex.cjs',
     'libexec/scc-merge.cjs',
     'libexec/target-update-check.cjs',

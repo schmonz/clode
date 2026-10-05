@@ -79,6 +79,20 @@ function attestReport({ manifestText, members, bom, notes }) {
 }
 // <<< clodeAttest <<<
 
+// RG-ARGV0 (grep-native Task 10c): a quaude invoked as rg IS rg, as native's claude binary is (2.1.283 answers as
+// its embedded ripgrep when argv[0]'s last path component is exactly `rg`, or the environment's ARGV0 is exactly
+// `rg`). The Bash tool's `rg` is upstream's shell function run against this binary that way (libexec/rg-entry.cjs,
+// which states the rule; this is its copy, since this file can require nothing, and test/rg-entry.test.cjs holds
+// both to native's table).
+export function isRgInvocation(argv0, env) {
+  if (env && env.ARGV0 === 'rg') return true;
+  return typeof argv0 === 'string' && argv0.split(/[\\/]/).pop().replace(/^[A-Za-z]:/, '') === 'rg';
+}
+// What rg reads of the archive: everything but the bundle (graph.*, cli.qbc), the pristine engine template and the
+// bundle's npm packages, none of which rg-entry.cjs or its companions load. Every rg the Bash tool runs pays this
+// read, so it skips ~74 MB of a 2.1.283 quaude's 80.
+const RG_UNREAD = /^(?:graph[.-]|cli\.qbc$|template\/|node_modules\/)/;
+
 async function sha256hex(bytes) {
   const d = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
   return Array.from(d, (b) => b.toString(16).padStart(2, '0')).join('');
@@ -223,7 +237,9 @@ async function main() {
   // followed by exit() can lose bytes; a synchronous write(2) before exit()
   // cannot.
   const g = tjs.args.slice(1);
-  if (g[0] === '--clode-update-guard') {
+  // Invoked as rg: every argument is rg's, `--clode-*` included (native's rg has no such flags either).
+  const asRg = isRgInvocation(tjs.args[0], tjs.env);
+  if (!asRg && g[0] === '--clode-update-guard') {
     let text = '';
     try {
       const reader = tjs.stdin.getReader();
@@ -284,22 +300,28 @@ async function main() {
   await exef.read(indexBuf, indexOff);
   const index = JSON.parse(dec.decode(indexBuf));
 
-  // 4) members (eager read; lazy/mmap is a rung-2 optimization).
+  // 4) members (eager read; lazy/mmap is a rung-2 optimization). The manifest and
+  // the loader first: they decide the role, and with it what else is read.
   const files = new Map();
-  for (const m of index.members) {
+  const readMember = async (m) => {
     const buf = new Uint8Array(m.len);
     await exef.read(buf, m.offset);
     files.set(m.name, buf);
+  };
+  const BOOT = ['manifest.json', 'node-shim/loader.cjs'];
+  for (const name of BOOT) {
+    const m = index.members.find((x) => x.name === name);
+    if (!m) die(`archive is missing ${name}`, 70);
+    await readMember(m);
   }
-  await exef.close();
 
   // 5) boot-verify (fast integrity gate): the manifest we are about to trust
   // and the loader we are about to evaluate must hash to what the index
   // promises. Full per-member verification runs on --clode-attest only
   // (design memo §5 policy).
-  for (const name of ['manifest.json', 'node-shim/loader.cjs']) {
+  for (const name of BOOT) {
     const m = index.members.find((x) => x.name === name);
-    if (!m || !files.get(name)) die(`archive is missing ${name}`, 70);
+    if (!files.get(name)) die(`archive is missing ${name}`, 70);
     if ((await sha256hex(files.get(name))) !== m.sha256) die(`${name} failed integrity check (corrupt blobulate?)`, 70);
   }
 
@@ -309,6 +331,22 @@ async function main() {
   // carved and there is no --clode-attest short-circuit for it.
   const manifest = JSON.parse(dec.decode(files.get('manifest.json')));
   const isBuilder = (manifest.role ?? 'quaude') === 'builder';
+  const rgRole = asRg && !isBuilder;
+  for (const m of index.members) {
+    if (files.has(m.name) || (rgRole && RG_UNREAD.test(m.name))) continue;
+    await readMember(m);
+  }
+  await exef.close();
+
+  // 6.5) rg (RG-ARGV0): rg-entry.cjs answers, with every argument, before the bundle or any of the target's
+  // contract (target-env, the update guard) is touched: no Claude Code runs here.
+  if (rgRole) {
+    globalThis.__quaudeVFS = { files, index, manifest };
+    globalThis.__quaudeArgs = tjs.args.slice(1);
+    globalThis.__quaudeEntry = 'rg-entry.cjs';
+    (0, new Function(dec.decode(files.get('node-shim/loader.cjs'))))();
+    return;
+  }
   let rest = tjs.args.slice(1);
   if (!isBuilder) {
     // argv carve-out: strip --clode-* BEFORE any bundle code can observe argv.

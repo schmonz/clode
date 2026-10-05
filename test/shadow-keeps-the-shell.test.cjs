@@ -25,7 +25,9 @@
 // The applet is a stand-in, on purpose: this is about the SHELL'S control flow, not
 // about ugrep or bfs, so a script whose behaviour we fix exactly lets every row name
 // the precise bytes it expects on every host. The same stand-in plays ugrep (for
-// grep and rg) and bfs (for find).
+// grep), bfs (for find) and the quaude binary that answers rg (CLAUDE_CODE_EXECPATH,
+// which the bundle sets in the Bash tool's environment: grep-native Task 10c, rg is
+// native's own shell function run against that binary as rg).
 const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -36,9 +38,11 @@ const bunShim = require('../libexec/bun-shim.cjs');
 const { rewriteSnapshot } = bunShim;
 
 // A captured upstream snapshot (grep + find shadows). rewriteSnapshot rebuilds both
-// through buildShadow and injects the rg twin (rgShadowBody), so one render carries
-// every shadow shape the product emits.
+// through buildShadow; rg comes from the writer's own rg block (RG_BLOCK, below), so
+// one render carries every shadow shape the product emits.
 const UPSTREAM = fs.readFileSync(path.join(__dirname, 'fixtures', 'snapshot-execpath.sh'), 'utf8');
+// Native 2.1.283's own snapshot, verbatim (its rg is the function form, inside the guard).
+const NATIVE_283 = fs.readFileSync(path.join(__dirname, 'fixtures', 'snapshot-2.1.283.sh'), 'utf8');
 
 // The skew-trailer shape (a generation-time probe found the host applet rejects the
 // flags) is the other body buildShadow emits. It must obey the same rule.
@@ -54,11 +58,12 @@ const FINDINGS = [
 // (and no other rg alias) with quaude's rg shadow.
 const EXPAND = '[ -n "${BASH_VERSION:-}" ] && shopt -s expand_aliases\n';
 const RG_BLOCK = `# Check for rg availability\nif ! (unalias rg 2>/dev/null; command -v rg) >/dev/null 2>&1; then\n  alias rg='${bunShim.RG_PATH}'\nfi\n`;
-const ALIASED = `${EXPAND}${RG_BLOCK}${UPSTREAM}`;
+// quaude's snapshot in normal mode: the writer's rg block, then the find/grep shadows (dAn), as the writer orders them.
+const NORMAL = `${EXPAND}${RG_BLOCK}${UPSTREAM}`;
 const SHAPES = {
-  plain: rewriteSnapshot(UPSTREAM),
-  skewed: rewriteSnapshot(UPSTREAM, FINDINGS),
-  aliased: rewriteSnapshot(ALIASED),
+  plain: rewriteSnapshot(NORMAL),
+  skewed: rewriteSnapshot(NORMAL, FINDINGS),
+  native283: rewriteSnapshot(`${EXPAND}${NATIVE_283}`),
 };
 
 // The stand-in applet. A "match" is an argument spelled NEEDLE; -q silences the
@@ -133,8 +138,11 @@ for (const [shape, text] of Object.entries(SHAPES)) {
   fs.writeFileSync(path.join(dir, `snap-${shape}.sh`), text);
 }
 
+// No rg on PATH (the stand-in's directory and the system's, without any dir holding an rg), so upstream's guard
+// takes its "no host rg" branch, as on a host without ripgrep.
+const NO_RG_PATH = [dir, ...(process.env.PATH || '').split(':').filter((d) => d && !fs.existsSync(path.join(d, 'rg')))].join(':');
 function runIn(shell, shape, cmd) {
-  const env = { ...process.env, CLODE_UGREP: applet, CLODE_BFS: applet, CLODE_T_CMD: cmd };
+  const env = { ...process.env, PATH: NO_RG_PATH, CLODE_UGREP: applet, CLODE_BFS: applet, CLAUDE_CODE_EXECPATH: applet, CLODE_T_CMD: cmd };
   delete env.BASH_ENV; delete env.ENV;
   // The Bash tool's own shape: source the snapshot, then eval the command.
   const script = `. '${path.join(dir, `snap-${shape}.sh`)}' && eval "$CLODE_T_CMD"`;
@@ -175,11 +183,9 @@ for (const shell of SHELLS) {
 }
 
 // ---- quaude's own rg alias line, and only it (grep-native Task 10b fix round, review I-1/I-2) -------------------
-// The runs below use a PATH holding no rg (only the stand-in's directory and the system's), so upstream's guard
-// takes its "no host rg" branch, as on a host without ripgrep.
-const NO_RG_PATH = [dir, ...(process.env.PATH || '').split(':').filter((d) => d && !fs.existsSync(path.join(d, 'rg')))].join(':');
-function runSnap(shell, file, cmd) {
-  const env = { ...process.env, PATH: NO_RG_PATH, CLODE_UGREP: applet, CLODE_BFS: applet, CLODE_T_CMD: cmd };
+// The runs below use NO_RG_PATH (above) unless they say otherwise.
+function runSnap(shell, file, cmd, PATH = NO_RG_PATH) {
+  const env = { ...process.env, PATH, CLODE_UGREP: applet, CLODE_BFS: applet, CLAUDE_CODE_EXECPATH: applet, CLODE_T_CMD: cmd };
   delete env.BASH_ENV; delete env.ENV;
   return cp.spawnSync(shell.bin, [...shell.args, `. '${file}' && eval "$CLODE_T_CMD"`], { cwd: dir, env, encoding: 'utf8' });
 }
@@ -191,6 +197,15 @@ fs.writeFileSync(OPTIN, rewriteSnapshot(`${EXPAND}${RG_BLOCK}`));
 // the stand-in, so only the alias can explain an empty answer
 const USER_ALIAS = path.join(dir, 'snap-user-alias.sh');
 fs.writeFileSync(USER_ALIAS, rewriteSnapshot(`${EXPAND}alias rg='rg -q'\n${RG_BLOCK}${UPSTREAM}`));
+// grep-native Task 10c: a host rg (here a tripwire) installed. Upstream's guard then defines no rg at all, so the Bash
+// tool's `rg` is the host's, in EVERY mode, as native's is: normal mode (find/grep shadows present) and --allowedTools
+// naming Grep or Glob (the rg block alone). quaude used to add its own rg beside the find/grep shadows, outside that
+// guard, and so ran its translation instead of the host's rg in normal mode.
+const HOST_RG = path.join(dir, 'host-rg');
+fs.mkdirSync(HOST_RG);
+fs.writeFileSync(path.join(HOST_RG, 'rg'), '#!/bin/sh\necho HOST-RG "$@"\n', { mode: 0o755 });
+const NORMAL_FILE = path.join(dir, 'snap-normal.sh');
+fs.writeFileSync(NORMAL_FILE, rewriteSnapshot(NORMAL));
 for (const shell of SHELLS) {
   const skip = shell.bin ? false : `${shell.name} is not installed on this host`;
   test(`${shell.name}: with only the rg block (searchToolsOptIn), rg reaches quaude's rg shadow, not a missing file`, { skip }, () => {
@@ -201,6 +216,12 @@ for (const shell of SHELLS) {
     const r = runSnap(shell, USER_ALIAS, 'rg NEEDLE f; echo rc=$?');
     assert.strictEqual(r.stdout, 'rc=0\n', r.stderr);
   });
+  for (const [mode, file] of [['normal mode', NORMAL_FILE], ['the rg block alone (searchToolsOptIn)', OPTIN], ['native 2.1.283\'s own snapshot', path.join(dir, 'snap-native283.sh')]]) {
+    test(`${shell.name}: with a host rg installed, the Bash tool's rg is the host's (${mode}), as native's is`, { skip }, () => {
+      const r = runSnap(shell, file, 'rg NEEDLE f; echo rc=$?', `${HOST_RG}:${NO_RG_PATH}`);
+      assert.strictEqual(r.stdout, 'HOST-RG NEEDLE f\nrc=0\n', r.stderr);
+    });
+  }
 }
 test('rewriteSnapshot replaces only quaude\'s own rg alias line, in the file and in the generator, and no other', () => {
   const other = "alias rg='rg -c'\n  alias rg='/usr/local/bin/rg'\n";
@@ -211,7 +232,10 @@ test('rewriteSnapshot replaces only quaude\'s own rg alias line, in the file and
   const gen = `SNAPSHOT_FILE=/x\n      echo '  alias rg='"'${bunShim.RG_PATH}'" >> "$SNAPSHOT_FILE"\n`;
   const g = rewriteSnapshot(gen);
   assert.doesNotMatch(g, /alias rg=/);
-  assert.match(g, /cat >> "\$SNAPSHOT_FILE" << 'QUAUDE_RG_FUNC_END'\nfunction rg \{[\s\S]*\nQUAUDE_RG_FUNC_END\n/);
+  // native's own heredoc and indentation (2.1.283's mAn), with native's function run against this binary (rg-entry.cjs)
+  const fn = require('../libexec/rg-entry.cjs').rgShadowFunction(process.execPath);
+  assert.ok(g.includes(`      cat >> "$SNAPSHOT_FILE" << 'RIPGREP_FUNC_END'\n  ${fn}\nRIPGREP_FUNC_END\n`), g);
+  assert.ok(file.includes(`  ${fn}\n`), file);
 });
 // The generator itself, through the real interception: the bundle hands child_process a shell command that writes
 // the snapshot; with only the rg block in it (no ARGV0 shadow), bun-shim must still rewrite it.

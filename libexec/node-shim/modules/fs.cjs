@@ -135,8 +135,9 @@ function chmodBestEffort(p, mode) {
 //
 // Not hypothetical, and not new: this is the SIBLING of the cpSync-drops-mode bug found
 // in the field, whose fix landed on copyFileSync and never covered the CREATE path. It
-// reproduces inside our own suite — test/rg-to-ugrep.test.cjs:30 writes a `#!/bin/sh`
-// fixture with {mode:0o755} and the engine then reports "Permission denied". mkdirSync
+// reproduced inside our own suite — test/rg-to-ugrep.test.cjs wrote a `#!/bin/sh` fixture
+// with {mode:0o755} (a row retired with the rg->ugrep translation, grep-native Task 10c)
+// and the engine then reported "Permission denied". mkdirSync
 // has honoured its mode all along, so the parameter was known, just not threaded here.
 //
 // chmod-AFTER-create, matching what createWriteStream already does for o.mode below and

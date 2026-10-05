@@ -53,6 +53,13 @@ const { isExecutableFile } = require('./clode-hosttools.cjs');
 const { guardVerdict, shouldInjectGuard } = require('./update-guard.cjs');
 const { checkUpdate } = require('./target-update-check.cjs');
 const { carveClodeArgs, CLODE_FLAGS, attestReport } = require('./clode-attest.cjs');
+// RG-ARGV0 (grep-native Task 10c): a naude invoked as rg IS rg, as native's binary is; the Bash tool's `rg` runs it
+// that way (libexec/rg-entry.cjs states the rule and the command; its top level requires only node builtins, so
+// esbuild bundles the predicate in, and the command itself is required from the materialized assets below).
+const { isRgInvocation } = require('./rg-entry.cjs');
+// rg-entry.cjs and the companions it requires from its own directory: what rg needs on disk (and, beside bun-shim,
+// what the bundle needs: bun-shim.cjs requires rg-entry.cjs for the shell function it writes).
+const RG_ASSETS = ['rg-entry.cjs', 'rg-native.cjs', 'rg-regex.cjs', 'rg-walk.cjs', 'rg-types.cjs'];
 require('./host-provision.cjs'); // ensure esbuild bundles it into the SEA for runtime provision('tar')
 
 // Install globalThis.__clodeCheckUpdate exactly as the quaude PRELUDE does
@@ -142,6 +149,7 @@ function defaultRequireMain(script, argv) {
 function runNaude(opts = {}) {
   const {
     argv = process.argv.slice(2),
+    argv0 = process.argv0,
     execPath = process.execPath,
     env = process.env,
     requireMain = defaultRequireMain,
@@ -150,6 +158,19 @@ function runNaude(opts = {}) {
     stderr = process.stderr,
     exit = (c) => process.exit(c),
   } = opts;
+
+  // rg (RG-ARGV0): every argument is rg's, answered by rg-entry.cjs before anything else (no deps unpacked, no
+  // bundle, no guard). Only rg's own files are materialized, beside where the bundle's copies go.
+  // The work dir the SEA's assets are materialized into (rg's and the bundle's alike); injectable for tests.
+  const workDirFor = (cacheDir) => opts.workDir || path.join(cacheDir, 'sea-deps', 'naude');
+  if (isRgInvocation(argv0, env)) {
+    const sea = opts.sea || seaHelpers.seaMod();
+    const workDir = workDirFor(env.NAUDE_CACHE || os.tmpdir());
+    (opts.materializeAssets || seaHelpers.materializeAssets)({ sea, destDir: workDir, names: RG_ASSETS });
+    (opts.requireRg || ((p) => require('node:module').createRequire(p)(p)))(path.join(workDir, 'rg-entry.cjs'))
+      .main({ argv, env, exit });
+    return;
+  }
 
   // Guard dispatch: naude's own patched updater hook calls back
   // `<naude> --clode-update-guard` as a PreToolUse(Bash) command. Read the whole
@@ -236,12 +257,12 @@ function runNaude(opts = {}) {
   // there is workDir, so the file must actually exist on disk here or that
   // require 404s the moment the notify-only autoupdater fires (mirrors quaude-
   // blobulate.js's product-role member of the same name, same reasoning).
-  // unicode-text.cjs and rg-native.cjs (and rg-native.cjs's own rg-regex.cjs, rg-walk.cjs and rg-types.cjs) ride for the same reason, one level further in:
+  // unicode-text.cjs, rg-entry.cjs and rg-native.cjs (and rg-native.cjs's own rg-regex.cjs, rg-walk.cjs and rg-types.cjs) ride for the same reason, one level further in:
   // bun-shim.cjs (itself materialized here) requires THEM dynamically the same way, off
   // its own __dirname — see test/shim-companions.test.cjs.
   const depsRoot = materializeDeps({ sea, cacheDir });
-  const workDir = opts.workDir || path.join(cacheDir, 'sea-deps', 'naude');
-  materializeAssets({ sea, destDir: workDir, names: ['cli.cjs', 'bun-shim.cjs', 'target-update-check.cjs', 'unicode-text.cjs', 'rg-native.cjs', 'rg-regex.cjs', 'rg-walk.cjs', 'rg-types.cjs'] });
+  const workDir = workDirFor(cacheDir);
+  materializeAssets({ sea, destDir: workDir, names: ['cli.cjs', 'bun-shim.cjs', 'target-update-check.cjs', 'unicode-text.cjs', ...RG_ASSETS] });
   const cliPath = path.join(workDir, 'cli.cjs');
 
   // Build the child env: sentinel points at the baked cli.cjs; NODE_PATH PREPENDS
@@ -334,4 +355,4 @@ if (require('./naude-sea.cjs').isSea() || process.env.NAUDE_RUN_AS_NODE) {
   runNaude({ argv: process.argv.slice(2) });
 }
 
-module.exports = { runNaude };
+module.exports = { runNaude, isRgInvocation };

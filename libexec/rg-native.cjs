@@ -101,6 +101,7 @@ function parseRgRefusal(text) {
 // run may buffer when the caller named none (execFile names its maxBuffer, 20 MB in 2.1.283).
 const RG_MAX_BUFFER = 256 * 1024 * 1024;
 
+const stripDot = (p) => (p.startsWith('./') ? p.slice(2) : p);
 const toBuf = (b) => (b == null ? Buffer.alloc(0) : Buffer.isBuffer(b) ? b : Buffer.from(b));
 const firstLine = (buf) => toBuf(buf).toString('utf8').split('\n').map((l) => l.trim()).find(Boolean) || '';
 
@@ -119,7 +120,10 @@ function appletRejected(bin, status, stderr) {
 //
 // argv: rg's arguments (no argv[0]). opts:
 //   cwd, env              where and with what the search runs (env defaults to process.env)
-//   input                 what the caller hands the child's stdin (rg reads it for target `-`)
+//   input                 what the caller hands the child's stdin (rg reads it for target `-`), or a function
+//                         answering it, called only when the search reaches stdin (a command's fd 0: rg-entry.cjs)
+//   implicit              what a pathless search searches, 'stdin' or 'cwd' (RG-IMPLICIT-PATH: a command's
+//                         question, rg-entry.cjs); absent, a pathless search refuses
 //   timeout, maxBuffer,   the caller's own bounds, when it named them
 //   killSignal
 //   ugrep()               the ugrep a search runs (null: this host has none)
@@ -859,6 +863,9 @@ const LONG_BOOL = {
   // to a pipe anyway (as quaude's rg always prints)
   '--no-messages': (s) => { s.noMessages = true; }, '--messages': (s) => { s.noMessages = false; },
   '--no-heading': () => {},
+  // RG-CONFIG (rg-entry.cjs): quaude's rg reads no config file, so --no-config changes nothing it does; the command
+  // reads it to know that native's rg would not read RIPGREP_CONFIG_PATH either
+  '--no-config': (s) => { s.noConfig = true; },
 };
 const SHORT_BOOL = { l: '--files-with-matches', c: '--count', i: '--ignore-case', s: '--case-sensitive', n: '--line-number',
   N: '--no-line-number', H: '--with-filename', I: '--no-filename', 0: '--null', o: '--only-matching', '.': '--hidden', U: '--multiline', L: '--follow' };
@@ -873,8 +880,8 @@ const SPECIAL_SHORT = { V: 'version-short' };
 // RG-SORT-MODIFIED: --sort/--sortr's choices, as rg spells its usage error for any other; `modified` is
 // answered, `none` sorts nothing, and path/accessed/created refuse by name (no upstream tool passes them).
 const SORT_CHOICES = new Set(['path', 'modified', 'accessed', 'created', 'none']);
-// The reason quaude's rg gives for a flag it cannot answer as native does (stated once; bun-shim's
-// shell `rg` refuses with it too).
+// The reason quaude's rg gives for a flag it cannot answer as native does (stated once; the Bash tool's
+// `rg`, rg-entry.cjs, is this same rg).
 const untranslatableReason = (flag) => `quaude answers rg with its own emulation over ugrep, on purpose, and it cannot yet give ${flag} `
   + 'the answer native\'s rg gives, so it refuses rather than answer differently; nothing was searched';
 const cannotYet = (flag) => ({ refuse: untranslatableReason(flag), flag });
@@ -920,8 +927,10 @@ function setValue(s, key, flag, v) {
   return null;
 }
 
-// parseRgSearch(argv) -> { spec } | { special } | { refuse, flag } | { usage: stderr line }
-function parseRgSearch(argv) {
+// parseRgSearch(argv, { implicit }) -> { spec } | { special } | { refuse, flag } | { usage: stderr line }
+// implicit: what a pathless rg searches, as only a command can tell (RG-IMPLICIT-PATH, rg-entry.cjs decides it from
+// its fd 0): 'stdin' or 'cwd'; absent, a pathless search refuses (every rg the bundle spawns names a path).
+function parseRgSearch(argv, { implicit = null } = {}) {
   const s = { mode: 'standard', patterns: [], ignoreCase: false, lineNumber: null, withFilename: null, nul: false, only: false, multiline: false, dotall: false,
     before: null, after: null, context: null, maxColumns: 0, hidden: false, noIgnore: false, globs: [], types: [], threads: null, paths: [],
     sort: null, maxDepth: null, follow: false, noIgnoreVcs: false, maxFilesize: null, noMessages: false };
@@ -956,6 +965,8 @@ function parseRgSearch(argv) {
   // never read. The LAST of --files, -l, -c and --json decides (ripgrep 14.1.1's Mode::update lets any mode
   // override, whatever its comment says: `--files -l x t` searches t for x, measured).
   if (s.mode === 'list') {
+    // RG-IMPLICIT-PATH: a pathless --files lists ./ whatever its stdin is (hiargs.rs: only a search reads stdin)
+    if (!pos.length && implicit) { s.paths = ['.']; s.implicit = true; return { spec: s }; }
     if (!pos.length) return { refuse: 'quaude answers rg with its own emulation over ugrep, on purpose, and this rg --files names no path to list; nothing was listed' };
     if (pos.includes('-')) return cannotYet('--files over -');
     s.paths = pos;
@@ -966,8 +977,11 @@ function parseRgSearch(argv) {
     s.patterns.push(pos.shift());
   }
   if (s.patterns.length > 1) return cannotYet('-e');
-  // rg with no path searches its stdin or the working directory, by what its stdin is; every rg the
-  // bundle runs names one, so quaude's rg does not guess.
+  // RG-IMPLICIT-PATH: rg with no path searches its stdin or the working directory, by what its stdin is. Only a
+  // command knows its stdin (rg-entry.cjs); every rg the bundle runs names a path, so with no `implicit` quaude's
+  // rg does not guess. ./ is searched as `.` and printed without its `./` (s.implicit: rg's strip_dot_prefix).
+  if (!pos.length && implicit === 'stdin') { pos.push('-'); s.implicitStdin = true; }
+  else if (!pos.length && implicit === 'cwd') { pos.push('.'); s.implicit = true; }
   if (!pos.length) return { refuse: 'quaude answers rg with its own emulation over ugrep, on purpose, and this rg names no path to search; nothing was searched' };
   s.paths = pos;
   s.before = s.before !== null ? s.before : s.context || 0;
@@ -1034,13 +1048,6 @@ function errnoOfText(text) {
     if (t && t.toLowerCase() === want) return n;
   }
   return undefined;
-}
-
-// rg's --glob as bun-shim's rgToUgrep hands it to ugrep (`!G` -> --exclude=G, else --include=G), stated
-// ONCE for it (the shell snapshot's `rg` function, its shell twin). NOT rg's dialect: quaude's rg never uses
-// it; it walks as rg does (rg-walk.cjs RG-GLOB-*).
-function ugrepGlobArg(kind, g) {
-  return kind === 'iglob' ? `--iglob=${g}` : g[0] === '!' ? `--exclude=${g.slice(1)}` : `--include=${g}`;
 }
 
 // A file's bytes, as rg opens them (its text and binary detection: rgView).
@@ -2119,7 +2126,8 @@ function* searchCore(spec, opts) {
       try {
         for (const w of walker.walk(P, { sequential, errText: osErrorText, tick: TICK })) {
           if (w === TICK) { searchStats.ticks.walk++; yield TICK; continue; }
-          if (w.file) entries.push({ disp: w.file, file: w.file, walked: true });
+          // RG-IMPLICIT-PATH: a pathless search prints each file without the ./ it walked from; the walk's own errors keep it
+          if (w.file) entries.push({ disp: spec.implicit ? stripDot(w.file) : w.file, file: w.file, walked: true });
           else entries.push(w);
         }
       } catch (e) {
@@ -2253,7 +2261,7 @@ function matchOutcome(e, opts, ugrep) {
 // The plan for one rg call: { result } (answered without searching: a refusal or rg's usage error), or
 // { spec, ugrep } (a search or a listing quaude's rg answers).
 function rgPlan(argv, opts) {
-  const p = parseRgSearch(argv);
+  const p = parseRgSearch(argv, { implicit: opts.implicit });
   const debug = (v) => { if (opts.debug) opts.debug(argv, v); };
   if (p.usage) { debug('=> quaude\'s rg (rg\'s own usage error)'); return { result: { stdout: Buffer.alloc(0), stderr: Buffer.from(p.usage), status: 2, signal: null } }; }
   if (p.refuse) { debug(`!! untranslatable ${p.flag || '(argv)'}`); return { result: rgRefusal(p.refuse, { flag: p.flag }) }; }
@@ -2317,7 +2325,8 @@ function searchSync(plan, opts) {
       const o = { ugrep, cwd: opts.cwd, env, ignoreCase: spec.ignoreCase, multiline: spec.multiline, dotall: spec.dotall, spawnSync, deadline, first, known };
       try { return { matches: (opts.matchFiles || ugrepMatches)(files, pattern, o) }; } catch (e) { return matchOutcome(e, opts, ugrep); }
     },
-    stdin: () => (typeof opts.input === 'string' ? Buffer.from(opts.input, 'utf8') : toBuf(opts.input)),
+    // input: the bytes, or (a command's fd 0: rg-entry.cjs) a function read only when the search reaches stdin
+    stdin: () => { const i = typeof opts.input === 'function' ? opts.input() : opts.input; return typeof i === 'string' ? Buffer.from(i, 'utf8') : toBuf(i); },
     decide: ({ text, t, first }) => { try { return { matches: matchTextLines(text, t, deadline, first) }; } catch (e) { return matchOutcome(e, opts, ugrep); } },
     // printing: the caller's timeout is checked as it goes
     tick: () => { if (deadline && Date.now() > deadline) throw timedOutError(); return null; },
@@ -2601,4 +2610,4 @@ function rgExecFileSync(r, opts, file, args) {
 
 module.exports = { isRgExe, rgRefusal, parseRgRefusal, untranslatableReason, runRg, rgSpawn, rgExecFile, rgSpawnSync, rgExecFileSync, RG_MAX_BUFFER,
   UGREP_MIN, parseUgrepVersion, versionAtLeast, ugrepCapabilities, ugrepCapabilitiesAsync, ugrepMatchArgv, chunkFiles, parseUgrepRanges,
-  ugrepMatches, ugrepMatchesAsync, matchFilesAlone, parseRgSearch, ugrepGlobArg, UgrepError, rgText, searchStats, FILL_TICK_BYTES };
+  ugrepMatches, ugrepMatchesAsync, matchFilesAlone, parseRgSearch, UgrepError, rgText, searchStats, FILL_TICK_BYTES };

@@ -514,3 +514,35 @@ test('a bare run carves nothing: ordinary args reach the child untouched', () =>
   assert.deepStrictEqual(cap.call.args.filter((a) => a !== '--settings' && !/clode-guard-/.test(a)),
     ['-p', 'say PONG', '--allowedTools', 'Bash']);
 });
+
+// RG-ARGV0 (grep-native Task 10c): a naude invoked as rg (argv[0] `rg`, or ARGV0=rg in its environment, as the
+// Bash tool's shell function runs it) answers with rg-entry.cjs, every argument rg's, before anything else: only
+// rg's own files are materialized, nothing is spawned, no deps are unpacked, no guard is read.
+for (const [label, argv0, env] of [['argv[0] rg', '/some/dir/rg', {}], ['ARGV0=rg', '/naude', { ARGV0: 'rg' }]]) {
+  test(`naude invoked as rg (${label}) runs rg-entry.cjs with every argument, and nothing else`, () => {
+    const seen = { names: null, required: null, main: null };
+    runNaude({
+      argv: ['--clode-update-guard', '-c', 'x'], argv0, execPath: '/naude', env, workDir: '/work', sea: fakeSea(),
+      materializeDeps: () => { throw new Error('deps unpacked for rg'); },
+      materializeAssets: (opts) => { seen.names = opts.names; seen.dest = opts.destDir; return opts.destDir; },
+      requireRg: (p) => { seen.required = p; return { main: (io) => { seen.main = io; } }; },
+      spawn: () => { throw new Error('spawned for rg'); },
+      exit: () => {},
+    });
+    assert.deepStrictEqual(seen.names, ['rg-entry.cjs', 'rg-native.cjs', 'rg-regex.cjs', 'rg-walk.cjs', 'rg-types.cjs']);
+    assert.strictEqual(seen.dest, '/work');
+    assert.strictEqual(seen.required, path.join('/work', 'rg-entry.cjs'));
+    assert.deepStrictEqual(seen.main.argv, ['--clode-update-guard', '-c', 'x']);
+  });
+}
+test('naude not invoked as rg never reaches rg-entry.cjs, and materializes it beside bun-shim.cjs (which requires it)', () => {
+  let names = null;
+  runNaude({
+    argv: [], argv0: '/naude', execPath: '/naude', env: {}, cacheDir: os.tmpdir(), workDir: '/work', sea: fakeSea(),
+    materializeDeps: () => '/deps',
+    materializeAssets: (opts) => { names = opts.names; return opts.destDir; },
+    requireRg: () => { throw new Error('rg-entry reached'); },
+    spawn: () => ({ on() {} }), procOn: () => {}, procOff: () => {}, exit: () => {}, onExit: (cb) => cb(0, null),
+  });
+  assert.ok(names.includes('bun-shim.cjs') && names.includes('rg-entry.cjs'), JSON.stringify(names));
+});

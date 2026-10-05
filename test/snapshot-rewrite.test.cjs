@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const { rewriteSnapshot, collectShadows, warnAppletSkew, CLODE_SHADOWS } = require('../libexec/bun-shim.cjs');
+const { rgShadowFunction } = require('../libexec/rg-entry.cjs');
 
 const fx = (name) => fs.readFileSync(path.join(__dirname, 'fixtures', name), 'utf8');
 
@@ -69,22 +70,35 @@ test('rewriteSnapshot: works on install-path-style snapshots too (resolver-agnos
   assert.doesNotMatch(out, /_cc_bin|ARGV0=/);
 });
 
-test('rewriteSnapshot: rewrites an upstream rg shadow to the ugrep twin', () => {
+// grep-native Task 10c (user ruling 2026-10-04): the Bash tool's `rg` is quaude's own rg, the command
+// (libexec/rg-entry.cjs). An upstream rg shadow becomes native's own function run against THIS binary as rg (its
+// fallback is process.execPath, where native names its install path); upstream's flags are never used, and no
+// ugrep translation is left.
+test('rewriteSnapshot: an upstream rg shadow becomes native\'s function, run against this binary as rg', () => {
   const snap = 'function rg {\n  local _cc_bin="$HOME/.local/bin/claude"\n' +
     '  ARGV0=rg "$_cc_bin" --color=never "$@"\n}\n';
   const out = rewriteSnapshot(snap);
-  assert.match(out, /local _bin="\$\{CLODE_UGREP:-\$\(command -v ugrep 2>\/dev\/null\)\}"/);
-  assert.match(out, /clode: rg needs 'ugrep'/);
-  assert.doesNotMatch(out, /ARGV0=rg/);
-  assert.doesNotMatch(out, /--color=never/); // upstream ripgrep flags are dropped, not passed to ugrep
+  assert.strictEqual(out, rgShadowFunction(process.execPath) + '\n');
+  assert.doesNotMatch(out, /CLODE_UGREP|ugrep/);
+  assert.doesNotMatch(out, /--color=never/); // upstream's flags are dropped
 });
 
-test('rewriteSnapshot: injects an rg shadow when find/grep present but rg absent', () => {
+// rg is defined where native defines it, inside upstream's "is rg installed?" guard, in every mode; it is never
+// ADDED beside the find/grep shadows (that addition sat outside the guard and overrode a host rg).
+// grep-native Task 10c: the shell function is native's own, byte for byte (test/fixtures/snapshot-2.1.283.sh holds it verbatim from a real
+// native snapshot, install path /home/user/.local/bin/claude), with quaude's binary where native names its install.
+test('rgShadowFunction is native 2.1.283\'s rg function, byte for byte, with this binary as the fallback', () => {
+  const snap = fx('snapshot-2.1.283.sh');
+  const at = snap.indexOf('  function rg {');
+  const native = snap.slice(at, snap.indexOf('\n}\n', at) + 2);
+  assert.strictEqual('  ' + rgShadowFunction('/home/user/.local/bin/claude'), native);
+  assert.match(rgShadowFunction('/a b/quaude'), /_cc_bin='\/a b\/quaude'\n/);
+  assert.match(rgShadowFunction('C:\\x\\quaude.exe', 'win32'), /_cc_bin=\/c\/x\/quaude\.exe\n/);
+});
+
+test('rewriteSnapshot: never adds an rg shadow beside find/grep (rg lives inside upstream\'s guard)', () => {
   const out = rewriteSnapshot(skewSnap); // skewSnap has find+grep, no rg
-  assert.match(out, /function rg \{/);
-  assert.match(out, /local _bin="\$\{CLODE_UGREP:-\$\(command -v ugrep 2>\/dev\/null\)\}"/);
-  // injected AFTER the existing shadows, exactly once
-  assert.strictEqual((out.match(/function rg \{/g) || []).length, 1);
+  assert.doesNotMatch(out, /function rg \{/);
 });
 
 test('rewriteSnapshot: does NOT inject rg into a string with no shadows', () => {
@@ -199,7 +213,8 @@ test('rewriteSnapshot without findings is byte-identical to the 1-arg form', () 
 test('CLODE_SHADOWS: each probe-bearing applet carries a shell rc test matching its skew predicate', () => {
   assert.strictEqual(CLODE_SHADOWS.grep.skewRcTest, '[ "$_rc" -ge 2 ]');
   assert.strictEqual(CLODE_SHADOWS.find.skewRcTest, '[ "$_rc" -ne 0 ]');
-  assert.strictEqual(CLODE_SHADOWS.rg.skewRcTest, '[ "$_rc" -ge 2 ]');
+  // rg is quaude's own rg (rg-entry.cjs): no host applet, so nothing to override, probe or test for skew
+  assert.deepStrictEqual(CLODE_SHADOWS.rg, { applet: 'rg', entry: true });
 });
 
 test('warnAppletSkew RETURNS the findings for the shadows it was given', () => {

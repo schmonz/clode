@@ -208,7 +208,7 @@ export function stageDeps(nmdir) {
 // The old `builder` asset (the path of the clode building this naude, once fed to
 // the retired spawn-a-rebuild callback) is GONE: auto-update is notify-only now,
 // so nothing reads a builder path and nothing writes one.
-export function naudeSeaConfig({ mainBundle, cliCjs, bunShim, tar, sig, out, targetUpdateCheck, unicodeText, rgNative, rgRegex, rgWalk, rgTypes, manifest, manifestSig }) {
+export function naudeSeaConfig({ mainBundle, cliCjs, bunShim, tar, sig, out, targetUpdateCheck, unicodeText, rgEntry, rgNative, rgRegex, rgWalk, rgTypes, manifest, manifestSig }) {
   const assets = {
     'deps.tar': tar,
     'deps.sig': sig,
@@ -229,6 +229,9 @@ export function naudeSeaConfig({ mainBundle, cliCjs, bunShim, tar, sig, out, tar
     'rg-regex.cjs': rgRegex,
     'rg-walk.cjs': rgWalk,
     'rg-types.cjs': rgTypes,
+    // rg-entry.cjs (grep-native Task 10c): the rg COMMAND a naude invoked as rg runs (naude-entry.cjs), and
+    // bun-shim.cjs's companion (require(__dirname + '/rg-entry.cjs'), for the Bash tool's `rg` function).
+    'rg-entry.cjs': rgEntry,
   };
   // manifest.json: what this naude knows about itself — which clode built it, which
   // upstream bundle it bakes, which platform that bundle was CARVED for, and the sha256
@@ -336,6 +339,8 @@ export function writeSeaConfig({
   // rgWalk, rgTypes (grep-native Task 9 — rg-native.cjs's rg-walk.cjs and rg-types.cjs companions): the same.
   rgWalk = path.join(REPO, 'libexec', 'rg-walk.cjs'),
   rgTypes = path.join(REPO, 'libexec', 'rg-types.cjs'),
+  // rgEntry (grep-native Task 10c — the rg command, bun-shim.cjs's rg-entry.cjs companion): the same.
+  rgEntry = path.join(REPO, 'libexec', 'rg-entry.cjs'),
   extras = {}, template = null,
 }) {
   // Ensure the artifact dir exists before writing into it (sea-config.json here).
@@ -380,7 +385,7 @@ export function writeSeaConfig({
     console.error(`build-naude: rg-regex.cjs not found at: ${rgRegex}`);
     process.exit(1);
   }
-  for (const [name, file] of [['rg-walk.cjs', rgWalk], ['rg-types.cjs', rgTypes]]) {
+  for (const [name, file] of [['rg-walk.cjs', rgWalk], ['rg-types.cjs', rgTypes], ['rg-entry.cjs', rgEntry]]) {
     // Fail loud, same reason: rg-native.cjs's own `require(__dirname + '/<name>')` 404s on first use without it.
     if (!fs.existsSync(file)) { console.error(`build-naude: ${name} not found at: ${file}`); process.exit(1); }
   }
@@ -398,6 +403,7 @@ export function writeSeaConfig({
     'rg-regex.cjs': rgRegex,
     'rg-walk.cjs': rgWalk,
     'rg-types.cjs': rgTypes,
+    'rg-entry.cjs': rgEntry,
   };
   const members = {};
   for (const [name, file] of Object.entries(assetFiles)) {
@@ -439,6 +445,7 @@ export function writeSeaConfig({
     rgRegex,
     rgWalk,
     rgTypes,
+    rgEntry,
     manifest: manifestPath,
     manifestSig: manifestSigPath,
   });

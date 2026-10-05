@@ -169,7 +169,7 @@ test('attest golden: stable manifest fields + full member verification', async (
   // check keeps meaning the same thing as upstream's packaging changes under us.
   // unicode-text.cjs rides at the archive root beside bun-shim.cjs (the one clustering/width/
   // SGR implementation both bun-shim and the Intl polyfill require).
-  for (const m of [manifest.entry, 'bun-shim.cjs', 'unicode-text.cjs', 'rg-native.cjs', 'rg-regex.cjs', 'rg-walk.cjs', 'rg-types.cjs', 'node-shim/loader.cjs', 'node-shim/modules/process.cjs', 'target-env.cjs', 'target-update-check.cjs']) {
+  for (const m of [manifest.entry, 'bun-shim.cjs', 'unicode-text.cjs', 'rg-native.cjs', 'rg-regex.cjs', 'rg-walk.cjs', 'rg-types.cjs', 'rg-entry.cjs', 'node-shim/loader.cjs', 'node-shim/modules/process.cjs', 'target-env.cjs', 'target-update-check.cjs']) {
     assert.ok(manifest.members[m], `manifest missing member ${m}`);
   }
   // The shipped loader member must be byte-identical to the committed loader, and the text
@@ -185,7 +185,8 @@ test('attest golden: stable manifest fields + full member verification', async (
   assert.strictEqual(manifest.members['rg-regex.cjs'].sha256,
     sha256File(path.join(REPO, 'libexec/rg-regex.cjs')));
   // ...and its walk and type table (grep-native Task 9).
-  for (const c of ['rg-walk.cjs', 'rg-types.cjs']) assert.strictEqual(manifest.members[c].sha256, sha256File(path.join(REPO, 'libexec', c)));
+  // ...and the rg command (grep-native Task 10c).
+  for (const c of ['rg-walk.cjs', 'rg-types.cjs', 'rg-entry.cjs']) assert.strictEqual(manifest.members[c].sha256, sha256File(path.join(REPO, 'libexec', c)));
 
   // BOM (Task a): the declared closure as name@version — states what this
   // quaude embeds without cross-referencing package.json + node_modules.
@@ -286,6 +287,31 @@ test('reserved namespace: --clode-attest short-circuits before the bundle sees a
   assert.strictEqual(r.status, 0, r.stderr);
   assert.ok(r.stdout.includes(require('../libexec/clode-attest.cjs').ATTEST_VERIFIED), r.stdout);
   assert.doesNotMatch(r.stdout, /PONG/);
+});
+
+// RG-ARGV0 (grep-native Task 10c): the blobulated quaude invoked as rg IS rg (libexec/rg-entry.cjs), every argument
+// rg's, before any of the bundle or the --clode-* carve runs: argv[0] `rg` (the shell function's bash/zsh spellings)
+// and ARGV0=rg in its environment (upstream's msys spelling). rg's --version is native's literal (rg-types.cjs);
+// `--clode-attest` is rg's to refuse, never an attest.
+function runAsRg(args, { argv0 = 'rg', env = {}, input } = {}) {
+  return require('node:child_process').spawnSync(QUAUDE, args, { cwd: DIR, argv0, input, encoding: 'utf8', timeout: 60000,
+    env: cleanEnv({ ...freshHome('quaude-build-home-'), ...env }) });
+}
+test('RG-ARGV0: the quaude invoked as rg answers as rg, before its bundle or its --clode-* carve', (t) => {
+  if (SKIP) { t.skip(SKIP); return; }
+  for (const [label, o] of [['argv[0] rg', {}], ['argv[0] /x/rg', { argv0: '/x/rg' }], ['ARGV0=rg', { argv0: QUAUDE, env: { ARGV0: 'rg' } }]]) {
+    const v = runAsRg(['--version'], o);
+    assert.strictEqual(v.status, 0, `${label}: ${v.stderr}`);
+    assert.ok(v.stdout.startsWith('ripgrep 14.1.1 (rev 7c1d0ed28a)\n'), `${label}: ${v.stdout}`);
+    const c = runAsRg(['-c', 'needle', '-'], { ...o, input: 'a needle\nb\nneedle c\n' });
+    assert.deepStrictEqual([c.status, c.stdout], [0, '2\n'], `${label}: ${c.stderr}`);
+  }
+  const a = runAsRg(['--clode-attest']);
+  assert.strictEqual(a.status, 2, a.stdout);
+  assert.doesNotMatch(a.stdout, /all members verified/);
+  assert.match(a.stderr, /^rg: error parsing flag --clode-attest: quaude answers rg/);
+  // not invoked as rg: Claude Code's own --version
+  assert.match(runAsRg(['--version'], { argv0: QUAUDE }).stdout, /\(Claude Code\)/);
 });
 
 // The retired spelling is GONE, not aliased: it is now an ordinary argument, so it reaches

@@ -1023,7 +1023,9 @@ if (__QVFS) {
   // its esbuilt clode-main bundle as a SOURCE member — measured 65KB / 0.24s
   // boot, so bytecode buys nothing and would force strict mode on the whole
   // esbuild output); absent manifest/entry keeps the quaude default, cli.qbc.
-  entryAbs = '/quaude/' + ((__QVFS.manifest && __QVFS.manifest.entry) || 'cli.qbc');
+  // __quaudeEntry: the bootstrap's choice for an invocation that runs no bundle (quaude invoked as rg:
+  // rg-entry.cjs, grep-native Task 10c); otherwise the manifest's.
+  entryAbs = '/quaude/' + (globalThis.__quaudeEntry || (__QVFS.manifest && __QVFS.manifest.entry) || 'cli.qbc');
   extraArgv = globalThis.__quaudeArgs ?? tjs.args.slice(1);
 } else {
   const entry = tjs.args[3];

@@ -34,7 +34,7 @@ const FIND_FLAGS = '-S dfs -regextype findutils-default';
 // ---- the parse, both spellings -------------------------------------------------------
 test('2.1.283 spelling ${1+"$@"}: collectShadows reads every upstream flag', () => {
   assert.deepStrictEqual(collectShadows(SNAP_283), [
-    { name: 'rg', applet: 'rg', env: 'CLODE_UGREP', flags: '' },
+    { name: 'rg', applet: 'rg', env: undefined, flags: '' },
     { name: 'find', applet: 'bfs', env: 'CLODE_BFS', flags: FIND_FLAGS },
     { name: 'grep', applet: 'ugrep', env: 'CLODE_UGREP', flags: GREP_FLAGS_283 },
   ]);
@@ -53,7 +53,10 @@ test('rewriteSnapshot of the 2.1.283 snapshot runs each applet WITH upstream\'s 
   assert.ok(out.includes(`\n  "$_bin" ${GREP_FLAGS_283} "$@"\n`), `grep flags missing:\n${out}`);
   assert.ok(out.includes(`\n  "$_bin" ${FIND_FLAGS} "$@"\n`), `find flags missing:\n${out}`);
   assert.doesNotMatch(out, /\n {2}"\$_bin" "\$@"\n/, 'a shadow was rebuilt with no flags');
-  assert.doesNotMatch(out, /_cc_bin|ARGV0=|exec -a /);
+  // rg is native's own function run against this binary (grep-native Task 10c), and only rg runs anything as an argv0
+  const rgFn = require('../libexec/rg-entry.cjs').rgShadowFunction(process.execPath);
+  assert.ok(out.includes(rgFn), `rg is not quaude's rg function:\n${out}`);
+  assert.doesNotMatch(out.replace(rgFn, ''), /_cc_bin|ARGV0=|exec -a /);
   assert.strictEqual((out.match(/function rg \{/g) || []).length, 1);
   assert.doesNotMatch(out, /clode: could not read upstream/);
 });
@@ -127,7 +130,7 @@ test('an unparsed shadow reaches /doctor, and an unparsed rg says rg is unaffect
   const grepRow = recorded.find((f) => f.name === 'grep' && /doctor-row-unique/.test(f.issue || ''));
   assert.ok(grepRow, `no /doctor record for the unparsed grep: ${JSON.stringify(recorded)}`);
   assert.match(grepRow.issue, /it runs ugrep without them/);
-  assert.match(err, /rg is translated to ugrep and never uses upstream's flags, so nothing changes/);
+  assert.match(err, /rg is quaude's own rg and never uses upstream's flags, so nothing changes/);
   assert.doesNotMatch(err, /it runs rg without them/);
 });
 
