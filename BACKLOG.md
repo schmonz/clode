@@ -8,6 +8,37 @@ Concrete clode-under-Node divergences from native Claude Code, to triage and fix
 That page is GENERATED from `scripts/build-graph.cjs` — the one declaration of the build — so it
 cannot drift from it; it is also where the honest answer to "does this need node?" lives.
 
+## The Bash tool's `rg` is quaude's rg now; what that left open (2026-10-04)
+
+grep-native Task 10c (user ruling 2026-10-04) made the Bash tool's `rg` quaude's own tested rg, run as native runs
+its embedded one (the entry above, under "The Grep tool in quaude", says how). Left open:
+
+- **Every Bash `rg` pays the rg command's startup.** Measured on this Mac (M-series, a quaude built from the tree,
+  10 runs each): `rg --version` 112 ms (native 12 ms; the same quaude's bundle `--version` 1075 ms), a 13-file
+  `rg -c` 146 ms. Of the 112: the node-shim loader's boot 28 ms, rg-native.cjs and the node-shim modules it requires
+  about 60, all parsed from source; the archive read is 1.3 MB of the binary's 80 (the bootstrap skips the bundle,
+  the engine template and node_modules). On Tiger PPC, where the bundle's boot is about 40 times this Mac's, that
+  suggests seconds per Bash `rg`: UNMEASURED there, and the doctrine is to profile on that box before a lever.
+  The lever it would point at is compiling rg-entry.cjs, its companions and the node-shim modules to bytecode, as
+  the bundle already is.
+- **A closed fd 0 under tjs.** Native's `rg x <&-` finds no readable stdin and searches ./. Under tjs, by the time
+  any JS runs, libuv's own first pipe has taken fd 0, and it reads as a FIFO; rg-entry.cjs runs the search again as
+  ./ when that stdin could not be read at all (measured on darwin: the read fails at once). Where the read would
+  instead return EAGAIN forever (a non-blocking pipe end with nothing to come), it would spin. The root fix is
+  the engine's: reopen a closed 0, 1 or 2 on /dev/null at startup, as node does. naude (node) is unaffected.
+- **RIPGREP_CONFIG_PATH is refused.** Native's shell function passes no --no-config, so native's Bash `rg` reads
+  the config file; quaude's rg reads none, so with RIPGREP_CONFIG_PATH set (and no --no-config) it refuses by
+  name (RG-CONFIG). Reading the file (one argument per line, `#` comments) is small; it needs native rows.
+- **A terminal.** quaude's rg prints as rg prints to a pipe or a file. Native rg on a terminal adds headings,
+  colour and line numbers. The Bash tool never gives rg a terminal; a person running a quaude as rg by hand
+  in one gets the pipe form.
+- **Dev-mode bundles.** The bundle sets CLAUDE_CODE_EXECPATH to process.execPath. Under `tjs run loader.cjs
+  cli.cjs` (some test harnesses) that is tjs, which does not answer as rg, so the Bash tool's `rg` fails there; a
+  built quaude or naude answers. No test drives the Bash tool's `rg` through such a harness.
+- **Windows, unmeasured.** RG-ARGV0's leaf rule reads `\` as a separator and does not take `rg.exe` (native on
+  macOS does not); the shell function's fallback is spelled as msys sees it (C:\a -> /c/a), as native's writer
+  spells its own; upstream's msys branch reaches rg through ARGV0=rg, which the rule honours.
+
 ## Ten agentic rows run the developer's own ~/.claude, hooks included (2026-10-04)
 
 Measured during grep-native Task 10b's full suite (RC 1, 10 failures, every one at its cap with empty
@@ -229,15 +260,32 @@ Bash tool instead".
     not found" before Task 10b, and the missing file after), and `alias rg='rg -c'` is honoured.
     With --allowedTools naming Grep or Glob and a host rg on PATH, the Bash tool's `rg` is that host rg:
     upstream's guard (`if ! (unalias rg; command -v rg)`) writes no rg at all then, and no find/grep shadow
-    is injected. Native does exactly the same, so in both modes the Bash tool's `rg` matches native (the
-    review of fix round 1 drove both shells through the real Bash tool).
-    Left open: the Bash tool's rg is the shell shadow (rgShadowBody, the old rg-to-ugrep translation),
-    not quaude's rg: under `-c` it prints zero counts (`in/e.log:0`) where rg prints none, and its file
-    order is ugrep's.
+    is injected. Native does exactly the same.
+    CORRECTED 2026-10-04 (grep-native Task 10c): this entry (5525ba7) went on to say "so in both modes the
+    Bash tool's `rg` matches native". It did not, in NORMAL mode: wherever the snapshot held find/grep
+    shadows, rewriteSnapshot ADDED its own rg shadow beside them, OUTSIDE upstream's guard, so a host rg was
+    overridden by quaude's shell translation; native's Bash `rg` is the host's there. And with no host rg,
+    the Bash tool's rg was that shell shadow (rgShadowBody, the old rg-to-ugrep translation), not quaude's
+    tested rg: under `-c` it printed zero counts (`in/e.log:0`), its file order was ugrep's, a pathless `rg x`
+    searched its stdin and printed `(standard input):0`, and `--json` was refused; nothing judged it
+    against native. Measured at 2e9027c through the gate's Bash route (bash): 42 of 42 BASH_ROWS cells
+    differed from native, and a host rg in normal mode did not run.
+    FIXED (grep-native Task 10c, user ruling 2026-10-04: mirror native exactly). The Bash tool's `rg` is
+    quaude's own rg: libexec/rg-entry.cjs, the rg COMMAND, which a quaude (or naude) runs when invoked as
+    rg (argv[0] `rg`, or ARGV0=rg: RG-ARGV0, native's rule) before any of its bundle loads, answering with
+    rg-native.cjs. The snapshot's rg is native's own shell function (2.1.283's dbe("rg", argv0), byte for
+    byte) run against CLAUDE_CODE_EXECPATH (the quaude binary), written where the writer's alias was,
+    INSIDE upstream's guard, in every mode; it is never added anywhere else, so a host rg wins in every
+    mode, as native's. rgShadowBody and rgToUgrep are deleted. A pathless `rg` searches as native's does
+    (RG-IMPLICIT-PATH: stdin when it is a file, FIFO or socket, else ./ with the `./` left off; the Bash
+    tool's `< /dev/null` means ./). test/fidelity/rg-differential.test.cjs gained a Bash-route column:
+    every matrix cell plus 14 BASH_ROWS a tree kind, through bash and zsh, native's snapshot against
+    native and quaude's against a quaude BUILT from the tree; 0 differ, and the host-rg tripwire runs in
+    both modes for both. shadow-writer-from-carve holds the shell function to the pinned carve's writer.
     Left open: (1) a host rg that sits AT RG_PATH (ripgrep installed in the very directory the
     quaude or naude binary is in) is what a route that execs the path for real would run; every
     spawn is answered by basename, and the snapshot's alias, the one shell route, is now replaced
-    by the shadow, so no known route reaches it. (2) Such a route that does meet ENOENT is worded
+    by the function that runs quaude itself as rg, so no known route reaches it. (2) Such a route that does meet ENOENT is worded
     by the bundle's own YE as "ripgrep not found on PATH. Install it ..." in system mode; no route
     is known to reach it.
   - FIXED in part (grep-native Task 6): files_with_matches and count are quaude's rg's own now
@@ -538,8 +586,9 @@ Bash tool instead".
   - REFUSED BY NAME: --sort/--sortr path, accessed, created (no upstream tool passes them); --files over `-`;
     --files naming no path. The last of --files, -l, -c and --json decides the mode, as ripgrep 14.1.1's
     Mode::update lets any mode override (its comment says otherwise; measured).
-  - THE OLD TRANSLATION IS GONE for a spawned rg (bun-shim's _rgTranslate and rgFilesToListing deleted);
-    rgToUgrep stays only as the spec of the shell snapshot's `rg` function (rgShadowBody).
+  - THE OLD TRANSLATION IS GONE for a spawned rg (bun-shim's _rgTranslate and rgFilesToListing deleted),
+    and since grep-native Task 10c for the shell's too (rgToUgrep and rgShadowBody deleted: the Bash tool's
+    `rg` is libexec/rg-entry.cjs).
   - Windows path spelling for --files is unmeasured, as the walk's is.
 - **quaude's rg's binary detection is rg's line buffer (grep-native Task 8, 2026-10-04).** Read from
   grep-searcher 0.1.14, encoding_rs_io 0.1.7, grep-printer 0.2.2 and ripgrep 14.1.1's hiargs.rs, every
