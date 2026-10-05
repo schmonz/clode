@@ -79,18 +79,13 @@ test('agentic Write round-trip under tjs: the tool creates the file on disk', as
 // via Bash. They are also kept under CLAUDE_CODE_ENTRYPOINT=local-agent, and on Windows
 // without Git Bash; `--allowedTools Bash,Grep` keeps Grep, and `--disallowedTools Bash`
 // still removes it (read from the 2.1.283 carve by the F4 review, 2026-09-27). In
-// output_mode "content" the tool runs `rg --json` (from 2.1.251 on; not in .185/.218/
-// .243/.246/.250), which quaude's rg does not answer yet. Until 2026-10 the tool then
-// answered "ripgrep not found on PATH" here, or a host rg on PATH answered instead; the
-// old check passed anyway, on MARK in the tool_use's own `pattern`. Since grep-native
-// Task 4 quaude's rg (libexec/rg-native.cjs) REFUSES it honestly: rc 2 and
-// `rg: error parsing flag --json: quaude answers rg ...` on stderr, which the tool hands
-// the model as "Search failed ... ripgrep rejected the pattern ...". This row skips on
-// exactly that refusal IN THE TOOL_RESULT, and on nothing else: "not found" or any other
-// answer without the matched line fails (BACKLOG.md, "The Grep tool in quaude"). The
-// grep-native plan's later tasks answer --json; its Task 11 removes the skip.
-const { parseRgRefusal } = require('../../libexec/rg-native.cjs');
-const grepJsonRefused = (result) => { const r = parseRgRefusal(result); return !!r && r.flag === '--json'; };
+// output_mode "content" the tool runs `rg --json` (from 2.1.251 on). Until 2026-10 the tool
+// answered "ripgrep not found on PATH" here, or a host rg on PATH answered instead; the old
+// check passed anyway, on MARK in the tool_use's own `pattern`. From grep-native Task 4 to
+// Task 11 quaude's rg refused --json honestly and this row skipped on exactly that refusal;
+// quaude's rg answers it now (libexec/rg-native.cjs), so the row judges the matched line and
+// cannot skip. Every output mode, judged against native byte for byte, is
+// test/fidelity/agentic-grep-glob.test.cjs.
 test('agentic Grep round-trip under tjs: search-applet path returns the match', async (t) => {
   if (skipUnlessTjs(t)) return;
   const bin = providerBin(); if (!bin) { t.skip('no CLODE_PROVIDER_BIN'); return; }
@@ -113,11 +108,6 @@ test('agentic Grep round-trip under tjs: search-applet path returns the match', 
     assert.strictEqual(r.status, 0, `stderr:\n${r.stderr}`);
     const result = toolResultText(mock, GREP.id);
     assert.ok(result, 'no follow-up POST carrying the Grep tool_result');
-    if (grepJsonRefused(result)) {
-      t.skip('the Grep tool runs `rg --json`, which quaude\'s rg refuses honestly until the grep-native plan '
-        + 'answers it; the tool_result carries that refusal (BACKLOG.md: The Grep tool in quaude)');
-      return;
-    }
     assert.ok(found(mock), `Grep tool_result lacks the matched line:\n${result.slice(0, 1500)}`);
   } finally { await mock.close(); }
 });

@@ -52,7 +52,8 @@
 //   A driver CAN SKIP when its test is declared skipped (test.skip, a `{ skip }`/`{ todo }`
 //   option), or when a skip( call follows the control inside its test (outside a test: to the end
 //   of the top-level statement). A precondition skip belongs BEFORE the control; one after it can
-//   depend on the outcome, which is how agentic-tools' Grep row reads a refusal as a skip.
+//   depend on the outcome, which is how agentic-tools' Grep row read a refusal as a skip
+//   until the grep-native plan's Task 11.
 //
 // THE VERDICT, per registered tool, and on the table:
 //   - driven by a driver that cannot skip: OK; also exempted: a finding (remove the exemption);
@@ -832,18 +833,12 @@ function scanCoverage({ carve, what, sources, exemptions, today }) {
 // registers fewer is BROKEN until someone re-measures.
 const TOOL_FLOOR = 90;
 // Each gate below is read from the tool's registry element or its isEnabled() in that carve.
-// UNTIL_TASK_11 is when the grep-native plan expects its Task 11 to have driven Grep and Glob
-// (the design estimated three days for the whole plan from 2026-09-27; tasks 1-3 alone took two,
-// so this allows about four times that). Task 11 deletes both entries; if it has not by then,
-// the gate goes red and says the plan slipped. UNTIL_REVIEW is a quarterly re-decision for the
-// rest: drive the tool, or renew its entry with a new reason and date.
+// UNTIL_REVIEW is a quarterly re-decision: drive the tool, or renew its entry with a new reason
+// and date. (Grep and Glob were exempted here until the grep-native plan's Task 11 drove them,
+// 2026-10-05: test/fidelity/agentic-grep-glob.test.cjs, every output mode against native, and
+// agentic-tools' Grep rows, which no longer skip.)
 const RECORDED = '2026-09-28';
-const UNTIL_TASK_11 = '2026-10-12';
 const UNTIL_REVIEW = '2026-12-31';
-const GREP_GLOB_PLAN = 'deferred: the "Grep and Glob = native" plan (.superpowers/sdd/2026-09-27-grep-native); its Task 11 '
-  + "drives this tool end to end against native's embedded rg and removes this entry. Until then quaude's rg translation "
-  + 'answers wrongly in every mode (BACKLOG.md, "The Grep tool in quaude"). Registered only when named in --tools or '
-  + '--allowedTools (searchToolsOptIn), under CLAUDE_CODE_ENTRYPOINT=local-agent, or with no Bash (Windows without Git Bash)';
 const LOCAL = 'deferred, no plan yet: it runs on this machine, so a canned-mock turn could drive it, and no live check '
   + 'judges its tool_result';
 const INTERACTIVE = 'deferred, no plan yet: disabled in a non-interactive (-p) session without a permission-prompt tool, '
@@ -861,10 +856,6 @@ const RUNNER = 'deferred, no plan yet: a self-hosted runner operator tool, regis
 const RELAY = (what) => `deferred, no plan yet: a relay stub that asks the user to enable ${what}; enabled only with a `
   + 'device relay, which no live check sets up';
 const EXEMPTIONS = [
-  // The plan's own two.
-  { tool: 'Grep', reason: `${GREP_GLOB_PLAN}. Its one driver, agentic-tools' Grep row, skips on the rg --json refusal`,
-    date: RECORDED, until: UNTIL_TASK_11 },
-  { tool: 'Glob', reason: `${GREP_GLOB_PLAN}. Nothing drives it`, date: RECORDED, until: UNTIL_TASK_11 },
   // Local tools a canned mock could drive today: the to-do list proper.
   { tool: 'Read', reason: `${LOCAL}. floor-probe B4 and node-shim-agentic's Edit row script Read only to satisfy `
     + 'read-before-edit, and judge nothing it returns', date: RECORDED, until: UNTIL_REVIEW },
@@ -1325,18 +1316,6 @@ test('checkExemptionTable refuses a malformed, doubled or expired entry', () => 
 
 test('the EXEMPTIONS table is well-formed and unexpired, with or without a carve', () => {
   assert.deepStrictEqual(checkExemptionTable(EXEMPTIONS, new Date().toISOString().slice(0, 10)), []);
-});
-
-// Task 11 deletes this test together with the two entries. Its Grep driver must then assert with
-// no skip after its control, or the gate still reads Grep as driven only by a driver that can skip.
-test('Grep and Glob are exempted by this plan until the end of its Task 11, which removes them', () => {
-  const plan = EXEMPTIONS.filter((e) => e.tool === 'Grep' || e.tool === 'Glob');
-  assert.deepStrictEqual(plan.map((e) => e.tool).sort(), ['Glob', 'Grep']);
-  for (const e of plan) {
-    assert.match(e.reason, /2026-09-27-grep-native/);
-    assert.match(e.reason, /Task 11/);
-    assert.strictEqual(e.until, plan[0].until);
-  }
 });
 
 test('the floor is BROKEN, never clean, when the carve registers fewer tools than were measured', () => {
