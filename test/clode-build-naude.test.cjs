@@ -598,7 +598,7 @@ test('clode build naude: an unsupported HOST is refused before the bundle is sta
 // A CHECKOUT's naude is assembled from the PREBUILT build/bundle/naude-entry.bundle.cjs
 // (scripts/build-clode-main.mjs), and nothing else rebuilds it: after a pull that changed
 // libexec, `clode build naude` used to bake the OLD entry code silently (found in grep-native
-// Task 10c, where a test's naude kept the pre-fix rg dispatch). The same rule `--self`
+// Task 10c, where a test's naude kept the pre-fix rg dispatch). The same rule `clode bootstrap`
 // already enforces on its clode-main bundle refuses it here: a bundle older than any
 // libexec source fails loud and names the command that rebuilds it — before any staging.
 function fakeCheckout(dir, bundleTime) {

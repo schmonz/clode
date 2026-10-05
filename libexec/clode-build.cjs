@@ -1158,7 +1158,7 @@ function carveVerdict({ naude, self, providerPlatform, target, hostPlatform, env
 // clode build [--out PATH]. Returns the exit status (0 on success). Injectable
 // bits (env/stderr/stdout) keep the unit-testable surface consistent with the
 // sibling subcommand modules.
-// A prebuilt esbuilt bundle (build/<dir>/clode-main.bundle.cjs for --self, the checkout's
+// A prebuilt esbuilt bundle (build/<dir>/clode-main.bundle.cjs for `clode bootstrap`, the checkout's
 // build/bundle/naude-entry.bundle.cjs for naude) freezes libexec as of whenever it was
 // built; a stale one builds a WRONG product silently. The rule, stated once for both
 // sites: the bundle must be no older than any libexec/*.{cjs,mjs,js} — deliberately the
@@ -1334,7 +1334,7 @@ async function clodeBuildIn(args, opts) {
     const effLibexec = blobulatedBuilder ? path.join(payloadDir, 'libexec') : opts.libexec;
     // A checkout assembles the PREBUILT build/bundle/naude-entry.bundle.cjs, which nothing
     // here rebuilds: after a pull that changed libexec it would bake the OLD entry code
-    // silently. The same rule as --self's clode-main bundle (staleLibexecSource), checked
+    // silently. The same rule as `clode bootstrap`'s clode-main bundle (staleLibexecSource), checked
     // before any staging. (A blobulated builder carries its bundle in the payload, built
     // with it, so it cannot be stale this way.)
     if (!blobulatedBuilder) {
