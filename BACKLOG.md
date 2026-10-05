@@ -31,13 +31,22 @@ its embedded one (the entry above, under "The Grep tool in quaude", says how). L
   root fix is still the engine's: reopen a closed 0, 1 or 2 on /dev/null at startup, as node does (naude is
   unaffected).
 - **Streaming (RG-STREAM, fix round, review I-2).** The rg command searches stdin and named files as they arrive:
-  `yes needle | rg needle | head -1` 0.32 s (native 0.01 s; naude 0.08 s; before: never ended); a 150 MB file under
-  `| head -1` 2.03 s, 88 MB RSS (native 0.02 s, 6.9 MB; naude 0.24 s; the reviewer's 138 MB before: 117 s, 1.77
-  GB). Left: (1) a streamed file is decided by the JS matcher alone (no ugrep proposals), so a FULL search of a big
+  `yes needle | rg needle | head -1` 0.39 s (native 0.01 s; naude 0.08 s; before: never ended); a 150 MB file under
+  `| head -1` 0.27 s, 17 MB RSS (native 0.02 s, 6.9 MB; naude 0.24 s; the reviewer's 138 MB before: 117 s, 1.77
+  GB). WHERE THE TIME GOES (fix round 2): ~0.1 s is the rg command's start, the rest is the first window's search,
+  which the matcher makes before anything prints. The fix round 1 build spent ~2.0 s there, whatever the file's size
+  (5 MB and 150 MB alike): its first window was the BOM sniff's 1 MiB read plus the next 1 MiB, ~45,000 lines all
+  matching, decided by the JS matcher at ~25 us a line in a built quaude (~0.55 s per MB) before the first line was
+  printed. Now a named file is read 64 KiB at a time and the first read is searched at once: 0.19 s to the first
+  line. Left: (1) a streamed file is decided by the JS matcher alone (no ugrep proposals), so a FULL search of a big
   file is slow: `rg -c needle` over those 150 MB, every line a match, 86 s (native 0.25 s); ugrep proposals per
   window are the lever. (2) WALKED files are still read whole, one at a time (memory: the largest file walked).
   (3) The built quaude runs the same matcher about 3 times slower than the same engine binary under `tjs run`
   (2 MB: 1.26 s against 0.42 s; same template sha256): unexplained, worth measuring before a bytecode lever.
+  (5) `clode build naude` from a checkout assembles the PREBUILT build/bundle/naude-entry.bundle.cjs
+  (scripts/build-clode-main.mjs), and nothing rebuilds it when libexec/naude-entry.cjs changes: a naude built after
+  an edit is not the tree's (fix round 2: the gate's naude kept a fixed regression for one run). test/built-binary
+  builtNaude now rebuilds it first; `clode build naude` itself still does not notice.
   (4) A slow stdin under the standard printer prints a fill (64 KiB) at a time, as the all-there read model
   RG-STDIN-ALL-THERE says rg's reads go; native over a trickling pipe prints as each read ends.
 - **A `-U` stdin read error.** The multi-line search still reads stdin whole; a read error there (EAGAIN)

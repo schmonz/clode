@@ -2126,7 +2126,9 @@ function* printListing(spec, entries, cwd, sink) {
 // test/rg-stream.test.cjs holds over every printer, window and NUL position; the gate judges both against native.
 // NOT STREAMED: a multi-line search (rg reads those whole too), a UTF-16 text (rg's decoder; searched whole), and a
 // WALKED file (each read whole, as before: its binary quit reads in fills a walk's ugrep pass has already looked at).
-const STREAM_READ = 1024 * 1024;
+// A named file is read 64 KiB at a time, rg's own buffer: the first window is searched as soon as its first read is
+// in (fix round 2: a 1 MiB read plus the next before anything printed held a big file's first line ~2 s in a quaude).
+const STREAM_READ = 64 * 1024;
 const utf16Head = (h) => h.length >= 2 && ((h[0] === 0xff && h[1] === 0xfe) || (h[0] === 0xfe && h[1] === 0xff));
 
 // lineBufferFills (RG-BINARY-CONVERT, quit false), as the text arrives: advance() runs rg's fills as far as the
@@ -2247,10 +2249,13 @@ function* streamEntry(spec, e, t, out, state, ctx) {
     };
     // A window is searched once what arrived since the last one is at least as much as what that one kept (and 4 KiB):
     // every byte is searched a bounded number of times, however small the pieces stdin hands over.
-    let fresh = 0;
+    let fresh = head.length, primed = true;      // the BOM sniff's read is the first window's
     while (!finished) {
-      const c = yield* next();
-      if (c) { append(c); fresh += c.length; } else eof = true;
+      if (!primed) {
+        const c = yield* next();
+        if (c) { append(c); fresh += c.length; } else eof = true;
+      }
+      primed = false;
       if (!eof && fresh < Math.max(4096, buf.length)) continue;
       join();
       fresh = 0;
