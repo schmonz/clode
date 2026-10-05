@@ -121,3 +121,22 @@ test('a consumer whose usage-error test cannot be found is a finding and is not 
   assert.strictEqual(r.examined, 2);
   assert.match(r.findings.join('\n'), /^usage-error regex: the test that throws CD is in the carve 0 times/m);
 });
+
+// The linux-x64 2.1.283 carve (found by grep-native Task 11's Linux run, where this gate was BROKEN, 2 of 3): its
+// minifier binds the consumer's regex name twice, in two modules (`_Q=/^rg: (?:regex parse error|.../m` beside the
+// consumer, `_Q=/^\/?_blob\/[0-9a-f]{32}$/` in another). A minified name is a module's own, so the binding read is the
+// one in the module of the test that uses it; two there are still not trusted.
+const HDR = (name) => `\nimport.meta.require = globalThis.__quaudeRequire; import.meta.url = "file://${name}";\n`;
+test('the usage-error regex is the binding in the consumer\'s own module when the name is bound in another too (linux-x64 2.1.283)', () => {
+  const other = `${HDR('/$bunfs/root/chunk-blob.js')}var a=new Set(["x"]),TQ=/^\\/?_blob\\/[0-9a-f]{32}$/;function f(){}`;
+  const consumer = `${HDR('/$bunfs/root/chunk-grep.js')}${CARVE_2_1_283}`;
+  for (const text of [other + consumer, consumer + other]) {
+    const r = scanBuilders({ text, what: 'two modules' });
+    assert.strictEqual(r.examined, 3, r.findings.join('\n'));
+    assert.deepStrictEqual(r.findings, []);
+  }
+  const twice = `${HDR('/$bunfs/root/chunk-grep.js')}var TQ=/^x/;${CARVE_2_1_283}`;
+  const r = scanBuilders({ text: twice, what: 'one module, twice' });
+  assert.strictEqual(r.examined, 2);
+  assert.match(r.findings.join('\n'), /^usage-error regex: the regex TQ is bound in the consumer's module 2 times, not once/m);
+});

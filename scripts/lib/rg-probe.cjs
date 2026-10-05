@@ -235,7 +235,17 @@ function consumerUsageErrorRegex(text) {
   const esc = (n) => n.replace(/\$/g, '\\$');
   const use = all(new RegExp(`(${ID})\\.test\\(${ID}\\)\\)\\{${ID}\\(new ${esc(cls[0][1])}\\(`, 'g'));
   if (use.length !== 1) return { missing: `the test that throws ${cls[0][1]} is in the carve ${use.length} times, not once` };
-  const def = all(new RegExp(`(?:^|[^\\w$])${esc(use[0][1])}=\\/((?:[^/\\\\\\n]|\\\\.)+)\\/([a-z]*)`, 'g'));
+  let def = all(new RegExp(`(?:^|[^\\w$])${esc(use[0][1])}=\\/((?:[^/\\\\\\n]|\\\\.)+)\\/([a-z]*)`, 'g'));
+  // A minified name is its MODULE's own: the linux-x64 2.1.283 carve binds this one twice, in two modules (grep-native
+  // Task 11). So several bindings are narrowed to the module of the test that uses it (modules split at CHUNK_MARK,
+  // the header extract-claude-js writes on each), and must leave exactly one there.
+  if (def.length > 1) {
+    const starts = [0, ...all(new RegExp(CHUNK_MARK.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')).map((m) => m.index)];
+    const moduleOf = (i) => starts.filter((s0) => s0 <= i).pop();
+    const home = moduleOf(use[0].index);
+    def = def.filter((d) => moduleOf(d.index) === home);
+    if (def.length !== 1) return { missing: `the regex ${use[0][1]} is bound in the consumer's module ${def.length} times, not once` };
+  }
   if (def.length !== 1) return { missing: `the regex ${use[0][1]} is bound in the carve ${def.length} times, not once` };
   return { regex: new RegExp(def[0][1], def[0][2]) };
 }
@@ -770,9 +780,12 @@ function runOursRg(argv, cwd, opts = {}) { return runOursRgBatch([{ argv, cwd }]
 //      Linux container). Unless the argv asks rg to sort (--sort/--sortr, as the Glob tool does) or to
 //      walk on ONE thread (-j1: depth first in readdir order, 20 of 20 on both, and quaude's rg walks
 //      the same: RG-WALK-ORDER, ruling G15), each file's record is sorted before comparing: `path\0`
-//      for -l/--files with --null (a line without it), `path\0N\n` for -c, and for --json one file's
-//      begin..end messages as one record, the summary after them. The records themselves, and the
-//      number of them, must still match exactly.
+//      for -l/--files with --null (a line without it), `path\0N\n` for -c, for --json one file's
+//      begin..end messages as one record, the summary after them, and for the STANDARD printer with
+//      --null one file's run of `path\0...` lines (grep-native Task 11: 2.1.283's environment scan eo()
+//      prints that way, and in an ubuntu:24.04 container native's file order over the envscan tree was
+//      not this Mac's; without --null a path cannot be told from its line, so that printer's order is
+//      judged). The records themselves, and the number of them, must still match exactly.
 //   2. ELAPSED TIMES in --json: `"elapsed":{...}` in each end message's stats and
 //      `"elapsed_total":{...}` in the summary are wall-clock readings; their contents are
 //      blanked. Every other stat must match.
@@ -797,7 +810,20 @@ function recordShape(argv) {
   if (json > files && json > count) return 'json';
   if (files > count) return sep;
   if (count !== -1) return '\n';
-  return null;   // the standard printer: nothing measured calls for reordering it
+  return null;   // the standard printer (with --null, normalizeRg reads its records itself: standardRuns)
+}
+// The standard printer with --null: each line `path\0...`, a file's lines together; a line with no NUL (a `--`
+// context separator) belongs to the run before it. -> the runs, each one file's lines.
+function standardRuns(s) {
+  const runs = [];
+  let cur = null, curPath = null;
+  for (const line of splitAfter(s, '\n')) {
+    const z = line.indexOf('\0');
+    const p = z === -1 ? curPath : line.slice(0, z);
+    if (!cur || p !== curPath) { cur = []; runs.push(cur); curPath = p; }
+    cur.push(line);
+  }
+  return runs.map((r) => r.join(''));
 }
 const splitAfter = (s, sep) => { const out = []; let i = 0; for (let j; (j = s.indexOf(sep, i)) !== -1; i = j + 1) out.push(s.slice(i, j + 1)); if (i < s.length) out.push(s.slice(i)); return out; };
 const isVersion = (argv) => argv.length === 1 && argv[0] === '--version';
@@ -806,7 +832,9 @@ function normalizeRg(stdout, argv, { arch = process.arch } = {}) {
   if (arch === 'x64' && isVersion(argv)) s = s.replace(/^simd\(runtime\):.*$/m, 'simd(runtime):');
   const shape = recordShape(argv);
   if (shape === 'json') s = s.replace(/"(elapsed|elapsed_total)":\{[^{}]*\}/g, '"$1":{}');
-  if (!shape || rgSorts(argv) || rgOneThread(argv)) return s;
+  if (rgSorts(argv) || rgOneThread(argv)) return s;
+  // runs joined with an ASCII record separator, so a file split into two runs never reads as one
+  if (!shape) return argv.includes('--null') || argv.includes('-0') ? standardRuns(s).sort().join('\x1e') : s;
   if (shape !== 'json') return splitAfter(s, shape).sort().join('');
   const files = []; const rest = []; let cur = null;
   for (const line of splitAfter(s, '\n')) {

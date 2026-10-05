@@ -417,7 +417,7 @@ test('RG-WALK-ORDER: -j1 walks depth first in readdir order, the parallel walk L
     }
   }
 }));
-test('RG-WALK-ORDER: native\'s -j1 order is ours exactly, and its parallel order on a small tree is ours at least once in 10 (native)',
+test('RG-WALK-ORDER: native\'s -j1 order is ours exactly, and its parallel order on a small tree is ours at least once in 10 on macOS, the same records elsewhere (native)',
   { skip: POSIX || (!NATIVE ? 'no native provider' : false) }, () => withTrees((root) => {
     const env = { PATH: process.env.PATH, HOME: path.join(root, 'empty') };
     const native = (argv, cwd) => cp.spawnSync(NATIVE, ['--no-config', ...argv], { cwd, argv0: 'rg', env, encoding: 'latin1' }).stdout;
@@ -426,11 +426,20 @@ test('RG-WALK-ORDER: native\'s -j1 order is ours exactly, and its parallel order
       const argv = ['-j1', '-l', '--hidden', 'needle', rel], cwd = path.join(root, tree);
       assert.strictEqual(ours(argv, cwd), native(argv, cwd), `${tree}: -j1`);
     }
+    // The parallel walk: ours (LIFO over readdir) is among native's orders on a small tree where that was MEASURED as
+    // native's commonest, macOS (20 of 20). Elsewhere it is not: in an ubuntu:24.04 container on a 12-thread Xeon
+    // (grep-native Task 11, 2026-10-05) native printed nested/tree as a,deep,sub and deep,a,sub over 10 runs, never
+    // ours' deep,sub,a; ruling G15 already scoped the modal order to small macOS trees. There the order is what
+    // normalization 1 forgives (scripts/lib/rg-probe.cjs), and the records must still be native's exactly.
     for (const [tree, cwdRel, rel] of [['repo', '.', 'code'], ['nested', 'top', 'tree']]) {
       const argv = ['-l', '--hidden', 'needle', rel], cwd = path.join(root, tree, cwdRel);
       const o = ours(argv, cwd);
       const seen = Array.from({ length: 10 }, () => native(argv, cwd));
-      assert.ok(seen.includes(o), `${tree}/${rel}: native's parallel orders ${JSON.stringify([...new Set(seen)])} never once ours ${JSON.stringify(o)}`);
+      if (process.platform === 'darwin') {
+        assert.ok(seen.includes(o), `${tree}/${rel}: native's parallel orders ${JSON.stringify([...new Set(seen)])} never once ours ${JSON.stringify(o)}`);
+      } else {
+        for (const n of new Set(seen)) assert.strictEqual(normalizeRg(Buffer.from(o, 'latin1'), argv), normalizeRg(Buffer.from(n, 'latin1'), argv), `${tree}/${rel}`);
+      }
     }
   }));
 

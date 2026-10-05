@@ -214,6 +214,24 @@ test('compareRg forgives ONLY --version\'s simd(runtime) line, and only on x86_6
   assert.strictEqual(P.compareRg(res(['needle', '-'], VX('+AVX2')), res(['needle', '-'], VX('-AVX2')), { arch: 'x64' }).same, false);
 });
 
+// The standard printer with --null (2.1.283's environment scan eo(): `-o -H --null ... .`) walks in parallel too, and
+// prints each file's lines together, `path\0` first on each (measured 2026-10-05 in an ubuntu:24.04 container: native's
+// order over the envscan tree differed from this Mac's): each file's run of lines is ONE record (normalization 1). The
+// lines inside a file, and the run's own bytes, are still judged; without --null a path cannot be told from its line
+// (`a:b:c`), so the standard printer's order is judged there.
+const STD_NULL = ['-o', '-H', '--null', 'needle', '.'];
+test('compareRg forgives walk order for the standard printer with --null, a file\'s run of lines as one record', () => {
+  const A = './a.txt\x00needle\n./a.txt\x00needle\n', B = './b.txt\x00needle\n';
+  assert.strictEqual(P.compareRg(res(STD_NULL, A + B), res(STD_NULL, B + A)).same, true);
+  // a file's own lines keep their order, and are not shuffled with another file's
+  assert.strictEqual(P.compareRg(res(STD_NULL, './a.txt\x00one\n./a.txt\x00two\n'), res(STD_NULL, './a.txt\x00two\n./a.txt\x00one\n')).same, false);
+  assert.strictEqual(P.compareRg(res(STD_NULL, A + B), res(STD_NULL, './a.txt\x00needle\n' + B + './a.txt\x00needle\n')).same, false);
+  // judged where rg promised an order, and without --null
+  assert.strictEqual(P.compareRg(res(['-j1', ...STD_NULL], A + B), res(['-j1', ...STD_NULL], B + A)).same, false);
+  const H = ['-o', '-H', 'needle', '.'];
+  assert.strictEqual(P.compareRg(res(H, './a.txt:needle\n./b.txt:needle\n'), res(H, './b.txt:needle\n./a.txt:needle\n')).same, false);
+});
+
 test('compareRg: a record set that differs only by a MISSING record is not forgiven by the order normalization', () => {
   assert.strictEqual(P.compareRg(res(FILES, 'a.txt\0b.txt\0'), res(FILES, 'a.txt\0')).same, false);
   assert.strictEqual(P.compareRg(res(FILES, 'a.txt\0a.txt\0'), res(FILES, 'a.txt\0')).same, false);
