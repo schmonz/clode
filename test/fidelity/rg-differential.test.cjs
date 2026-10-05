@@ -88,7 +88,7 @@ const path = require('node:path');
 const { defineGuard, guardTests, checkGate, BROKEN } = require('../guard.cjs');
 const P = require('../../scripts/lib/rg-probe.cjs');
 const { parseRgRefusal } = require('../../libexec/rg-native.cjs');
-const { providerBin } = require('../provider-resolve.cjs');
+const { providerBin, rgOracle, rgOracleSkip } = require('../provider-resolve.cjs');
 const { tjsPath, resolveBin } = require('../node-shim-helper.cjs');
 const { builtQuaude, builtNaude } = require('../built-binary.cjs');
 
@@ -612,7 +612,7 @@ test('RG-MMAP-EVERYWHERE: inTree JSON-escapes the tree and counts bytes_printed 
 });
 // ...and native agrees: macOS native over bin2 in such a tree prints exactly its record spelled there.
 test('RG-MMAP-EVERYWHERE: macOS native in a tree with a quote and a non-ASCII letter prints its record as inTree spells it (native, macOS)',
-  { skip: process.platform !== 'darwin' ? 'macOS only' : !providerBin(process.env) ? 'no native provider' : false }, () => {
+  { skip: process.platform !== 'darwin' ? 'macOS only' : !rgOracle(process.env) ? rgOracleSkip(process.env) : false }, () => {
     const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'rg-intree-')));
     try {
       const tree = path.join(base, `caf${String.fromCodePoint(0xe9)} "q\\x`);

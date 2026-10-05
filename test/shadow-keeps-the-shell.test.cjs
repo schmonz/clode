@@ -224,7 +224,11 @@ for (const shell of SHELLS) {
   }
 }
 test('rewriteSnapshot replaces only quaude\'s own rg alias line, in the file and in the generator, and no other', () => {
-  const other = "alias rg='rg -c'\n  alias rg='/usr/local/bin/rg'\n";
+  // a host's own rg alias, at a path that is never RG_PATH (rg beside the binary running the bundle: under a node in
+  // /usr/local/bin, as in a node container, `/usr/local/bin/rg` IS quaude's line, and was rewritten)
+  const hostRg = '/opt/a-host-rg-dir/bin/rg';
+  assert.notStrictEqual(hostRg, bunShim.RG_PATH);
+  const other = `alias rg='rg -c'\n  alias rg='${hostRg}'\n`;
   assert.strictEqual(rewriteSnapshot(other), other);
   const file = rewriteSnapshot(RG_BLOCK);
   assert.doesNotMatch(file, /alias rg=/);

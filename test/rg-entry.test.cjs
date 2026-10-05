@@ -30,7 +30,7 @@ const cp = require('node:child_process');
 const P = require('../scripts/lib/rg-probe.cjs');
 const rgn = require('../libexec/rg-native.cjs');
 const { tjsPath, engineSpawn, LOADER } = require('./node-shim-helper.cjs');
-const { providerBin } = require('./provider-resolve.cjs');
+const { rgOracle, rgOracleSkip } = require('./provider-resolve.cjs');
 
 const REPO = path.resolve(__dirname, '..');
 const ENTRY = path.join(REPO, 'libexec', 'rg-entry.cjs');
@@ -42,7 +42,7 @@ function hostUgrep() {
 }
 const UGREP = hostUgrep();
 const NEED = { skip: POSIX || (!UGREP ? 'no ugrep on this host' : false) };
-const NATIVE = providerBin(process.env);
+const NATIVE = rgOracle(process.env), NATIVE_SKIP = rgOracleSkip(process.env);
 
 // RG-ARGV0: native 2.1.283 (darwin-arm64), `--version` run under each spelling, 2026-10-04: `ripgrep 14.1.1 ...`
 // (rg) or `2.1.283 (Claude Code)` (not rg).
@@ -126,7 +126,7 @@ test('RG-ARGV0: naude\'s entry is rg-entry\'s rule', () => {
   assert.strictEqual(require('../libexec/naude-entry.cjs').isRgInvocation, require('../libexec/rg-entry.cjs').isRgInvocation);
 });
 
-test('RG-ARGV0: native answers as rg exactly where the table says (native, off Windows)', { skip: POSIX || (!NATIVE ? 'no native provider' : false) }, () => {
+test('RG-ARGV0: native answers as rg exactly where the table says (native, off Windows)', { skip: POSIX || (!NATIVE ? NATIVE_SKIP : false) }, () => {
   for (const [argv0, env, want] of ARGV0_ROWS) {
     const r = cp.spawnSync(NATIVE, ['--version'], { argv0, env: { HOME: os.tmpdir(), PATH: '/usr/bin:/bin', ...env }, encoding: 'utf8', timeout: 60000 });
     assert.strictEqual(r.stdout.startsWith('ripgrep '), want, `${argv0} ${JSON.stringify(env)}: ${r.stdout.split('\n')[0]}`);
@@ -196,7 +196,7 @@ test('RG-IMPLICIT-PATH: an unreadable file is named as printed, the walk\'s erro
 
 // Live: every literal row and the order under -j1, against native here, run the same way (and --json, whose
 // elapsed times compareRg forgives).
-test('RG-IMPLICIT-PATH: ours under tjs equals native run the same way, order included under -j1 (native)', { skip: NEED.skip || (!tjsPath() ? 'no tjs engine' : false) || (!NATIVE ? 'no native provider' : false) }, () => {
+test('RG-IMPLICIT-PATH: ours under tjs equals native run the same way, order included under -j1 (native)', { skip: NEED.skip || (!tjsPath() ? 'no tjs engine' : false) || (!NATIVE ? NATIVE_SKIP : false) }, () => {
   const rows = [...IMPLICIT.map(([argv, stdin]) => [argv, stdin]), [['-j1', '--json', 'needle'], 'null'], [['--json', 'needle'], 'pipe'],
     [['-j1', 'needle'], 'null'], [['-j1', '-c', 'needle', 'sub'], 'pipe']];
   for (const [argv, stdin] of rows) {
@@ -223,7 +223,7 @@ test('RG-CONFIG: RIPGREP_CONFIG_PATH set refuses by name; --no-config, or an emp
   assert.ok(fs.existsSync(t));
 });
 
-test('RG-CONFIG: native with --no-config searches as with no config (native)', { skip: NEED.skip || (!NATIVE ? 'no native provider' : false) }, () => {
+test('RG-CONFIG: native with --no-config searches as with no config (native)', { skip: NEED.skip || (!NATIVE ? NATIVE_SKIP : false) }, () => {
   const r = nativeRun(['--no-config', '-l', 'needle', 'sub'], 'null');
   assert.deepStrictEqual([r.status, r.stdout.toString()], [0, 'sub/deep/nested.txt\n']);
 });
@@ -263,7 +263,7 @@ const IO_ROWS = [
 ];
 for (const [label, run] of [['tjs', 'tjs'], ['native', 'native']]) {
   test(`rg-entry's I/O is native's: a reader that goes away, a closed stdout, a closed stderr (${label})`,
-    { skip: POSIX || (label === 'tjs' ? NEED.skip || (!tjsPath() ? 'no tjs engine' : false) : !NATIVE ? 'no native provider' : false) }, () => {
+    { skip: POSIX || (label === 'tjs' ? NEED.skip || (!tjsPath() ? 'no tjs engine' : false) : !NATIVE ? NATIVE_SKIP : false) }, () => {
       for (const [what, script, want] of IO_ROWS) {
         const r = bash(`E=$(mktemp); ${script(asCmd(run))}; rm -f "$E"`);
         assert.strictEqual(r.stdout, want, `${what}: ${r.stderr}`);

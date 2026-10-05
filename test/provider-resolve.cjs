@@ -241,4 +241,20 @@ function cmpVersion(a, b) {
   return 0;
 }
 
-module.exports = { providers, providerBin, providerBinFor, platformSkipReason, skipReason, isBunContainer, pinnedVersion, cmpVersion, REPO };
+// THE rg ORACLE: providerBin's provider when it RUNS as rg (native's embedded rg answers `--version` under argv0
+// rg), else null. CI's suite hands the tests a MINIMISED carve (scripts/stage-provider.mjs: only clode reads it,
+// it cannot run), and a provider for another platform cannot run here either: a test judging against native rg
+// skips on null, naming rgOracleSkip, where it used to spawn the carve and fail (EACCES). Asked once per path.
+const rgOracleMemo = new Map();
+function rgOracle(env = process.env) {
+  const bin = providerBin(env);
+  if (!bin) return null;
+  if (!rgOracleMemo.has(bin)) rgOracleMemo.set(bin, require('../scripts/lib/rg-probe.cjs').nativeRgVersion(bin) ? bin : null);
+  return rgOracleMemo.get(bin);
+}
+function rgOracleSkip(env = process.env) {
+  const bin = providerBin(env);
+  return bin ? `the provider ${bin} does not run as rg here (a minimised carve, or another platform's binary)` : skipReason(env);
+}
+
+module.exports = { providers, providerBin, providerBinFor, platformSkipReason, skipReason, isBunContainer, pinnedVersion, cmpVersion, rgOracle, rgOracleSkip, REPO };

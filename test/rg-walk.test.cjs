@@ -23,7 +23,7 @@ const { normalizeRg } = require('../scripts/lib/rg-probe.cjs');
 const { TREES, makeWalkTree } = require('./rg-walk-cases.cjs');
 const { tjsPath, runLoader } = require('./node-shim-helper.cjs');
 const { missingExtDeps } = require('./shim-surface/collect.cjs');
-const { providerBin } = require('./provider-resolve.cjs');
+const { rgOracle, rgOracleSkip } = require('./provider-resolve.cjs');
 
 const NO_TJS = !tjsPath() ? 'no tjs engine' : (() => {
   const missing = missingExtDeps();
@@ -43,7 +43,7 @@ const CAPS = UGREP ? rgn.ugrepCapabilities(UGREP) : null;
 // (`\` joins, FILE_ATTRIBUTE_HIDDEN) is unmeasured (BACKLOG).
 const POSIX = process.platform === 'win32' ? 'the walk on Windows is unmeasured (BACKLOG); these trees hold names it cannot' : false;
 const needUgrep = { skip: POSIX || (!UGREP ? 'no ugrep on this host' : !CAPS.format ? CAPS.reason : false) };
-const NATIVE = providerBin(process.env);
+const NATIVE = rgOracle(process.env), NATIVE_SKIP = rgOracleSkip(process.env);
 
 const NREP = 'n'.repeat(300);   // a path component past NAME_MAX
 const P9_NATIVE = [
@@ -418,7 +418,7 @@ test('RG-WALK-ORDER: -j1 walks depth first in readdir order, the parallel walk L
   }
 }));
 test('RG-WALK-ORDER: native\'s -j1 order is ours exactly, and its parallel order on a small tree is ours at least once in 10 on macOS, the same records elsewhere (native)',
-  { skip: POSIX || (!NATIVE ? 'no native provider' : false) }, () => withTrees((root) => {
+  { skip: POSIX || (!NATIVE ? NATIVE_SKIP : false) }, () => withTrees((root) => {
     const env = { PATH: process.env.PATH, HOME: path.join(root, 'empty') };
     const native = (argv, cwd) => cp.spawnSync(NATIVE, ['--no-config', ...argv], { cwd, argv0: 'rg', env, encoding: 'latin1' }).stdout;
     const ours = (argv, cwd) => rgn.runRg(argv, { cwd, env, spawnSync: cp.spawnSync, ugrep: () => null, matchFiles: rgn.matchFilesAlone }).stdout.toString('latin1');

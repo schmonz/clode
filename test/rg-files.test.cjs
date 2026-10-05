@@ -73,7 +73,6 @@ const cp = require('node:child_process');
 const rgn = require('../libexec/rg-native.cjs');
 const { tjsPath, runLoader } = require('./node-shim-helper.cjs');
 const { missingExtDeps } = require('./shim-surface/collect.cjs');
-const { providerBin } = require('./provider-resolve.cjs');
 const { FILES_TREE, makeFilesTree } = require('./rg-files-cases.cjs');
 
 const NO_TJS = !tjsPath() ? 'no tjs engine' : (() => {
@@ -212,9 +211,10 @@ test('RG-SORT-MODIFIED: equal times keep the walk\'s readdir order, --sortr keep
 // RULING G12, end to end: files written within ONE second, their times as the filesystem gave them (none set):
 // native's --sort=modified order is quaude's under tjs (node-shim's stat once reported whole seconds, so such files
 // came out in walk order). Native is run where a provider is at hand; the times are also judged sub-second under tjs.
-const NATIVE = (() => { try { return providerBin(); } catch { return null; } })();
+const { rgOracle, rgOracleSkip } = require('./provider-resolve.cjs');
+const NATIVE = rgOracle(process.env), NATIVE_SKIP = rgOracleSkip(process.env);
 test('RG-SORT-MODIFIED (ruling G12): files written within one second list in native\'s order under tjs (native)', {
-  skip: POSIX || NO_TJS || (!NATIVE ? 'no native provider' : false),
+  skip: POSIX || NO_TJS || (!NATIVE ? NATIVE_SKIP : false),
 }, () => {
   const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'rg-g12-')));
   try {

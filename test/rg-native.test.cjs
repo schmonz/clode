@@ -1540,9 +1540,9 @@ test('RG-STDIN-ALL-THERE: a pipe-capacity divergence row reads stdin, and macOS 
 // The record is kept honest where it can be measured: on macOS, native fed by one write (spawnSync's)
 // prints only its recorded macOS answer or Linux's, and its recorded one at least once in 10 runs. A
 // change in macOS native (or in macOS pipes) fails here, naming the record to re-measure.
-const NATIVE_BIN = require('./provider-resolve.cjs').providerBin(process.env);
+const NATIVE_BIN = require('./provider-resolve.cjs').rgOracle(process.env);
 test('RG-STDIN-ALL-THERE: macOS native still prints its recorded pipe-capacity answer (native, macOS)',
-  { skip: process.platform !== 'darwin' ? 'macOS only' : !NATIVE_BIN ? 'no native provider' : false }, () => withP8((root) => {
+  { skip: process.platform !== 'darwin' ? 'macOS only' : !NATIVE_BIN ? require('./provider-resolve.cjs').rgOracleSkip(process.env) : false }, () => withP8((root) => {
     for (const [, argv, input, mrc, mout, lrc, lout] of P8_MACOS_PIPE_DIVERGENCE) {
       let recorded = 0;
       for (let i = 0; i < 10; i++) {
