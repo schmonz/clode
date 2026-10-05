@@ -1227,6 +1227,67 @@ jobs:
         env:
           CLODE_OFFLINE: '1'
         run: node scripts/cell-profile-diff.cjs --native "$CLODE_NATIVE_ORACLE"
+      # THE rg GATES (grep-native plan, Task 11). quaude answers rg itself (libexec/rg-native.cjs), and searches
+      # with the HOST's ugrep: ugrep proposes candidate lines, quaude's own Rust-regex port decides. ugrep is
+      # never vendored and never shipped; rg-native refuses one older than UGREP_MIN (5.0.0, measured: 3.11.2
+      # exits 0 on a failed read). ubuntu-latest's apt ugrep is 5.0.0, exactly the floor, so this leg also
+      # judges the oldest ugrep quaude supports; the step fails here, by name, if apt ever hands it less.
+      # zsh too: the gate's Bash-route column judges every shell it finds (bash required, zsh optional), and the
+      # Bash tool runs a user's zsh as readily as bash.
+      - name: Install ugrep (>= rg-native's UGREP_MIN) and zsh for the rg gates
+        id: ugrep
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          sudo apt-get -o Acquire::Retries=3 update -qq
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends ugrep zsh
+          node -e '
+            const { UGREP_MIN } = require("./libexec/rg-native.cjs");
+            const out = require("node:child_process").execFileSync("ugrep", ["--version"], { encoding: "utf8" });
+            const have = (/^ugrep (\d+\.\d+\.\d+)/.exec(out) || [])[1];
+            const n = (v) => v.split(".").map(Number);
+            const ok = have && n(have).reduce((c, x, i) => c || (x > n(UGREP_MIN)[i] ? 1 : x < n(UGREP_MIN)[i] ? -1 : 0), 0) >= 0;
+            console.log(`ugrep ${have} (quaude needs >= ${UGREP_MIN})`);
+            if (!ok) { console.error(`ERROR: ugrep ${have} is older than UGREP_MIN ${UGREP_MIN}: quaude refuses to search with it`); process.exit(1); }
+          '
+      # quaude's rg judged BYTE FOR BYTE against native's EMBEDDED rg (the pinned provider run as rg):
+      #   rg-differential     every argv upstream's Grep and Glob tools build, over the fixture trees, through the
+      #                       interception the bundle hits; then the same cells and BASH_ROWS through the Bash
+      #                       tool's route (native's snapshot vs quaude's, a quaude AND a naude built from this
+      #                       tree), and the tripwire rows (a host rg first on PATH).
+      #   agentic-grep-glob   the real Grep, Glob and Bash tools in a built quaude, one -p turn of 27 calls against
+      #                       a canned mock, every tool_result equal to native's recorded answer, on a PATH with no
+      #                       rg and one with a tripwire rg. CLODE_E2E_NATIVE=1 runs its instrument too: native's
+      #                       own turn here must still give those recorded answers, so a Linux native that moved
+      #                       is named, not hidden.
+      # postject into deps/clode because the gate builds a naude (test/built-binary.cjs builtNaude), which also
+      # fetches the pinned Node. The gate's named normalizations (compareRg: walk order, --json elapsed times, and
+      # on THIS x86_64 runner the CPU-read simd(runtime) line of `rg --version`) are the only differences forgiven.
+      # ONE skip is accepted, by name: rg-differential's "macOS only" row (macOS native printing its own record of
+      # the RG-MMAP-EVERYWHERE divergence), which cannot run on Linux. Any other skip — a missing native, engine,
+      # ugrep, bash, quaude or naude — means the gates judged nothing, and fails the step.
+      - name: rg gates — quaude's rg vs native's embedded rg (rg-differential), and Grep/Glob/Bash rg end to end
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' && steps.ugrep.outcome == 'success' }}
+        env:
+          CLODE_TJS: ${{ runner.temp }}/tjs/tjs
+          CLODE_E2E_NATIVE: '1'
+        run: |
+          set -euo pipefail
+          npm ci --prefix deps/clode 2>&1 | tail -3
+          # The oracle must RUN (as rg, and as Claude Code for the end-to-end turn), so it is the pinned native
+          # binary itself (scripts/find-provider.mjs), never stage-provider's minimised carve, which only clode
+          # reads. The quaude and naude the gates build are built from it too.
+          NATIVE="$(node scripts/find-provider.mjs)" || exit 1
+          echo "native: $NATIVE"
+          CLODE_PROVIDER_BIN="$NATIVE" CLODE_CLAUDE_BIN="$NATIVE" \
+            node --test --test-concurrency=1 \
+              test/fidelity/rg-differential.test.cjs \
+              test/fidelity/agentic-grep-glob.test.cjs 2>&1 | tee rg-gates.out
+          SKIPPED=$(sed -nE 's/^(ℹ|#) skipped ([0-9]+)$/\2/p' rg-gates.out | tail -1)
+          NAMED=$(grep -cE '# macOS only$' rg-gates.out || true)
+          echo "skipped: ${SKIPPED:-?}; accepted by name (macOS only): $NAMED"
+          [ "${SKIPPED:-x}" = 1 ] && [ "$NAMED" = 1 ] \
+            || { echo "ERROR: an rg gate SKIPPED beyond the one macOS-only row (see its reason above) — it judged nothing, so this is not a pass" >&2; grep -E 'skipped|# SKIP|﹣' rg-gates.out >&2; exit 1; }
 
   # node-shim oracle on DARWIN — the same node-vs-tjs behavioral diff as
   # node-shim-oracle above, but on macOS against a real darwin tjs.
