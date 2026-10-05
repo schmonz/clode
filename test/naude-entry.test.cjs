@@ -546,3 +546,26 @@ test('naude not invoked as rg never reaches rg-entry.cjs, and materializes it be
   });
   assert.ok(names.includes('bun-shim.cjs') && names.includes('rg-entry.cjs'), JSON.stringify(names));
 });
+
+// Review (fix round 2): in node, merely READING process.stdin makes a piped fd 0 O_NONBLOCK, so a naude invoked as
+// rg that touched it before dispatching made `(echo a; sleep 1; echo b) | rg a` fail with EAGAIN (rg's <stdin>
+// error since review M-2). The rg dispatch must touch none of process.stdin, process.stdout, process.stderr.
+test('naude invoked as rg reads none of process.stdin, stdout, stderr before rg-entry runs', () => {
+  const touched = [];
+  const saved = {};
+  for (const k of ['stdin', 'stdout', 'stderr']) {
+    saved[k] = Object.getOwnPropertyDescriptor(process, k);
+    Object.defineProperty(process, k, { configurable: true, get() { touched.push(k); return saved[k].get ? saved[k].get.call(process) : saved[k].value; } });
+  }
+  try {
+    runNaude({
+      argv: ['needle'], argv0: 'rg', execPath: '/naude', env: {}, workDir: '/work', sea: fakeSea(),
+      materializeAssets: (opts) => opts.destDir,
+      requireRg: () => ({ main: () => {} }),
+      exit: () => {},
+    });
+  } finally {
+    for (const k of ['stdin', 'stdout', 'stderr']) Object.defineProperty(process, k, saved[k]);
+  }
+  assert.deepStrictEqual(touched, []);
+});

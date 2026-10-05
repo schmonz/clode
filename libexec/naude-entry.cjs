@@ -153,11 +153,12 @@ function runNaude(opts = {}) {
     execPath = process.execPath,
     env = process.env,
     requireMain = defaultRequireMain,
-    stdin = process.stdin,
-    stdout = process.stdout,
-    stderr = process.stderr,
     exit = (c) => process.exit(c),
   } = opts;
+  // stdin, stdout, stderr: read only where used, never before the rg dispatch below. In node, READING process.stdin
+  // makes a piped fd 0 O_NONBLOCK, and a naude invoked as rg then failed `(echo a; sleep 1; echo b) | rg a` with
+  // EAGAIN (rg's <stdin> error, as native's for a non-blocking stdin): grep-native Task 10c fix round 2.
+  const stdio = (k) => (opts[k] !== undefined ? opts[k] : process[k]);
 
   // rg (RG-ARGV0): every argument is rg's, answered by rg-entry.cjs before anything else (no deps unpacked, no
   // bundle, no guard). Only rg's own files are materialized, beside where the bundle's copies go.
@@ -180,6 +181,7 @@ function runNaude(opts = {}) {
   // NAUDE_RUN_AS_NODE check below; it always exits 0 itself.
   if (argv[0] === '--clode-update-guard') {
     let data = '';
+    const stdin = stdio('stdin');
     stdin.on('data', (chunk) => { data += chunk; });
     stdin.on('end', () => {
       let verdict = null;
@@ -189,7 +191,7 @@ function runNaude(opts = {}) {
       } catch {
         verdict = null;
       }
-      if (verdict) stdout.write(JSON.stringify(verdict));
+      if (verdict) stdio('stdout').write(JSON.stringify(verdict));
       exit(0);
     });
     return;
@@ -215,7 +217,7 @@ function runNaude(opts = {}) {
   // which would blame it on itself. Everything else passes through in order.
   const carved = carveClodeArgs(argv);
   if (carved.unknown.length) {
-    stderr.write(`naude: unknown option '${carved.unknown[0]}' `
+    stdio('stderr').write(`naude: unknown option '${carved.unknown[0]}' `
       + `(the --clode-* namespace is reserved; known: ${CLODE_FLAGS.join(', ')})\n`);
     exit(64);
     return;
@@ -242,7 +244,7 @@ function runNaude(opts = {}) {
   // are unpacked. An attest that boots the product is a launch, not an attest.
   if (carved.clode.includes('--clode-attest')) {
     const report = attestSelf(sea);
-    stdout.write(report.text);
+    stdio('stdout').write(report.text);
     exit(report.ok ? 0 : 1);
     return;
   }
