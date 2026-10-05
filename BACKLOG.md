@@ -8,10 +8,23 @@ Concrete clode-under-Node divergences from native Claude Code, to triage and fix
 That page is GENERATED from `scripts/build-graph.cjs` — the one declaration of the build — so it
 cannot drift from it; it is also where the honest answer to "does this need node?" lives.
 
-## The Bash tool's `rg` is quaude's rg now; what that left open (2026-10-04)
+## Grep, Glob and the Bash tool's `rg` are native's; what the grep-native plan left open (2026-10-05)
+
+The plan closed with its Task 11 (2026-10-05): the Grep and Glob tools answer as native in every mode, end to end
+on macOS, NetBSD and Linux, and CI's linux-x64-pty judges both rg gates against native on every push from now on
+(the first such run is the push that carries this). Its open threads, by where each is written:
+- below: the Bash tool's `rg` (startup cost, closed descriptors, streaming, a `-U` stdin error, RIPGREP_CONFIG_PATH,
+  a terminal, dev-mode bundles, Windows);
+- under "The NetBSD spike found three bugs": the closed Grep/Glob entry's left-open items (the bundle's Linux
+  descriptor forms judged only end to end; a host rg AT RG_PATH); the regex dialect, THE written divergence, and
+  every refusal by rule; the -l/-c/standard printer entry (special paths, ugrep failures, error text under Node);
+  --json (names that are not UTF-8); the walk (Windows, 1-CPU hosts, the -j1 line buffer); -U and --files (the
+  flags still refused by name: --sort path/accessed/created, --files -); binary files;
+- under "`net.createServer` is ABSENT": sandboxed Bash never runs under quaude (measured in Task 11);
+- under "Ten agentic rows": every quaude still creates ~/.tjs.
 
 grep-native Task 10c (user ruling 2026-10-04) made the Bash tool's `rg` quaude's own tested rg, run as native runs
-its embedded one (the entry above, under "The Grep tool in quaude", says how). Left open:
+its embedded one (the entry under "The Grep tool in quaude, and the Glob tool" says how). Left open:
 
 - **Every Bash `rg` pays the rg command's startup.** Measured on this Mac (M-series, a quaude built from the tree,
   10 runs each): `rg --version` 112 ms (native 12 ms; the same quaude's bundle `--version` 1075 ms), a 13-file
@@ -27,9 +40,10 @@ its embedded one (the entry above, under "The Grep tool in quaude", says how). L
   read(2) fails with ENXIO; on Linux it is the epoll fd, which reads as no FIFO, so the search is ./ at once. The
   rg command reads ENXIO (and EBADF) as the end of stdin, as Rust's stdin does, and a pathless search that meets
   it first searches ./ (native's answer); nothing spins (EAGAIN, a non-blocking stdin with nothing yet, is rg's
-  `<stdin>` error, as native's). A closed fd 1 is the same kqueue (writes fail ENXIO): read as a closed stdout. The
-  root fix is still the engine's: reopen a closed 0, 1 or 2 on /dev/null at startup, as node does (naude is
-  unaffected).
+  `<stdin>` error, as native's). A closed fd 1 is the same kqueue (writes fail ENXIO) or, on Linux, the epoll fd
+  (`readlink /proc/self/fd/1` = anon_inode:[eventpoll]; writes fail EINVAL, which printed a JS stack and rc 1 until
+  grep-native Task 11, found by the Linux run of the gate's `>&-` row): both read as a closed stdout. The root fix
+  is still the engine's: reopen a closed 0, 1 or 2 on /dev/null at startup, as node does (naude is unaffected).
 - **Streaming (RG-STREAM, fix round, review I-2).** The rg command searches stdin and named files as they arrive:
   `yes needle | rg needle | head -1` 0.39 s (native 0.01 s; naude 0.08 s; before: never ended); a 150 MB file under
   `| head -1` 0.27 s, 17 MB RSS (native 0.02 s, 6.9 MB; naude 0.24 s; the reviewer's 138 MB before: 117 s, 1.77
@@ -43,10 +57,6 @@ its embedded one (the entry above, under "The Grep tool in quaude", says how). L
   window are the lever. (2) WALKED files are still read whole, one at a time (memory: the largest file walked).
   (3) The built quaude runs the same matcher about 3 times slower than the same engine binary under `tjs run`
   (2 MB: 1.26 s against 0.42 s; same template sha256): unexplained, worth measuring before a bytecode lever.
-  (5) `clode build naude` from a checkout assembles the PREBUILT build/bundle/naude-entry.bundle.cjs
-  (scripts/build-clode-main.mjs), and nothing rebuilds it when libexec/naude-entry.cjs changes: a naude built after
-  an edit is not the tree's (fix round 2: the gate's naude kept a fixed regression for one run). test/built-binary
-  builtNaude now rebuilds it first; `clode build naude` itself still does not notice.
   (4) A slow stdin under the standard printer prints a fill (64 KiB) at a time, as the all-there read model
   RG-STDIN-ALL-THERE says rg's reads go; native over a trickling pipe prints as each read ends.
 - **A `-U` stdin read error.** The multi-line search still reads stdin whole; a read error there (EAGAIN)
@@ -121,15 +131,16 @@ only keeps the obvious ways back closed. A standalone `node --test file` gets th
 launch helpers that require suite-home.cjs (provider-resolve, oracle-models, node-shim-helper, e2e); a test that spawns
 the bundle without any of them, run standalone, runs it under the real home.
 
-## 87 of the 90 tools the carve can register have no driver that can fail (2026-09-28)
+## 85 of the 90 tools the carve can register have no driver that can fail (2026-09-28; Grep and Glob driven 2026-10-05)
 
 `every-tool-driven` (test/build-gates/tool-coverage-gates.test.cjs; the grep-native plan's task
 0c) reads the tool registry from the pinned carve and requires each tool to have a live check
 that judges its tool_result, or a dated entry in that file's EXEMPTIONS table. At 2.1.283 the
 darwin-arm64 and linux-amd64 carves both register the same 90 tools (87 in getAllBaseTools, 3
-outside it: SubagentHandback, ObserverReport, the MCP template). Three are driven: Agent, Bash,
-Edit. Grep's one driver (agentic-tools) skips on the `rg --json` refusal. The other 87 are the
-table, and the table is the to-do list, grouped by what a driver would need:
+outside it: SubagentHandback, ObserverReport, the MCP template). Five are driven: Agent, Bash,
+Edit, and since grep-native Task 11 Grep and Glob (test/fidelity/agentic-grep-glob.test.cjs, every
+output mode against native; agentic-tools' Grep rows no longer skip). The other 85 are the table,
+and the table is the to-do list, grouped by what a driver would need:
 - **18 local tools a canned-mock turn could drive today** (Read, Write, NotebookEdit, the Task*
   list, TaskStop, Skill, the worktree and cron tools, ScheduleWakeup, ReportFindings, Workflow,
   ListAgents). Read and Write are near misses: floor-probe B4 and node-shim-agentic's Edit row
@@ -143,9 +154,8 @@ table, and the table is the to-do list, grouped by what a driver would need:
   driver); 4 behind a default-off GrowthBook flag; 6 MCP (agentic-mcp-ws is DEFERRED); 16
   claude.ai features and 8 remote/bridged-session tools; 9 self-hosted runner operator tools; 4
   device-relay stubs.
-Grep and Glob fall due 2026-10-12 (the plan's Task 11 drives them and deletes both entries).
-Every other entry falls due 2026-12-31: that day the gate goes red, and each must be driven or
-re-dated with a new reason.
+Every entry falls due 2026-12-31: that day the gate goes red, and each must be driven or re-dated
+with a new reason.
 
 ## The NetBSD spike found three bugs, all fixed; what it left open (2026-09-26)
 
@@ -244,113 +254,34 @@ Bash tool instead".
   too. It is a false positive that fails LOUD (rc 1, with the fix), never a silently wrong
   search. Not fixed: telling a primary from an operand needs find's expression grammar (which
   primaries take a value), which is not trivial. Fix it with that, and a row per case.
-- **The Grep tool in quaude: broken in EVERY mode, and the Glob tool too, in every carve since
-  2.1.185.** (Measured 2026-09-27: a real quaude, 675f1f5's libexec, and native 2.1.283 against
-  the same mock and tree; full evidence in the grep task's report.)
-  - files_with_matches answers "No files found" and count answers "Found 0 total occurrences":
-    SILENTLY wrong, because ugrep exits 2 on `--max-columns` and the tool reads that as no
-    matches. content answers "ripgrep not found on PATH. Install it". Glob (`rg --files --null
-    --glob P --sort=modified`, `--sort=modified` in every carve) answers the same.
-  - With an rg on PATH, the bundle resolves rg through Bun.which to an ABSOLUTE path, and the
-    spawn wrappers translate only a bare `rg`: the HOST rg answers every Grep and Glob call.
-    FIXED (grep-native Task 4): every spawn surface matches rg by BASENAME and answers it with
-    libexec/rg-native.cjs; no rg process ever starts (test/rg-spawn.test.cjs, every surface,
-    node and tjs).
-  - With no rg on PATH, a Grep path outside the working directory refuses: "ripgrep was found
-    only by name on PATH ... Install ripgrep at an absolute path". NOT fixed by grep-native
-    Task 4, and no task of that plan names it: the bundle's own `djn` refuses whenever its
-    rgPath (`Bun.which('rg') ?? 'rg'`) is not absolute, before anything is spawned, so the
-    model is still told to install ripgrep on a host without one.
-    FIXED (grep-native Task 10b, user ruling 2026-10-03: a path string only, no file created):
-    bun-shim's Bun.which('rg') answers ONE absolute path whatever PATH holds, RG_PATH = `rg`
-    beside the binary running the bundle (`rg.exe` on Windows, the spelling Bun.which answers
-    there), and Bun.which(RG_PATH) answers itself (the sandbox's dependency check). The bundle
-    takes native's route on every host: a directory target is searched as `.` from that
-    directory, output made relative (the inside-cwd form changed from absolute to that too, its
-    tool_results unchanged). Measured end to end, the real 2.1.283 bundle under tjs vs native,
-    one canned mock: 8 Grep calls (dir, sub dir, file and -U targets outside cwd; dir, sub dir and
-    no-path inside), on a PATH with no rg and with a tripwire rg first: 16 of 16 tool_results
-    byte-equal (4 of the 8 no-rg ones refused before). The first-use probe (`rg --version`) and
-    the file count reach quaude's rg as before. test/fidelity/agentic-tools.test.cjs drives 3 of
-    those against native literals; rg-differential holds Bun.which('rg') to RG_PATH (never the
-    tripwire's) with no file there.
-    THE SHELL'S rg (corrected in the fix round, review I-1/I-2). quaude's snapshot writer (no
-    argv0) spells rg `alias rg='<RG_PATH>'` inside upstream's "no host rg" guard, and the Bash
-    tool's zsh AND bash expand it (the bash snapshot starts with `shopt -s expand_aliases`), so `rg`
-    ran a missing file. b4a3f11's blanket `unalias rg` before the injected shadow was wrong twice:
-    it threw away a user's own rg alias (native honours `alias rg='rg -c'`), and with --allowedTools
-    naming Grep or Glob (searchToolsOptIn) nothing is injected at all, so `rg` still hit the missing
-    file (zsh: `no such file or directory: .../rg`, rc 127; this entry said no route reached it). Now
-    rewriteSnapshot replaces THAT line (its value is RG_PATH), and no other rg alias, with quaude's rg
-    shadow, always, and recognises a generator holding only that line as a snapshot. Real Bash tool,
-    zsh and bash, against native: --allowedTools Bash,Grep with no host rg answers (it said "command
-    not found" before Task 10b, and the missing file after), and `alias rg='rg -c'` is honoured.
-    With --allowedTools naming Grep or Glob and a host rg on PATH, the Bash tool's `rg` is that host rg:
-    upstream's guard (`if ! (unalias rg; command -v rg)`) writes no rg at all then, and no find/grep shadow
-    is injected. Native does exactly the same.
-    CORRECTED 2026-10-04 (grep-native Task 10c): this entry (5525ba7) went on to say "so in both modes the
-    Bash tool's `rg` matches native". It did not, in NORMAL mode: wherever the snapshot held find/grep
-    shadows, rewriteSnapshot ADDED its own rg shadow beside them, OUTSIDE upstream's guard, so a host rg was
-    overridden by quaude's shell translation; native's Bash `rg` is the host's there. And with no host rg,
-    the Bash tool's rg was that shell shadow (rgShadowBody, the old rg-to-ugrep translation), not quaude's
-    tested rg: under `-c` it printed zero counts (`in/e.log:0`), its file order was ugrep's, a pathless `rg x`
-    searched its stdin and printed `(standard input):0`, and `--json` was refused; nothing judged it
-    against native. Measured at 2e9027c through the gate's Bash route (bash): 42 of 42 BASH_ROWS cells
-    differed from native, and a host rg in normal mode did not run.
-    FIXED (grep-native Task 10c, user ruling 2026-10-04: mirror native exactly). The Bash tool's `rg` is
-    quaude's own rg: libexec/rg-entry.cjs, the rg COMMAND, which a quaude (or naude) runs when invoked as
-    rg (argv[0] `rg`, or ARGV0=rg: RG-ARGV0, native's rule) before any of its bundle loads, answering with
-    rg-native.cjs. The snapshot's rg is native's own shell function (2.1.283's dbe("rg", argv0), byte for
-    byte) run against CLAUDE_CODE_EXECPATH (the quaude binary), written where the writer's alias was,
-    INSIDE upstream's guard, in every mode; it is never added anywhere else, so a host rg wins in every
-    mode, as native's. rgShadowBody and rgToUgrep are deleted. A pathless `rg` searches as native's does
-    (RG-IMPLICIT-PATH: stdin when it is a file, FIFO or socket, else ./ with the `./` left off; the Bash
-    tool's `< /dev/null` means ./). test/fidelity/rg-differential.test.cjs gained a Bash-route column:
-    every matrix cell plus 14 BASH_ROWS a tree kind, through bash and zsh, native's snapshot against
-    native and quaude's against a quaude BUILT from the tree; 0 differ, and the host-rg tripwire runs in
-    both modes for both. shadow-writer-from-carve holds the shell function to the pinned carve's writer.
-    Left open: (1) a host rg that sits AT RG_PATH (ripgrep installed in the very directory the
-    quaude or naude binary is in) is what a route that execs the path for real would run; every
-    spawn is answered by basename, and the snapshot's alias, the one shell route, is now replaced
-    by the function that runs quaude itself as rg, so no known route reaches it. (2) Such a route that does meet ENOENT is worded
-    by the bundle's own YE as "ripgrep not found on PATH. Install it ..." in system mode; no route
-    is known to reach it.
-  - FIXED in part (grep-native Task 6): files_with_matches and count are quaude's rg's own now
-    (libexec/rg-native.cjs: -l, -c and the standard printer, as native prints them; --max-columns
-    a no-op there, as native's is). In rg-differential, 28 of the 90 files/count cells are equal
-    (none were); every one of the other 62 is in a class below that a later task of that plan owns
-    (.git, ignore precedence, whitelist and brace globs, --type: Task 9, done 2026-10-04; -U: Task 10,
-    done 2026-10-04; a binary's NUL past rg's first read: Task 8, done 2026-10-04). After Task 9, 8 files
-    and 8 count cells differed, every one -U; after Task 10, none.
-  - With `--max-columns` dropped, 44 of the 60 files/count argv x tree cells still differ from
-    native (the other 16 are empty on both sides): `--glob '!.git'` excludes no directory in
-    ugrep (.git/HEAD is searched); ugrep -I drops invalid-UTF-8 files; `-c` prints zero counts;
-    outside a git repo rg ignores .gitignore and honors .ignore, ugrep the reverse; an rg
-    whitelist glob overrides ignore rules; `**/*.{ts,tsx}` matches nothing in ugrep; `-U` is
-    ugrep's `--binary` and `--multiline-dotall` is rejected; `--type` is refused; rg reports
-    matches before a NUL that lies past its first 64 KiB read, and renumbers lines in an
-    explicitly named binary file.
-  (Corrected 2026-09-27 from the F4 review's reading of the 2.1.283 carve.)
-  - **When the tool exists.** Upstream swaps Grep and Glob for `grep`/`find` via Bash when
-    bash is available (`wa()`), UNLESS `searchToolsOptIn` is set. That opt-in is set
-    whenever `--tools` or `--allowedTools` names Grep or Glob. The tools are also kept under
-    CLAUDE_CODE_ENTRYPOINT=local-agent, and on Windows without Git Bash.
-    `--allowedTools Bash,Grep` keeps Grep; `--disallowedTools Bash` still removes it.
-  - **What breaks.** output_mode "content" pushes `--json` (first in 2.1.251; absent in .185,
-    .218, .243, .246 and .250, so 0.20260831.1 already shipped this broken). The rg->ugrep
-    translation refuses --json by design, and the tool answers "ripgrep not found on PATH".
-  - **--max-columns.** Every mode since 2.1.185 passes `--max-columns 500`. rgToUgrep passes it
-    through, and mis-splits its value: `--max-columns` is followed by `500` as a
-    positional. ugrep 7.8.2 rejects it ("invalid option --max-columns"). So
-    files_with_matches and count modes fail too (measured above).
-  - **On a refusal, `_rewriteRgSpawn` hands back the UNTRANSLATED argv.** With no rg, the
-    model is told "Install ripgrep". With an rg on PATH, the host rg runs, contradicting
-    the rg-divergence rule. FIXED (grep-native Task 4): a refusal is a synthesized failed
-    child (rg-native.cjs rgRefusal: rc 2, `rg: error parsing flag <flag>: <reason>` on stderr,
-    the spelling the tool's consumer shows the model as an error instead of "no results").
-  test/fidelity/agentic-tools.test.cjs's Grep row checked the whole body and passed on its
-  own `pattern:`. Since f4d763d it reads the tool_result, and a `--json` refusal on stderr
-  never counts as a pass. The fix is the next task.
+- **The Grep tool in quaude, and the Glob tool: native's, in every mode (grep-native plan, closed 2026-10-05).**
+  Both were broken in every carve since 2.1.185: files_with_matches and count answered "No files found" (ugrep
+  exited 2 on `--max-columns`), content mode and Glob "ripgrep not found on PATH. Install it", a Grep outside the
+  working directory "Install ripgrep at an absolute path", and a host rg on PATH answered instead; git history (and
+  this entry's earlier versions) has the measurements. quaude's rg (libexec/rg-native.cjs, rg-regex.cjs,
+  rg-walk.cjs, rg-types.cjs, rg-entry.cjs) now answers every argv the tools build as native's embedded rg does:
+  judged byte for byte by test/fidelity/rg-differential.test.cjs (253 cells over three fixture trees, then the
+  Bash tool's route through bash and zsh, a built quaude and naude, and a tripwire rg), and end to end by
+  test/fidelity/agentic-grep-glob.test.cjs (a built quaude, 27 Grep, Glob and Bash-`rg` calls in one turn, every
+  tool_result equal to native's, with no rg and with a tripwire rg on PATH): green on macOS arm64, NetBSD 11 arm64
+  and Linux x64 (ubuntu:24.04, ugrep 5.0.0); CI's linux-x64-pty runs both. The Grep and Glob tools never run a host
+  rg and never tell the model to install one; bun-shim's Bun.which('rg') answers quaude's own absolute path
+  (RG_PATH, beside the binary, never created). The Bash tool's `rg` is quaude's tested rg unless the user installed
+  one: upstream's guard defines its rg only when none is on PATH, and native does the same.
+  The Linux end to end found what the gate could not: the 2.1.283 bundle on Linux spawns its Grep's rg with cwd
+  /proc/self/fd/N and names a single file /proc/<its pid>/fd/N, and quaude's rg refused both as descriptor paths,
+  failing every Grep there (RG-SPAWN-CWD, RG-PID-FD; Task 11). Left open:
+  (1) rg-differential spawns every cell from a plain directory, so the bundle's own descriptor forms are judged
+  only end to end; a cell kind handing the gate's "ours" a /proc/self/fd/N cwd would judge them cell by cell.
+  (2) A host rg that sits AT RG_PATH (ripgrep installed in the very directory the quaude or naude binary is in) is
+  what a route that execs the path for real would run; every spawn is answered by basename and the snapshot's rg
+  runs quaude itself, so no known route reaches it. (3) Such a route that does meet ENOENT is worded by the
+  bundle's own YE as "ripgrep not found on PATH. Install it ..." in system mode; no route is known to reach it.
+  (4) WHEN THE TOOLS EXIST (read from the 2.1.283 carve, F4 review): upstream swaps Grep and Glob for `grep`/`find`
+  via Bash when bash is available (`wa()`) unless `searchToolsOptIn` is set, which it is whenever `--tools` or
+  `--allowedTools` names Grep or Glob; they are also kept under CLAUDE_CODE_ENTRYPOINT=local-agent and on Windows
+  without Git Bash. `--allowedTools Bash,Grep` keeps Grep; `--disallowedTools Bash` still removes it. So most
+  sessions reach rg through the Bash tool's `rg` (above) and grep/find shadows, not these tools.
 - **`rg --version` was answered by ugrep's own version, so /doctor reported rg not working.** FIXED
   (grep-native Task 9, user ruling 2026-10-03): quaude's rg answers `--version`, `-V` and `--type-list`
   from libexec/rg-types.cjs, generated from the pinned native by scripts/gen-rg-types.cjs and held fresh
@@ -379,7 +310,15 @@ Bash tool instead".
     stderr maxBuffer fires late) and pushes stdout without backpressure; no 2.1.283 consumer is
     affected (review N3).
 - **quaude's rg regex dialect: what ugrep-proposes / rg-regex-decides leaves open (grep-native
-  Task 5b, 2026-10-03).** ugrepMatches now decides every line ugrep proposes with
+  Task 5b, 2026-10-03).** THE WRITTEN DIVERGENCE (the grep-native design's one in scope, restated at its close,
+  2026-10-05): rg's Rust regex and ugrep's dialect cannot be made equal (leftmost-first against leftmost-longest
+  alternation, `\b` and POSIX classes over UTF-8, measured in Task 5), so quaude never translates one into the
+  other. ugrep only PROPOSES candidate lines, by a prefilter proved a superset of rg's matches; rg-regex.cjs (a port
+  of regex-syntax 0.8.4 and regex-automata 0.4.7's Pike VM, its tables generated from native) DECIDES every line and
+  every range as rg does; and what it cannot decide as rg does is REFUSED BY NAME (rc 2, the rule on stderr; the
+  tools show the model an error), never answered differently. The gate's patterns are the dialect both read alike
+  plus the hostile corpora the reviews ran (thousands of patterns, 0 diff). The refusals, each by rule, are below.
+  ugrepMatches now decides every line ugrep proposes with
   libexec/rg-regex.cjs (rg's own matcher semantics over character data generated from native), so
   Task 5's dialect rows are native's on ugrep 7.8.2 and 5.0.0 alike (the task-5b report has the
   table). What remains, each by name:
@@ -4638,6 +4577,17 @@ deciding what to do next, which is how they went missing from planning. Recorded
 here so the next session can see them.
 
 ### 1. `net.createServer` is ABSENT — UDS peer messaging is silently off under quaude
+
+**AND SANDBOXED BASH NEVER RUNS UNDER QUAUDE (measured 2026-10-05, grep-native Task 11, macOS arm64 and Linux
+x64).** With `{"sandbox":{"enabled":true}}` in the settings, a Bash call that writes inside and outside the
+working directory: native runs it sandboxed (inside written, outside refused: `Operation not permitted` on macOS,
+`Read-only file system` under bwrap on Linux); quaude answers `Sandbox is enabled but failed to initialize: not a
+function. Sandboxing is disabled for the rest of this session; restart to retry.` (is_error, nothing runs, every
+Bash call that session). The debug log says only `Failed to initialize sandbox: not a function`; the sandbox's
+network proxies are servers the bundle makes with `createServer` (`__.createServer(); y.listen(0,"127.0.0.1")`,
+the SOCKS server's `t3.createServer(...)`), so this gap is the likely cause, unconfirmed. On Linux it used to fail
+earlier: the sandbox's dependency check looked for rg on PATH and said dependencies are missing; since grep-native
+Task 10b Bun.which(RG_PATH) answers, the check passes and initialization is what fails. Neither ever sandboxed.
 
 Every quaude startup logs `[ERROR] [uds-messaging] Failed to create server: TypeError:
 not a function`. That is `net.createServer`: `libexec/node-shim/modules/net.cjs` exports
