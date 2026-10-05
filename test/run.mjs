@@ -315,10 +315,15 @@ if (!harnessOk()) {
 // main.mjs'` — a missing prerequisite, not a product defect. Building it up front (fast:
 // ~2s once the esbuild toolchain is installed) removes the race instead of hoping to
 // win it; build-clode-main.test.cjs still re-derives it for real and is unaffected by
-// finding it already fresh.
+// finding it already fresh. A STALE pair is rebuilt too: `clode build naude` from a checkout
+// refuses a naude-entry bundle older than libexec (clode-build's staleLibexecSource), so a tree
+// edited since its last build-clode-main would otherwise fail every checkout naude test.
 const NAUDE_BUNDLE = path.join('build', 'bundle', 'naude-entry.bundle.cjs');
 const MAIN_BUNDLE = path.join('build', 'bundle', 'clode-main.bundle.cjs');
-if (!fs.existsSync(NAUDE_BUNDLE) || !fs.existsSync(MAIN_BUNDLE)) {
+const { staleLibexecSource } = require('../libexec/clode-build.cjs');
+if (!fs.existsSync(NAUDE_BUNDLE) || !fs.existsSync(MAIN_BUNDLE)
+  || staleLibexecSource(NAUDE_BUNDLE, path.join(ROOT, 'libexec'))
+  || staleLibexecSource(MAIN_BUNDLE, path.join(ROOT, 'libexec'))) {
   console.error('run: pre-building build/bundle/*.bundle.cjs (node scripts/build-clode-main.mjs) ...');
   execFileSync(process.execPath, [path.join('scripts', 'build-clode-main.mjs')], { stdio: 'inherit' });
 }

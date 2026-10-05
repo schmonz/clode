@@ -594,3 +594,46 @@ test('clode build naude: an unsupported HOST is refused before the bundle is sta
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// A CHECKOUT's naude is assembled from the PREBUILT build/bundle/naude-entry.bundle.cjs
+// (scripts/build-clode-main.mjs), and nothing else rebuilds it: after a pull that changed
+// libexec, `clode build naude` used to bake the OLD entry code silently (found in grep-native
+// Task 10c, where a test's naude kept the pre-fix rg dispatch). The same rule `--self`
+// already enforces on its clode-main bundle refuses it here: a bundle older than any
+// libexec source fails loud and names the command that rebuilds it — before any staging.
+function fakeCheckout(dir, bundleTime) {
+  const root = path.join(dir, 'root');
+  const libexec = path.join(root, 'libexec');
+  fs.mkdirSync(libexec, { recursive: true });
+  fs.mkdirSync(path.join(root, 'build', 'bundle'), { recursive: true });
+  fs.writeFileSync(path.join(libexec, 'naude-entry.cjs'), '// a source edited after the bundle\n');
+  const bundle = path.join(root, 'build', 'bundle', 'naude-entry.bundle.cjs');
+  fs.writeFileSync(bundle, '// a prebuilt naude entry\n');
+  fs.utimesSync(bundle, bundleTime, bundleTime);
+  return libexec;
+}
+
+test('clode build naude (checkout): a naude-entry bundle older than libexec fails loud and names the fix', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-naude-stale-'));
+  try {
+    const { env } = seedProvider(dir);
+    const libexec = fakeCheckout(dir, new Date(1000));
+    const r = await runBuild([], env, undefined, undefined, { libexec });
+    assert.strictEqual(r.status, 1);
+    assert.match(r.stderr, /naude-entry\.bundle\.cjs is older than libexec\/naude-entry\.cjs/);
+    assert.match(r.stderr, /build-clode-main\.mjs/);
+    assert.deepStrictEqual(r.calls, [], 'nothing may be spawned for a stale bundle');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('clode build naude (checkout): a fresh naude-entry bundle passes the staleness gate', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-naude-fresh-'));
+  try {
+    const { env } = seedProvider(dir);
+    // pre-2038: NetBSD's utimes truncates to a signed 32-bit time_t (see clode-build.test.cjs)
+    const libexec = fakeCheckout(dir, new Date(Math.min(Date.now() + 1000 * 60 * 60 * 24 * 365, Date.UTC(2038, 0, 1))));
+    const r = await runBuild([], env, undefined, undefined, { libexec });
+    // the fake checkout has no extractor, so the build fails further on — this asserts only the gate
+    assert.doesNotMatch(r.stderr, /is older than libexec\//);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});

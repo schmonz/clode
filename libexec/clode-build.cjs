@@ -1158,6 +1158,22 @@ function carveVerdict({ naude, self, providerPlatform, target, hostPlatform, env
 // clode build [--out PATH]. Returns the exit status (0 on success). Injectable
 // bits (env/stderr/stdout) keep the unit-testable surface consistent with the
 // sibling subcommand modules.
+// A prebuilt esbuilt bundle (build/<dir>/clode-main.bundle.cjs for --self, the checkout's
+// build/bundle/naude-entry.bundle.cjs for naude) freezes libexec as of whenever it was
+// built; a stale one builds a WRONG product silently. The rule, stated once for both
+// sites: the bundle must be no older than any libexec/*.{cjs,mjs,js} — deliberately the
+// simple "newest mtime under libexec" (a superset of each bundle's real require graph)
+// rather than a per-module dependency walk; obviously correct beats clever here.
+// AppleDouble sidecars (this mount litters libexec/._*.cjs — see git-gc-fails-appledouble)
+// are not sources, and their mtimes drift independently of the file they shadow, so they
+// would make the gate cry wolf on a genuinely fresh bundle. Returns the first newer
+// source's name, or null.
+function staleLibexecSource(bundle, libexec) {
+  const bm = fs.statSync(bundle).mtimeMs;
+  return fs.readdirSync(libexec).find((f) => /\.(cjs|mjs|js)$/.test(f) && !f.startsWith('._')
+    && fs.statSync(path.join(libexec, f)).mtimeMs > bm) || null;
+}
+
 // THE BUILD'S OWN TJS HOME (ruling G33). Every tjs process the build starts (the blobulate worker, the attest, the
 // product's smoke) creates its "home", $TJS_HOME or else ~/.tjs, before anything else runs (txiki's run-main), and the
 // smoke's bundle writes localStorage.db and cookies.txt there. A build must not leave that in the user's home, so
@@ -1316,6 +1332,18 @@ async function clodeBuildIn(args, opts) {
     }
     const assembleRoot = blobulatedBuilder ? payloadDir : ROOT;
     const effLibexec = blobulatedBuilder ? path.join(payloadDir, 'libexec') : opts.libexec;
+    // A checkout assembles the PREBUILT build/bundle/naude-entry.bundle.cjs, which nothing
+    // here rebuilds: after a pull that changed libexec it would bake the OLD entry code
+    // silently. The same rule as --self's clode-main bundle (staleLibexecSource), checked
+    // before any staging. (A blobulated builder carries its bundle in the payload, built
+    // with it, so it cannot be stale this way.)
+    if (!blobulatedBuilder) {
+      const naudeBundle = path.join(ROOT, 'build', 'bundle', 'naude-entry.bundle.cjs');
+      const staleSrc = fs.existsSync(naudeBundle) && staleLibexecSource(naudeBundle, opts.libexec);
+      if (staleSrc) {
+        return fail(`build naude: ${naudeBundle} is older than libexec/${staleSrc} — a stale bundle would build a naude from OLD code; re-run \`node scripts/build-clode-main.mjs\` and try again`);
+      }
+    }
 
     try {
       // -- CAN THIS BUILD HAPPEN AT ALL? Asked FIRST, because it is a pure lookup in
@@ -1808,19 +1836,11 @@ async function clodeBuildIn(args, opts) {
       // convention — "run build-clode-main.mjs first" — and conventions don't hold,
       // as this same skew recurring here proves). So this is a hard gate, not a
       // warning: fail loud and name the exact command rather than blobulate a builder
-      // that answers a dead flag surface. Deliberately the simple "newest mtime
-      // under libexec/*.cjs" rule (a superset of clode-main's real require graph)
-      // rather than a clever per-module dependency walk — obviously correct beats
-      // clever here. Applies even when CLODE_MAIN_BUNDLE was set explicitly: an
+      // that answers a dead flag surface (the rule: staleLibexecSource). Applies
+      // even when CLODE_MAIN_BUNDLE was set explicitly: an
       // override picks WHICH bundle, not whether it's fresh, and the failure mode
       // (wrong builder blobulated silently) is identical either way.
-      const bm = fs.statSync(bundle).mtimeMs;
-      // Exclude AppleDouble sidecars (this mount litters libexec/._*.cjs — see
-      // git-gc-fails-appledouble): they are not real sources, and their mtimes
-      // can drift independently of the file they shadow, which would make the
-      // gate cry wolf on a genuinely fresh bundle.
-      const staleSrc = fs.readdirSync(libexec).find((f) => /\.(cjs|mjs|js)$/.test(f) && !f.startsWith('._')
-        && fs.statSync(path.join(libexec, f)).mtimeMs > bm);
+      const staleSrc = staleLibexecSource(bundle, libexec);
       if (staleSrc) {
         return fail(`bootstrap: ${bundle} is older than libexec/${staleSrc} — a stale bundle would blobulate a WRONG builder (dead flag surface / extractIfNeeded crash); re-run \`node scripts/build-clode-main.mjs\` and try again`);
       }
@@ -2224,5 +2244,5 @@ module.exports = {
   readDirectDeps, computeDepClosure, assertClosureMatchesLockfile,
   scanBareSpecifiers, scannableTexts, specifierPackageName, isBuiltinSpecifier, shimProvidedModules,
   assertNoUnknownBareSpecifiers, KNOWN_UNREACHABLE, resolveClaudeNmDir,
-  resolveManifest, releaseBaseUrl, thisTjsPin,
+  resolveManifest, releaseBaseUrl, thisTjsPin, staleLibexecSource,
 };
