@@ -4599,16 +4599,29 @@ here so the next session can see them.
 
 ### 1. `net.createServer` is ABSENT — UDS peer messaging is silently off under quaude
 
-**AND SANDBOXED BASH NEVER RUNS UNDER QUAUDE (measured 2026-10-05, grep-native Task 11, macOS arm64 and Linux
-x64).** With `{"sandbox":{"enabled":true}}` in the settings, a Bash call that writes inside and outside the
-working directory: native runs it sandboxed (inside written, outside refused: `Operation not permitted` on macOS,
-`Read-only file system` under bwrap on Linux); quaude answers `Sandbox is enabled but failed to initialize: not a
-function. Sandboxing is disabled for the rest of this session; restart to retry.` (is_error, nothing runs, every
-Bash call that session). The debug log says only `Failed to initialize sandbox: not a function`; the sandbox's
-network proxies are servers the bundle makes with `createServer` (`__.createServer(); y.listen(0,"127.0.0.1")`,
-the SOCKS server's `t3.createServer(...)`), so this gap is the likely cause, unconfirmed. On Linux it used to fail
-earlier: the sandbox's dependency check looked for rg on PATH and said dependencies are missing; since grep-native
-Task 10b Bun.which(RG_PATH) answers, the check passes and initialization is what fails. Neither ever sandboxed.
+**AND SANDBOXED BASH NEVER RUNS UNDER QUAUDE; IT FAILED OPEN UNTIL 8b088ef, AND NOW FAILS CLOSED (measured
+2026-10-05, grep-native Task 11 and its fix round 2, macOS arm64 and Linux x64).** With `{"sandbox":{"enabled":true}}`
+(user, project or local settings) and three Bash calls each writing a file inside and outside the working directory:
+native runs them sandboxed (inside written, outside refused: `Operation not permitted` on macOS, `Read-only file
+system` under bwrap on Linux). quaude's sandbox fails to initialize (the debug log says only `Failed to initialize
+sandbox: not a function`; the sandbox's network proxies are servers the bundle makes with `createServer`, e.g.
+`__.createServer(); y.listen(0,"127.0.0.1")`, the SOCKS server's `t3.createServer(...)`, so this gap is the likely
+cause, unconfirmed). Corrected (this entry first said every Bash call then errored): the first call answered
+`Sandbox is enabled but failed to initialize: not a function. Sandboxing is disabled for the rest of this session`,
+the bundle set sandboxDisabledThisSession, and calls 2 and 3 RAN UNSANDBOXED, writing outside the working
+directory. Before grep-native Task 10b on Linux it failed open earlier: the dependency check missed rg, and the
+bundle's optional branch runs commands unsandboxed with a warning. FIXED to fail CLOSED (8b088ef, user ruling
+2026-10-05; the named divergence is stated at the injection in libexec/quaude-bootstrap.mjs): quaude hands the
+bundle sandbox.failIfUnavailable, so with the sandbox enabled every Bash call is refused (`Sandbox is required but
+failed to initialize: not a function. Restart to retry.`), and where bubblewrap/socat are missing quaude refuses at
+startup (`sandbox required but unavailable ... sandbox.failIfUnavailable is set`; native starts unsandboxed with a
+warning there). test/fidelity/agentic-sandbox-fail-closed.test.cjs holds it. Left: (1) real sandbox support
+(after the release); (2) the refusal's reason is the bundle's, `not a function`, which names the symptom, not the
+gap; naming it needs a shim `net.createServer` that throws by name, which this entry says not to wall in before the
+wall-aware inventory; (3) "Restart to retry" will not help under quaude; (4) NAUDE does not sandbox either: under
+Node the sandbox initializes, but wrapWithSandbox refuses every sandboxed call (`Shell '/bin/bash' not found in
+PATH`, measured on macOS): it fails closed by that gap, not open; the likely cause is bun-shim's Bun.which on an
+absolute shell path, unmeasured.
 
 Every quaude startup logs `[ERROR] [uds-messaging] Failed to create server: TypeError:
 not a function`. That is `net.createServer`: `libexec/node-shim/modules/net.cjs` exports

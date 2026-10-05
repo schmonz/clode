@@ -70,6 +70,11 @@ error with the help under it, not a silent translation:
   worktree is the one it claims, could not tell two files apart
 - Fix `clode build naude` from a source checkout silently building from a stale prebuilt
   entry bundle; it now refuses and names `node scripts/build-clode-main.mjs`
+- (`quaude` only, known gap) Sandboxed Bash is REFUSED, not run, until quaude supports
+  Claude Code's sandbox: with `sandbox.enabled`, every Bash call is refused (`Sandbox is
+  required but failed to initialize`), and where Linux lacks bubblewrap or socat quaude
+  refuses to start. Before this, the first call was refused and every later one ran
+  UNSANDBOXED. Native runs these commands sandboxed
 
 ## 0.20260831.1
 
