@@ -1275,10 +1275,16 @@ jobs:
           set -euo pipefail
           npm ci --prefix deps/clode 2>&1 | tail -3
           # The oracle must RUN (as rg, and as Claude Code for the end-to-end turn), so it is the pinned native
-          # binary itself (scripts/find-provider.mjs), never stage-provider's minimised carve, which only clode
-          # reads. The quaude and naude the gates build are built from it too.
-          NATIVE="$(node scripts/find-provider.mjs)" || exit 1
-          echo "native: $NATIVE"
+          # binary itself, never stage-provider's minimised carve, which only clode reads: UPSTREAM_PIN's
+          # platform package, installed on its own as the text oracle above is (its purpose is to be RUN and
+          # judged against; the gates also build their quaude and naude from it, as a dev box builds from the
+          # provider it has). A header that names no version refuses rather than install `@`.
+          V=$(sed -n 's/^claude-code //p' UPSTREAM_PIN)
+          [ -n "$V" ] || { echo "ERROR: UPSTREAM_PIN names no claude-code version" >&2; exit 2; }
+          npm i --prefix "$RUNNER_TEMP/rg-oracle" @anthropic-ai/claude-code-linux-x64@"$V" 2>&1 | tail -2
+          NATIVE="$RUNNER_TEMP/rg-oracle/node_modules/@anthropic-ai/claude-code-linux-x64/claude"
+          test -x "$NATIVE" || { echo "ERROR: no native claude at $NATIVE after installing $V" >&2; exit 1; }
+          echo "native: $NATIVE ($V)"
           CLODE_PROVIDER_BIN="$NATIVE" CLODE_CLAUDE_BIN="$NATIVE" \
             node --test --test-concurrency=1 \
               test/fidelity/rg-differential.test.cjs \
