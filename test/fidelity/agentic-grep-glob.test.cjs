@@ -235,6 +235,19 @@ function baseEnv() {
   for (const [k, v] of Object.entries(process.env)) if (!/^(CLAUDE|ANTHROPIC)/.test(k)) env[k] = v;
   return env;
 }
+// THE PATH WITH NO rg (review M2). Dropping every directory that holds an rg also drops what sits beside it: where rg
+// lives with ugrep and bash (Homebrew's bin, pkgsrc's /opt/pkg/bin), quaude's rg would lose its ugrep and the turn would
+// fail for a reason that is not the product's. So a directory holding an rg is replaced by one of its own (under
+// `scratch`) linking every other entry of it: only rg is hidden, everything else still resolves.
+function pathWithoutRg(PATH, scratch) {
+  return PATH.split(path.delimiter).filter(Boolean).map((d, i) => {
+    if (!fs.existsSync(path.join(d, 'rg'))) return d;
+    const twin = path.join(scratch, `path-${i}`);
+    fs.mkdirSync(twin, { recursive: true });
+    for (const e of fs.readdirSync(d)) if (e !== 'rg') try { fs.symlinkSync(path.join(d, e), path.join(twin, e)); } catch { /* unlinkable: not a tool */ }
+    return twin;
+  }).join(path.delimiter);
+}
 const resolveBin = (name, PATH) => PATH.split(path.delimiter).map((d) => d && path.join(d, name)).find((p) => p && fs.existsSync(p)) || null;
 
 function runTurn(bin, cwd, env, timeoutMs) {
@@ -258,7 +271,7 @@ async function judge(bin, mode) {
     fs.mkdirSync(trip);
     fs.writeFileSync(path.join(trip, 'rg'), '#!/bin/sh\necho TRIPWIRE-HOST-RG-RAN "$@"\nexit 99\n', { mode: 0o755 });
     const host = baseEnv();
-    const noRg = (host.PATH || '').split(path.delimiter).filter((d) => d && !fs.existsSync(path.join(d, 'rg'))).join(path.delimiter);
+    const noRg = pathWithoutRg(host.PATH || '', path.join(t.base, 'no-rg'));
     const PATH = mode === PATH_MODES[1] ? `${trip}${path.delimiter}${noRg}` : noRg;
     const bash = resolveBin('bash', noRg);
     const mock = await startMockAnthropic({
@@ -280,6 +293,21 @@ async function judge(bin, mode) {
     } finally { await mock.close(); }
   } finally { fs.rmSync(t.base, { recursive: true, force: true }); }
 }
+
+test('pathWithoutRg hides only rg: a tool beside it still resolves (review M2)', { skip: process.platform === 'win32' ? 'symlinks and a POSIX PATH' : false }, () => {
+  const d = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'no-rg-path-')));
+  try {
+    const bin = path.join(d, 'bin'), other = path.join(d, 'other');
+    for (const [dir, names] of [[bin, ['rg', 'ugrep', 'bash']], [other, ['zsh']]]) {
+      fs.mkdirSync(dir);
+      for (const n of names) fs.writeFileSync(path.join(dir, n), '#!/bin/sh\n', { mode: 0o755 });
+    }
+    const P = pathWithoutRg([bin, other].join(path.delimiter), path.join(d, 'scratch'));
+    assert.strictEqual(resolveBin('rg', P), null);
+    for (const n of ['ugrep', 'bash', 'zsh']) assert.ok(resolveBin(n, P), `${n} must still resolve`);
+    assert.ok(P.split(path.delimiter).includes(other), 'a directory with no rg is kept as it is');
+  } finally { fs.rmSync(d, { recursive: true, force: true }); }
+});
 
 const SKIP = process.platform === 'win32' ? 'the tripwire is a shell script and the Bash rows need bash' : false;
 
