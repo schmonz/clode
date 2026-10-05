@@ -63,11 +63,11 @@ function loadShim(fsShimSrc, { win, fss }) {
     priority: require('node:os').constants.priority,
     UV_UDP_REUSEADDR: require('node:os').constants.UV_UDP_REUSEADDR,
   };
-  const sandboxRequire = (id) =>
-    (String(id).includes('internal/engine-constants.cjs') ? engineConstants : require(id));
+  // and node-errors.cjs, which fs.cjs reshapes the engine's errors with, loaded beside it (test/fs-shim-sandbox.cjs)
+  let sandboxRequire = null;
   const sandbox = {
     module: { exports: {} }, exports: {},
-    require: sandboxRequire, console,
+    require: (id) => sandboxRequire(id), console,
     TextDecoder, TextEncoder, Buffer,
     __tjs_fs_sync: fss,
     // _isWin reads navigator.platform first, then falls back to process.platform.
@@ -76,6 +76,7 @@ function loadShim(fsShimSrc, { win, fss }) {
   };
   sandbox.globalThis = sandbox; // globalThis.__tjs_fs_sync / globalThis.process resolve here
   vm.createContext(sandbox);
+  sandboxRequire = require('./fs-shim-sandbox.cjs').shimRequire(sandbox, engineConstants);
   vm.runInContext(
     `(function (module, exports, require) {\n${fsShimSrc}\n})(module, exports, require);`,
     sandbox, { filename: 'fs.cjs' });

@@ -67,7 +67,6 @@ function makeFSS() {
   };
 }
 
-const NODE_ERRORS_SRC = fs.readFileSync(path.join(__dirname, '..', 'libexec', 'node-shim', 'internal', 'node-errors.cjs'), 'utf8');
 // Load a fs.cjs-shaped source with a given process.platform and stand-in primitive.
 function loadShim(fsShimSrc, { platform, fss }) {
   const os = require('node:os');
@@ -80,17 +79,11 @@ function loadShim(fsShimSrc, { platform, fss }) {
     priority: os.constants.priority,
     UV_UDP_REUSEADDR: os.constants.UV_UDP_REUSEADDR,
   };
-  // node-shim's own internals the shim requires, loaded in the same sandbox: engine-constants is this host's
-  // node table, and node-errors (which reshapes the engine's errors as node's) reads it from there.
-  const nodeErrors = { exports: {} };
-  const sandboxRequire = (id) => {
-    if (/engine-constants\.cjs$/.test(String(id))) return engineConstants;
-    if (/node-errors\.cjs$/.test(String(id))) return nodeErrors.exports;
-    return require(id);
-  };
+  // node-shim's own internals the shim requires, loaded in the same sandbox (test/fs-shim-sandbox.cjs)
+  let sandboxRequire = null;
   const sandbox = {
     module: { exports: {} }, exports: {},
-    require: sandboxRequire, console,
+    require: (id) => sandboxRequire(id), console,
     TextDecoder, TextEncoder, Buffer, queueMicrotask,
     __tjs_fs_sync: fss,
     navigator: { platform: platform === 'darwin' ? 'MacIntel' : platform === 'linux' ? 'Linux aarch64' : 'NetBSD evbarm' },
@@ -106,7 +99,7 @@ function loadShim(fsShimSrc, { platform, fss }) {
   };
   sandbox.globalThis = sandbox;
   vm.createContext(sandbox);
-  vm.runInContext(`(function (module, exports, require) {\n${NODE_ERRORS_SRC}\n})`, sandbox, { filename: 'node-errors.cjs' })(nodeErrors, nodeErrors.exports, sandboxRequire);
+  sandboxRequire = require('./fs-shim-sandbox.cjs').shimRequire(sandbox, engineConstants);
   vm.runInContext(
     `(function (module, exports, require) {\n${fsShimSrc}\n})(module, exports, require);`,
     sandbox, { filename: 'fs.cjs' });
