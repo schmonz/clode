@@ -75,7 +75,7 @@ function registerCleanup() {
 // provider in: STABLE_CACHE unless a caller hands it a scratch copy it has changed (the
 // reset-invisibility gate builds from a carve whose reset thresholds it lowered, and must never
 // write that carve where an ordinary build would pick it up).
-function build({ cache = STABLE_CACHE } = {}) {
+function build({ cache = STABLE_CACHE, naude = false } = {}) {
   const provider = providerBin(process.env);
   if (!provider) {
     return { skip: providerSkipReason(process.env) };
@@ -87,8 +87,9 @@ function build({ cache = STABLE_CACHE } = {}) {
   }
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'built-binary-'));
-  const out = path.join(dir, process.platform === 'win32' ? 'quaude.exe' : 'quaude');
-  const result = spawnSync(process.execPath, [ENTRY, 'build', '--out', out], {
+  const name = naude ? 'naude' : 'quaude';
+  const out = path.join(dir, process.platform === 'win32' ? `${name}.exe` : name);
+  const result = spawnSync(process.execPath, [ENTRY, 'build', ...(naude ? ['naude'] : []), '--out', out], {
     encoding: 'utf8',
     timeout: 300000,
     env: {
@@ -136,6 +137,19 @@ function build({ cache = STABLE_CACHE } = {}) {
   return { path: out };
 }
 
+// builtNaude() -> { path } | { skip: reason }: the same, for a naude (`clode build naude`: Claude Code baked into a
+// Node SEA; ~33 s here). CLODE_NAUDE wins the same way CLODE_QUAUDE does.
+let naudeMemo = null;
+function builtNaude() {
+  if (process.env.CLODE_NAUDE) {
+    if (!fs.existsSync(process.env.CLODE_NAUDE)) return { skip: `CLODE_NAUDE=${process.env.CLODE_NAUDE} does not exist` };
+    return { path: process.env.CLODE_NAUDE };
+  }
+  if (naudeMemo) return naudeMemo;
+  naudeMemo = build({ naude: true });
+  return naudeMemo;
+}
+
 function builtQuaude() {
   if (process.env.CLODE_QUAUDE) {
     if (!fs.existsSync(process.env.CLODE_QUAUDE)) {
@@ -148,4 +162,4 @@ function builtQuaude() {
   return memo;
 }
 
-module.exports = { builtQuaude, buildQuaude: build, STABLE_CACHE };
+module.exports = { builtQuaude, builtNaude, buildQuaude: build, STABLE_CACHE };

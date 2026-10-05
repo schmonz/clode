@@ -980,9 +980,33 @@ function writeNativeSnapshot(file, { mode = 'normal' } = {}) {
   return file;
 }
 
-// Run each route's cells through its shell, all routes at once: one driver script per route (the snapshot
-// sourced once, then each cell in its tree, its stdout, stderr and status to files), the drivers in parallel.
-// routes: [{ name, shellBin, snapshot, execPath }]; cells: [{ argv, cwd, input }]; env: what every driver runs with.
+// THE BASH TOOL'S OWN COMMAND (review M-5), from 2.1.283's buildExecCommand with a snapshot: `<shell> -c` (no -l
+// then) of `source <snapshot> 2>/dev/null || true && <MAn> && <IAn> && eval '<command>' < /dev/null && pwd -P >| <cwd
+// file>`, MAn the shell's glob setting and IAn its unsetenv reset, quoted here as the carve spells them (Qtt appends
+// the `< /dev/null`; the cwd file is left out, as nothing reads it here).
+const BASH_TOOL_GLOB = { bash: 'shopt -u extglob 2>/dev/null || true', zsh: 'setopt NO_EXTENDED_GLOB NO_BARE_GLOB_QUAL 2>/dev/null || true' };
+const BASH_TOOL_UNSETENV = "{ \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true";
+function bashToolCommand(shellName, snapshot, command) {
+  return [`source ${shq(snapshot)} 2>/dev/null || true`, BASH_TOOL_GLOB[shellName], BASH_TOOL_UNSETENV, `eval ${shq(command)} < /dev/null`].join(' && ');
+}
+// BASH_IO (review I-1): rg's own I/O through the Bash tool, measured against native 2.1.283 (darwin-arm64, 2026-10-04):
+// more output than a pipe holds into `| head -1` (rg's status on stderr: native dies of SIGPIPE, 141), a closed stdout
+// (rc 0, nothing written) and a closed stderr (rc 2). `BIG` is a file of 200,000 matching lines beside the trees.
+// Judged on stdout, stderr and status alike: no normalization.
+const BASH_IO = [
+  ['| head -1 over more than a pipe holds', '{ rg needle BIG; echo "rg=$?" >&2; } | head -1'],
+  ['a closed stdout', 'rg needle a.txt >&-; echo "rc=$?"'],
+  ['a closed stderr', 'rg needle zzz-absent-path 2>&-; echo "rc=$?"'],
+];
+function bashIoCells(treeDir, bigFile) {
+  return BASH_IO.map(([label, cmd]) => ({ id: `root Bash IO ${label}`, kind: 'root', io: true, argv: [cmd], cwd: treeDir, command: cmd.replace(/\bBIG\b/, shq(bigFile)) }));
+}
+function writeBigFile(file) { fs.writeFileSync(file, Buffer.from('a line with a needle in it\n'.repeat(200000))); return file; }
+
+// Run each route's cells through its shell as the Bash tool runs them (bashToolCommand, a fresh shell per cell), all
+// routes at once: one driver per route, the drivers in parallel. routes: [{ name, shellName, shellBin, snapshot,
+// execPath }]; cells: [{ argv, cwd, input } or { command, cwd }]; env: what every driver runs with (CLAUDE_CODE_EXECPATH
+// is each route's binary, as the bundle sets it in the Bash tool's environment).
 const shq = (s) => `'${String(s).replace(/'/g, "'\\''")}'`;
 function runBashRoutes(routes, cells, { env, dir }) {
   fs.mkdirSync(dir, { recursive: true });
@@ -995,16 +1019,16 @@ function runBashRoutes(routes, cells, { env, dir }) {
   const jobs = routes.map((r, ri) => {
     const out = path.join(dir, `route.${ri}`);
     fs.mkdirSync(out, { recursive: true });
-    const lines = [`. ${shq(r.snapshot)} || exit 97`];
+    const lines = [];
     cells.forEach((c, i) => {
       const o = shq(path.join(out, `o.${i}`)), e = shq(path.join(out, `e.${i}`)), st = shq(path.join(out, `r.${i}`));
-      const run = `rg ${c.argv.map(shq).join(' ')}`;
-      lines.push(`cd ${shq(c.cwd)} && { ${inputs[i] ? `cat ${shq(inputs[i])} | ${run}` : `${run} < /dev/null`} > ${o} 2> ${e}; echo $? > ${st}; }`);
+      const command = c.command || (inputs[i] ? `cat ${shq(inputs[i])} | ` : '') + `rg ${c.argv.map(shq).join(' ')}`;
+      lines.push(`cd ${shq(c.cwd)} && { CLAUDE_CODE_EXECPATH=${shq(r.execPath)} ${shq(r.shellBin)} -c ${shq(bashToolCommand(r.shellName, r.snapshot, command))} `
+        + `> ${o} 2> ${e}; echo $? > ${st}; }`);
     });
     const script = path.join(out, 'driver.sh');
     fs.writeFileSync(script, lines.join('\n') + '\n');
-    const zsh = path.basename(r.shellBin) === 'zsh';
-    return `CLAUDE_CODE_EXECPATH=${shq(r.execPath)} ${shq(r.shellBin)} ${zsh ? '-f ' : ''}${shq(script)} > ${shq(path.join(out, 'log'))} 2>&1 &`;
+    return `/bin/sh ${shq(script)} > ${shq(path.join(out, 'log'))} 2>&1 &`;
   });
   const r = spawnSync('/bin/sh', ['-c', `${jobs.join('\n')}\nwait\n`], { env, timeout: 1800000 });
   if (r.error) throw new Error(`the Bash route drivers did not run: ${r.error.message}`);
@@ -1021,4 +1045,4 @@ function runBashRoutes(routes, cells, { env, dir }) {
 module.exports = { RG_TREE_KINDS, makeRgTree, treeEntries, RG_MATRIX, cellArgv, grepArgv, globArgv, VCS_DIRS, flagLiterals, builderFlagLiterals, matrixDrift,
   consumerUsageErrorRegex, refusalDrift, carveRgArgvShapes, carveRunners, rgResolutionReferences, rgRunnerCalls, RG_RESOLUTION_NON_RUNNERS, pathScannedRunners,
   runNativeRg, nativeRgVersion, runOursRg, cellInput, assertNoAncestorRules, runOursRgBatch, compareRg, normalizeRg, rgOneThread, MMAP_EVERYWHERE, mmapEverywhere, inTree,
-  BASH_ROWS, BASH_CELLS, BASH_PIPE_INPUT, writeQuaudeSnapshot, writeNativeSnapshot, runBashRoutes };
+  BASH_ROWS, BASH_CELLS, BASH_PIPE_INPUT, BASH_IO, bashIoCells, writeBigFile, bashToolCommand, writeQuaudeSnapshot, writeNativeSnapshot, runBashRoutes };
