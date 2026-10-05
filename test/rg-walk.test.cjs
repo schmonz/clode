@@ -306,9 +306,20 @@ function nodeText(err) {
     return `: ${u[0].toUpperCase()}${u.slice(1)} (os error ${n})`;
   })).join('\n');
 }
-function check(row, got, T, { engine = 'node' } = {}) {
+// RG-ERROR-TEXT ON A MUSL ENGINE, the named divergence stated in libexec/rg-native.cjs (Task 11 review I1): quaude's
+// published Linux engine is static MUSL, whose strerror(3) words some errnos differently from glibc's, the libc
+// native's rows were measured with. Measured 2026-10-05 over errnos 0..133 (musl in node:24.21.0-alpine, the engine
+// built there printing the same table; glibc in gcc:13): 74 of 134 differ; these are the ones rg's searches meet.
+// The engine is told by its own strerror(0) (musl "No error information", glibc "Success"). Native's rows stay as
+// native printed them; under a musl engine they are read through these words.
+const MUSL_TEXT = { 5: 'I/O error', 36: 'Filename too long', 40: 'Symbolic link loop', 95: 'Not supported' };
+const engineLibc = (strerror0) => (strerror0 === 'No error information' ? 'musl' : strerror0 === 'Success' ? 'glibc' : null);
+function muslText(err) {
+  return err.split('\n').map((l) => l.replace(/: ([^:]+) \(os error (\d+)\)$/, (m, t, n) => (MUSL_TEXT[n] ? `: ${MUSL_TEXT[n]} (os error ${n})` : m))).join('\n');
+}
+function check(row, got, T, { engine = 'node', libc = null } = {}) {
   const [rule, tree, cwdRel, argv, home, rc, out, err0] = row;
-  const err = engine === 'node' ? nodeText(err0) : err0;
+  const err = engine === 'node' ? nodeText(err0) : libc === 'musl' ? muslText(err0) : err0;
   const un = (s) => s.split(T).join('<T>');
   const what = `${rule}: (${tree}/${cwdRel}, HOME ${home}) rg ${argv.join(' ')} => ${JSON.stringify(got).slice(0, 600)}`;
   assert.strictEqual(got.status, rc, what);
@@ -366,16 +377,19 @@ test('RG-WALK-*: under tjs, both twins, every row (native)', { skip: needUgrep.s
         });
         out.push({ sync: { status: s.status, stdout: l1(s.stdout), stderr: l1(s.stderr) }, async: a });
       }
-      process.stdout.write('PROBE:' + JSON.stringify(out) + '\\n');
+      const se = globalThis.__tjs_fs_sync && globalThis.__tjs_fs_sync.strerror;
+      process.stdout.write('PROBE:' + JSON.stringify({ strerror0: se ? se(0) : null, out }) + '\\n');
     })();
   `);
   try {
     const res = runLoader(prog, [], { timeout: 180000 });
     const line = (res.stdout || '').split('\n').find((l) => l.startsWith('PROBE:'));
     assert.ok(line, `the tjs probe printed nothing (exit ${res.status}): ${(res.stderr || '').slice(0, 1500)}`);
-    const got = JSON.parse(line.slice('PROBE:'.length));
+    const { strerror0, out: got } = JSON.parse(line.slice('PROBE:'.length));
+    const libc = process.platform === 'linux' ? engineLibc(strerror0) : null;
+    if (process.platform === 'linux') assert.ok(libc, `a Linux engine whose libc its strerror(0) does not tell: ${JSON.stringify(strerror0)}`);
     assert.strictEqual(got.length, P9_NATIVE.length);
-    P9_NATIVE.forEach((row, i) => { const T = path.join(root, row[1]); check(row, got[i].sync, T, { engine: 'tjs' }); check(row, got[i].async, T, { engine: 'tjs' }); });
+    P9_NATIVE.forEach((row, i) => { const T = path.join(root, row[1]); check(row, got[i].sync, T, { engine: 'tjs', libc }); check(row, got[i].async, T, { engine: 'tjs', libc }); });
   } finally { fs.rmSync(prog, { force: true }); }
 }));
 
@@ -619,4 +633,12 @@ test('RG-WALK-*: the async twin keeps the loop turning over a walk of 30,000 fil
     assert.deepStrictEqual([got.code, got.bytes], [1, 0], JSON.stringify(got));
     assert.ok(got.maxGap < 600, `the loop was held ${got.maxGap} ms`);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('RG-ERROR-TEXT on a musl engine: native\'s glibc words read through musl\'s, by errno, and nothing else', () => {
+  assert.strictEqual(engineLibc('No error information'), 'musl');
+  assert.strictEqual(engineLibc('Success'), 'glibc');
+  assert.strictEqual(engineLibc('Undefined error: 0'), null);
+  assert.strictEqual(muslText('rg: ./self: Too many levels of symbolic links (os error 40)\nrg: x: File name too long (os error 36)\nrg: ./gone: No such file or directory (os error 2)\n'),
+    'rg: ./self: Symbolic link loop (os error 40)\nrg: x: Filename too long (os error 36)\nrg: ./gone: No such file or directory (os error 2)\n');
 });

@@ -1024,7 +1024,13 @@ function parseRgSearch(argv, { implicit = null } = {}) {
 // EACCES, ENOTDIR; measured against native's literals in test/rg-native.test.cjs).
 // RG-ERROR-TEXT: rg prints its platform's C library text for an errno (Rust's io::Error formats strerror_r),
 // so quaude's rg asks the engine for strerror(3) (txiki-strerror.patch: __tjs_fs_sync.strerror) and prints that,
-// as written. That holds on POSIX only. On WINDOWS rg prints FormatMessageW's text with the raw Win32 code
+// as written. That holds on POSIX only, and the words are the ENGINE's libc's: a NAMED DIVERGENCE on Linux, an
+// artifact of our libc choice, stated here once (Task 11 review I1). quaude's published Linux engine is static musl
+// (linux-x64-musl), native's rg is linked against glibc, and musl words 74 of errnos 0..133 differently (measured
+// 2026-10-05): ELOOP "Symbolic link loop" (glibc "Too many levels of symbolic links"), ENAMETOOLONG "Filename too
+// long" ("File name too long"), EIO "I/O error" ("Input/output error"), EOPNOTSUPP "Not supported" ("Operation not
+// supported"). The errno number, and every other byte, are native's. test/rg-walk.test.cjs judges native's rows
+// through musl's words on a musl engine (told by its strerror(0)), exactly on a glibc one. On WINDOWS rg prints FormatMessageW's text with the raw Win32 code
 // (`The system cannot find the file specified. (os error 2)`, `Access is denied. (os error 5)`), and this prints
 // the MSVC CRT's strerror with the CRT errno libuv mapped it to (`No such file or directory (os error 2)`,
 // `Permission denied (os error 13)`): libuv has lost the Win32 code, so Windows is a named divergence, unmeasured. libuv's own table (what tjs.Error and node's messages carry, capitalized below) is the fallback
