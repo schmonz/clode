@@ -637,3 +637,24 @@ test('clode build naude (checkout): a fresh naude-entry bundle passes the stalen
     assert.doesNotMatch(r.stderr, /is older than libexec\//);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+// The rule reads all of libexec, its subdirectories included (Task 11 review M5): an edit to
+// libexec/node-shim/** is an edit to what a naude carries, so it marks the bundle stale too.
+test('clode build naude (checkout): a node-shim source newer than the bundle marks it stale too', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-naude-stale-shim-'));
+  try {
+    const { env } = seedProvider(dir);
+    const libexec = fakeCheckout(dir, new Date(Math.min(Date.now() + 1000 * 60 * 60 * 24 * 365, Date.UTC(2038, 0, 1))));
+    const shim = path.join(libexec, 'node-shim', 'modules', 'fs.cjs');
+    fs.mkdirSync(path.dirname(shim), { recursive: true });
+    fs.writeFileSync(shim, '// a shim module edited after the bundle\n');
+    const late = new Date(Date.UTC(2038, 0, 2));
+    fs.utimesSync(shim, late, late);
+    // AppleDouble sidecars are no sources, at any depth
+    fs.writeFileSync(path.join(path.dirname(shim), '._fs.cjs'), 'sidecar');
+    const r = await runBuild([], env, undefined, undefined, { libexec });
+    assert.strictEqual(r.status, 1);
+    assert.match(r.stderr, /naude-entry\.bundle\.cjs is older than libexec\/node-shim\/modules\/fs\.cjs/);
+    assert.deepStrictEqual(r.calls, []);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});

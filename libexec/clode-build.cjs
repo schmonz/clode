@@ -1166,12 +1166,21 @@ function carveVerdict({ naude, self, providerPlatform, target, hostPlatform, env
 // rather than a per-module dependency walk; obviously correct beats clever here.
 // AppleDouble sidecars (this mount litters libexec/._*.cjs — see git-gc-fails-appledouble)
 // are not sources, and their mtimes drift independently of the file they shadow, so they
-// would make the gate cry wolf on a genuinely fresh bundle. Returns the first newer
-// source's name, or null.
+// would make the gate cry wolf on a genuinely fresh bundle. Subdirectories count (libexec/node-shim/**: an edit to
+// a shim module is an edit to what the bundle's product carries). Returns the first newer source's path relative
+// to libexec, `/`-separated, or null.
 function staleLibexecSource(bundle, libexec) {
   const bm = fs.statSync(bundle).mtimeMs;
-  return fs.readdirSync(libexec).find((f) => /\.(cjs|mjs|js)$/.test(f) && !f.startsWith('._')
-    && fs.statSync(path.join(libexec, f)).mtimeMs > bm) || null;
+  const walk = (dir, rel) => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (e.name.startsWith('._')) continue;
+      const p = path.join(dir, e.name), r = rel ? `${rel}/${e.name}` : e.name;
+      if (e.isDirectory()) { const hit = walk(p, r); if (hit) return hit; continue; }
+      if (/\.(cjs|mjs|js)$/.test(e.name) && fs.statSync(p).mtimeMs > bm) return r;
+    }
+    return null;
+  };
+  return walk(libexec, '');
 }
 
 // THE BUILD'S OWN TJS HOME (ruling G33). Every tjs process the build starts (the blobulate worker, the attest, the
