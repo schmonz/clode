@@ -64,6 +64,22 @@
 // target `.`, the directory as cwd), whatever the host's PATH holds.
 // CONTROL: the full matrix, every pair equal, with ONE planted differing byte and ONE cell the
 // tripwire answered.
+//
+// THE BASH ROUTE (grep-native Task 10c, user ruling 2026-10-04: the Bash tool's `rg` is quaude's tested rg). Native's
+// snapshot defines `rg`, inside upstream's "is rg installed?" guard, as a shell function that runs the claude binary
+// as rg; quaude's is that same function run against quaude, which answers as rg (libexec/rg-entry.cjs) before its
+// bundle loads. So every cell runs a second way, per shell (bash, and zsh where installed): the shell sources the
+// snapshot and runs `rg <argv>` as the Bash tool does (`< /dev/null`; a stdin cell pipes its input), with a PATH
+// holding no rg and CLAUDE_CODE_EXECPATH naming the binary, as the bundle sets it:
+//   native  native's own snapshot (test/fixtures/snapshot-2.1.283.sh), against the pinned provider
+//   ours    quaude's snapshot as its writer emits it, through bun-shim's real interception, against a quaude BUILT
+//           from this tree (test/built-binary.cjs), so the bootstrap's rg dispatch is what is judged
+// plus BASH_ROWS (scripts/lib/rg-probe.cjs): what a model types that the Grep tool never builds (no path, -c with
+// zero-count files, -l, --json, -U, the walk's order under -j1, a pipe into rg). Each pair is judged by compareRg as
+// above. The instrument is checked too: native's Bash route must answer every matrix cell as native's rg answered
+// it, or a broken shell function on both sides would read as agreement. And with a host rg installed (the
+// tripwire first on PATH), the Bash tool's `rg` must be the host's, for native and ours alike, in normal mode and
+// with --allowedTools naming Grep or Glob (no find/grep shadows), as native's guard makes it.
 const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -74,6 +90,7 @@ const P = require('../../scripts/lib/rg-probe.cjs');
 const { parseRgRefusal } = require('../../libexec/rg-native.cjs');
 const { providerBin } = require('../provider-resolve.cjs');
 const { tjsPath, resolveBin } = require('../node-shim-helper.cjs');
+const { builtQuaude } = require('../built-binary.cjs');
 
 // Measured: RG_MATRIX's cells per tree kind: 21 Grep argv x 2 directory target forms plus 3
 // Glob argv x 2 (2026-09-28); for bin2 the 21 Grep argv once more naming early.dat; for root
@@ -92,6 +109,11 @@ const FLOOR = Object.values(KIND_FLOORS).reduce((a, b) => a + b, 0);
 // a NUL squashing late.dat's count and early.dat holding no match before its NUL's fill).
 // With the -U variants (Task 10 fix round, 2026-10-04): 182 of 253.
 const ANSWERED_FLOORS = { root: 73, nogit: 56, bin2: 53 };
+// THE BASH ROUTE's floors, per shell: every matrix cell plus every BASH_CELLS row (14 a tree kind, 2026-10-04), and
+// the BASH_CELLS rows native answered (measured 2026-10-04, native 2.1.283, darwin-arm64: 35 of 42, both shells alike;
+// root 13, nogit 12, bin2 10 of 14 each).
+const BASH_FLOOR = FLOOR + 42;
+const BASH_ANSWERED_FLOOR = 35;
 
 // THE TRIPWIRE: an `rg` placed FIRST on the PATH ours sees, which prints this and exits 99. Until
 // grep-native Task 10b, Bun.which('rg') then answered ITS absolute path (the route a host with
@@ -225,14 +247,92 @@ function readCells() {
     const cells = P.RG_MATRIX.map((c) => ({ ...c, cwd: trees[c.kind], argv: P.cellArgv(c, trees[c.kind]), input: P.cellInput(c) }));
     const native = cells.map((c) => P.runNativeRg(bin, c.argv, c.cwd, { env, input: c.input }));
     const ours = P.runOursRgBatch(cells.map((c) => ({ argv: c.argv, cwd: c.cwd, input: c.input })), { env });
+    const bash = bashRoute({ root, trees, bin, ugrep, home, tripDir: trip, cells });
     return {
-      cells: cells.map((c, i) => ({ id: c.id, kind: c.kind, tree: c.cwd, argv: c.argv, native: native[i], ours: ours[i] })),
+      cells: cells.map((c, i) => ({ id: c.id, kind: c.kind, tree: c.cwd, argv: c.argv, native: native[i], ours: ours[i], bash: bash.matrix && bash.matrix[i] })),
+      bash: { shells: bash.shells, cells: bash.cells, tripwire: bash.tripwire, unavailable: bash.unavailable, floor: BASH_FLOOR, answeredFloor: BASH_ANSWERED_FLOOR },
       platform: process.platform,
       floors: KIND_FLOORS, answeredFloors: ANSWERED_FLOORS, tripwire: tripRg, rgPath: ours.length ? ours[0].rgPath : null,
       ownRgPath: ours.length ? ours[0].ownRgPath : null, rgPathExists: !!(ours.length && ours[0].ownRgPath && fs.existsSync(ours[0].ownRgPath)),
       what: `native ${bin} (${version.split('\n')[0]}) vs ours under tjs over ${ugrep}`,
     };
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
+}
+
+// THE BASH ROUTE: the matrix cells and BASH_CELLS through each shell's snapshot, native's and ours; then the
+// tripwire rows. { shells, matrix: per cell { [shell]: { native, ours } }, cells: BASH_CELLS with the same,
+// tripwire: [{ shell, mode, side, ran }] } or { unavailable: why } when there is no quaude to run.
+function bashRoute({ root, trees, bin, ugrep, home, tripDir, cells }) {
+  const q = builtQuaude();
+  if (!q.path) return { unavailable: `no quaude built from this tree to run as rg (${q.skip})` };
+  const shells = [['bash', resolveBin('bash')], ['zsh', resolveBin('zsh')]].filter(([, b]) => b);
+  if (!shells.some(([n]) => n === 'bash')) return { unavailable: 'no bash on this host' };
+  const dir = path.join(root, 'bash-route');
+  fs.mkdirSync(dir);
+  // A PATH with no rg in it (the guard's "no host rg" branch); ugrep is named by CLODE_UGREP.
+  const noRg = (process.env.PATH || '').split(path.delimiter).filter((d) => d && !fs.existsSync(path.join(d, 'rg'))).join(path.delimiter);
+  const env = { HOME: home, PATH: noRg, CLODE_UGREP: ugrep };
+  const routes = [];
+  for (const [name, shellBin] of shells) {
+    routes.push({ name: `native ${name}`, shellBin, execPath: bin, snapshot: P.writeNativeSnapshot(path.join(dir, `native-${name}.sh`)) });
+    routes.push({ name: `ours ${name}`, shellBin, execPath: q.path, snapshot: P.writeQuaudeSnapshot(path.join(dir, `ours-${name}.sh`), shellBin) });
+  }
+  const bashCells = P.BASH_CELLS.map((c) => ({ ...c, cwd: trees[c.kind] }));
+  const all = [...cells.map((c) => ({ argv: c.argv, cwd: c.cwd, input: c.input })), ...bashCells];
+  const got = P.runBashRoutes(routes, all, { env, dir: path.join(dir, 'runs') });
+  const pick = (i) => Object.fromEntries(shells.map(([name], si) => [name, { native: got[2 * si][i], ours: got[2 * si + 1][i] }]));
+  // The tripwire rows: a host rg first on PATH, each snapshot in each mode, `rg needle .` once.
+  const trip = [];
+  for (const [name, shellBin] of shells) {
+    for (const mode of ['normal', 'optin']) {
+      trip.push({ name, mode, side: 'native', shellBin, execPath: bin, snapshot: P.writeNativeSnapshot(path.join(dir, `trip-native-${name}-${mode}.sh`), { mode }) });
+      trip.push({ name, mode, side: 'ours', shellBin, execPath: q.path, snapshot: P.writeQuaudeSnapshot(path.join(dir, `trip-ours-${name}-${mode}.sh`), shellBin, { mode }) });
+    }
+  }
+  const tripGot = P.runBashRoutes(trip, [{ argv: ['needle', '.'], cwd: trees.root, input: null }],
+    { env: { ...env, PATH: `${tripDir}${path.delimiter}${noRg}` }, dir: path.join(dir, 'trip') });
+  return {
+    shells: shells.map(([n]) => n),
+    matrix: cells.map((c, i) => pick(i)),
+    cells: bashCells.map((c, j) => ({ id: c.id, kind: c.kind, tree: c.cwd, argv: c.argv, bash: pick(cells.length + j) })),
+    tripwire: trip.map((t, k) => ({ shell: t.name, mode: t.mode, side: t.side,
+      ran: tripGot[k][0].status === TRIPWIRE_RC && tripGot[k][0].stdout.toString('latin1').includes(TRIPWIRE_MARK) })),
+  };
+}
+
+// The Bash route's findings: a shell short of its floor (BROKEN, with the short list), a pair that differs, native's
+// Bash route not answering as native's rg (the instrument), and a host rg that did not answer.
+function scanBash(cells, bash, platform) {
+  const short = [], findings = [];
+  if (!bash) return { short: ['the Bash route never ran'], findings };
+  if (bash.unavailable) return { short: [`the Bash route cannot run: ${bash.unavailable}`], findings };
+  const rows = [...cells.map((c) => ({ ...c, matrix: true })), ...bash.cells];
+  for (const shell of bash.shells) {
+    const have = rows.filter((c) => c.bash && c.bash[shell]);
+    if (have.length < bash.floor) short.push(`the Bash route through ${shell} has ${have.length} cells, under its floor of ${bash.floor}`);
+    const answered = bash.cells.filter((c) => c.bash && c.bash[shell] && c.bash[shell].native.status === 0 && c.bash[shell].native.stdout.length).length;
+    if (answered < bash.answeredFloor) short.push(`the Bash route through ${shell} has ${answered} BASH_ROWS cells native answered, under its floor of ${bash.answeredFloor}`);
+  }
+  if (!bash.shells.includes('bash')) short.push('the Bash route did not run through bash');
+  if (short.length) return { short, findings };
+  for (const shell of bash.shells) {
+    for (const c of rows) {
+      const b = c.bash[shell];
+      const where = `${c.id} [Bash route, ${shell}]`;
+      if (c.matrix) {
+        const inst = P.compareRg(c.native, b.native);
+        if (!inst.same) { findings.push(`${where}: native's Bash route did not answer as native's rg (${inst.why})`); continue; }
+      }
+      const ex = c.matrix ? P.mmapEverywhere(c.id, b.native, c.argv || [], c.tree, platform) : null;
+      const d = P.compareRg(ex ? ex.expected : b.native, b.ours);
+      if (!d.same) findings.push(`${where}: ${d.why}${ex ? ` (${P.MMAP_EVERYWHERE.rule}: judged against Linux native's answer)` : ''}`);
+    }
+  }
+  for (const t of bash.tripwire) {
+    if (!t.ran) findings.push(`[Bash route, ${t.shell}, ${t.mode === 'optin' ? 'searchToolsOptIn' : 'normal mode'}] with a host rg installed, ${t.side}'s Bash \`rg\` did not run it (native's guard leaves rg to the host's)`);
+  }
+  if (bash.tripwire.length < 4 * bash.shells.length) short.push(`the Bash route ran ${bash.tripwire.length} tripwire rows, not ${4 * bash.shells.length}`);
+  return { short, findings };
 }
 
 // What ours refused, tallied by the flag its refusal named, or by what the applet said when it
@@ -250,7 +350,7 @@ function refusalTally(cells) {
   return [...t].sort((a, b) => b[1] - a[1]).map(([k, n]) => `${k} x${n}`).join(', ') || 'none';
 }
 
-function scanCells({ cells, floors, answeredFloors, tripwire, rgPath, ownRgPath, rgPathExists, what, platform }) {
+function scanCells({ cells, floors, answeredFloors, tripwire, rgPath, ownRgPath, rgPathExists, what, platform, bash }) {
   const per = {}, answered = {};
   for (const c of cells) {
     per[c.kind] = (per[c.kind] || 0) + 1;
@@ -262,8 +362,10 @@ function scanCells({ cells, floors, answeredFloors, tripwire, rgPath, ownRgPath,
     ...Object.entries(answeredFloors).filter(([k, f]) => (answered[k] || 0) < f)
       .map(([k, f]) => `the ${k} tree has ${answered[k] || 0} cells native answered, under its floor of ${f}`),
   ];
+  const B = scanBash(cells, bash, platform);
+  short.push(...B.short);
   if (short.length) return { examined: 0, findings: short, note: `${what}; ${short.join('; ')}` };
-  const findings = [];
+  const findings = [...B.findings];
   // quaude's own rg (grep-native Task 10b): absolute, named rg, the path bun-shim states (RG_PATH), never the tripwire's, and
   // no file there. A bare `rg` sends the bundle's Grep tool down the refusing route outside the working directory.
   const ownSpelled = typeof rgPath === 'string' && /^\//.test(rgPath.replace(/^[A-Za-z]:[\\/]/, '/')) && /^rg(?:\.exe)?$/.test(rgPath.split(/[\\/]/).pop());
@@ -285,8 +387,9 @@ function scanCells({ cells, floors, answeredFloors, tripwire, rgPath, ownRgPath,
     if (!d.same) findings.push(`${c.id}: ${d.why}${ex ? ` (${P.MMAP_EVERYWHERE.rule}: judged against Linux native's answer)` : ''}`);
   }
   const kinds = Object.keys(floors).map((k) => `${k} ${per[k]} (native answered ${answered[k] || 0})`).join(', ');
+  const bashNote = `Bash route through ${bash.shells.join(' and ')}: ${bash.cells.length} BASH_ROWS cells + the matrix each, ${bash.tripwire.length} tripwire rows`;
   return { examined: cells.length, findings,
-    note: `${what}; ${cells.length} cells (${kinds}); ${findings.length} differ; ours refused: ${refusalTally(cells)}` };
+    note: `${what}; ${cells.length} cells (${kinds}); ${findings.length} differ; ours refused: ${refusalTally(cells)}; ${bashNote}` };
 }
 
 // The full matrix on macOS, every pair equal (an RG-MMAP-EVERYWHERE cell: native printing its recorded
@@ -305,9 +408,24 @@ function controlCells({ defects = true } = {}) {
     const r = res(argv, 'a.txt\0');
     return { id: c.id, kind: c.kind, tree: '/tree', argv, native: r, ours: { ...r } };
   });
+  // The Bash route: every pair equal, native's Bash route answering as native's rg, every tripwire row run by the host rg.
+  const shells = ['bash', 'zsh'];
+  for (const c of cells) c.bash = Object.fromEntries(shells.map((sh) => [sh, { native: c.native, ours: c.ours }]));
+  const bash = { shells, floor: BASH_FLOOR, answeredFloor: BASH_ANSWERED_FLOOR,
+    cells: P.BASH_CELLS.map((c) => { const r = res(c.argv, 'a.txt\0'); return { id: c.id, kind: c.kind, tree: '/tree', argv: c.argv,
+      bash: Object.fromEntries(shells.map((sh) => [sh, { native: r, ours: { ...r } }])) }; }),
+    tripwire: shells.flatMap((sh) => ['normal', 'optin'].flatMap((mode) => ['native', 'ours'].map((side) => ({ shell: sh, mode, side, ran: true })))) };
   const base = { cells, floors: KIND_FLOORS, answeredFloors: ANSWERED_FLOORS, tripwire: '/trip/rg', rgPath: '/quaude/bin/rg', ownRgPath: '/quaude/bin/rg',
-    rgPathExists: false, what: 'synthetic control', platform: 'darwin' };
+    rgPathExists: false, what: 'synthetic control', platform: 'darwin', bash };
   if (!defects) return base;
+  // ...the Bash route's own: one byte of a BASH_ROWS cell through zsh, native's Bash route off native's rg in one
+  // matrix cell through bash, and quaude's Bash `rg` overriding a host rg in normal mode (the 10c defect itself).
+  const bc = bash.cells[3].bash.zsh;
+  const bb = Buffer.from(bc.ours.stdout); bb[0] ^= 1;
+  bc.ours = { ...bc.ours, stdout: bb };
+  const im = cells.filter((x) => !P.MMAP_EVERYWHERE.cells[x.id])[5];
+  im.bash.bash = { native: { ...im.native, status: 127, stdout: Buffer.alloc(0) }, ours: { ...im.native, status: 127, stdout: Buffer.alloc(0) } };
+  bash.tripwire.find((t) => t.shell === 'bash' && t.mode === 'normal' && t.side === 'ours').ran = false;
   const plain = cells.filter((x) => !P.MMAP_EVERYWHERE.cells[x.id]);
   const k = plain[Math.floor(plain.length / 2)];
   const planted = Buffer.from(k.ours.stdout); planted[0] ^= 1;
@@ -317,6 +435,7 @@ function controlCells({ defects = true } = {}) {
   const o = Buffer.from(e1.ours.stdout); o[o.length - 2] ^= 1;
   e1.ours = { ...e1.ours, stdout: o };
   e2.native = { ...e2.native, stdout: Buffer.concat([e2.native.stdout, Buffer.from('x')]) };
+  for (const sh of shells) e2.bash[sh] = { ...e2.bash[sh], native: e2.native };   // native drifted, on both of its routes
   return base;
 }
 
@@ -368,9 +487,36 @@ test('a file at quaude\'s own rg path is a finding: nothing is ever written ther
 
 test('the control plants one differing byte AND one tripwire hit, and the gate names both', () => {
   const r = scanCells(controlCells());
-  assert.strictEqual(r.findings.length, 4, r.findings.join('\n'));
+  assert.strictEqual(r.findings.length, 7, r.findings.join('\n'));
   assert.ok(r.findings.some((f) => /stdout differs at byte 0/.test(f)));
   assert.ok(r.findings.some((f) => /ours ran a HOST rg \(the tripwire answered/.test(f)));
+});
+
+// THE BASH ROUTE (grep-native Task 10c): each planted defect is its own finding, named by route and shell.
+test('the Bash route: a differing byte, native\'s Bash route off its rg, and a host rg overridden are each a finding', () => {
+  const r = scanCells(controlCells());
+  const bashF = r.findings.filter((f) => /Bash route/.test(f));
+  assert.strictEqual(bashF.length, 3, bashF.join('\n'));
+  assert.ok(bashF.some((f) => new RegExp(`^${P.BASH_CELLS[3].id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\[Bash route, zsh\\]: stdout differs at byte 0`).test(f)), bashF.join('\n'));
+  assert.ok(bashF.some((f) => /\[Bash route, bash\]: native's Bash route did not answer as native's rg \(exit 0 vs 127/.test(f)), bashF.join('\n'));
+  assert.ok(bashF.includes("[Bash route, bash, normal mode] with a host rg installed, ours's Bash `rg` did not run it (native's guard leaves rg to the host's)"), bashF.join('\n'));
+  assert.deepStrictEqual(scanCells(controlCells({ defects: false })).findings, []);
+});
+
+test('the Bash route short of a shell\'s floor, or unable to run, makes rg-differential BROKEN, naming why', () => {
+  const c = controlCells({ defects: false });
+  c.bash.cells = c.bash.cells.slice(0, 10);
+  let r = checkGate({ name: 'bash-floor', floor: guard.floor, read: () => c, scan: scanCells });
+  assert.strictEqual(r.verdict, BROKEN, r.message);
+  assert.match(r.message, /the Bash route through bash has \d+ cells, under its floor of \d+/);
+  const u = controlCells({ defects: false });
+  u.bash = { unavailable: 'no quaude built from this tree to run as rg (x)' };
+  r = checkGate({ name: 'bash-unavailable', floor: guard.floor, read: () => u, scan: scanCells });
+  assert.strictEqual(r.verdict, BROKEN, r.message);
+  assert.match(r.message, /the Bash route cannot run: no quaude built/);
+  const z = controlCells({ defects: false });
+  z.bash.shells = ['zsh'];
+  assert.match(checkGate({ name: 'bash-absent', floor: guard.floor, read: () => z, scan: scanCells }).message, /did not run through bash/);
 });
 
 // RG-MMAP-EVERYWHERE hides nothing else: with every pair equal the matrix is clean on macOS; one byte of
@@ -383,7 +529,9 @@ test('RG-MMAP-EVERYWHERE: equal pairs are clean; a byte off in ours, or native o
   assert.ok(r.findings.some((f) => f.startsWith(`${EXCEPTED[1]}: RG-MMAP-EVERYWHERE's record of native macOS no longer holds`)), r.findings.join('\n'));
   const lin = controlCells({ defects: false });
   lin.platform = 'linux';
-  assert.deepStrictEqual(scanCells(lin).findings.map((f) => f.split(':')[0]).sort(), EXCEPTED.slice().sort());
+  // ...and through the Bash route the same, in each shell
+  assert.deepStrictEqual(scanCells(lin).findings.map((f) => f.split(':')[0]).sort(),
+    EXCEPTED.flatMap((id) => [id, `${id} [Bash route, bash]`, `${id} [Bash route, zsh]`]).sort());
 });
 
 // inTree spells a recorded literal in a real tree as native would print it there: the path JSON-escaped
@@ -477,4 +625,4 @@ test('makeRgTree refuses a tree whose ancestor holds .git, .ignore or .rgignore'
   }
 });
 
-module.exports = { readCells, scanCells, controlCells, KIND_FLOORS, ANSWERED_FLOORS };
+module.exports = { readCells, scanCells, controlCells, KIND_FLOORS, ANSWERED_FLOORS, BASH_FLOOR, BASH_ANSWERED_FLOOR };

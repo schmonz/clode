@@ -915,6 +915,110 @@ function mmapEverywhere(id, native, argv, tree, platform) {
   return { expected, stale };
 }
 
+// ---- the Bash route (grep-native Task 10c) -------------------------------------------------------------
+// The Bash tool's `rg`, run as the Bash tool runs it: a shell sources the snapshot and runs the command (each
+// with `< /dev/null`, as 2.1.283's Qtt appends it; a stdin cell pipes its input instead). Native's snapshot
+// defines rg, inside upstream's "is rg installed?" guard, as a function that runs the claude binary with argv[0]
+// rg (test/fixtures/snapshot-2.1.283.sh holds it verbatim); quaude's is the same function run against quaude
+// (libexec/rg-entry.cjs). Both run with CLAUDE_CODE_EXECPATH naming their binary, as the bundle sets it in the
+// Bash tool's environment, and a PATH holding no rg, so the guard takes its "no host rg" branch.
+//
+// BASH_ROWS: what a model types into the Bash tool that the Grep tool never builds: no path (RG-IMPLICIT-PATH:
+// with `< /dev/null` rg searches ./ and prints paths without it; with a pipe, its stdin), -c (zero counts
+// unprinted), -l, --json, -U, and the walk's order under -j1 (the standard printer only there: on rg's parallel
+// walk its lines interleave by file in no fixed order, which compareRg does not normalize). [argv, stdin] with stdin
+// 'null' or 'pipe'.
+const BASH_PIPE_INPUT = Buffer.from('a needle\nno\nneedle two\n');
+const BASH_ROWS = [
+  [['-c', 'needle'], 'null'], [['-l', 'needle'], 'null'], [['--json', 'needle'], 'null'], [['-c', '-U', 'needle.'], 'null'],
+  [['-j1', 'needle'], 'null'], [['-j1', '-n', 'needle'], 'null'], [['-j1', '-c', 'needle'], 'null'], [['-j1', '-l', 'needle'], 'null'],
+  [['-j1', '--files'], 'null'], [['-j1', '-U', '-c', '^\\w'], 'null'], [['-c', 'zzz-absent'], 'null'],
+  [['-n', 'needle'], 'pipe'], [['-c', 'needle'], 'pipe'], [['--json', 'needle'], 'pipe'],
+];
+const BASH_CELLS = [];
+for (const kind of RG_TREE_KINDS) {
+  for (const [argv, stdin] of BASH_ROWS) BASH_CELLS.push({ id: `${kind} Bash rg ${argv.join(' ')} <${stdin}`, kind, argv, input: stdin === 'pipe' ? BASH_PIPE_INPUT : null });
+}
+
+// quaude's snapshot GENERATOR, as 2.1.283's mAn writes it for a binary with no argv0 (the alias form, the
+// alias's value Bun.which('rg'): bun-shim's RG_PATH), in normal mode (the find/grep block, dAn's text from the
+// native fixture) or with --allowedTools naming Grep or Glob (`optin`: no find/grep block). The generator runs
+// through the REAL interception: a node child loads bun-shim (which wraps child_process) and hands the generator
+// to child_process.execFileSync, which rewrites it as it does for the bundle; the shell then writes the snapshot.
+const NATIVE_SNAPSHOT = path.join(__dirname, '..', '..', 'test', 'fixtures', 'snapshot-2.1.283.sh');
+function nativeFindGrepBlock() {
+  const t = fs.readFileSync(NATIVE_SNAPSHOT, 'utf8');
+  return t.slice(t.indexOf('unalias find 2>/dev/null || true'));
+}
+function writeQuaudeSnapshot(file, shellBin, { mode = 'normal' } = {}) {
+  const shim = path.join(__dirname, '..', '..', 'libexec', 'bun-shim.cjs');
+  const src = `
+    const Bun = require(${JSON.stringify(shim)});
+    const q = (s) => "'" + String(s).replace(/'/g, "'\\\\''") + "'";
+    const gen = [
+      'SNAPSHOT_FILE=' + q(process.argv[1]),
+      'echo "# Snapshot file" >| "$SNAPSHOT_FILE"',
+      'echo "unalias -a 2>/dev/null || true" >> "$SNAPSHOT_FILE"',
+      'echo \\'[ -n "\${BASH_VERSION:-}" ] && shopt -s expand_aliases\\' >> "$SNAPSHOT_FILE"',
+      '      echo "# Check for rg availability" >> "$SNAPSHOT_FILE"',
+      '      echo "if ! (unalias rg 2>/dev/null; command -v rg) >/dev/null 2>&1; then" >> "$SNAPSHOT_FILE"',
+      "      echo '  alias rg='\\"'" + Bun.RG_PATH.replace(/'/g, "'\\\\''") + "'\\" >> \\"$SNAPSHOT_FILE\\"",
+      '      echo "fi" >> "$SNAPSHOT_FILE"',
+      ...(process.argv[3] === 'normal' ? ['      cat >> "$SNAPSHOT_FILE" << \\'FIND_GREP_FUNC_END\\'', process.argv[4], 'FIND_GREP_FUNC_END'] : []),
+      '',
+    ].join('\\n');
+    require('child_process').execFileSync(process.argv[2], ['-c', gen], { stdio: ['ignore', 'ignore', 'inherit'] });
+  `;
+  const r = spawnSync(process.execPath, ['-e', src, file, shellBin, mode, nativeFindGrepBlock()], { encoding: 'utf8', timeout: 60000 });
+  if (r.status !== 0 || !fs.existsSync(file)) throw new Error(`quaude's snapshot generator did not run: ${r.stderr || r.error}`);
+  return file;
+}
+// native's snapshot: its own text (the fixture: native's rg function inside the guard, then its find/grep block).
+function writeNativeSnapshot(file, { mode = 'normal' } = {}) {
+  const t = fs.readFileSync(NATIVE_SNAPSHOT, 'utf8');
+  fs.writeFileSync(file, '[ -n "${BASH_VERSION:-}" ] && shopt -s expand_aliases\n' + (mode === 'normal' ? t : t.slice(0, t.indexOf('# Shadow find/grep'))));
+  return file;
+}
+
+// Run each route's cells through its shell, all routes at once: one driver script per route (the snapshot
+// sourced once, then each cell in its tree, its stdout, stderr and status to files), the drivers in parallel.
+// routes: [{ name, shellBin, snapshot, execPath }]; cells: [{ argv, cwd, input }]; env: what every driver runs with.
+const shq = (s) => `'${String(s).replace(/'/g, "'\\''")}'`;
+function runBashRoutes(routes, cells, { env, dir }) {
+  fs.mkdirSync(dir, { recursive: true });
+  const inputs = cells.map((c, i) => {
+    if (c.input == null) return null;
+    const f = path.join(dir, `in.${i}`);
+    fs.writeFileSync(f, c.input);
+    return f;
+  });
+  const jobs = routes.map((r, ri) => {
+    const out = path.join(dir, `route.${ri}`);
+    fs.mkdirSync(out, { recursive: true });
+    const lines = [`. ${shq(r.snapshot)} || exit 97`];
+    cells.forEach((c, i) => {
+      const o = shq(path.join(out, `o.${i}`)), e = shq(path.join(out, `e.${i}`)), st = shq(path.join(out, `r.${i}`));
+      const run = `rg ${c.argv.map(shq).join(' ')}`;
+      lines.push(`cd ${shq(c.cwd)} && { ${inputs[i] ? `cat ${shq(inputs[i])} | ${run}` : `${run} < /dev/null`} > ${o} 2> ${e}; echo $? > ${st}; }`);
+    });
+    const script = path.join(out, 'driver.sh');
+    fs.writeFileSync(script, lines.join('\n') + '\n');
+    const zsh = path.basename(r.shellBin) === 'zsh';
+    return `CLAUDE_CODE_EXECPATH=${shq(r.execPath)} ${shq(r.shellBin)} ${zsh ? '-f ' : ''}${shq(script)} > ${shq(path.join(out, 'log'))} 2>&1 &`;
+  });
+  const r = spawnSync('/bin/sh', ['-c', `${jobs.join('\n')}\nwait\n`], { env, timeout: 1800000 });
+  if (r.error) throw new Error(`the Bash route drivers did not run: ${r.error.message}`);
+  return routes.map((route, ri) => cells.map((c, i) => {
+    const at = (x) => path.join(dir, `route.${ri}`, `${x}.${i}`);
+    if (!fs.existsSync(at('r'))) {
+      const log = fs.existsSync(path.join(dir, `route.${ri}`, 'log')) ? fs.readFileSync(path.join(dir, `route.${ri}`, 'log'), 'utf8') : '';
+      throw new Error(`the ${route.name} Bash route never ran ${JSON.stringify(c.argv)}: ${log.slice(0, 400)}`);
+    }
+    return { argv: c.argv, status: Number(fs.readFileSync(at('r'), 'utf8').trim()), signal: null, stdout: fs.readFileSync(at('o')), stderr: fs.readFileSync(at('e')) };
+  }));
+}
+
 module.exports = { RG_TREE_KINDS, makeRgTree, treeEntries, RG_MATRIX, cellArgv, grepArgv, globArgv, VCS_DIRS, flagLiterals, builderFlagLiterals, matrixDrift,
   consumerUsageErrorRegex, refusalDrift, carveRgArgvShapes, carveRunners, rgResolutionReferences, rgRunnerCalls, RG_RESOLUTION_NON_RUNNERS, pathScannedRunners,
-  runNativeRg, nativeRgVersion, runOursRg, cellInput, assertNoAncestorRules, runOursRgBatch, compareRg, normalizeRg, rgOneThread, MMAP_EVERYWHERE, mmapEverywhere, inTree };
+  runNativeRg, nativeRgVersion, runOursRg, cellInput, assertNoAncestorRules, runOursRgBatch, compareRg, normalizeRg, rgOneThread, MMAP_EVERYWHERE, mmapEverywhere, inTree,
+  BASH_ROWS, BASH_CELLS, BASH_PIPE_INPUT, writeQuaudeSnapshot, writeNativeSnapshot, runBashRoutes };
