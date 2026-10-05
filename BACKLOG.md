@@ -22,6 +22,12 @@ on macOS, NetBSD and Linux, and CI's linux-x64-pty judges both rg gates against 
   flags still refused by name: --sort path/accessed/created, --files -); binary files;
 - under "`net.createServer` is ABSENT": sandboxed Bash never runs under quaude (measured in Task 11);
 - under "Ten agentic rows": every quaude still creates ~/.tjs.
+- **The native-literal rg unit rows run on dev boxes only.** CI's suite stages a MINIMISED provider, which cannot run
+  as rg, so every "(native)" row in rg-entry, rg-walk, rg-files and rg-native skips there, by name (rgOracleSkip;
+  before Task 11 they failed with EACCES and would have been red). linux-x64-pty has a runnable native (the rg step's
+  oracle) and tjs; adding those four files to that step, with the macOS-only rows as its named skips, would judge
+  them on every push. They passed in an ubuntu:24.04 container with a real native (212 pass, 1 macOS-only skip), but
+  the combination with the step was not run, so it was not added blind.
 
 grep-native Task 10c (user ruling 2026-10-04) made the Bash tool's `rg` quaude's own tested rg, run as native runs
 its embedded one (the entry under "The Grep tool in quaude, and the Glob tool" says how). Left open:
