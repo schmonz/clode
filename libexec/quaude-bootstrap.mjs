@@ -435,6 +435,19 @@ async function main() {
       // accumulation) — no cleanup needed.
       const guardKey = (await sha256hex(new TextEncoder().encode(tjs.exePath))).slice(0, 16);
       const guardSettingsFile = tmpBase.replace(/[\\/]+$/, '') + sep + `clode-guard-${guardKey}.json`;
+      // SANDBOXED BASH FAILS CLOSED (user ruling 2026-10-05) — THE NAMED DIVERGENCE, stated here once: quaude cannot
+      // provide Claude Code's sandbox yet (its initialization needs node:net servers the node-shim lacks; BACKLOG,
+      // "net.createServer is ABSENT"), so under quaude an ENABLED sandbox is always REQUIRED: this settings file says
+      // sandbox.failIfUnavailable, the bundle's own setting for it (no patch to the bundle). With the sandbox enabled
+      // from any source the bundle merges, it then takes its own required branch: every Bash call is refused ("Sandbox
+      // is required but failed to initialize ..."), where the optional branch disabled the sandbox for the rest of the
+      // session and ran every later call UNSANDBOXED; and where the platform's sandbox dependencies are missing
+      // (Linux without bubblewrap/socat) it refuses at startup, where native would start unsandboxed with a warning.
+      // Native runs those commands sandboxed. With the sandbox off nothing changes (the setting is read only when it
+      // is enabled); dangerouslyDisableSandbox keeps native's policy (allowUnsandboxedCommands, the permission rules).
+      // naude injects no such setting: under Node the sandbox's servers exist and its initialization does not fail,
+      // but naude does not run sandboxed commands either (each is refused, "Shell '/bin/bash' not found in PATH",
+      // measured 2026-10-05 on macOS; BACKLOG): it fails closed by another gap, never open.
       const guardSettings = {
         hooks: {
           PreToolUse: [
@@ -446,6 +459,7 @@ async function main() {
             },
           ],
         },
+        sandbox: { failIfUnavailable: true },
       };
       await tjs.writeFile(guardSettingsFile, new TextEncoder().encode(JSON.stringify(guardSettings)));
       rest = [...rest, '--settings', guardSettingsFile];
