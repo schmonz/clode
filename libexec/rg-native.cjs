@@ -138,7 +138,27 @@ function appletRejected(bin, status, stderr) {
 // A search is searchSync's, bounded by the caller's timeout (see there).
 // Returns { stdout, stderr, status, signal }, plus `refused` for a refusal and `errorCode` when
 // a bound fired (node's spawnSync reports ETIMEDOUT / ENOBUFS; node-shim's ETIMEDOUT for both).
+// RG-SPAWN-CWD: a spawned rg's working directory is the directory its spawn's cwd names when the child starts: the
+// child chdir()s there before exec. The 2.1.283 bundle on Linux hands its Grep's rg a cwd of /proc/self/fd/N, a
+// directory it holds open (fd N is still the caller's at that chdir), so rg runs in that directory and never sees the
+// name. quaude's rg runs inside the caller, where N names the same directory now: a cwd naming a descriptor is
+// resolved once, up front, to the directory it names, and the search runs from there, as rg's does. Any other cwd is
+// taken as given (it names its directory the same way before and after a chdir). One that does not resolve to a
+// plain path stays as it was, and its target is refused as before (RG-REFUSE-SPECIAL-FILE).
+const DESCRIPTOR_CWD = /^\/(?:dev\/fd|proc\/(?:self|thread-self|\d+)\/fd)\/\d+$/;
+function rgSpawnCwd(cwd, { realpath = (p) => require('fs').realpathSync(p) } = {}) {
+  if (typeof cwd !== 'string' || !DESCRIPTOR_CWD.test(cwd)) return cwd;
+  let real;
+  try { real = realpath(cwd); } catch { return cwd; }
+  return typeof real === 'string' && real && !DESCRIPTOR_PATH.test(real) ? real : cwd;
+}
+const withSpawnCwd = (opts) => {
+  const cwd = rgSpawnCwd(opts && opts.cwd);
+  return cwd === (opts && opts.cwd) ? opts : { ...opts, cwd };
+};
+
 function runRg(argv, opts = {}) {
+  opts = withSpawnCwd(opts);
   const plan = rgPlan(argv, opts);
   if (plan.result) return plan.result;
   return searchSync(plan, opts);
@@ -1703,6 +1723,10 @@ function jsonSummary(t) {
 //     are the rg CHILD's descriptors to native; quaude's rg runs inside its caller, so they would be
 //     the CALLER's (an O_NONBLOCK open of /dev/fd/0 on macOS is a dup keeping fd 0's blocking mode: the
 //     read held the whole engine). Refused.
+//   - RG-PID-FD: /proc/<pid>/fd/N with a NUMERIC pid names the same open file to every process that opens
+//     it, rg's child included (the 2.1.283 bundle on Linux names a file it holds open that way, its own
+//     pid, for its Grep's single-file searches). So it is a path like any other, classified by what it is
+//     below: a regular file or a directory is searched, the rest as the rules here say.
 //   - a FIFO: rg reads it until a writer closes it (none: it waits). Refused.
 //   - a character device: /dev/null (by identity: its resolved path) is an empty file (rc 1, or the
 //     other paths' answer); any other is refused, never read (a nonblocking read of a terminal eats
@@ -1712,6 +1736,9 @@ function jsonSummary(t) {
 //     102)`, the rest answered, rc 2); one that opens is refused (native reads it to its end).
 // The type is the engine's Stats' (node-shim's reads the mode bits since Task 7 review I3).
 const DESCRIPTOR_PATH = /^\/(?:dev\/(?:std(?:in|out|err)$|fd\/)|proc\/(?:self|thread-self|\d+)\/fd\/)/;
+const PID_FD_PATH = /^\/proc\/\d+\/fd\/\d+$/;
+// A named path refused as a process's own descriptor (above): a descriptor name, but not a numeric pid's (RG-PID-FD).
+const descriptorRefused = (p) => !PID_FD_PATH.test(p) && isDescriptorPath(p);
 function isDescriptorPath(p) {
   if (DESCRIPTOR_PATH.test(p)) return true;
   try { return DESCRIPTOR_PATH.test(require('fs').realpathSync(p)); } catch { return false; }
@@ -2366,7 +2393,7 @@ function* searchCore(spec, opts) {
   }
   const kinds = spec.paths.map((P) => {
     if (P === '-') return { kind: 'stdin' };
-    if (process.platform !== 'win32' && isDescriptorPath(path.resolve(cwd, P))) return { kind: 'refuse' };
+    if (process.platform !== 'win32' && descriptorRefused(path.resolve(cwd, P))) return { kind: 'refuse' };
     try {
       const st = fs.statSync(path.resolve(cwd, P));
       return { kind: st.isDirectory() ? 'dir' : st.isFile() ? 'file' : 'special', st };
@@ -2839,6 +2866,7 @@ function refusedChild(r, opts) {
 //   spawn                 the UNWRAPPED asynchronous spawn
 //   maxBuffer             (rgExecFile's) where a search stops printing; spawn has no such bound
 function rgSpawn(argv, opts = {}, ctx) {
+  opts = withSpawnCwd(opts);
   const plan = rgPlan(argv, ctx);
   if (plan.result) return refusedChild(plan.result, opts);
   return searchChild(plan, opts, ctx);
@@ -2915,6 +2943,6 @@ function rgExecFileSync(r, opts, file, args) {
   return s.stdout;
 }
 
-module.exports = { isRgExe, rgRefusal, parseRgRefusal, untranslatableReason, runRg, rgSpawn, rgExecFile, rgSpawnSync, rgExecFileSync, RG_MAX_BUFFER,
+module.exports = { isRgExe, rgRefusal, parseRgRefusal, untranslatableReason, runRg, rgSpawnCwd, descriptorRefused, rgSpawn, rgExecFile, rgSpawnSync, rgExecFileSync, RG_MAX_BUFFER,
   UGREP_MIN, parseUgrepVersion, versionAtLeast, ugrepCapabilities, ugrepCapabilitiesAsync, ugrepMatchArgv, chunkFiles, parseUgrepRanges,
   ugrepMatches, ugrepMatchesAsync, matchFilesAlone, parseRgSearch, UgrepError, rgText, searchStats, FILL_TICK_BYTES };

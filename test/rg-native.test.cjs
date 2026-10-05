@@ -1704,3 +1704,84 @@ test('RG-BINARY-QUIT: -l reads a walked file only as far as rg\'s fills decide (
     }
   } finally { fs.rmSync(d, { recursive: true, force: true }); }
 });
+
+// RG-SPAWN-CWD (grep-native Task 11, found by the Linux end to end): the 2.1.283 bundle on Linux spawns its Grep's rg
+// with cwd `/proc/self/fd/N`, a directory it holds open. A spawned rg never sees that name: the child chdir()s there
+// before exec, while fd N is still the caller's, and rg's own working directory is that directory. quaude's rg runs
+// inside the caller, where N names the same directory now, so the search resolves the name once, up front, and then
+// searches as rg would from there; it used to take the cwd at its word and refuse the target `.` as a descriptor path
+// (RG-REFUSE-SPECIAL-FILE), failing every Grep on Linux.
+test('RG-SPAWN-CWD: a cwd naming a descriptor is the directory it resolves to; any other cwd is taken as given', () => {
+  const calls = [];
+  const realpath = (p) => { calls.push(p); return '/real/dir'; };
+  for (const cwd of ['/proc/self/fd/17', '/proc/thread-self/fd/3', '/proc/4242/fd/9', '/dev/fd/9']) {
+    assert.strictEqual(rgn.rgSpawnCwd(cwd, { realpath }), '/real/dir', cwd);
+  }
+  calls.length = 0;
+  for (const cwd of ['/tmp/x', '/proc/self/cwd', '/dev/fdx/1', undefined]) assert.strictEqual(rgn.rgSpawnCwd(cwd, { realpath }), cwd, String(cwd));
+  assert.deepStrictEqual(calls, [], 'only a descriptor cwd is resolved');
+  // a name that does not resolve, or resolves to another descriptor, is left as it was (and refused as before)
+  assert.strictEqual(rgn.rgSpawnCwd('/proc/self/fd/17', { realpath: () => { throw Object.assign(new Error('x'), { code: 'ENOENT' }); } }), '/proc/self/fd/17');
+  assert.strictEqual(rgn.rgSpawnCwd('/proc/self/fd/17', { realpath: () => '/dev/fd/0' }), '/proc/self/fd/17');
+});
+test('RG-SPAWN-CWD: rg spawned with cwd /proc/self/fd/N searches that directory, as the 2.1.283 bundle on Linux spawns it (both twins)', {
+  skip: needUgrep.skip || (!fs.existsSync('/proc/self/fd') ? 'no /proc/self/fd on this host (the bundle passes such a cwd on Linux only)' : false),
+}, async () => {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'rg-spawn-cwd-')));
+  const fd = fs.openSync(dir, 'r');
+  try {
+    fs.mkdirSync(path.join(dir, 'src'));
+    fs.writeFileSync(path.join(dir, 'src', 'a.txt'), 'a needle\n');
+    const cwd = `/proc/self/fd/${fd}`;
+    const ctx = { spawn: cp.spawn, spawnSync: cp.spawnSync, ugrep: () => UGREP };
+    for (const argv of [['-l', '--null', 'needle', '.'], ['--json', 'needle', '.'], ['--files', '.']]) {
+      const want = rgn.runRg(argv, { ...ctx, cwd: dir });
+      const s = rgn.runRg(argv, { ...ctx, cwd });
+      assert.deepStrictEqual([s.status, normalizeRg(s.stdout, argv)], [want.status, normalizeRg(want.stdout, argv)], `sync ${argv.join(' ')}: ${s.stderr}`);
+      const a = await new Promise((res) => rgn.rgExecFile(argv, { cwd, encoding: 'buffer' }, (e, so, se) => res({ status: e ? e.code : 0, stdout: so, stderr: String(se) }), 'rg', ctx));
+      assert.deepStrictEqual([a.status, normalizeRg(a.stdout, argv)], [want.status, normalizeRg(want.stdout, argv)], `async ${argv.join(' ')}: ${a.stderr}`);
+    }
+  } finally { fs.closeSync(fd); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+// RG-PID-FD (grep-native Task 11, found by the Linux end to end): for a single FILE, the 2.1.283 bundle on Linux names
+// the file it holds open as `/proc/<its pid>/fd/N` (its Grep's content and count modes over src/app.js). That name is
+// the same open file to every process that opens it, rg's child included, so it is a path like any other: classified
+// by what it is (a regular file or a directory is searched; a FIFO, a terminal or a socket still refuses, by
+// RG-SPECIAL-FILE). Only the names that are each process's OWN descriptors (/dev/stdin, /dev/fd/N,
+// /proc/self/fd/N, /proc/thread-self/fd/N) stay refused by name: to native they are rg's child's own, to quaude's rg
+// its caller's.
+test('RG-PID-FD: /proc/<pid>/fd/N is classified by what it is; a process\'s own descriptor names refuse by name', () => {
+  for (const p of ['/dev/stdin', '/dev/stdout', '/dev/fd/0', '/dev/fd/17', '/proc/self/fd/17', '/proc/thread-self/fd/3']) {
+    assert.strictEqual(rgn.descriptorRefused(p), true, p);
+  }
+  for (const p of ['/proc/4242/fd/17', '/proc/1/fd/0', '/tmp/x', '/proc/4242/fdinfo/17']) assert.strictEqual(rgn.descriptorRefused(p), false, p);
+});
+test('RG-PID-FD: a file named /proc/<our pid>/fd/N is searched as the file it is, both twins (Linux)', {
+  skip: needUgrep.skip || (!fs.existsSync(`/proc/${process.pid}/fd`) ? 'no /proc/<pid>/fd on this host (the bundle names files that way on Linux only)' : false),
+}, async () => {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'rg-pid-fd-')));
+  const file = path.join(dir, 'app.js');
+  fs.writeFileSync(file, "const a = 1;\nreturn 'needle one';\n");
+  const fd = fs.openSync(file, 'r');
+  try {
+    const named = `/proc/${process.pid}/fd/${fd}`;
+    const ctx = { spawn: cp.spawn, spawnSync: cp.spawnSync, ugrep: () => UGREP };
+    // -n and -c over one file print no path; --json's records name the path as given, so they are compared by
+    // their matches (bytes_printed counts the path's own bytes)
+    const view = (argv, b) => (argv[0] !== '--json' ? String(b) : String(b).split('\n').filter(Boolean).map((l) => JSON.parse(l))
+      .filter((m) => m.type === 'match').map((m) => ({ path: m.data.path.text, line: m.data.line_number, text: m.data.lines.text, sub: m.data.submatches })));
+    for (const argv of [['-n', 'needle', named], ['-c', 'needle', named], ['--json', 'needle', named]]) {
+      const real = argv.map((a) => (a === named ? file : a));
+      const want = rgn.runRg(real, { ...ctx, cwd: dir });
+      const wv = view(real, want.stdout);
+      const expect = Array.isArray(wv) ? wv.map((m) => ({ ...m, path: named })) : wv;
+      assert.ok(want.status === 0 && (Array.isArray(wv) ? wv.length === 1 : wv.length > 0), `the real path answers: ${want.stderr}`);
+      const s = rgn.runRg(argv, { ...ctx, cwd: dir });
+      assert.deepStrictEqual([s.status, view(argv, s.stdout)], [0, expect], `sync ${argv.join(' ')}: ${s.stderr}`);
+      const a = await new Promise((res) => rgn.rgExecFile(argv, { cwd: dir, encoding: 'buffer' }, (e, so, se) => res({ status: e ? e.code : 0, stdout: so, stderr: String(se) }), 'rg', ctx));
+      assert.deepStrictEqual([a.status, view(argv, a.stdout)], [0, expect], `async ${argv.join(' ')}: ${a.stderr}`);
+    }
+    assert.strictEqual(rgn.runRg(['needle', `/proc/self/fd/${fd}`], { ...ctx, cwd: dir }).status, 2, '/proc/self/fd/N still refuses');
+  } finally { fs.closeSync(fd); fs.rmSync(dir, { recursive: true, force: true }); }
+});
