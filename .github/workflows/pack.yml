@@ -82,7 +82,7 @@ jobs:
           echo "=== manifest ==="; cat templates.json
           echo "=== pack ==="; ls -1 pack
       - name: Upload the assembled pack (manifest + engines)
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: templates-pack
           path: pack
