@@ -122,11 +122,11 @@ jobs:
         with:
           node-version-file: .tool-versions
       - uses: docker/setup-qemu-action@v4.4.0   # fix-binary binfmt: host node spawns the s390x tjs
-      - uses: actions/download-artifact@v8.0.1
+      - uses: actions/download-artifact@v8.0.2
         with:
           name: tjs-linux-s390x-musl
           path: ${{ runner.temp }}/tjs-be
-      - uses: actions/download-artifact@v8.0.1
+      - uses: actions/download-artifact@v8.0.2
         with:
           name: tjs-linux-x64-musl
           path: ${{ runner.temp }}/tjs-le
@@ -178,7 +178,7 @@ jobs:
         with:
           node-version-file: .tool-versions
       - name: Download the four darwin engine slices
-        uses: actions/download-artifact@v8.0.1
+        uses: actions/download-artifact@v8.0.2
         with:
           pattern: tjs-darwin-*
           path: ${{ runner.temp }}/slices
@@ -286,7 +286,7 @@ jobs:
         with:
           node-version-file: .tool-versions
       - name: Download every leg's bare engine
-        uses: actions/download-artifact@v8.0.1
+        uses: actions/download-artifact@v8.0.2
         with:
           pattern: tjs-*
           path: engines
@@ -361,7 +361,7 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v7.0.1
-      - uses: actions/download-artifact@v8.0.1
+      - uses: actions/download-artifact@v8.0.2
         with:
           pattern: clode-*          # published builders (smoke-* and tjs-* stay CI artifacts)
           path: dist

@@ -53,7 +53,7 @@ jobs:
       # No merge: each `tjs-<leg>` artifact lands in its own subdir under engines/,
       # which is exactly the shape collectInputs() expects (one dir per leg).
       - name: Download every leg's bare engine
-        uses: actions/download-artifact@v8.0.1
+        uses: actions/download-artifact@v8.0.2
         with:
           pattern: tjs-*
           path: engines
