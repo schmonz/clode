@@ -500,7 +500,7 @@ runs:
     # an empty expression would silently make the path "/*.log".
     - name: Upload the sparc guest console log (qemu-netbsd-sparc)
       if: always() && inputs.platform == 'qemu-netbsd-sparc'
-      uses: actions/upload-artifact@v7.0.1
+      uses: actions/upload-artifact@v7.0.2
       with:
         name: guest-console-${{ inputs.log-name }}-attempt${{ github.run_attempt }}
         path: ${{ runner.temp }}/qemu-sparc/*.log

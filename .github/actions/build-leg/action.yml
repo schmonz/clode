@@ -1298,7 +1298,7 @@ runs:
 
     - name: Upload the tier-2 cross-blobulated builder
       if: inputs.tier2 == 'true'
-      uses: actions/upload-artifact@v7.0.1
+      uses: actions/upload-artifact@v7.0.2
       with:
         name: ${{ inputs.publish == 'true' && steps.name.outputs.asset || format('smoke-{0}', steps.name.outputs.asset) }}
         path: ${{ steps.name.outputs.asset }}
@@ -1795,7 +1795,7 @@ runs:
     # Attest is unaffected either way: ci tier never sets `attest` (it never
     # sets `publish`, and attest is `matrix.publish && 'true'`).
     - name: Upload the bare tjs binary (oracle jobs + debugging)
-      uses: actions/upload-artifact@v7.0.1
+      uses: actions/upload-artifact@v7.0.2
       with:
         name: tjs-${{ inputs.leg }}
         path: ${{ steps.bare.outputs.path }}
@@ -1822,7 +1822,7 @@ runs:
 
     - name: Upload the builder artifact
       if: inputs.no-exec != 'true'
-      uses: actions/upload-artifact@v7.0.1
+      uses: actions/upload-artifact@v7.0.2
       with:
         name: ${{ inputs.publish == 'true' && steps.name.outputs.asset || format('smoke-{0}', steps.name.outputs.asset) }}
         path: ${{ steps.name.outputs.asset }}

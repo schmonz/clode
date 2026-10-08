@@ -214,7 +214,7 @@ jobs:
           # them, one per slice.
           echo "asset=clode-$V-macos" >> "$GITHUB_OUTPUT"
       - name: Upload the bare fat engine (CI artifact)
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: tjs-darwin-universal
           path: ${{ steps.fat.outputs.fat }}
@@ -237,7 +237,7 @@ jobs:
         with:
           subject-path: ${{ steps.name.outputs.asset }}
       - name: Upload the universal builder (published)
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: ${{ steps.name.outputs.asset }}
           path: ${{ steps.name.outputs.asset }}
@@ -316,7 +316,7 @@ jobs:
           [ -n "$pin" ] || { echo "could not derive tjs pin from PINS.md" >&2; exit 1; }
           echo "pin=$pin" >> "$GITHUB_OUTPUT"
       - name: Upload the pack for the release job
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: clode-templates-${{ steps.name.outputs.pin }}
           path: pack
