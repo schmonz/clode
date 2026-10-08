@@ -36,7 +36,7 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v7.0.1
-      - uses: actions/setup-node@v7.0.0
+      - uses: actions/setup-node@v7.1.0
         with:
           node-version-file: .tool-versions
       - name: Install runtime deps (the ext-dep closure) for the naude build
@@ -104,7 +104,7 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v7.0.1
-      - uses: actions/setup-node@v7.0.0
+      - uses: actions/setup-node@v7.1.0
         with:
           node-version-file: .tool-versions
       - name: Install runtime deps (the ext-dep closure) for the naude build
@@ -173,7 +173,7 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v7.0.1
-      - uses: actions/setup-node@v7.0.0
+      - uses: actions/setup-node@v7.1.0
         with:
           node-version-file: .tool-versions
       - name: Install runtime deps (the ext-dep closure) for the naude build
@@ -242,7 +242,7 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v7.0.1
-      - uses: actions/setup-node@v7.0.0
+      - uses: actions/setup-node@v7.1.0
         with:
           node-version-file: .tool-versions
       - name: Install runtime deps (the ext-dep closure) for the naude build
