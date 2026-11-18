@@ -20,7 +20,9 @@ on macOS, NetBSD and Linux, and CI's linux-x64-pty judges both rg gates against 
   every refusal by rule; the -l/-c/standard printer entry (special paths, ugrep failures, error text under Node);
   --json (names that are not UTF-8); the walk (Windows, 1-CPU hosts, the -j1 line buffer); -U and --files (the
   flags still refused by name: --sort path/accessed/created, --files -); binary files;
-- under "`net.createServer` is ABSENT": sandboxed Bash never runs under quaude (measured in Task 11);
+- under "`net.createServer` is ABSENT": sandboxed Bash never runs under quaude (measured in Task 11), and the
+  round-3 residuals (a schema-invalid user `--settings` file; policy-set bwrapPath/socatPath; Windows unmeasured);
+- "Piped-stdin prompts never arrive under quaude" (found in sandbox round 3);
 - under "Ten agentic rows": every quaude still creates ~/.tjs.
 - **Some rg unit rows run on dev boxes only.** In CI's ubuntu suite (ugrep installed, no tjs, a MINIMISED provider)
   the literal rows DO run under node: rg-walk's P9 rows (RG-ERROR-TEXT read through libuv's words, node's named
@@ -4591,6 +4593,15 @@ load-bearing, not a cosmetic honesty fix. The bundle gates its `argv0`-based
 the `child_process` path instead. Anyone "fixing" it to `true` would silently reroute
 rg through a Bun API we do not implement.
 
+## Piped-stdin prompts never arrive under quaude (found 2026-11-18, sandbox round 3)
+
+`echo 'say hi' | quaude -p` (and the same with options before `-p`) exits with Claude Code's own `no stdin data
+received in 3s` where native reads the piped prompt and runs the turn (measured on macOS arm64 with the 2.1.283
+carve and a canned mock; native answered, quaude made no request). A prompt given as an argument works. The
+sandbox round-3 live rows use `-- <prompt>` for that reason. Not investigated: the likely suspects are the
+node-shim's process.stdin readiness for a pipe (the bundle waits for 'readable'/'data' with a 3s timer) and the
+bootstrap's stdin handling. A gate should drive a piped prompt end to end once it is fixed.
+
 ## Untracked-until-now findings from 2026-08-23/24 (three of them)
 
 These lived only in commit messages. Git preserves that; nobody browses it when
@@ -4616,12 +4627,40 @@ bundle sandbox.failIfUnavailable, so with the sandbox enabled every Bash call is
 failed to initialize: not a function. Restart to retry.`), and where bubblewrap/socat are missing quaude refuses at
 startup (`sandbox required but unavailable ... sandbox.failIfUnavailable is set`; native starts unsandboxed with a
 warning there). test/fidelity/agentic-sandbox-fail-closed.test.cjs holds it. Left: (1) real sandbox support
-(after the release); (2) the refusal's reason is the bundle's, `not a function`, which names the symptom, not the
-gap; naming it needs a shim `net.createServer` that throws by name, which this entry says not to wall in before the
-wall-aware inventory; (3) "Restart to retry" will not help under quaude; (4) NAUDE does not sandbox either: under
+(after the release); (2) "Restart to retry" will not help under quaude; (3) NAUDE does not sandbox either: under
 Node the sandbox initializes, but wrapWithSandbox refuses every sandboxed call (`Shell '/bin/bash' not found in
 PATH`, measured on macOS): it fails closed by that gap, not open; the likely cause is bun-shim's Bun.which on an
 absolute shell path, unmeasured.
+
+**Round 3 (2026-11-18, grep-native sandbox round 3).** Four corrections, each measured:
+- The user's own `--settings` (`X`, `=X`, file or inline JSON) was DISCARDED whole under quaude and naude: the bundle
+  keeps the last `--settings`, and the guard's came last. So a sandbox enabled there failed OPEN (all three calls
+  ran, writing outside the working directory), and its env, hooks and permissions never applied. FIXED (88aacca):
+  the user's value is read by the bundle's own rule and merged with quaude's (hooks concatenated, quaude's scalars
+  win), one `--settings` reaches the bundle; a value the bundle refuses reaches it unchanged (its own rc-1 error).
+  LEFT: a user `--settings` FILE that parses but fails Claude Code's settings schema (say `{"permissions": 5}`) is
+  dropped WHOLE by the bundle, silently, as native drops it; under quaude the merged file is that file, so the
+  update guard and sandbox.failIfUnavailable go with it (fails OPEN for that run). Fixing it means validating
+  against the bundle's schema before merging (or handing the bundle two settings layers): not done.
+- The guard took an option's value for a subcommand (`--add-dir config ...`): fixed by the bundle's own option
+  table (c13f6b8), gated against the carve (guard-option-table-gate).
+- WHERE NATIVE WOULD NOT SANDBOX, quaude now does as native does (USER ruling D2): Linux without bubblewrap or socat
+  (or WSL1) gets native's `Sandbox disabled ... Commands will run WITHOUT sandboxing` and every call runs
+  unsandboxed; before, quaude refused to start there. Measured in a Linux container (node:24.21.0-bookworm,
+  x86_64) with the 2.1.283 linux carve: native and the new quaude print the same warning and run; with bubblewrap
+  and socat installed every call is refused. LEFT: (a) sandbox.bwrapPath/socatPath, which only managed policy sets:
+  quaude cannot read every policy source, so where one might exist (a managed-settings file or directory under
+  /etc/claude-code, a cached remote-settings.json, `--managed-settings`) it keeps failIfUnavailable even with the
+  deps off PATH, refusing to start where native, given no such path, would warn and run; (b) Windows is not
+  measured: quaude keeps failIfUnavailable there.
+- The refusal now names the gap (USER ruling M1): node-shim's `net.createServer` is an honest THROWING stub,
+  `quaude does not support the sandbox yet: net.createServer`, so every refused call reads `Sandbox is required but
+  failed to initialize: quaude does not support the sandbox yet: net.createServer. Restart to retry.` The same text
+  now appears in the uds-messaging startup log below, which is not about the sandbox. The gap stays TRACKED, though
+  it left shim-surface's golden map (the warning below): test/node-shim-net.test.cjs pins the throw and
+  test/bun-shim-ant-gap.test.cjs pins that nothing listens.
+- An explicit user `sandbox.failIfUnavailable:false` stays OVERRIDDEN (USER ruling D1), from settings files and from
+  `--settings` alike; the fail-closed test has a row for each.
 
 Every quaude startup logs `[ERROR] [uds-messaging] Failed to create server: TypeError:
 not a function`. That is `net.createServer`: `libexec/node-shim/modules/net.cjs` exports
@@ -4636,11 +4675,11 @@ logged, then it bails. Full chain a real implementation needs, in order:
 `server.listen(<unix socket path>, cb)` → `server.unref()` → per-connection `Socket`
 with `.on('close')` → `fs.promises.chmod(sockPath, 0o600)`.
 
-**Do NOT "fix" it with a walled stub.** `net.createServer` is already tracked in
-`test/shim-surface/golden.json`, and `layer2Gaps` decides by `prop in shim.surface`
-(collect.cjs:88) — so a wall would silently DELETE a tracked gap. That is exactly what
-the v8 walls did on 2026-08-23 before being reverted. Either implement it, or land the
-wall-aware inventory first (see the /heapdump entry).
+**The walled stub landed anyway, by USER ruling (M1, 2026-11-18), and did what this paragraph
+warned:** `layer2Gaps` decides by `prop in shim.surface` (collect.cjs:88), so `net.createServer` left
+`test/shim-surface/golden.json`'s missing list (its notes record why). It is still tracked, by
+test/node-shim-net.test.cjs (the throw, by name) and test/bun-shim-ant-gap.test.cjs (nothing listens), but the
+inventory no longer counts it: the wall-aware inventory (see the /heapdump entry) is what would count it again.
 
 ### 2. Does MCP-over-SSE actually work on Windows? STILL UNKNOWN
 

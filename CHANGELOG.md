@@ -71,10 +71,17 @@ error with the help under it, not a silent translation:
 - Fix `clode build naude` from a source checkout silently building from a stale prebuilt
   entry bundle; it now refuses and names `node scripts/build-clode-main.mjs`
 - (`quaude` only, known gap) Sandboxed Bash is REFUSED, not run, until quaude supports
-  Claude Code's sandbox: with `sandbox.enabled`, every Bash call is refused (`Sandbox is
-  required but failed to initialize`), and where Linux lacks bubblewrap or socat quaude
-  refuses to start. Before this, the first call was refused and every later one ran
-  UNSANDBOXED. Native runs these commands sandboxed
+  Claude Code's sandbox: with `sandbox.enabled`, wherever native would sandbox, every Bash
+  call is refused (`Sandbox is required but failed to initialize: quaude does not support
+  the sandbox yet: net.createServer`). Before this, the first call was refused and every
+  later one ran UNSANDBOXED. Native runs these commands sandboxed. Where native would not
+  sandbox (Linux without bubblewrap or socat), quaude does as native does: it warns and runs
+  them unsandboxed
+- (`quaude` only) Your own `sandbox.failIfUnavailable: false` is overridden: with the sandbox
+  enabled, quaude refuses sandboxed Bash calls even when you said to run them unsandboxed if
+  the sandbox cannot start, because under quaude it never can yet
+- (`quaude` and `naude`) Fix your own `--settings` (a file or inline JSON) being ignored:
+  none of its permissions, hooks, environment or sandbox settings applied
 
 ## 0.20260831.1
 
