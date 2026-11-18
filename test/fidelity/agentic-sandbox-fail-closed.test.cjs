@@ -14,6 +14,8 @@
 // reason and no marker exists. With it off: all three run. Measured on macOS, and on Linux with bubblewrap and socat
 // present. Where native would NOT sandbox (Linux without bubblewrap or socat: native prints its warning and runs every
 // call unsandboxed), quaude does as native does (round 3, USER ruling D2): the same warning, every call runs.
+// An explicit sandbox.failIfUnavailable:false from the user stays OVERRIDDEN wherever native would sandbox (USER ruling
+// D1): those rows are refused like the rest.
 //
 // Round 3 (C1): the user's own --settings is MERGED with quaude's (libexec/update-guard.cjs, "THE USER'S --settings"),
 // where it used to be discarded whole. Its sandbox setting fails closed like any other source's; its env, hooks and
@@ -128,6 +130,10 @@ const ON_CASES = [
   // prompt rides after `--`; with stdout not a TTY the bundle prints). quaude's --settings goes BEFORE the `--`: after
   // it, it would be a prompt word, not an option.
   { name: 'user settings, `--add-dir config -- <prompt>` (no -p)', source: 'user', args: ['--add-dir', 'config', '--allowedTools', 'Bash', '--', 'write the markers'] },
+  // D1: the user's own failIfUnavailable:false (user settings, and their --settings file) is overridden: quaude's
+  // --settings outranks user settings in the bundle's merge, and the merge of a user --settings puts quaude's value last.
+  { name: 'user settings with failIfUnavailable:false (D1)', source: 'user', sourceSettings: { sandbox: { enabled: true, failIfUnavailable: false } } },
+  { name: 'a --settings file with failIfUnavailable:false (D1)', files: { 'f.json': { sandbox: { enabled: true, failIfUnavailable: false } } }, args: fileArg('f.json') },
 ];
 
 // Where native would sandbox (libexec/update-guard.cjs, sandboxWouldRun, by the bundle's own check): macOS always;
