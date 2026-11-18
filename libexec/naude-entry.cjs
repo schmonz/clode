@@ -315,14 +315,30 @@ function runNaude(opts = {}) {
   if (execPath && shouldInjectGuard(childArgv)) {
     const hookCommand = '"' + execPath + '" --clode-update-guard';
     const guardSettings = { hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: hookCommand }] }] } };
-    const probe = policyProbe({ providerPlatform: process.platform, env });
-    const policyMayOverride = Boolean(findOptionArgs(childArgv, '--managed-settings'))
-      || probe.always || probe.paths.some((p) => { try { fs.lstatSync(p); return true; } catch { return false; } });
+    let procVersion;
+    try { procVersion = fs.readFileSync('/proc/version', 'utf8'); } catch { procVersion = undefined; }
+    const probe = policyProbe({ providerPlatform: process.platform, env, procVersion });
+    const policyMayOverride = probe.always || probe.paths.some((p) => { try { fs.lstatSync(p); return true; } catch { return false; } });
     const mode = guardDeliveryMode(childArgv, policyMayOverride);
     if (mode === 'own') {
       childArgv.splice(0, childArgv.length, ...withSettingsArg(childArgv, findSettingsArgs(childArgv), JSON.stringify(guardSettings)));
-    } else if (mode === 'layers') {
+    } else {
       guardDir = fs.mkdtempSync(path.join(cacheDir || os.tmpdir(), 'clode-guard-'));
+      if (mode === 'merge') {
+        // Belt and braces: the hook merged into the user's value too (a value the bundle cannot use reaches it
+        // unchanged and it prints its own error).
+        const found = findSettingsArgs(childArgv);
+        let fileText;
+        if (!settingsIsInline(found.value)) fileText = readSettingsFileSync(found.value);
+        const plan = planGuardSettings(found, fileText, guardSettings);
+        if (!plan.passthrough) {
+          if (plan.warning) stdio('stderr').write(`naude: ${plan.warning}\n`);
+          const file = path.join(guardDir, 'settings.json');
+          fs.writeFileSync(file, JSON.stringify(plan.settings), { mode: 0o600 });
+          childArgv.splice(0, childArgv.length, ...withSettingsArg(childArgv, found, file));
+        }
+      }
+      // The layers, in 'layers' and 'merge' alike: the guard's hook as a session plugin.
       const files = guardPluginFiles(hookCommand);
       const pluginDir = path.join(guardDir, 'plugin');
       for (const rel of Object.keys(files)) {
@@ -331,20 +347,6 @@ function runNaude(opts = {}) {
         fs.writeFileSync(f, files[rel], { mode: 0o600 });
       }
       childArgv.splice(0, childArgv.length, ...withGuardLayers(childArgv, pluginDir, false));
-    } else {
-      // The fallback: the hook merged into the user's value (a value the bundle cannot use reaches it unchanged and
-      // it prints its own error; a schema-invalid file still drops the merge, BACKLOG).
-      const found = findSettingsArgs(childArgv);
-      let fileText;
-      if (!settingsIsInline(found.value)) fileText = readSettingsFileSync(found.value);
-      const plan = planGuardSettings(found, fileText, guardSettings);
-      if (!plan.passthrough) {
-        if (plan.warning) stdio('stderr').write(`naude: ${plan.warning}\n`);
-        guardDir = fs.mkdtempSync(path.join(cacheDir || os.tmpdir(), 'clode-guard-'));
-        const file = path.join(guardDir, 'settings.json');
-        fs.writeFileSync(file, JSON.stringify(plan.settings), { mode: 0o600 });
-        childArgv.splice(0, childArgv.length, ...withSettingsArg(childArgv, found, file));
-      }
     }
   }
 

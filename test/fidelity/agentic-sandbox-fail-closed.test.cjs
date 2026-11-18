@@ -79,7 +79,7 @@ const PRINT = ['-p', 'write the markers', '--allowedTools', 'Bash'];
 // One turn of a case. `source` writes ON to user, project or local settings ('off': none). `files` are written to the
 // run's base dir first (a value may be a function of { base, work }); `args` is argv, or a function of { base, work };
 // `script` the tool calls the mock answers with, in order. -> { mock, markers, r, files } (files: base's entries after).
-async function runCase(bin, { source = 'off', sourceSettings = ON, args = PRINT, script = SCRIPT, files = {} }) {
+async function runCase(bin, { source = 'off', sourceSettings = ON, args = PRINT, script = SCRIPT, files = {}, cfgFiles = {} }) {
   const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-fail-closed-')));
   try {
     const work = path.join(base, 'work'), home = path.join(base, 'home'), cfg = path.join(home, '.claude'), tjsHome = path.join(base, 'tjs-home');
@@ -88,6 +88,7 @@ async function runCase(bin, { source = 'off', sourceSettings = ON, args = PRINT,
     if (source === 'project') fs.writeFileSync(path.join(work, '.claude', 'settings.json'), JSON.stringify(sourceSettings));
     if (source === 'local') fs.writeFileSync(path.join(work, '.claude', 'settings.local.json'), JSON.stringify(sourceSettings));
     const ctx = { base, work };
+    for (const [name, content] of Object.entries(cfgFiles)) fs.writeFileSync(path.join(cfg, name), content);
     for (const [name, content] of Object.entries(files)) {
       const text = typeof content === 'function' ? content(ctx) : content;
       fs.writeFileSync(path.join(base, name), typeof text === 'string' ? text : JSON.stringify(text));
@@ -111,6 +112,7 @@ async function runCase(bin, { source = 'off', sourceSettings = ON, args = PRINT,
 }
 
 // A --settings value written to the run's base dir, by absolute path.
+const MERGE_SEAM = { 'remote-settings.json': '{}' };
 const fileArg = (name) => ({ base }) => [...PRINT, '--settings', path.join(base, name)];
 
 // The sandbox-ON cases: each must leave every call refused and nothing written.
@@ -129,6 +131,10 @@ const ON_CASES = [
   // refused by the optional branch and calls 2 and 3 ran UNSANDBOXED.
   { name: 'user settings + an unparseable --settings file', source: 'user', files: { 'bad.json': '{"sandbox": ' }, args: fileArg('bad.json') },
   { name: 'user settings + a schema-invalid --settings file ({"permissions":5})', source: 'user', files: { 'sch.json': { permissions: 5 } }, args: fileArg('sch.json') },
+  // Fix round 2: where managed policy may exist quaude merges into the user's --settings AND adds the layers (belt and
+  // braces). The test seam that makes quaude see "policy may exist" without any policy: an empty cached
+  // remote-settings.json in the config dir (policyProbe lists it; the bundle finds no settings in it).
+  { name: 'policy may exist (merge mode) + user settings + a schema-invalid --settings file', source: 'user', cfgFiles: MERGE_SEAM, files: { 'sch.json': { permissions: 5 } }, args: fileArg('sch.json') },
   // I1 + placement: `--add-dir config` is the model command with one added directory, not the `config` subcommand (the
   // prompt rides after `--`; with stdout not a TTY the bundle prints). quaude's --settings goes BEFORE the `--`: after
   // it, it would be a prompt word, not an option.
@@ -207,6 +213,9 @@ test('the user\'s --settings is honoured under quaude: env, hooks and permission
   const sch = await runCase(q.path, { files: { 'sch.json': { permissions: 5 } }, script: [U],
     args: ({ base }) => [...PRINT, '--dangerously-skip-permissions', '--settings', path.join(base, 'sch.json')] });
   if (!updateDenied(sch.mock)) findings.push(`a schema-invalid --settings file took the update guard with it: ${JSON.stringify(toolResult(sch.mock, U.id))} rc ${sch.r.status} ${sch.r.stderr.slice(0, 300)}`);
+  const schM = await runCase(q.path, { cfgFiles: MERGE_SEAM, files: { 'sch.json': { permissions: 5 } }, script: [U],
+    args: ({ base }) => [...PRINT, '--dangerously-skip-permissions', '--settings', path.join(base, 'sch.json')] });
+  if (!updateDenied(schM.mock)) findings.push(`merge mode: a schema-invalid --settings file took the update guard with it: ${JSON.stringify(toolResult(schM.mock, U.id))} rc ${schM.r.status} ${schM.r.stderr.slice(0, 300)}`);
 
   // Inline JSON denying Bash: the tool is gone, as native measured ("No such tool available: Bash").
   const d = await runCase(q.path, { script: [E], args: [...PRINT, '--settings', JSON.stringify({ permissions: { deny: ['Bash'] } })] });

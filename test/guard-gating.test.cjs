@@ -161,8 +161,42 @@ test('guardDeliveryMode: own without a user --settings; layers beside one; merge
   assert.strictEqual(ug.guardDeliveryMode(['--settings={"a":1}'], false), 'layers');
   assert.strictEqual(ug.guardDeliveryMode(['--add-dir', '--settings', 'x'], false), 'own', 'an option value is not --settings');
   assert.strictEqual(ug.guardDeliveryMode(['--settings', 'f.json'], true), 'merge', 'policy may refuse --plugin-dir');
-  assert.strictEqual(ug.guardDeliveryMode(['--managed-settings', '{}', '--settings', 'f.json'], false), 'merge',
-    'the user\'s own --managed-settings is theirs: one slot');
+  assert.strictEqual(ug.guardDeliveryMode(['--managed-settings', '{}', '--settings', 'f.json'], false), 'layers',
+    'a user --managed-settings object takes failIfUnavailable merged in (fix round 2)');
+  assert.strictEqual(ug.guardDeliveryMode(['--managed-settings', 'nope', '--settings', 'f.json'], false), 'merge',
+    'one the bundle ignores cannot carry it: the merge must');
+});
+
+// Fix round 2 (controller ruling): 'merge' ALSO carries the layers, belt and braces.
+test('win32: policy always "may", so a user --settings gets all three: merged --settings, --plugin-dir, --managed-settings', () => {
+  const probe = ug.policyProbe({ providerPlatform: 'win32', env: {} });
+  const argv = ['--settings', 'f.json', '-p', 'x'];
+  assert.strictEqual(ug.guardDeliveryMode(argv, probe.always), 'merge');
+  const ours = { hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: 'g' }] }] }, sandbox: { failIfUnavailable: true } };
+  const plan = ug.planGuardSettings(ug.findSettingsArgs(argv), JSON.stringify({ env: { A: '1' } }), ours);
+  const out = ug.withGuardLayers(ug.withSettingsArg(argv, ug.findSettingsArgs(argv), 'C:\\g\\settings.json'), 'C:\\g\\plugin', true);
+  assert.deepStrictEqual(plan.settings, { env: { A: '1' }, ...ours });
+  assert.deepStrictEqual(out, ['--settings', 'C:\\g\\settings.json', '-p', 'x', '--plugin-dir', 'C:\\g\\plugin',
+    '--managed-settings', JSON.stringify({ sandbox: { failIfUnavailable: true } })]);
+});
+
+test('withGuardLayers: a user --managed-settings gets failIfUnavailable merged in place (the bundle keeps one, the last)', () => {
+  const theirs = JSON.stringify({ permissions: { deny: ['WebFetch'] }, sandbox: { failIfUnavailable: false } });
+  assert.deepStrictEqual(ug.withGuardLayers(['--managed-settings', theirs, '--settings', 'f'], '/d', true),
+    ['--managed-settings', JSON.stringify({ permissions: { deny: ['WebFetch'] }, sandbox: { failIfUnavailable: true } }),
+      '--settings', 'f', '--plugin-dir', '/d']);
+  assert.deepStrictEqual(ug.withGuardLayers(['--managed-settings={}', '--settings', 'f'], '/d', true),
+    ['--managed-settings=' + JSON.stringify({ sandbox: { failIfUnavailable: true } }), '--settings', 'f', '--plugin-dir', '/d']);
+  assert.deepStrictEqual(ug.withGuardLayers(['--managed-settings', 'nope', '--settings', 'f'], '/d', true),
+    ['--managed-settings', 'nope', '--settings', 'f', '--plugin-dir', '/d'], 'one the bundle ignores is left as native leaves it');
+  assert.deepStrictEqual(ug.withGuardLayers(['--managed-settings', '{}'], '/d', false),
+    ['--managed-settings', '{}', '--plugin-dir', '/d'], 'nothing merged when the sandbox is not required');
+});
+
+test('policyProbe: WSL (by /proc/version) inherits Windows policy: always "may", so merge plus layers', () => {
+  assert.strictEqual(ug.policyProbe({ providerPlatform: 'linux', env: {}, procVersion: 'Linux version 5.15.153.1-microsoft-standard-WSL2' }).always, true);
+  assert.strictEqual(ug.policyProbe({ providerPlatform: 'linux', env: {}, procVersion: 'Linux version 4.4.0-19041-Microsoft' }).always, true);
+  assert.strictEqual(ug.policyProbe({ providerPlatform: 'linux', env: {}, procVersion: 'Linux version 6.8.0-45-generic' }).always, false);
 });
 
 test('withGuardLayers: the user\'s argv unchanged, --plugin-dir and --managed-settings added where options end', () => {

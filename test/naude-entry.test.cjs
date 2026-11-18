@@ -428,17 +428,18 @@ test('first pass: the guard\'s private directory is removed when the child exits
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test('first pass: where policy may exist (here, the user\'s own --managed-settings) the hook is merged into the user\'s --settings', () => {
+test('first pass: \'merge\' (here, a user --managed-settings the bundle ignores) merges the hook into the user\'s --settings AND adds the plugin', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naude-user-settings-'));
   const userFile = path.join(dir, 'mine.json');
   fs.writeFileSync(userFile, JSON.stringify({ env: { MINE: '1' } }));
-  const cap = firstPass({ argv: ['-p', 'x', '--managed-settings', '{}', '--settings', userFile] });
+  const cap = firstPass({ argv: ['-p', 'x', '--managed-settings', 'nope', '--settings', userFile] });
   const at = cap.call.args.flatMap((a, i) => (a === '--settings' ? [i] : []));
   assert.strictEqual(at.length, 1);
   const merged = JSON.parse(fs.readFileSync(cap.call.args[at[0] + 1], 'utf8'));
   assert.deepStrictEqual(merged.env, { MINE: '1' });
   assert.deepStrictEqual(merged.hooks.PreToolUse.map((h) => h.hooks[0].command), ['"/naude" --clode-update-guard']);
-  assert.strictEqual(cap.call.args.indexOf('--plugin-dir'), -1);
+  assert.deepStrictEqual(pluginHooks(cap.call.args).hooks.hooks.PreToolUse.map((h) => h.hooks[0].command), ['"/naude" --clode-update-guard'],
+    'belt and braces: the plugin too');
   fs.rmSync(path.dirname(cap.call.args[at[0] + 1]), { recursive: true, force: true });
   fs.rmSync(dir, { recursive: true, force: true });
 });

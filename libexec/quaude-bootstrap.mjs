@@ -294,10 +294,12 @@ function shouldInjectGuard(argv) {
 //     them; disableAllHooks and allowManagedHooksOnly govern them as they govern settings hooks.
 // Both are only for that case (a user --settings): without one, quaude's keys are its own --settings, inline JSON
 // (nothing written to disk by quaude; the bundle stores inline settings itself, as it does for native). Where a
-// managed-policy source may exist (it could set disableSideloadFlags, refusing --plugin-dir at startup, and a
-// managed-settings file or MDM profile shuts the parent's managed settings out), or the user passed their own
-// --managed-settings, quaude falls back to merging into the user's value (planGuardSettings), the one case a
-// schema-invalid user file still drops quaude's keys (BACKLOG).
+// managed-policy source may exist (Windows and WSL always), quaude ALSO merges its keys into the user's value
+// (planGuardSettings), belt and braces, because policy can shut the parent's managed settings out (a managed-settings
+// document or profile, first-wins). Policy can also refuse --plugin-dir at startup (disableSideloadFlags): quaude then
+// fails CLOSED, refusing to start where native starts (accepted, controller ruling). The one residual: policy that
+// shuts the parent slice out AND a schema-invalid user --settings file AND the sandbox enabled: the hook survives (the
+// plugin), sandbox.failIfUnavailable does not (BACKLOG).
 const SETTINGS_FILE_MAX_BYTES = 2097152;
 function findOptionArgs(argv, name) {
   const at = [];
@@ -395,13 +397,17 @@ function withSettingsArg(argv, found, file) {
 // platform, the provider carve's): the managed-settings document and drop-in directory (macOS "/Library/Application
 // Support/ClaudeCode", every other platform "/etc/claude-code"), the macOS managed-preferences profiles
 // (com.anthropic.claudecode, device and per-user), and a cached server-managed remote-settings.json in the config
-// dir. -> { always: true } on Windows (its policy is in the registry, which quaude cannot probe), else { paths }:
+// dir. -> { always: true } on Windows (its policy is in the registry, which quaude cannot probe) and under WSL
+// (`procVersion`, /proc/version: it inherits Windows' policy), else { paths }:
 // policy may exist when any of them exists, or argv has --managed-settings. Policy can set sandbox.bwrapPath/socatPath
 // (sandboxWouldRun), refuse --plugin-dir at startup (disableSideloadFlags), and a managed-settings document or profile
 // shuts a parent's managed settings out (first-wins), so quaude then delivers its keys by the path that does not
 // depend on any of that (guardDeliveryMode's 'merge').
-function policyProbe({ providerPlatform, env }) {
+function policyProbe({ providerPlatform, env, procVersion }) {
   if (providerPlatform === 'win32') return { always: true, paths: [] };
+  // WSL inherits Windows' admin policy (the registry, the Windows-side managed-settings file), which quaude cannot
+  // probe from inside it: "may".
+  if (providerPlatform === 'linux' && wslVersion(procVersion) !== undefined) return { always: true, paths: [] };
   const e = env || {};
   const base = providerPlatform === 'darwin' ? '/Library/Application Support/ClaudeCode' : '/etc/claude-code';
   const paths = [base + '/managed-settings.json', base + '/managed-settings.d'];
@@ -425,22 +431,51 @@ function guardPluginFiles(hookCommand) {
     }) + '\n',
   };
 }
-// How quaude's keys reach the bundle (see "THE USER'S --settings"). `ours` = quaude's settings (hooks, and sandbox
-// when required); -> 'own' (no user --settings: ours as the one --settings), 'layers' (a user --settings, left
-// unchanged; ours as --managed-settings and --plugin-dir) or 'merge' (the fallback: ours merged into the user's).
+// How quaude's keys reach the bundle (see "THE USER'S --settings"). -> 'own' (no user --settings: quaude's settings
+// as the one --settings), 'layers' (a user --settings, left unchanged; quaude's keys as --plugin-dir and
+// --managed-settings beside it) or 'merge' (quaude's settings merged into the user's --settings AND the layers, belt
+// and braces: fix round 2, controller ruling). 'merge' is where the layers alone may not hold: admin policy may exist
+// (`policyMayOverride`: it can shut the parent's managed settings out, or refuse --plugin-dir, failing closed), or the
+// user's own --managed-settings is not a JSON object (the bundle ignores it, so quaude cannot merge into it).
 function guardDeliveryMode(argv, policyMayOverride) {
   const found = findSettingsArgs(argv);
   if (!found || found.value === '') return 'own';
-  if (policyMayOverride || findOptionArgs(argv, '--managed-settings')) return 'merge';
+  if (policyMayOverride) return 'merge';
+  const m = findOptionArgs(argv, '--managed-settings');
+  if (m && parseManagedSettings(m.value) === null) return 'merge';
   return 'layers';
 }
-// argv for 'layers': the user's argv unchanged, plus `--plugin-dir <pluginDir>` and, when sandbox.failIfUnavailable
-// is required, `--managed-settings <json>`, where options end (before a `--`).
+// A --managed-settings value as the bundle reads it (J6o: JSON of the trimmed value, which must be an object), or null.
+function parseManagedSettings(value) {
+  try {
+    const v = JSON.parse(String(value).trim());
+    return isPlainObject(v) ? v : null;
+  } catch (_) { return null; }
+}
+// argv with the layers added, where options end (before a `--`): `--plugin-dir <pluginDir>` (the guard's hook) and,
+// when sandbox.failIfUnavailable is required, `--managed-settings <json>`. The bundle keeps ONE --managed-settings (the
+// last), so a user's own is not displaced: failIfUnavailable is merged into it, in place (their keys kept, ours the
+// restrictive value). A user value that is not a JSON object is left as it is (the bundle ignores it and says so,
+// as native does); then quaude's value rides only in the merged --settings ('merge').
 function withGuardLayers(argv, pluginDir, sandboxRequired) {
-  const at = optionsEnd(argv);
+  const FIU = { sandbox: { failIfUnavailable: true } };
+  let out = argv.slice();
   const add = ['--plugin-dir', pluginDir];
-  if (sandboxRequired) add.push('--managed-settings', JSON.stringify({ sandbox: { failIfUnavailable: true } }));
-  return argv.slice(0, at).concat(add, argv.slice(at));
+  if (sandboxRequired) {
+    const m = findOptionArgs(out, '--managed-settings');
+    if (!m) add.push('--managed-settings', JSON.stringify(FIU));
+    else {
+      const theirs = parseManagedSettings(m.value);
+      if (theirs !== null) {
+        const [i, n] = m.at[m.at.length - 1];
+        const merged = JSON.stringify(mergeSettings(theirs, FIU));
+        if (n === 1) out[i] = '--managed-settings=' + merged;
+        else out[i + 1] = merged;
+      }
+    }
+  }
+  const at = optionsEnd(out);
+  return out.slice(0, at).concat(add, out.slice(at));
 }
 // WHERE NATIVE WOULD SANDBOX (grep-native sandbox round 3, D2; USER: match native). quaude says
 // sandbox.failIfUnavailable only where native would actually run the sandbox; elsewhere the bundle's own optional
@@ -478,10 +513,13 @@ async function readSettingsFile(tjs, file) {
   } catch (_) { return null; }
 }
 
-// Whether a managed-policy source may exist (policyProbe, guardGating, says where).
-async function policyMayExist(tjs, providerPlatform, argv) {
-  if (findOptionArgs(argv, '--managed-settings')) return true;
-  const probe = policyProbe({ providerPlatform, env: tjs.env });
+// /proc/version (Linux, WSL), or undefined where there is none.
+async function readProcVersion(tjs) {
+  try { return new TextDecoder().decode(await tjs.readFile('/proc/version')); } catch (_) { return undefined; }
+}
+// Whether an admin managed-policy source may exist (policyProbe, guardGating, says where).
+async function policyMayExist(tjs, providerPlatform, procVersion) {
+  const probe = policyProbe({ providerPlatform, env: tjs.env, procVersion });
   if (probe.always) return true;
   for (const p of probe.paths) { try { await tjs.lstat(p); return true; } catch (_) { /* absent */ } }
   return false;
@@ -489,8 +527,9 @@ async function policyMayExist(tjs, providerPlatform, argv) {
 
 // What sandboxWouldRun (guardGating) needs to know: the bundle's baked platform, and on Linux the facts its own
 // dependency check reads. Bun.which looks a name up on PATH (the env the bundle will see, already shaped by
-// bootstrapTargetEnv); policyMayExist says whether a policy source could set sandbox.bwrapPath/socatPath.
-async function sandboxFacts(tjs, providerPlatform, policyMayOverride) {
+// bootstrapTargetEnv); `policyMayOverride`: whether policy (admin, or the user's own --managed-settings) could set
+// sandbox.bwrapPath/socatPath.
+async function sandboxFacts(tjs, providerPlatform, procVersion, policyMayOverride) {
   if (providerPlatform !== 'linux') return { providerPlatform };
   const onPath = async (name) => {
     for (const dir of String(tjs.env.PATH || '').split(':')) {
@@ -502,8 +541,6 @@ async function sandboxFacts(tjs, providerPlatform, policyMayOverride) {
     }
     return false;
   };
-  let procVersion;
-  try { procVersion = new TextDecoder().decode(await tjs.readFile('/proc/version')); } catch (_) { procVersion = undefined; }
   return { providerPlatform, procVersion, hasBwrap: await onPath('bwrap'), hasSocat: await onPath('socat'), policyMayOverride };
 }
 
@@ -781,8 +818,11 @@ async function main() {
       // servers exist and its initialization does not fail, but naude does not run sandboxed commands either (each is
       // refused, "Shell '/bin/bash' not found in PATH", measured 2026-10-05 on macOS; BACKLOG): it fails closed by
       // another gap, never open.
-      const policyMayOverride = await policyMayExist(tjs, manifest.providerPlatform, rest);
-      const required = sandboxWouldRun(await sandboxFacts(tjs, manifest.providerPlatform, policyMayOverride));
+      const procVersion = await readProcVersion(tjs);
+      const policyMayOverride = await policyMayExist(tjs, manifest.providerPlatform, procVersion);
+      const userManaged = Boolean(findOptionArgs(rest, '--managed-settings'));
+      const required = sandboxWouldRun(
+        await sandboxFacts(tjs, manifest.providerPlatform, procVersion, policyMayOverride || userManaged));
       const hookCommand = '"' + tjs.exePath + '" --clode-update-guard';
       const guardSettings = { hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: hookCommand }] }] } };
       if (required) guardSettings.sandbox = { failIfUnavailable: true };
@@ -795,22 +835,9 @@ async function main() {
         rest = withSettingsArg(rest, findSettingsArgs(rest), JSON.stringify(guardSettings));
       } else {
         const dir = await privateGuardDir(tjs, tmpBase, sep);
-        if (mode === 'layers') {
-          const files = guardPluginFiles(hookCommand);
-          const pluginDir = dir + sep + 'plugin-' + (await sha256hex(new TextEncoder().encode(JSON.stringify(files)))).slice(0, 16);
-          for (const rel of Object.keys(files)) {
-            const parts = rel.split('/');
-            let d = pluginDir;
-            for (const part of [''].concat(parts.slice(0, -1))) {
-              d = part ? d + sep + part : d;
-              try { await tjs.makeDir(d, { mode: 0o700 }); } catch (_) { /* exists */ }
-            }
-            await writeFileOnce(tjs, pluginDir + sep + parts.join(sep), files[rel]);
-          }
-          rest = withGuardLayers(rest, pluginDir, required);
-        } else {
-          // The fallback: quaude's keys merged into the user's value. A value the bundle cannot use reaches it
-          // unchanged (it prints its own error and exits); a schema-invalid file still drops the merge (BACKLOG).
+        if (mode === 'merge') {
+          // Belt and braces: quaude's keys merged into the user's value too (a value the bundle cannot use reaches it
+          // unchanged: it prints its own error and exits).
           const found = findSettingsArgs(rest);
           let fileText;
           if (!settingsIsInline(found.value)) fileText = await readSettingsFile(tjs, found.value);
@@ -824,6 +851,20 @@ async function main() {
             rest = withSettingsArg(rest, found, file);
           }
         }
+        // The layers, in 'layers' and 'merge' alike: the guard's hook as a session plugin, sandbox.failIfUnavailable as
+        // managed settings.
+        const files = guardPluginFiles(hookCommand);
+        const pluginDir = dir + sep + 'plugin-' + (await sha256hex(new TextEncoder().encode(JSON.stringify(files)))).slice(0, 16);
+        for (const rel of Object.keys(files)) {
+          const parts = rel.split('/');
+          let d = pluginDir;
+          for (const part of [''].concat(parts.slice(0, -1))) {
+            d = part ? d + sep + part : d;
+            try { await tjs.makeDir(d, { mode: 0o700 }); } catch (_) { /* exists */ }
+          }
+          await writeFileOnce(tjs, pluginDir + sep + parts.join(sep), files[rel]);
+        }
+        rest = withGuardLayers(rest, pluginDir, required);
       }
     }
   }
