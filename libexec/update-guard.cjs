@@ -121,8 +121,116 @@ function shouldInjectGuard(argv) {
   const first = firstPositional(argv);
   return first === undefined || !SUBCOMMANDS.has(first);
 }
+// THE USER'S --settings (grep-native sandbox round 3, C1). The bundle keeps ONE --settings (its eager scanner takes the
+// last occurrence, as commander does), so the guard's own --settings, appended after the user's, discarded the user's
+// whole: under quaude a user --settings never applied (permissions, hooks, env, and a sandbox enabled there failed
+// OPEN). Now the user's value is read by the bundle's own rule and quaude's settings are merged into it: exactly one
+// --settings reaches the bundle. The rule, from the 2.1.283 carve: occurrences are `--settings X` and `--settings=X`
+// before any `--`, skipping other options' values (the same scan as hasFlag); the last one wins; an empty value loads
+// nothing. A value whose trim starts with '{' and ends with '}' is inline JSON, anything else a file path (relative to
+// the working directory). Inline JSON that does not parse, and a file that is missing, not a regular file, unreadable
+// or over 2 MiB, make the bundle print its error and exit 1 before anything runs: then argv goes to the bundle
+// UNCHANGED, so the user sees exactly that error. A file whose content is not a JSON object is skipped by the bundle,
+// which runs on without it (measured, native: rc 0, nothing from it applied); quaude skips it the same way, says so on
+// stderr, and keeps its own settings. A file that parses but fails the bundle's schema is dropped whole by the bundle,
+// and with it the settings quaude merged in: native drops that file too, but the guard and the sandbox setting go with
+// it (BACKLOG, the one case this merge cannot cover without the bundle's schema).
+const SETTINGS_FILE_MAX_BYTES = 2097152;
+function findSettingsArgs(argv) {
+  const at = [];
+  let value;
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === '--') break;
+    if (typeof a === 'string' && a.startsWith('--settings=')) { at.push([i, 1]); value = a.slice('--settings='.length); continue; }
+    if (a === '--settings' && i + 1 < argv.length) { at.push([i, 2]); value = argv[i + 1]; i++; continue; }
+    i = skipOptionValue(argv, i);
+  }
+  return at.length ? { value, at } : null;
+}
+function settingsIsInline(value) {
+  const t = String(value).trim();
+  return t.startsWith('{') && t.endsWith('}');
+}
+// A settings file's bytes as the bundle decodes them: UTF-16LE after an FF FE mark, else UTF-8.
+function decodeSettingsBytes(bytes) {
+  if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xfe) {
+    let out = '';
+    for (let i = 2; i + 1 < bytes.length; i += 2) out += String.fromCharCode(bytes[i] | (bytes[i + 1] << 8));
+    return out;
+  }
+  return new TextDecoder('utf-8').decode(bytes);
+}
+// The settings object the text holds, or null when the bundle would not read one from it. An empty FILE is {}.
+function parseSettingsText(text, inline) {
+  let t = inline ? String(text).trim() : String(text);
+  if (t.charCodeAt(0) === 0xfeff) t = t.slice(1);
+  if (!inline && t.trim() === '') return {};
+  try {
+    const v = JSON.parse(t);
+    return v !== null && typeof v === 'object' && !Array.isArray(v) ? v : null;
+  } catch (_) { return null; }
+}
+function isPlainObject(v) { return v !== null && typeof v === 'object' && !Array.isArray(v); }
+// quaude's settings over the user's: objects merge key by key, arrays concatenate (the user's first: their PreToolUse
+// hooks are kept and quaude's run too), any other value of quaude's replaces the user's.
+function mergeSettings(user, ours) {
+  const out = Object.assign({}, user);
+  for (const k of Object.keys(ours)) {
+    const u = out[k];
+    const v = ours[k];
+    if (isPlainObject(u) && isPlainObject(v)) out[k] = mergeSettings(u, v);
+    else if (Array.isArray(u) && Array.isArray(v)) out[k] = u.concat(v);
+    else out[k] = v;
+  }
+  return out;
+}
+// What to hand the bundle. `found` = findSettingsArgs(argv); `fileText` = the user's FILE decoded (a string), or null
+// when it could not be used (missing, not a regular file, unreadable, over the limit), or undefined when no file was
+// read (no --settings, an empty value, inline JSON). -> { passthrough: true } (argv unchanged: the bundle reports the
+// error) | { settings, warning } (settings to write; warning to print, or null).
+function planGuardSettings(found, fileText, ours) {
+  if (!found || found.value === '') return { settings: ours, warning: null };
+  if (settingsIsInline(found.value)) {
+    const user = parseSettingsText(found.value, true);
+    return user === null ? { passthrough: true } : { settings: mergeSettings(user, ours), warning: null };
+  }
+  if (fileText === null || fileText === undefined) return { passthrough: true };
+  const user = parseSettingsText(fileText, false);
+  if (user === null) {
+    return { settings: ours, warning: `the --settings file ${found.value} is not a JSON object, so Claude Code skips it`
+      + ' and so does quaude: none of its settings apply' };
+  }
+  return { settings: mergeSettings(user, ours), warning: null };
+}
+// The index `--` ends options at (argv.length when there is none).
+function optionsEnd(argv) {
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === '--') return i;
+    i = skipOptionValue(argv, i);
+  }
+  return argv.length;
+}
+// argv with every user --settings removed and ONE `--settings file`: where the user's last one was, else where options
+// end (before a `--`, after which it would be a prompt, not an option).
+function withSettingsArg(argv, found, file) {
+  const drop = new Set();
+  let at = optionsEnd(argv);
+  if (found) {
+    for (const [i, n] of found.at) for (let k = 0; k < n; k++) drop.add(i + k);
+    at = found.at[found.at.length - 1][0];
+  }
+  const out = [];
+  for (let i = 0; i <= argv.length; i++) {
+    if (i === at) out.push('--settings', file);
+    if (i < argv.length && !drop.has(i)) out.push(argv[i]);
+  }
+  return out;
+}
 // <<< guardGating <<<
 module.exports = {
   guardVerdict, SUBCOMMANDS, shouldInjectGuard, firstPositional, hasFlag,
   VALUE_OPTIONS, VARIADIC_OPTIONS, OPTIONAL_VALUE_OPTIONS,
+  SETTINGS_FILE_MAX_BYTES, findSettingsArgs, settingsIsInline, decodeSettingsBytes, parseSettingsText, mergeSettings,
+  planGuardSettings, withSettingsArg,
 };

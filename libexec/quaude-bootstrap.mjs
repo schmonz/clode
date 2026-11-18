@@ -271,7 +271,124 @@ function shouldInjectGuard(argv) {
   const first = firstPositional(argv);
   return first === undefined || !SUBCOMMANDS.has(first);
 }
+// THE USER'S --settings (grep-native sandbox round 3, C1). The bundle keeps ONE --settings (its eager scanner takes the
+// last occurrence, as commander does), so the guard's own --settings, appended after the user's, discarded the user's
+// whole: under quaude a user --settings never applied (permissions, hooks, env, and a sandbox enabled there failed
+// OPEN). Now the user's value is read by the bundle's own rule and quaude's settings are merged into it: exactly one
+// --settings reaches the bundle. The rule, from the 2.1.283 carve: occurrences are `--settings X` and `--settings=X`
+// before any `--`, skipping other options' values (the same scan as hasFlag); the last one wins; an empty value loads
+// nothing. A value whose trim starts with '{' and ends with '}' is inline JSON, anything else a file path (relative to
+// the working directory). Inline JSON that does not parse, and a file that is missing, not a regular file, unreadable
+// or over 2 MiB, make the bundle print its error and exit 1 before anything runs: then argv goes to the bundle
+// UNCHANGED, so the user sees exactly that error. A file whose content is not a JSON object is skipped by the bundle,
+// which runs on without it (measured, native: rc 0, nothing from it applied); quaude skips it the same way, says so on
+// stderr, and keeps its own settings. A file that parses but fails the bundle's schema is dropped whole by the bundle,
+// and with it the settings quaude merged in: native drops that file too, but the guard and the sandbox setting go with
+// it (BACKLOG, the one case this merge cannot cover without the bundle's schema).
+const SETTINGS_FILE_MAX_BYTES = 2097152;
+function findSettingsArgs(argv) {
+  const at = [];
+  let value;
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === '--') break;
+    if (typeof a === 'string' && a.startsWith('--settings=')) { at.push([i, 1]); value = a.slice('--settings='.length); continue; }
+    if (a === '--settings' && i + 1 < argv.length) { at.push([i, 2]); value = argv[i + 1]; i++; continue; }
+    i = skipOptionValue(argv, i);
+  }
+  return at.length ? { value, at } : null;
+}
+function settingsIsInline(value) {
+  const t = String(value).trim();
+  return t.startsWith('{') && t.endsWith('}');
+}
+// A settings file's bytes as the bundle decodes them: UTF-16LE after an FF FE mark, else UTF-8.
+function decodeSettingsBytes(bytes) {
+  if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xfe) {
+    let out = '';
+    for (let i = 2; i + 1 < bytes.length; i += 2) out += String.fromCharCode(bytes[i] | (bytes[i + 1] << 8));
+    return out;
+  }
+  return new TextDecoder('utf-8').decode(bytes);
+}
+// The settings object the text holds, or null when the bundle would not read one from it. An empty FILE is {}.
+function parseSettingsText(text, inline) {
+  let t = inline ? String(text).trim() : String(text);
+  if (t.charCodeAt(0) === 0xfeff) t = t.slice(1);
+  if (!inline && t.trim() === '') return {};
+  try {
+    const v = JSON.parse(t);
+    return v !== null && typeof v === 'object' && !Array.isArray(v) ? v : null;
+  } catch (_) { return null; }
+}
+function isPlainObject(v) { return v !== null && typeof v === 'object' && !Array.isArray(v); }
+// quaude's settings over the user's: objects merge key by key, arrays concatenate (the user's first: their PreToolUse
+// hooks are kept and quaude's run too), any other value of quaude's replaces the user's.
+function mergeSettings(user, ours) {
+  const out = Object.assign({}, user);
+  for (const k of Object.keys(ours)) {
+    const u = out[k];
+    const v = ours[k];
+    if (isPlainObject(u) && isPlainObject(v)) out[k] = mergeSettings(u, v);
+    else if (Array.isArray(u) && Array.isArray(v)) out[k] = u.concat(v);
+    else out[k] = v;
+  }
+  return out;
+}
+// What to hand the bundle. `found` = findSettingsArgs(argv); `fileText` = the user's FILE decoded (a string), or null
+// when it could not be used (missing, not a regular file, unreadable, over the limit), or undefined when no file was
+// read (no --settings, an empty value, inline JSON). -> { passthrough: true } (argv unchanged: the bundle reports the
+// error) | { settings, warning } (settings to write; warning to print, or null).
+function planGuardSettings(found, fileText, ours) {
+  if (!found || found.value === '') return { settings: ours, warning: null };
+  if (settingsIsInline(found.value)) {
+    const user = parseSettingsText(found.value, true);
+    return user === null ? { passthrough: true } : { settings: mergeSettings(user, ours), warning: null };
+  }
+  if (fileText === null || fileText === undefined) return { passthrough: true };
+  const user = parseSettingsText(fileText, false);
+  if (user === null) {
+    return { settings: ours, warning: `the --settings file ${found.value} is not a JSON object, so Claude Code skips it`
+      + ' and so does quaude: none of its settings apply' };
+  }
+  return { settings: mergeSettings(user, ours), warning: null };
+}
+// The index `--` ends options at (argv.length when there is none).
+function optionsEnd(argv) {
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === '--') return i;
+    i = skipOptionValue(argv, i);
+  }
+  return argv.length;
+}
+// argv with every user --settings removed and ONE `--settings file`: where the user's last one was, else where options
+// end (before a `--`, after which it would be a prompt, not an option).
+function withSettingsArg(argv, found, file) {
+  const drop = new Set();
+  let at = optionsEnd(argv);
+  if (found) {
+    for (const [i, n] of found.at) for (let k = 0; k < n; k++) drop.add(i + k);
+    at = found.at[found.at.length - 1][0];
+  }
+  const out = [];
+  for (let i = 0; i <= argv.length; i++) {
+    if (i === at) out.push('--settings', file);
+    if (i < argv.length && !drop.has(i)) out.push(argv[i]);
+  }
+  return out;
+}
 // <<< guardGating <<<
+
+// The user's --settings FILE, decoded as the bundle decodes it, or null when the bundle could not use it (missing, not a
+// regular file, over its 2 MiB limit, unreadable): the bundle then prints its own error. Relative to the working
+// directory, as the bundle resolves it.
+async function readSettingsFile(tjs, file) {
+  try {
+    const st = await tjs.stat(file);
+    if (((st.mode || 0) & S_IFMT) !== S_IFREG || st.size > SETTINGS_FILE_MAX_BYTES) return null;
+    return decodeSettingsBytes(await tjs.readFile(file));
+  } catch (_) { return null; }
+}
 
 async function main() {
   const dec = new TextDecoder();
@@ -486,16 +603,11 @@ async function main() {
       const platform = tjsPlatform(undefined, globalThis.__clodeMapPlatform);
       const sep = platform === 'win32' ? '\\' : '/';
       const tmpBase = tjs.tmpDir ?? tjs.env.TMPDIR ?? (platform === 'win32' ? 'C:\\Windows\\Temp' : '/tmp');
-      // Name the settings file DETERMINISTICALLY by the target's own path, not by
-      // pid. tjs wires no process-exit hook (process.cjs: "tjs.exit does not run
-      // handlers"), so a per-pid file would leak one tiny JSON per boot with no
-      // way to clean it up in-process. Its CONTENTS are identical for a given
-      // exePath, so a hash-of-exePath name makes the write idempotent: at most
-      // ONE file per distinct quaude binary, and concurrent sessions of the same
-      // binary write byte-identical content to the same path (no collision, no
-      // accumulation) — no cleanup needed.
-      const guardKey = (await sha256hex(new TextEncoder().encode(tjs.exePath))).slice(0, 16);
-      const guardSettingsFile = tmpBase.replace(/[\\/]+$/, '') + sep + `clode-guard-${guardKey}.json`;
+      // Name the settings file DETERMINISTICALLY by its content, not by pid. tjs wires no process-exit hook
+      // (process.cjs: "tjs.exit does not run handlers"), so a per-pid file would leak one tiny JSON per boot with no
+      // way to clean it up in-process. A hash-of-content name makes the write idempotent: one file per distinct
+      // (binary, user --settings) pair, and concurrent sessions with the same pair write byte-identical content to
+      // the same path (no collision, no accumulation) — no cleanup needed.
       // SANDBOXED BASH FAILS CLOSED (user ruling 2026-10-05) — THE NAMED DIVERGENCE, stated here once: quaude cannot
       // provide Claude Code's sandbox yet (its initialization needs node:net servers the node-shim lacks; BACKLOG,
       // "net.createServer is ABSENT"), so under quaude an ENABLED sandbox is always REQUIRED: this settings file says
@@ -522,8 +634,22 @@ async function main() {
         },
         sandbox: { failIfUnavailable: true },
       };
-      await tjs.writeFile(guardSettingsFile, new TextEncoder().encode(JSON.stringify(guardSettings)));
-      rest = [...rest, '--settings', guardSettingsFile];
+      // The user's own --settings, merged (libexec/update-guard.cjs states the rule: guardGating, "THE USER'S
+      // --settings"). A value the bundle cannot use reaches it unchanged: it prints its own error and exits.
+      const found = findSettingsArgs(rest);
+      let fileText;
+      if (found && found.value !== '' && !settingsIsInline(found.value)) fileText = await readSettingsFile(tjs, found.value);
+      const plan = planGuardSettings(found, fileText, guardSettings);
+      if (!plan.passthrough) {
+        if (plan.warning) console.error(`quaude: ${plan.warning}`);
+        const text = JSON.stringify(plan.settings);
+        // Named by CONTENT (which includes tjs.exePath): concurrent sessions with the same settings write byte-identical
+        // files to one path, different settings never share one. Mode 0600: a user's settings may carry secrets (env).
+        const guardKey = (await sha256hex(new TextEncoder().encode(text))).slice(0, 16);
+        const guardSettingsFile = tmpBase.replace(/[\\/]+$/, '') + sep + `clode-guard-${guardKey}.json`;
+        await tjs.writeFile(guardSettingsFile, new TextEncoder().encode(text), { mode: 0o600 });
+        rest = withSettingsArg(rest, found, guardSettingsFile);
+      }
     }
   }
 

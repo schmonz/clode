@@ -50,7 +50,10 @@ const { spawn } = require('node:child_process');
 const seaHelpers = require('./naude-sea.cjs');
 const { shapeTargetEnv } = require('./target-env.cjs');
 const { isExecutableFile } = require('./clode-hosttools.cjs');
-const { guardVerdict, shouldInjectGuard } = require('./update-guard.cjs');
+const {
+  guardVerdict, shouldInjectGuard, findSettingsArgs, settingsIsInline, decodeSettingsBytes, planGuardSettings, withSettingsArg,
+  SETTINGS_FILE_MAX_BYTES,
+} = require('./update-guard.cjs');
 const { checkUpdate } = require('./target-update-check.cjs');
 const { carveClodeArgs, CLODE_FLAGS, attestReport } = require('./clode-attest.cjs');
 // RG-ARGV0 (grep-native Task 10c): a naude invoked as rg IS rg, as native's binary is; the Bash tool's `rg` runs it
@@ -146,6 +149,16 @@ function defaultRequireMain(script, argv) {
 
 // runNaude(opts) — the two-branch SEA entry. Injectable seams (see header) default
 // to the real modules so the guarded bootstrap at the file end just works.
+// The user's --settings FILE, decoded as the bundle decodes it, or null when the bundle could not use it (missing, not a
+// regular file, over its 2 MiB limit, unreadable): the bundle then prints its own error.
+function readSettingsFileSync(file) {
+  try {
+    const st = fs.statSync(file);
+    if (!st.isFile() || st.size > SETTINGS_FILE_MAX_BYTES) return null;
+    return decodeSettingsBytes(fs.readFileSync(file));
+  } catch (_) { return null; }
+}
+
 function runNaude(opts = {}) {
   const {
     argv = process.argv.slice(2),
@@ -311,8 +324,19 @@ function runNaude(opts = {}) {
         ],
       },
     };
-    fs.writeFileSync(guardSettingsFile, JSON.stringify(guardSettings));
-    childArgv.push('--settings', guardSettingsFile);
+    // The user's own --settings, merged (libexec/update-guard.cjs states the rule: guardGating, "THE USER'S
+    // --settings"); a value the bundle cannot use reaches it unchanged, and it prints its own error.
+    const found = findSettingsArgs(childArgv);
+    let fileText;
+    if (found && found.value !== '' && !settingsIsInline(found.value)) fileText = readSettingsFileSync(found.value);
+    const plan = planGuardSettings(found, fileText, guardSettings);
+    if (plan.passthrough) guardSettingsFile = null;
+    else {
+      if (plan.warning) stdio('stderr').write(`naude: ${plan.warning}\n`);
+      // Mode 0600: a user's settings may carry secrets (env).
+      fs.writeFileSync(guardSettingsFile, JSON.stringify(plan.settings), { mode: 0o600 });
+      childArgv.splice(0, childArgv.length, ...withSettingsArg(childArgv, found, guardSettingsFile));
+    }
   }
 
   // Re-invoke the naude binary itself (its own node) as plain node, args passed

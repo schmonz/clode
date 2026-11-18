@@ -393,6 +393,30 @@ test('first pass: execPath falsy (no own binary to call back into) -> no --setti
   assert.strictEqual(cap.call.args.indexOf('--settings'), -1);
 });
 
+// C1 (grep-native sandbox round 3): the user's own --settings is merged with the guard's, never discarded (the bundle
+// keeps one --settings, the last). The rule is libexec/update-guard.cjs's, shared with quaude.
+test('first pass: the user\'s --settings file is merged with the guard\'s: ONE --settings, their settings and hooks kept', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naude-user-settings-'));
+  const userFile = path.join(dir, 'mine.json');
+  fs.writeFileSync(userFile, JSON.stringify({ env: { MINE: '1' },
+    hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: 'mine' }] }] } }));
+  const cap = firstPass({ argv: ['-p', 'x', '--settings', userFile] });
+  const at = cap.call.args.flatMap((a, i) => (a === '--settings' ? [i] : []));
+  assert.strictEqual(at.length, 1, `exactly one --settings reaches the bundle: ${JSON.stringify(cap.call.args)}`);
+  const merged = JSON.parse(fs.readFileSync(cap.call.args[at[0] + 1], 'utf8'));
+  assert.deepStrictEqual(merged.env, { MINE: '1' });
+  assert.deepStrictEqual(merged.hooks.PreToolUse.map((h) => h.hooks[0].command), ['mine', '"/naude" --clode-update-guard']);
+  assert.strictEqual(merged.sandbox, undefined, 'naude injects no sandbox setting');
+  fs.rmSync(cap.call.args[at[0] + 1], { force: true });
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('first pass: a --settings value the bundle refuses reaches it unchanged (it prints its own error)', () => {
+  const missing = path.join(os.tmpdir(), `naude-no-such-settings-${process.pid}.json`);
+  const cap = firstPass({ argv: ['-p', 'x', '--settings', missing], onExit: (cb) => cb(0, null) });
+  assert.deepStrictEqual(cap.call.args, ['-p', 'x', '--settings', missing]);
+});
+
 test('first pass: the guard settings file is best-effort removed when the child exits', () => {
   let writtenFile = null;
   const cap = firstPass({
