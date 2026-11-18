@@ -77,7 +77,9 @@ error with the help under it, not a silent translation:
   later one ran UNSANDBOXED. Native runs these commands sandboxed. Where native would not
   sandbox, quaude does as native does: it warns and runs them unsandboxed. That is
   every quaude built from Claude Code's Linux build (on Linux, and on NetBSD, Haiku and the other
-  platforms built from it) where bubblewrap or socat is not on PATH, and WSL1. Still open:
+  platforms built from it) where bubblewrap or socat is not on PATH, WSL1, and Windows unless
+  its sandbox is switched on (`CLAUDE_CODE_NANKEEN_KESTREL`, or the server-side switch Claude
+  Code has cached). Still open:
   when the sandbox is enabled, your `--settings` file is one Claude Code rejects (it skips it
   whole), and a managed-settings file or profile on the machine shuts out the settings quaude
   passes as managed, sandboxed Bash calls after the first run unsandboxed

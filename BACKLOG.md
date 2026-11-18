@@ -21,7 +21,8 @@ on macOS, NetBSD and Linux, and CI's linux-x64-pty judges both rg gates against 
   --json (names that are not UTF-8); the walk (Windows, 1-CPU hosts, the -j1 line buffer); -U and --files (the
   flags still refused by name: --sort path/accessed/created, --files -); binary files;
 - under "`net.createServer` is ABSENT": sandboxed Bash never runs under quaude (measured in Task 11), and the
-  round-3 residuals (a schema-invalid user `--settings` file; policy-set bwrapPath/socatPath; Windows unmeasured);
+  round-3 residuals (a schema-invalid user `--settings` file; policy-set bwrapPath/socatPath, registry-only under
+  WSL; the Windows gate read from its cache only);
 - "Piped-stdin prompts never arrive under quaude" (found in sandbox round 3);
 - under "Ten agentic rows": every quaude still creates ~/.tjs.
 - **Some rg unit rows run on dev boxes only.** In CI's ubuntu suite (ugrep installed, no tjs, a MINIMISED provider)
@@ -4659,9 +4660,16 @@ absolute shell path, unmeasured.
   sets disableSideloadFlags refuses `--plugin-dir` at startup: quaude given a user `--settings` there refuses to start
   where native starts (fails closed; accepted by ruling, in CHANGELOG). (c) The merged file is a copy of the user's
   settings (possibly secrets) in the private directory, removed after seven days (tjs.exit runs no exit handlers).
-  (d) The plugin is visible as a session plugin, `clode-update-guard`. (e) WSL counts as "policy may exist" for the
-  sandbox decision too, so a WSL2 quaude without bubblewrap/socat keeps failIfUnavailable (refuses to start where
-  native warns and runs): closed, never open.
+  (d) The plugin is visible as a session plugin, `clode-update-guard`. (e) CORRECTED in fix round 3: WSL's "policy
+  may exist" drives DELIVERY only (merge plus layers). It no longer feeds the sandbox decision, which had made every
+  WSL2 quaude without bubblewrap/socat refuse to start where native warns and runs (breaking D2). The sandbox decision
+  reads EVIDENCE: a visible policy source (/etc/claude-code managed-settings and drop-ins, a cached
+  remote-settings.json, and under WSL the Windows-side `/mnt/c/Program Files/ClaudeCode/managed-settings.json` and
+  `managed-settings.d` it inherits), or a user `--managed-settings` that itself sets sandbox.bwrapPath/socatPath (any
+  other `--managed-settings` is no longer evidence). Residual: bwrapPath/socatPath set ONLY in the registry
+  (HKLM\SOFTWARE\Policies\ClaudeCode, which the bundle reads under WSL through reg.exe) is not seen: quaude does not
+  run reg.exe at every start, so there the bundle's own check decides and native's warning prints where native, given
+  that path, would sandbox (the residual is open, not closed: calls run unsandboxed).
 - The guard took an option's value for a subcommand (`--add-dir config ...`): fixed by the bundle's own option
   table (c13f6b8), gated against the carve (guard-option-table-gate).
 - WHERE NATIVE WOULD NOT SANDBOX, quaude now does as native does (USER ruling D2): every quaude built from the linux
@@ -4671,9 +4679,16 @@ absolute shell path, unmeasured.
   x86_64) with the 2.1.283 linux carve: native and the new quaude print the same warning and run; with bubblewrap
   and socat installed every call is refused. LEFT: (a) sandbox.bwrapPath/socatPath, which only managed policy sets:
   quaude cannot read every policy source, so where one might exist (a managed-settings file or directory under
-  /etc/claude-code, a cached remote-settings.json, `--managed-settings`) it keeps failIfUnavailable even with the
-  deps off PATH, refusing to start where native, given no such path, would warn and run; (b) Windows is not
-  measured: quaude keeps failIfUnavailable there.
+  /etc/claude-code, a cached remote-settings.json, the WSL-inherited Windows-side file, or a `--managed-settings`
+  that sets the paths: fix round 3) it keeps failIfUnavailable even with the deps off PATH, refusing to start where
+  native, given no such path, would warn and run; the registry-only case is (e) above. (b) WINDOWS, fix round 3:
+  native sandboxes there only behind a gate (Eb -> sX: env CLAUDE_CODE_NANKEEN_KESTREL by the bundle's truthy rule,
+  or the server gate tengu_nankeen_kestrel, default off). quaude follows it: failIfUnavailable only when the env is
+  truthy or the gate is cached on in the bundle's global config (cachedGrowthBookFeatures in `.config.json` or
+  `.claude.json`, read read-only); otherwise native's warning, and it runs. Residuals: a gate the server turns on
+  for this session before it is cached (or turned off while the cache still says on), CLAUDE_INTERNAL_FC_OVERRIDES,
+  and GrowthBook disabled (the bundle may then ignore its cache): quaude reads only the cache. Unit rows only; no
+  Windows box measured.
 - The refusal now names the gap (USER ruling M1): node-shim's `net.createServer` is an honest THROWING stub,
   `quaude does not support the sandbox yet: net.createServer`, so every refused call reads `Sandbox is required but
   failed to initialize: quaude does not support the sandbox yet: net.createServer. Restart to retry.` The same text
