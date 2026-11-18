@@ -52,6 +52,7 @@ const { shapeTargetEnv } = require('./target-env.cjs');
 const { isExecutableFile } = require('./clode-hosttools.cjs');
 const {
   guardVerdict, shouldInjectGuard, findSettingsArgs, settingsIsInline, decodeSettingsBytes, planGuardSettings, withSettingsArg,
+  findOptionArgs, guardPluginFiles, guardDeliveryMode, withGuardLayers, policyProbe,
   SETTINGS_FILE_MAX_BYTES,
 } = require('./update-guard.cjs');
 const { checkUpdate } = require('./target-update-check.cjs');
@@ -303,39 +304,47 @@ function runNaude(opts = {}) {
     dirname: path.dirname,
   });
 
-  // Guard injection: wire the model's Bash tool through the update guard by
-  // writing an ephemeral PreToolUse settings file and appending --settings to
-  // the child's argv. The hook calls back into execPath — the naude's own
-  // binary. execPath falsy -> skip entirely (e.g. a bare `require()` in a test,
-  // or a context with no known own binary to call back into).
-  let guardSettingsFile = null;
+  // Guard injection: wire the model's Bash tool through the update guard (a PreToolUse hook calling back into
+  // execPath, the naude's own binary) in the child's argv. execPath falsy -> skip entirely (e.g. a bare `require()` in
+  // a test, or a context with no known own binary to call back into). How the hook reaches the bundle is the rule
+  // libexec/update-guard.cjs states (guardGating, "THE USER'S --settings"): never inside a user --settings value where
+  // it can be avoided. naude injects no sandbox setting (see quaude-bootstrap.mjs, SANDBOXED BASH FAILS CLOSED).
+  // Anything written goes in a private directory (mkdtemp, 0700) removed when the child exits.
+  let guardDir = null;
   const childArgv = [...argvForChild];
   if (execPath && shouldInjectGuard(childArgv)) {
-    guardSettingsFile = path.join(cacheDir || os.tmpdir(), 'clode-guard-' + process.pid + '.json');
-    const guardSettings = {
-      hooks: {
-        PreToolUse: [
-          {
-            matcher: 'Bash',
-            hooks: [
-              { type: 'command', command: '"' + execPath + '" --clode-update-guard' },
-            ],
-          },
-        ],
-      },
-    };
-    // The user's own --settings, merged (libexec/update-guard.cjs states the rule: guardGating, "THE USER'S
-    // --settings"); a value the bundle cannot use reaches it unchanged, and it prints its own error.
-    const found = findSettingsArgs(childArgv);
-    let fileText;
-    if (found && found.value !== '' && !settingsIsInline(found.value)) fileText = readSettingsFileSync(found.value);
-    const plan = planGuardSettings(found, fileText, guardSettings);
-    if (plan.passthrough) guardSettingsFile = null;
-    else {
-      if (plan.warning) stdio('stderr').write(`naude: ${plan.warning}\n`);
-      // Mode 0600: a user's settings may carry secrets (env).
-      fs.writeFileSync(guardSettingsFile, JSON.stringify(plan.settings), { mode: 0o600 });
-      childArgv.splice(0, childArgv.length, ...withSettingsArg(childArgv, found, guardSettingsFile));
+    const hookCommand = '"' + execPath + '" --clode-update-guard';
+    const guardSettings = { hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: hookCommand }] }] } };
+    const probe = policyProbe({ providerPlatform: process.platform, env });
+    const policyMayOverride = Boolean(findOptionArgs(childArgv, '--managed-settings'))
+      || probe.always || probe.paths.some((p) => { try { fs.lstatSync(p); return true; } catch { return false; } });
+    const mode = guardDeliveryMode(childArgv, policyMayOverride);
+    if (mode === 'own') {
+      childArgv.splice(0, childArgv.length, ...withSettingsArg(childArgv, findSettingsArgs(childArgv), JSON.stringify(guardSettings)));
+    } else if (mode === 'layers') {
+      guardDir = fs.mkdtempSync(path.join(cacheDir || os.tmpdir(), 'clode-guard-'));
+      const files = guardPluginFiles(hookCommand);
+      const pluginDir = path.join(guardDir, 'plugin');
+      for (const rel of Object.keys(files)) {
+        const f = path.join(pluginDir, ...rel.split('/'));
+        fs.mkdirSync(path.dirname(f), { recursive: true, mode: 0o700 });
+        fs.writeFileSync(f, files[rel], { mode: 0o600 });
+      }
+      childArgv.splice(0, childArgv.length, ...withGuardLayers(childArgv, pluginDir, false));
+    } else {
+      // The fallback: the hook merged into the user's value (a value the bundle cannot use reaches it unchanged and
+      // it prints its own error; a schema-invalid file still drops the merge, BACKLOG).
+      const found = findSettingsArgs(childArgv);
+      let fileText;
+      if (!settingsIsInline(found.value)) fileText = readSettingsFileSync(found.value);
+      const plan = planGuardSettings(found, fileText, guardSettings);
+      if (!plan.passthrough) {
+        if (plan.warning) stdio('stderr').write(`naude: ${plan.warning}\n`);
+        guardDir = fs.mkdtempSync(path.join(cacheDir || os.tmpdir(), 'clode-guard-'));
+        const file = path.join(guardDir, 'settings.json');
+        fs.writeFileSync(file, JSON.stringify(plan.settings), { mode: 0o600 });
+        childArgv.splice(0, childArgv.length, ...withSettingsArg(childArgv, found, file));
+      }
     }
   }
 
@@ -360,7 +369,7 @@ function runNaude(opts = {}) {
   }
   const cleanup = () => {
     for (const s of Object.keys(handlers)) procOff(s, handlers[s]);
-    if (guardSettingsFile) { try { fs.rmSync(guardSettingsFile, { force: true }); } catch {} }
+    if (guardDir) { try { fs.rmSync(guardDir, { recursive: true, force: true }); } catch {} }
   };
 
   // The exit hook is injectable (onExit) so tests drive it synchronously; the real

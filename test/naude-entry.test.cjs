@@ -369,23 +369,17 @@ test('guard dispatch: unparseable stdin fails OPEN (no crash, no stdout, exit 0)
 // incoming env before the process starts. So the gate MUST read execPath, not
 // env.CLODE_TARGET, or the hook is permanently inert in real boots (it only
 // ever passed before because unit tests injected env.CLODE_TARGET by hand).
-test('first pass: execPath present (env.CLODE_TARGET NOT set) -> child argv gets --settings <file>, file wires the PreToolUse guard hook from execPath', () => {
-  // NOTE: no onExit override here — the default (registers on the fake child's
-  // inert `on('exit', ...)`) never fires, so the settings file survives long
-  // enough to inspect. (A firing onExit would run cleanup() and unlink it —
-  // see the dedicated cleanup test below.) env stays {} — no CLODE_TARGET
-  // anywhere — proving injection fires from execPath alone.
+test('first pass: execPath present (env.CLODE_TARGET NOT set) -> child argv gets --settings <inline JSON> wiring the PreToolUse guard hook from execPath', () => {
+  // env stays {} -- no CLODE_TARGET anywhere -- proving injection fires from execPath alone. With no user --settings
+  // the guard's settings are the one --settings, INLINE (fix round 1: nothing written to disk for it).
   const cap = firstPass({ execPath: '/opt/naude', env: {} });
   const idx = cap.call.args.indexOf('--settings');
   assert.ok(idx !== -1, '--settings must be appended to the child argv');
-  const file = cap.call.args[idx + 1];
-  assert.ok(file, '--settings must be followed by a path');
-  const written = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const written = JSON.parse(cap.call.args[idx + 1]);
   assert.strictEqual(
     written.hooks.PreToolUse[0].hooks[0].command,
     '"/opt/naude" --clode-update-guard');
   assert.strictEqual(written.hooks.PreToolUse[0].matcher, 'Bash');
-  fs.rmSync(file, { force: true });
 });
 
 test('first pass: execPath falsy (no own binary to call back into) -> no --settings added to the child argv', () => {
@@ -393,38 +387,60 @@ test('first pass: execPath falsy (no own binary to call back into) -> no --setti
   assert.strictEqual(cap.call.args.indexOf('--settings'), -1);
 });
 
-// C1 (grep-native sandbox round 3): the user's own --settings is merged with the guard's, never discarded (the bundle
-// keeps one --settings, the last). The rule is libexec/update-guard.cjs's, shared with quaude.
-test('first pass: the user\'s --settings file is merged with the guard\'s: ONE --settings, their settings and hooks kept', () => {
+// C1 + fix round 1 (grep-native sandbox round 3): the user's own --settings reaches the bundle UNCHANGED (the bundle
+// keeps one --settings, and drops a schema-invalid file whole: anything merged into it would go too); the guard's hook
+// rides a session plugin beside it. The rule is libexec/update-guard.cjs's, shared with quaude.
+function pluginHooks(args) {
+  const i = args.indexOf('--plugin-dir');
+  assert.ok(i !== -1, `--plugin-dir carries the guard: ${JSON.stringify(args)}`);
+  return { dir: args[i + 1], hooks: JSON.parse(fs.readFileSync(path.join(args[i + 1], 'hooks', 'hooks.json'), 'utf8')) };
+}
+test('first pass: the user\'s --settings reaches the child unchanged; the guard hook rides --plugin-dir', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naude-user-settings-'));
   const userFile = path.join(dir, 'mine.json');
-  fs.writeFileSync(userFile, JSON.stringify({ env: { MINE: '1' },
-    hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: 'mine' }] }] } }));
+  fs.writeFileSync(userFile, JSON.stringify({ permissions: 5 }));
   const cap = firstPass({ argv: ['-p', 'x', '--settings', userFile] });
   const at = cap.call.args.flatMap((a, i) => (a === '--settings' ? [i] : []));
   assert.strictEqual(at.length, 1, `exactly one --settings reaches the bundle: ${JSON.stringify(cap.call.args)}`);
-  const merged = JSON.parse(fs.readFileSync(cap.call.args[at[0] + 1], 'utf8'));
-  assert.deepStrictEqual(merged.env, { MINE: '1' });
-  assert.deepStrictEqual(merged.hooks.PreToolUse.map((h) => h.hooks[0].command), ['mine', '"/naude" --clode-update-guard']);
-  assert.strictEqual(merged.sandbox, undefined, 'naude injects no sandbox setting');
-  fs.rmSync(cap.call.args[at[0] + 1], { force: true });
+  assert.strictEqual(cap.call.args[at[0] + 1], userFile, 'the user\'s own value, untouched');
+  const { dir: pluginDir, hooks } = pluginHooks(cap.call.args);
+  assert.deepStrictEqual(hooks.hooks.PreToolUse.map((h) => h.hooks[0].command), ['"/naude" --clode-update-guard']);
+  assert.ok(JSON.parse(fs.readFileSync(path.join(pluginDir, '.claude-plugin', 'plugin.json'), 'utf8')).name);
+  assert.strictEqual(cap.call.args.indexOf('--managed-settings'), -1, 'naude injects no sandbox setting');
+  assert.strictEqual(fs.statSync(path.dirname(pluginDir)).mode & 0o777, 0o700, 'a private directory');
+  fs.rmSync(path.dirname(pluginDir), { recursive: true, force: true });
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
 test('first pass: a --settings value the bundle refuses reaches it unchanged (it prints its own error)', () => {
   const missing = path.join(os.tmpdir(), `naude-no-such-settings-${process.pid}.json`);
   const cap = firstPass({ argv: ['-p', 'x', '--settings', missing], onExit: (cb) => cb(0, null) });
-  assert.deepStrictEqual(cap.call.args, ['-p', 'x', '--settings', missing]);
+  assert.deepStrictEqual(cap.call.args.slice(0, 4), ['-p', 'x', '--settings', missing]);
 });
 
-test('first pass: the guard settings file is best-effort removed when the child exits', () => {
-  let writtenFile = null;
-  const cap = firstPass({
-    onExit: (cb) => cb(0, null),
-  });
-  const idx = cap.call.args.indexOf('--settings');
-  writtenFile = cap.call.args[idx + 1];
-  assert.strictEqual(fs.existsSync(writtenFile), false, 'the ephemeral settings file must be removed on exit');
+test('first pass: the guard\'s private directory is removed when the child exits', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naude-user-settings-'));
+  const userFile = path.join(dir, 'mine.json');
+  fs.writeFileSync(userFile, '{}');
+  const cap = firstPass({ argv: ['-p', 'x', '--settings', userFile], onExit: (cb) => cb(0, null) });
+  const i = cap.call.args.indexOf('--plugin-dir');
+  assert.strictEqual(fs.existsSync(path.dirname(cap.call.args[i + 1])), false, 'removed on exit');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('first pass: where policy may exist (here, the user\'s own --managed-settings) the hook is merged into the user\'s --settings', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naude-user-settings-'));
+  const userFile = path.join(dir, 'mine.json');
+  fs.writeFileSync(userFile, JSON.stringify({ env: { MINE: '1' } }));
+  const cap = firstPass({ argv: ['-p', 'x', '--managed-settings', '{}', '--settings', userFile] });
+  const at = cap.call.args.flatMap((a, i) => (a === '--settings' ? [i] : []));
+  assert.strictEqual(at.length, 1);
+  const merged = JSON.parse(fs.readFileSync(cap.call.args[at[0] + 1], 'utf8'));
+  assert.deepStrictEqual(merged.env, { MINE: '1' });
+  assert.deepStrictEqual(merged.hooks.PreToolUse.map((h) => h.hooks[0].command), ['"/naude" --clode-update-guard']);
+  assert.strictEqual(cap.call.args.indexOf('--plugin-dir'), -1);
+  fs.rmSync(path.dirname(cap.call.args[at[0] + 1]), { recursive: true, force: true });
+  fs.rmSync(dir, { recursive: true, force: true });
 });
 
 
@@ -535,7 +551,8 @@ test('an unknown reserved flag is refused by naude, never handed to Claude Code'
 
 test('a bare run carves nothing: ordinary args reach the child untouched', () => {
   const cap = firstPass({ argv: ['-p', 'say PONG', '--allowedTools', 'Bash'], onExit: (cb) => cb(0, null) });
-  assert.deepStrictEqual(cap.call.args.filter((a) => a !== '--settings' && !/clode-guard-/.test(a)),
+  const i = cap.call.args.indexOf('--settings');
+  assert.deepStrictEqual(cap.call.args.filter((a, k) => k !== i && k !== i + 1),
     ['-p', 'say PONG', '--allowedTools', 'Bash']);
 });
 

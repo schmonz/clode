@@ -12,7 +12,7 @@
 // directory and one outside it; a throwaway HOME, CLAUDE_CONFIG_DIR and TJS_HOME per run. With the sandbox on (user,
 // project or local settings, or the user's own --settings): every call is refused with the bundle's required-branch
 // reason and no marker exists. With it off: all three run. Measured on macOS, and on Linux with bubblewrap and socat
-// present. Where native would NOT sandbox (Linux without bubblewrap or socat: native prints its warning and runs every
+// present. Where native would NOT sandbox (a linux-carve quaude, on Linux, NetBSD, Haiku..., without bubblewrap or socat: native prints its warning and runs every
 // call unsandboxed), quaude does as native does (round 3, USER ruling D2): the same warning, every call runs.
 // An explicit sandbox.failIfUnavailable:false from the user stays OVERRIDDEN wherever native would sandbox (USER ruling
 // D1): those rows are refused like the rest.
@@ -123,15 +123,19 @@ const ON_CASES = [
   { name: 'the user\'s --settings FILE', files: { 's.json': ON }, args: fileArg('s.json') },
   { name: 'the user\'s --settings=FILE', files: { 's.json': ON }, args: ({ base }) => [...PRINT, `--settings=${path.join(base, 's.json')}`] },
   { name: 'the user\'s --settings inline JSON', args: [...PRINT, '--settings', JSON.stringify(ON)] },
-  // A --settings file that is not a JSON object: the bundle skips it (native runs on without it); quaude skips it too
-  // and keeps its own settings, so the sandbox from user settings still fails closed.
+  // A --settings file the bundle drops WHOLE (not a JSON object; or valid JSON that fails its settings schema): native
+  // runs on without it. Fix round 1 (I-1): quaude's keys never ride in it, so the sandbox from user settings still
+  // fails closed. Before, merged into the dropped file, sandbox.failIfUnavailable went with it: the first call was
+  // refused by the optional branch and calls 2 and 3 ran UNSANDBOXED.
   { name: 'user settings + an unparseable --settings file', source: 'user', files: { 'bad.json': '{"sandbox": ' }, args: fileArg('bad.json') },
+  { name: 'user settings + a schema-invalid --settings file ({"permissions":5})', source: 'user', files: { 'sch.json': { permissions: 5 } }, args: fileArg('sch.json') },
   // I1 + placement: `--add-dir config` is the model command with one added directory, not the `config` subcommand (the
   // prompt rides after `--`; with stdout not a TTY the bundle prints). quaude's --settings goes BEFORE the `--`: after
   // it, it would be a prompt word, not an option.
   { name: 'user settings, `--add-dir config -- <prompt>` (no -p)', source: 'user', args: ['--add-dir', 'config', '--allowedTools', 'Bash', '--', 'write the markers'] },
   // D1: the user's own failIfUnavailable:false (user settings, and their --settings file) is overridden: quaude's
-  // --settings outranks user settings in the bundle's merge, and the merge of a user --settings puts quaude's value last.
+  // --settings outranks user settings in the bundle's merge, and beside a user --settings quaude's value is managed
+  // policy (--managed-settings), which outranks every --settings.
   { name: 'user settings with failIfUnavailable:false (D1)', source: 'user', sourceSettings: { sandbox: { enabled: true, failIfUnavailable: false } } },
   { name: 'a --settings file with failIfUnavailable:false (D1)', files: { 'f.json': { sandbox: { enabled: true, failIfUnavailable: false } } }, args: fileArg('f.json') },
 ];
@@ -197,6 +201,12 @@ test('the user\'s --settings is honoured under quaude: env, hooks and permission
   if (!envHonoured(h.mock)) findings.push(`--settings env not applied: ${JSON.stringify(toolResult(h.mock, E.id))} rc ${h.r.status} ${h.r.stderr.slice(0, 300)}`);
   if (!h.files.includes('user-hook-ran')) findings.push('--settings PreToolUse hook did not run');
   if (!updateDenied(h.mock)) findings.push(`quaude's update guard did not deny \`claude update\` beside the user's hook: ${JSON.stringify(toolResult(h.mock, U.id))}`);
+
+  // A schema-invalid --settings file is dropped whole by the bundle (native too); the update guard is not in it, so it
+  // still denies (fix round 1, I-1: it rides a session plugin beside a user --settings).
+  const sch = await runCase(q.path, { files: { 'sch.json': { permissions: 5 } }, script: [U],
+    args: ({ base }) => [...PRINT, '--dangerously-skip-permissions', '--settings', path.join(base, 'sch.json')] });
+  if (!updateDenied(sch.mock)) findings.push(`a schema-invalid --settings file took the update guard with it: ${JSON.stringify(toolResult(sch.mock, U.id))} rc ${sch.r.status} ${sch.r.stderr.slice(0, 300)}`);
 
   // Inline JSON denying Bash: the tool is gone, as native measured ("No such tool available: Bash").
   const d = await runCase(q.path, { script: [E], args: [...PRINT, '--settings', JSON.stringify({ permissions: { deny: ['Bash'] } })] });

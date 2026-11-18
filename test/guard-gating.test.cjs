@@ -151,3 +151,50 @@ test('sandboxWouldRun: macOS always; Linux with bwrap and socat (or a policy tha
   assert.strictEqual(ug.sandboxWouldRun({ providerPlatform: 'win32' }), true, 'Windows: unmeasured, closed');
   assert.strictEqual(ug.sandboxWouldRun({ providerPlatform: 'unknown' }), true, 'an unknown baked platform: closed');
 });
+
+// Fix round 1 (I-1): quaude's keys never ride inside a user --settings value where that can be avoided, because the
+// bundle drops a schema-invalid --settings file WHOLE, and anything merged into it with it.
+test('guardDeliveryMode: own without a user --settings; layers beside one; merge only where policy may exist', () => {
+  assert.strictEqual(ug.guardDeliveryMode(['-p', 'x'], false), 'own');
+  assert.strictEqual(ug.guardDeliveryMode(['--settings', '', '-p', 'x'], false), 'own', 'an empty value loads nothing');
+  assert.strictEqual(ug.guardDeliveryMode(['--settings', 'f.json', '-p', 'x'], false), 'layers');
+  assert.strictEqual(ug.guardDeliveryMode(['--settings={"a":1}'], false), 'layers');
+  assert.strictEqual(ug.guardDeliveryMode(['--add-dir', '--settings', 'x'], false), 'own', 'an option value is not --settings');
+  assert.strictEqual(ug.guardDeliveryMode(['--settings', 'f.json'], true), 'merge', 'policy may refuse --plugin-dir');
+  assert.strictEqual(ug.guardDeliveryMode(['--managed-settings', '{}', '--settings', 'f.json'], false), 'merge',
+    'the user\'s own --managed-settings is theirs: one slot');
+});
+
+test('withGuardLayers: the user\'s argv unchanged, --plugin-dir and --managed-settings added where options end', () => {
+  const FIU = JSON.stringify({ sandbox: { failIfUnavailable: true } });
+  assert.deepStrictEqual(ug.withGuardLayers(['--settings', 'f', '-p', 'x'], '/d', true),
+    ['--settings', 'f', '-p', 'x', '--plugin-dir', '/d', '--managed-settings', FIU]);
+  assert.deepStrictEqual(ug.withGuardLayers(['--settings', 'f', '--', 'a prompt'], '/d', false),
+    ['--settings', 'f', '--plugin-dir', '/d', '--', 'a prompt'], 'before --, after which they would be prompt words');
+});
+
+test('guardPluginFiles: a session plugin whose PreToolUse hook on Bash is the guard', () => {
+  const f = ug.guardPluginFiles('"/q" --clode-update-guard');
+  assert.deepStrictEqual(Object.keys(f).sort(), ['.claude-plugin/plugin.json', 'hooks/hooks.json']);
+  assert.strictEqual(JSON.parse(f['.claude-plugin/plugin.json']).name, ug.GUARD_PLUGIN_NAME);
+  assert.deepStrictEqual(JSON.parse(f['hooks/hooks.json']),
+    { hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: '"/q" --clode-update-guard' }] }] } });
+});
+
+test('policyProbe: the bundle\'s own policy locations per baked platform; Windows always "may"', () => {
+  assert.deepStrictEqual(ug.policyProbe({ providerPlatform: 'darwin', env: { USER: 'u', HOME: '/h' } }).paths, [
+    '/Library/Application Support/ClaudeCode/managed-settings.json',
+    '/Library/Application Support/ClaudeCode/managed-settings.d',
+    '/Library/Managed Preferences/com.anthropic.claudecode.plist',
+    '/Library/Managed Preferences/u/com.anthropic.claudecode.plist',
+    '/h/.claude/remote-settings.json',
+  ]);
+  assert.deepStrictEqual(ug.policyProbe({ providerPlatform: 'linux', env: { CLAUDE_CONFIG_DIR: '/c' } }).paths,
+    ['/etc/claude-code/managed-settings.json', '/etc/claude-code/managed-settings.d', '/c/remote-settings.json']);
+  assert.strictEqual(ug.policyProbe({ providerPlatform: 'win32', env: {} }).always, true);
+});
+
+test('findOptionArgs: --managed-settings by the same rule as --settings', () => {
+  assert.deepStrictEqual(ug.findOptionArgs(['--managed-settings', '{}', '-p'], '--managed-settings'), { value: '{}', at: [[0, 2]] });
+  assert.strictEqual(ug.findOptionArgs(['--', '--managed-settings', '{}'], '--managed-settings'), null);
+});

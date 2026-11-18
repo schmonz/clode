@@ -121,33 +121,46 @@ function shouldInjectGuard(argv) {
   const first = firstPositional(argv);
   return first === undefined || !SUBCOMMANDS.has(first);
 }
-// THE USER'S --settings (grep-native sandbox round 3, C1). The bundle keeps ONE --settings (its eager scanner takes the
-// last occurrence, as commander does), so the guard's own --settings, appended after the user's, discarded the user's
-// whole: under quaude a user --settings never applied (permissions, hooks, env, and a sandbox enabled there failed
-// OPEN). Now the user's value is read by the bundle's own rule and quaude's settings are merged into it: exactly one
-// --settings reaches the bundle. The rule, from the 2.1.283 carve: occurrences are `--settings X` and `--settings=X`
-// before any `--`, skipping other options' values (the same scan as hasFlag); the last one wins; an empty value loads
-// nothing. A value whose trim starts with '{' and ends with '}' is inline JSON, anything else a file path (relative to
-// the working directory). Inline JSON that does not parse, and a file that is missing, not a regular file, unreadable
-// or over 2 MiB, make the bundle print its error and exit 1 before anything runs: then argv goes to the bundle
-// UNCHANGED, so the user sees exactly that error. A file whose content is not a JSON object is skipped by the bundle,
-// which runs on without it (measured, native: rc 0, nothing from it applied); quaude skips it the same way, says so on
-// stderr, and keeps its own settings. A file that parses but fails the bundle's schema is dropped whole by the bundle,
-// and with it the settings quaude merged in: native drops that file too, but the guard and the sandbox setting go with
-// it (BACKLOG, the one case this merge cannot cover without the bundle's schema).
+// THE USER'S --settings (grep-native sandbox round 3, C1 and its fix round 1, I-1). The bundle keeps ONE --settings
+// (its eager scanner takes the last occurrence, as commander does), so the guard's own --settings, appended after the
+// user's, once discarded the user's whole. The rule for reading it, from the 2.1.283 carve: occurrences are
+// `--settings X` and `--settings=X` before any `--`, skipping other options' values (the same scan as hasFlag); the
+// last one wins; an empty value loads nothing. A value whose trim starts with '{' and ends with '}' is inline JSON,
+// anything else a file path (relative to the working directory). Inline JSON that does not parse, and a file that is
+// missing, not a regular file, unreadable or over 2 MiB, make the bundle print its error and exit 1; a file whose
+// content is not a JSON object, or that fails the bundle's settings schema (`{"permissions":5}`), is dropped WHOLE
+// by the bundle, silently, and the run goes on (measured, native).
+//
+// So quaude's own keys never ride in the user's file (planGuardDelivery): merged in, a schema-invalid user file took
+// them down with it (the update guard, and sandbox.failIfUnavailable: calls after the first ran UNSANDBOXED). With a
+// user --settings, that value reaches the bundle UNCHANGED (native's behaviour, errors and drops included) and
+// quaude's keys go through layers the bundle loads beside it, each its own (the 2.1.283 carve):
+//   - sandbox.failIfUnavailable: `--managed-settings <json>`, the policy tier a parent process hands in. The bundle
+//     keeps from it only restrictive values (Mzo; sandbox.failIfUnavailable:true is one, by its own table), above
+//     every user, project, local and --settings value, so a user's failIfUnavailable:false stays overridden (D1).
+//   - the update guard's PreToolUse hook: `--plugin-dir <dir>`, a session plugin whose hooks/hooks.json holds it
+//     (managed settings carry no hooks). Plugin hooks are their own source: a dropped --settings file does not drop
+//     them; disableAllHooks and allowManagedHooksOnly govern them as they govern settings hooks.
+// Both are only for that case (a user --settings): without one, quaude's keys are its own --settings, inline JSON
+// (nothing written to disk by quaude; the bundle stores inline settings itself, as it does for native). Where a
+// managed-policy source may exist (it could set disableSideloadFlags, refusing --plugin-dir at startup, and a
+// managed-settings file or MDM profile shuts the parent's managed settings out), or the user passed their own
+// --managed-settings, quaude falls back to merging into the user's value (planGuardSettings), the one case a
+// schema-invalid user file still drops quaude's keys (BACKLOG).
 const SETTINGS_FILE_MAX_BYTES = 2097152;
-function findSettingsArgs(argv) {
+function findOptionArgs(argv, name) {
   const at = [];
   let value;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--') break;
-    if (typeof a === 'string' && a.startsWith('--settings=')) { at.push([i, 1]); value = a.slice('--settings='.length); continue; }
-    if (a === '--settings' && i + 1 < argv.length) { at.push([i, 2]); value = argv[i + 1]; i++; continue; }
+    if (typeof a === 'string' && a.startsWith(name + '=')) { at.push([i, 1]); value = a.slice(name.length + 1); continue; }
+    if (a === name && i + 1 < argv.length) { at.push([i, 2]); value = argv[i + 1]; i++; continue; }
     i = skipOptionValue(argv, i);
   }
   return at.length ? { value, at } : null;
 }
+function findSettingsArgs(argv) { return findOptionArgs(argv, '--settings'); }
 function settingsIsInline(value) {
   const t = String(value).trim();
   return t.startsWith('{') && t.endsWith('}');
@@ -227,6 +240,57 @@ function withSettingsArg(argv, found, file) {
   }
   return out;
 }
+// Where a managed-policy source may live, as the bundle reads them (the 2.1.283 carve; `providerPlatform` is its baked
+// platform, the provider carve's): the managed-settings document and drop-in directory (macOS "/Library/Application
+// Support/ClaudeCode", every other platform "/etc/claude-code"), the macOS managed-preferences profiles
+// (com.anthropic.claudecode, device and per-user), and a cached server-managed remote-settings.json in the config
+// dir. -> { always: true } on Windows (its policy is in the registry, which quaude cannot probe), else { paths }:
+// policy may exist when any of them exists, or argv has --managed-settings. Policy can set sandbox.bwrapPath/socatPath
+// (sandboxWouldRun), refuse --plugin-dir at startup (disableSideloadFlags), and a managed-settings document or profile
+// shuts a parent's managed settings out (first-wins), so quaude then delivers its keys by the path that does not
+// depend on any of that (guardDeliveryMode's 'merge').
+function policyProbe({ providerPlatform, env }) {
+  if (providerPlatform === 'win32') return { always: true, paths: [] };
+  const e = env || {};
+  const base = providerPlatform === 'darwin' ? '/Library/Application Support/ClaudeCode' : '/etc/claude-code';
+  const paths = [base + '/managed-settings.json', base + '/managed-settings.d'];
+  if (providerPlatform === 'darwin') {
+    paths.push('/Library/Managed Preferences/com.anthropic.claudecode.plist');
+    if (e.USER) paths.push('/Library/Managed Preferences/' + e.USER + '/com.anthropic.claudecode.plist');
+  }
+  paths.push((e.CLAUDE_CONFIG_DIR || ((e.HOME || '') + '/.claude')) + '/remote-settings.json');
+  return { always: false, paths };
+}
+// The session plugin that carries the update guard's hook: its two files, by path inside the plugin directory.
+const GUARD_PLUGIN_NAME = 'clode-update-guard';
+function guardPluginFiles(hookCommand) {
+  return {
+    '.claude-plugin/plugin.json': JSON.stringify({
+      name: GUARD_PLUGIN_NAME,
+      description: 'clode: Claude Code in this binary is rebuilt by clode; the model may not update or reinstall it',
+    }) + '\n',
+    'hooks/hooks.json': JSON.stringify({
+      hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: hookCommand }] }] },
+    }) + '\n',
+  };
+}
+// How quaude's keys reach the bundle (see "THE USER'S --settings"). `ours` = quaude's settings (hooks, and sandbox
+// when required); -> 'own' (no user --settings: ours as the one --settings), 'layers' (a user --settings, left
+// unchanged; ours as --managed-settings and --plugin-dir) or 'merge' (the fallback: ours merged into the user's).
+function guardDeliveryMode(argv, policyMayOverride) {
+  const found = findSettingsArgs(argv);
+  if (!found || found.value === '') return 'own';
+  if (policyMayOverride || findOptionArgs(argv, '--managed-settings')) return 'merge';
+  return 'layers';
+}
+// argv for 'layers': the user's argv unchanged, plus `--plugin-dir <pluginDir>` and, when sandbox.failIfUnavailable
+// is required, `--managed-settings <json>`, where options end (before a `--`).
+function withGuardLayers(argv, pluginDir, sandboxRequired) {
+  const at = optionsEnd(argv);
+  const add = ['--plugin-dir', pluginDir];
+  if (sandboxRequired) add.push('--managed-settings', JSON.stringify({ sandbox: { failIfUnavailable: true } }));
+  return argv.slice(0, at).concat(add, argv.slice(at));
+}
 // WHERE NATIVE WOULD SANDBOX (grep-native sandbox round 3, D2; USER: match native). quaude says
 // sandbox.failIfUnavailable only where native would actually run the sandbox; elsewhere the bundle's own optional
 // branch prints its warning ("Sandbox disabled: ...") and runs commands unsandboxed, as native does, never attempting
@@ -255,5 +319,6 @@ module.exports = {
   guardVerdict, SUBCOMMANDS, shouldInjectGuard, firstPositional, hasFlag,
   VALUE_OPTIONS, VARIADIC_OPTIONS, OPTIONAL_VALUE_OPTIONS,
   SETTINGS_FILE_MAX_BYTES, findSettingsArgs, settingsIsInline, decodeSettingsBytes, parseSettingsText, mergeSettings,
-  planGuardSettings, withSettingsArg, wslVersion, sandboxWouldRun,
+  planGuardSettings, withSettingsArg, wslVersion, sandboxWouldRun, findOptionArgs, GUARD_PLUGIN_NAME, guardPluginFiles,
+  guardDeliveryMode, withGuardLayers, policyProbe,
 };
