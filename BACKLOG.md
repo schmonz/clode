@@ -4646,14 +4646,22 @@ absolute shell path, unmeasured.
   --settings) and the update guard a session plugin, `--plugin-dir` (managed settings carry no hooks). Without a
   user `--settings`, quaude's own is inline JSON: nothing on disk. Where it must write (the plugin; the fallback
   below) it writes into a private directory, `<tmp>/clode-guard-<uid>`, 0700, used only when it is a real
-  directory owned by the user and closed to others, else a fresh mkdtemp one. LEFT: (a) where a managed-policy
-  source may exist (a managed-settings document or drop-in, a macOS managed-preferences profile, a cached
-  remote-settings.json, the user's own `--managed-settings`; always on Windows, whose policy is in the registry),
-  quaude falls back to the merge, because policy can refuse `--plugin-dir` at startup (disableSideloadFlags) and
-  a managed-settings document or profile shuts the parent's managed settings out (first-wins): there a
-  schema-invalid user `--settings` file still drops quaude's keys. (b) The fallback's merged file is a copy of the
-  user's settings (possibly secrets) in the private directory, removed after seven days (tjs.exit runs no exit
-  handlers, so a session cannot remove its own). (c) The plugin is visible as a session plugin, `clode-update-guard`.
+  directory owned by the user and closed to others, else a fresh mkdtemp one. FIX ROUND 2 (controller ruling): where
+  a managed-policy source may exist (a managed-settings document or drop-in, a macOS managed-preferences profile, a
+  cached remote-settings.json; ALWAYS on Windows, whose policy is in the registry, and under WSL, which inherits it),
+  quaude merges its keys into the user's `--settings` AND adds the layers, belt and braces; a user's own
+  `--managed-settings` object gets failIfUnavailable merged in (the bundle keeps one, the last; Mzo keeps only
+  restrictive values from it), one that is not a JSON object is left as native leaves it (ignored) and the merge
+  carries the key. LEFT: (a) THE ONE RESIDUAL: a managed-settings document or profile in first-wins mode shuts the
+  parent's managed settings out, so with the sandbox enabled AND a schema-invalid user `--settings` file (which the
+  bundle drops whole, merge and all), failIfUnavailable reaches the bundle by no layer: calls after the first run
+  UNSANDBOXED (the update guard survives, in the plugin). Closing it needs the bundle's schema. (b) Admin policy that
+  sets disableSideloadFlags refuses `--plugin-dir` at startup: quaude given a user `--settings` there refuses to start
+  where native starts (fails closed; accepted by ruling, in CHANGELOG). (c) The merged file is a copy of the user's
+  settings (possibly secrets) in the private directory, removed after seven days (tjs.exit runs no exit handlers).
+  (d) The plugin is visible as a session plugin, `clode-update-guard`. (e) WSL counts as "policy may exist" for the
+  sandbox decision too, so a WSL2 quaude without bubblewrap/socat keeps failIfUnavailable (refuses to start where
+  native warns and runs): closed, never open.
 - The guard took an option's value for a subcommand (`--add-dir config ...`): fixed by the bundle's own option
   table (c13f6b8), gated against the carve (guard-option-table-gate).
 - WHERE NATIVE WOULD NOT SANDBOX, quaude now does as native does (USER ruling D2): every quaude built from the linux

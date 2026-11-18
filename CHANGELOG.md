@@ -77,7 +77,10 @@ error with the help under it, not a silent translation:
   later one ran UNSANDBOXED. Native runs these commands sandboxed. Where native would not
   sandbox, quaude does as native does: it warns and runs them unsandboxed. That is
   every quaude built from Claude Code's Linux build (on Linux, and on NetBSD, Haiku and the other
-  platforms built from it) where bubblewrap or socat is not on PATH, and WSL1
+  platforms built from it) where bubblewrap or socat is not on PATH, and WSL1. Still open:
+  when the sandbox is enabled, your `--settings` file is one Claude Code rejects (it skips it
+  whole), and a managed-settings file or profile on the machine shuts out the settings quaude
+  passes as managed, sandboxed Bash calls after the first run unsandboxed
 - (`quaude` only) Your own `sandbox.failIfUnavailable: false` is overridden: with the sandbox
   enabled, quaude refuses sandboxed Bash calls even when you said to run them unsandboxed if
   the sandbox cannot start, because under quaude it never can yet
@@ -85,7 +88,9 @@ error with the help under it, not a silent translation:
   none of its permissions, hooks, environment or sandbox settings applied. It now reaches
   Claude Code unchanged, as it does natively; beside it, the update guard is a session
   plugin (`clode-update-guard`) and the sandbox requirement a parent-managed setting.
-  Where managed policy may be present, quaude's settings are merged into yours instead
+  Where managed policy may be present (always on Windows and under WSL), quaude's settings
+  are also merged into yours. On a machine whose managed policy sets
+  `disableSideloadFlags`, quaude given your `--settings` refuses to start, where native starts
 
 ## 0.20260831.1
 
