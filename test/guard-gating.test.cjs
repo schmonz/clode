@@ -13,7 +13,29 @@ test('shouldInjectGuard: default/model command injects, subcommands skip', () =>
   assert.strictEqual(shouldInjectGuard(['rc']), false, 'remote-control alias');
   assert.strictEqual(shouldInjectGuard(['doctor']), false, 'doctor subcommand');
   assert.strictEqual(shouldInjectGuard(['mcp', 'add', 'x']), false, 'nested subcommand keyword first');
-  assert.strictEqual(shouldInjectGuard(['--debug', 'remote-control']), false, 'bool flag then subcommand');
+  assert.strictEqual(shouldInjectGuard(['--verbose', 'remote-control']), false, 'bool flag then subcommand');
+});
+
+// I1 (grep-native sandbox round 3): an option's VALUE is not a subcommand. The bundle's own rule decides which tokens
+// are values (libexec/update-guard.cjs's tables, gated against the carve by test/guard-subcommands-gate.test.cjs).
+// Each row was measured on native 2.1.283 with `--help` after it: the root help means the model command.
+test('shouldInjectGuard: an option value that spells a subcommand is a value, not the subcommand (I1)', () => {
+  assert.strictEqual(shouldInjectGuard(['--add-dir', 'config']), true, '--add-dir takes `config` (interactive)');
+  assert.strictEqual(shouldInjectGuard(['--add-dir', 'a', 'config']), true, '--add-dir is variadic: up to the next flag');
+  assert.strictEqual(shouldInjectGuard(['--model', 'doctor']), true, '--model takes a value');
+  assert.strictEqual(shouldInjectGuard(['--settings', 'update']), true, '--settings takes a value');
+  assert.strictEqual(shouldInjectGuard(['--debug', 'remote-control']), true,
+    '--debug [filter]: an optional value is taken when it is not a flag (native: root help)');
+  assert.strictEqual(shouldInjectGuard(['--project-config-root', 'config']), true,
+    'a commander root option missing from the eager scanner (native: root help)');
+  assert.strictEqual(shouldInjectGuard(['--debug', '--verbose', 'doctor']), false, 'an optional value never takes a flag');
+  assert.strictEqual(shouldInjectGuard(['--add-dir', 'a', '--verbose', 'mcp']), false, 'variadic stops at a flag');
+  assert.strictEqual(shouldInjectGuard(['--add-dir=config', 'doctor']), false, '--opt=value is one token');
+  assert.strictEqual(shouldInjectGuard(['--', 'doctor']), false, 'after `--` the next token is the positional');
+  assert.strictEqual(shouldInjectGuard(['--system-prompt', '-p']), true,
+    'a value option takes its next token even when it looks like a flag');
+  assert.strictEqual(shouldInjectGuard(['--append-system-prompt', '--print', 'doctor']), false,
+    '`--print` here is --append-system-prompt\'s value, not the print flag');
 });
 
 test('SUBCOMMANDS contains the reported case and its alias', () => {

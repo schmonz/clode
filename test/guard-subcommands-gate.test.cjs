@@ -176,3 +176,106 @@ const guard = defineGuard({
   },
 });
 guardTests(guard);
+
+// ---------------------------------------------------------------------------------------------------------------------
+// THE OPTION TABLE (grep-native sandbox round 3, I1). shouldInjectGuard() decides "is argv a subcommand?" by the
+// bundle's own rule: skip option VALUES, then read the first positional. Which options take a value is a hand copy in
+// libexec/update-guard.cjs (VALUE_OPTIONS / VARIADIC_OPTIONS / OPTIONAL_VALUE_OPTIONS), so this guard derives the same
+// three sets from the pinned carve and reports any difference. A missing value option is the harmful direction (its
+// value read as a subcommand skips the update guard and the sandbox fail-closed setting); an extra one is harmful too
+// (a real subcommand after a boolean flag would get --settings, which subcommands reject). So: equality.
+//
+// Two sources in the carve, both upstream's own:
+//   - the eager argv scanner (the module whose first-positional helper the bundle uses for `mcp`): three Sets, told
+//     apart by content — the one holding "--settings" (takes a value), the one holding "--add-dir" but not
+//     "--settings" (variadic), the one holding "--resume" (optional value);
+//   - commander's ROOT program (`X.name("claude")`): every `.option("…")` / `.addOption(new C("…"))` on its chain and on
+//     the root object, `<v>` required, `[v]` optional, `...` variadic. What dispatches subcommands is commander, so a
+//     root option that takes a value and is missing from the eager scanner (2.1.283: --attach-serve,
+//     --project-config-root) belongs in the table too.
+function optionNamesOf(spec) {
+  const head = spec.split(/[<[]/)[0];
+  return [...head.matchAll(/(--?[A-Za-z][\w-]*)/g)].map((m) => m[1]);
+}
+function scanOptionTable({ sources, table }) {
+  const findings = [];
+  let eager = null;
+  let root = null;
+  for (const src of sources) {
+    if (!eager && src.includes('"--prefill"') && src.includes('"--settings"')) {
+      const sets = [...src.matchAll(/new Set\(\[([^\]]*)\]\)/g)].map((m) => new Set([...m[1].matchAll(/"([^"]+)"/g)].map((x) => x[1])));
+      const value = sets.find((s) => s.has('--settings'));
+      const variadic = sets.find((s) => s.has('--add-dir') && !s.has('--settings'));
+      const optional = sets.find((s) => s.has('--resume'));
+      if (value && variadic && optional) eager = { value, variadic, optional };
+    }
+    const m = !root && /let ([\w$]+)=([\w$]+)\.name\("claude"\)/.exec(src);
+    if (m) {
+      const [, chainVar, rootVar] = m;
+      const end = src.indexOf(`${chainVar}.action(`, m.index);
+      const chain = src.slice(m.index, end === -1 ? undefined : end);
+      const esc = rootVar.replace(/\$/g, '\\$');
+      const specs = [
+        ...[...chain.matchAll(/\.(?:option\(|addOption\(new [\w$]+\()"([^"]+)"/g)].map((x) => x[1]),
+        ...[...src.matchAll(new RegExp(`(?<![\\w$.])${esc}\\.(?:option\\(|addOption\\(new [\\w$]+\\()"([^"]+)"`, 'g'))].map((x) => x[1]),
+      ];
+      root = { required: new Set(), optional: new Set(), variadic: new Set(), count: specs.length };
+      for (const spec of specs) {
+        const names = optionNamesOf(spec);
+        if (/</.test(spec)) names.forEach((n) => root.required.add(n));
+        else if (/\[/.test(spec)) names.forEach((n) => root.optional.add(n));
+        if (/\.\.\.[>\]]/.test(spec)) names.forEach((n) => root.variadic.add(n));
+      }
+    }
+  }
+  if (!eager) return { findings: ['the eager argv scanner\'s three option Sets were not found in the carve: this scan is blind'], examined: 0 };
+  if (!root) return { findings: ['commander\'s root program (`.name("claude")`) was not found in the carve: this scan is blind'], examined: 0 };
+  const union = (a, b) => new Set([...a, ...b]);
+  const want = {
+    VALUE_OPTIONS: union(eager.value, [...root.required].filter((n) => !eager.optional.has(n))),
+    VARIADIC_OPTIONS: union(eager.variadic, root.variadic),
+    OPTIONAL_VALUE_OPTIONS: union(eager.optional, [...root.optional].filter((n) => !eager.value.has(n))),
+  };
+  for (const [name, w] of Object.entries(want)) {
+    const have = table[name];
+    const add = [...w].filter((n) => !have.has(n)).sort();
+    const drop = [...have].filter((n) => !w.has(n)).sort();
+    if (add.length || drop.length) {
+      findings.push(`${name} drifted from the carve:\n  add: ${JSON.stringify(add)}\n  remove: ${JSON.stringify(drop)}\n`
+        + '  libexec/update-guard.cjs and libexec/quaude-bootstrap.mjs carry the guardGating block (drift-tested); edit both.');
+    }
+  }
+  return { findings, examined: want.VALUE_OPTIONS.size + want.VARIADIC_OPTIONS.size + want.OPTIONAL_VALUE_OPTIONS.size,
+    note: `${eager.value.size}/${eager.variadic.size}/${eager.optional.size} eager-scanner options, ${root.count} commander root option specs` };
+}
+
+const ug = require('../libexec/update-guard.cjs');
+const optionTableGuard = defineGuard({
+  name: 'guard-option-table-gate',
+  // Measured on the pinned 2.1.283 carve: 84 value + 11 variadic + 14 optional = 109. The floor catches a scan that
+  // finds only part of either source (the control's fixture examines 4).
+  floor: 90,
+  read: () => {
+    const carve = pinnedCarve();
+    if (carve.skip) return { skip: carve.skip };
+    if (!carve.split) return { skip: `the pinned carve ${carve.version} is not a split graph: this scan reads graph.json's sources` };
+    const doc = JSON.parse(fs.readFileSync(carve.carveFile, 'utf8'));
+    return {
+      sources: Object.values(doc.sources || {}).filter((s) => typeof s === 'string'),
+      table: { VALUE_OPTIONS: ug.VALUE_OPTIONS, VARIADIC_OPTIONS: ug.VARIADIC_OPTIONS, OPTIONAL_VALUE_OPTIONS: ug.OPTIONAL_VALUE_OPTIONS },
+    };
+  },
+  scan: scanOptionTable,
+  // The real drift: upstream adds a root option that takes a value (here `--new-thing <x>`) the table does not know.
+  control: () => ({
+    sources: [
+      'var i=new Set(["--prefill","--settings"]),Z=new Set(["--add-dir"]),a=new Set(["--resume"]);',
+      'let P=e.name("claude").option("--settings <file-or-json>","").option("--new-thing <x>","");P.action(()=>{})',
+    ],
+    table: {
+      VALUE_OPTIONS: new Set(['--prefill', '--settings']), VARIADIC_OPTIONS: new Set(['--add-dir']),
+      OPTIONAL_VALUE_OPTIONS: new Set(['--resume']),
+    },
+  }),
+});
+guardTests(optionTableGuard);
