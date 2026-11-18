@@ -106,3 +106,23 @@ console.log(JSON.stringify({ truthy: !!(roots && roots.length > 0) }));`);
   assert.strictEqual(r.status, 0, r.stderr);
   assert.deepStrictEqual(JSON.parse(r.stdout.trim()), { truthy: true });
 });
+
+// M1 (grep-native sandbox round 3, USER: name the gap). Claude Code's sandbox initialization calls net.createServer for
+// its proxies; quaude has no server sockets yet. An honest THROWING stub names the gap, so the bundle's refusal reads
+// "Sandbox is required but failed to initialize: quaude does not support the sandbox yet: net.createServer" instead
+// of "...: not a function". Never a fake server: nothing listens. The peer-credential daemon behind the same call
+// stays unreachable (test/bun-shim-ant-gap.test.cjs).
+test('net.createServer throws, naming the gap: "quaude does not support the sandbox yet: net.createServer"', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-net-'));
+  const f = path.join(dir, 'srv.cjs');
+  fs.writeFileSync(f, `
+    const net = require('net');
+    let out = 'NO-THROW';
+    try { net.createServer(() => {}); } catch (e) { out = 'THREW ' + e.message; }
+    console.log(out);
+  `);
+  const r = runLoader(f);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.strictEqual(r.stdout.trim(), 'THREW quaude does not support the sandbox yet: net.createServer');
+});

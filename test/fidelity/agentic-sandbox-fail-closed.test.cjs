@@ -30,7 +30,9 @@ const { builtQuaude } = require('../built-binary.cjs');
 const { startMockAnthropic, cannedSSE, cannedToolUseSSE } = require('../mock-anthropic-helper.cjs');
 const { toolResult, assertFailsOnMissingOutput } = require('../../scripts/lib/tool-result.cjs');
 
-const REQUIRED = /^Sandbox is required but failed to initialize\b/;
+// The bundle's required-branch refusal, naming the gap (round 3, USER ruling M1: node-shim's net.createServer throws
+// "quaude does not support the sandbox yet: net.createServer"; before, the reason read "not a function").
+const REQUIRED = /^Sandbox is required but failed to initialize: quaude does not support the sandbox yet: net\.createServer\b/;
 const STARTUP_REFUSAL = /sandbox required but unavailable/;
 const marker = (n) => `fc-marker-${n}`;
 const M1 = { name: 'Bash', input: { command: `echo in > ${marker(1)}; echo x > ../out-1; echo FC-RAN-$((40+1))`, description: 'one' }, id: 'toolu_fc_1' };

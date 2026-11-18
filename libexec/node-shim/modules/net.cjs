@@ -10,7 +10,7 @@
 // createConnection / real Socket I/O / net.Server) is NOT implemented — the
 // -p transport is txiki's native fetch, which never routes through node:net.
 // Socket is a minimal EventEmitter subclass so class-refs / instanceof / subclass
-// definitions at load resolve; connect/createConnection throw a branded wall.
+// definitions at load resolve; connect/createConnection throw a branded wall, createServer one naming the sandbox.
 const { EventEmitter } = require('node:events');
 
 // ---- isIP family (real, matches host node semantics) ----
@@ -148,9 +148,15 @@ class Server extends EventEmitter {
   close(cb) { if (cb) queueMicrotask(cb); return this; }
 }
 function connectUnimpl() { throw new Error('node-shim: net.connect/createConnection not implemented (fetch is the -p transport)'); }
+// An honest THROWING stub (grep-native sandbox round 3, USER ruling M1: name the gap), never a fake server. Claude
+// Code's sandbox initialization calls this for its proxies; absent, the bundle's refusal read "...failed to
+// initialize: not a function". Now it names what is missing: "Sandbox is required but failed to initialize: quaude
+// does not support the sandbox yet: net.createServer". Nothing listens, so the peer-credential daemon behind the same
+// call stays unreachable (test/bun-shim-ant-gap.test.cjs).
+function createServerUnsupported() { throw new Error('quaude does not support the sandbox yet: net.createServer'); }
 
 module.exports = {
   isIP, isIPv4, isIPv6, BlockList, Socket, Server, Stream: Socket,
-  connect: connectUnimpl, createConnection: connectUnimpl,
+  connect: connectUnimpl, createConnection: connectUnimpl, createServer: createServerUnsupported,
 };
 module.exports.default = module.exports;

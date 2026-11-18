@@ -18,7 +18,7 @@
 // The reason it is acceptable to leave absent is REACHABILITY, and reachability
 // is a fact about OTHER code that can change without anyone thinking about
 // Bun.ant. Both peer-credential call sites sit behind declared node-shim walls:
-// the UDS client goes through net.connect, the daemon through net.Server, and
+// the UDS client goes through net.connect, the daemon through net.createServer, and
 // both throw first. The last test here pins that. The day either wall comes
 // down, this file goes red and the decision gets re-taken — which is the point,
 // because upstream's fallbacks are NOT uniformly graceful: the daemon's uid
@@ -80,7 +80,8 @@ test('the peer-credential call sites are still behind node-shim walls', (t) => {
     const net = require('net');
     let c = 'NO-THROW'; try { net.connect({ path: '/tmp/nope.sock' }); } catch (e) { c = 'THREW'; }
     console.log('connect:' + c);
-    console.log('server:' + (typeof net.createServer));
+    let srv = 'NO-THROW'; try { net.createServer(() => {}); } catch (e) { srv = 'THREW'; }
+    console.log('server:' + srv);
   `);
   const r = runLoader(f);
   assert.strictEqual(r.status, 0, r.stderr);
@@ -88,8 +89,10 @@ test('the peer-credential call sites are still behind node-shim walls', (t) => {
     'net.connect no longer throws — the UDS client that calls Bun.ant.getPeerPid is now'
     + ' reachable, and upstream REFUSES TO SEND when the peer pid cannot be read.'
     + ' Re-take the Bun.ant decision (libexec/bun-shim.cjs, beside spawnSync).');
-  assert.match(r.stdout, /server:undefined/,
-    'net.createServer now exists — the daemon that calls Bun.ant.getPeerUid is now'
+  // Round 3 (M1): net.createServer EXISTS now, as a stub that throws naming the gap ("quaude does not support the
+  // sandbox yet"). Throwing at the call is the same wall: the daemon never gets a server to listen on.
+  assert.match(r.stdout, /server:THREW/,
+    'net.createServer no longer throws — the daemon that calls Bun.ant.getPeerUid is now'
     + ' reachable, and upstream\'s uid check FAILS OPEN when the lookup throws.'
     + ' Re-take the Bun.ant decision (libexec/bun-shim.cjs, beside spawnSync).');
 });
