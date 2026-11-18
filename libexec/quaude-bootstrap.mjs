@@ -377,6 +377,29 @@ function withSettingsArg(argv, found, file) {
   }
   return out;
 }
+// WHERE NATIVE WOULD SANDBOX (grep-native sandbox round 3, D2; USER: match native). quaude says
+// sandbox.failIfUnavailable only where native would actually run the sandbox; elsewhere the bundle's own optional
+// branch prints its warning ("Sandbox disabled: ...") and runs commands unsandboxed, as native does, never attempting
+// the initialization quaude cannot finish. The bundle's own rule, from the 2.1.283 carve (its baked platform, which
+// is the provider carve's: manifest.providerPlatform): macOS always sandboxes (sandbox-exec, no dependency check);
+// Linux sandboxes unless /proc/version says WSL1 (/WSL(\d+)/i gives the version, else "microsoft" means 1) or its
+// dependency check fails: bubblewrap and socat looked up on PATH (Bun.which), or at sandbox.bwrapPath /
+// sandbox.socatPath, which only managed policy sets. quaude cannot read every policy source (server-managed settings, a
+// policy helper), so where any might exist (a managed-settings document, a cached remote-settings.json, a
+// --managed-settings argument) it keeps the setting: closed, never open. The check's third dependency, ripgrep, is
+// quaude's own binary and always present. Every other baked platform keeps the setting too (Windows is unmeasured:
+// closed, never open). -> true when quaude must inject sandbox.failIfUnavailable.
+function wslVersion(procVersion) {
+  if (typeof procVersion !== 'string') return undefined;
+  const m = procVersion.match(/WSL(\d+)/i);
+  if (m && m[1]) return m[1];
+  return procVersion.toLowerCase().includes('microsoft') ? '1' : undefined;
+}
+function sandboxWouldRun({ providerPlatform, procVersion, hasBwrap, hasSocat, policyMayOverride }) {
+  if (providerPlatform !== 'linux') return true;
+  if (wslVersion(procVersion) === '1') return false;
+  return Boolean((hasBwrap && hasSocat) || policyMayOverride);
+}
 // <<< guardGating <<<
 
 // The user's --settings FILE, decoded as the bundle decodes it, or null when the bundle could not use it (missing, not a
@@ -388,6 +411,33 @@ async function readSettingsFile(tjs, file) {
     if (((st.mode || 0) & S_IFMT) !== S_IFREG || st.size > SETTINGS_FILE_MAX_BYTES) return null;
     return decodeSettingsBytes(await tjs.readFile(file));
   } catch (_) { return null; }
+}
+
+// What sandboxWouldRun (guardGating) needs to know: the bundle's baked platform, and on Linux the facts its own
+// dependency check reads. Bun.which looks a name up on PATH (the env the bundle will see, already shaped by
+// bootstrapTargetEnv); a policy source that could set sandbox.bwrapPath/socatPath is any managed-settings document
+// (/etc/claude-code/managed-settings.json or managed-settings.d), a cached remote-settings.json in the config dir, or
+// a --managed-settings argument.
+async function sandboxFacts(tjs, providerPlatform, argv) {
+  if (providerPlatform !== 'linux') return { providerPlatform };
+  const exists = async (p) => { try { await tjs.stat(p); return true; } catch (_) { return false; } };
+  const onPath = async (name) => {
+    for (const dir of String(tjs.env.PATH || '').split(':')) {
+      if (!dir) continue;
+      try {
+        const st = await tjs.stat(dir + '/' + name);
+        if (((st.mode || 0) & S_IFMT) === S_IFREG && ((st.mode || 0) & S_IXALL) !== 0) return true;
+      } catch (_) { /* not here */ }
+    }
+    return false;
+  };
+  let procVersion;
+  try { procVersion = new TextDecoder().decode(await tjs.readFile('/proc/version')); } catch (_) { procVersion = undefined; }
+  const configDir = tjs.env.CLAUDE_CONFIG_DIR || ((tjs.env.HOME || '') + '/.claude');
+  const policyMayOverride = argv.some((a) => a === '--managed-settings' || String(a).startsWith('--managed-settings='))
+    || await exists('/etc/claude-code/managed-settings.json') || await exists('/etc/claude-code/managed-settings.d')
+    || await exists(configDir + '/remote-settings.json');
+  return { providerPlatform, procVersion, hasBwrap: await onPath('bwrap'), hasSocat: await onPath('socat'), policyMayOverride };
 }
 
 async function main() {
@@ -609,18 +659,23 @@ async function main() {
       // (binary, user --settings) pair, and concurrent sessions with the same pair write byte-identical content to
       // the same path (no collision, no accumulation) — no cleanup needed.
       // SANDBOXED BASH FAILS CLOSED (user ruling 2026-10-05) — THE NAMED DIVERGENCE, stated here once: quaude cannot
-      // provide Claude Code's sandbox yet (its initialization needs node:net servers the node-shim lacks; BACKLOG,
-      // "net.createServer is ABSENT"), so under quaude an ENABLED sandbox is always REQUIRED: this settings file says
-      // sandbox.failIfUnavailable, the bundle's own setting for it (no patch to the bundle). With the sandbox enabled
-      // from any source the bundle merges, it then takes its own required branch: every Bash call is refused ("Sandbox
-      // is required but failed to initialize ..."), where the optional branch disabled the sandbox for the rest of the
-      // session and ran every later call UNSANDBOXED; and where the platform's sandbox dependencies are missing
-      // (Linux without bubblewrap/socat) it refuses at startup, where native would start unsandboxed with a warning.
-      // Native runs those commands sandboxed. With the sandbox off nothing changes (the setting is read only when it
-      // is enabled); dangerouslyDisableSandbox keeps native's policy (allowUnsandboxedCommands, the permission rules).
-      // naude injects no such setting: under Node the sandbox's servers exist and its initialization does not fail,
-      // but naude does not run sandboxed commands either (each is refused, "Shell '/bin/bash' not found in PATH",
-      // measured 2026-10-05 on macOS; BACKLOG): it fails closed by another gap, never open.
+      // provide Claude Code's sandbox yet (its initialization needs node:net servers the node-shim lacks:
+      // net.createServer throws "quaude does not support the sandbox yet"; BACKLOG), so where native WOULD sandbox,
+      // an ENABLED sandbox is REQUIRED under quaude: this settings file says sandbox.failIfUnavailable, the bundle's
+      // own setting for it (no patch to the bundle). With the sandbox enabled from any source the bundle merges, it
+      // then takes its own required branch: every Bash call is refused ("Sandbox is required but failed to initialize:
+      // quaude does not support the sandbox yet: net.createServer ..."), where the optional branch disabled the
+      // sandbox for the rest of the session and ran every later call UNSANDBOXED. Native runs those commands
+      // sandboxed. Where native would NOT sandbox (Linux without bubblewrap or socat, WSL1; sandboxWouldRun in the
+      // guardGating block), nothing is injected (USER ruling D2, match native): the bundle prints native's warning and
+      // runs commands unsandboxed, as native does. The setting OVERRIDES a user's own sandbox.failIfUnavailable:false
+      // (USER ruling D1): nothing ever runs unsandboxed where native would have sandboxed it. With the sandbox off
+      // nothing changes (the setting is read only when it is enabled); dangerouslyDisableSandbox keeps native's policy
+      // (allowUnsandboxedCommands, the permission rules). naude injects no such setting: under Node the sandbox's
+      // servers exist and its initialization does not fail, but naude does not run sandboxed commands either (each is
+      // refused, "Shell '/bin/bash' not found in PATH", measured 2026-10-05 on macOS; BACKLOG): it fails closed by
+      // another gap, never open.
+      const required = sandboxWouldRun(await sandboxFacts(tjs, manifest.providerPlatform, rest));
       const guardSettings = {
         hooks: {
           PreToolUse: [
@@ -632,8 +687,8 @@ async function main() {
             },
           ],
         },
-        sandbox: { failIfUnavailable: true },
       };
+      if (required) guardSettings.sandbox = { failIfUnavailable: true };
       // The user's own --settings, merged (libexec/update-guard.cjs states the rule: guardGating, "THE USER'S
       // --settings"). A value the bundle cannot use reaches it unchanged: it prints its own error and exits.
       const found = findSettingsArgs(rest);

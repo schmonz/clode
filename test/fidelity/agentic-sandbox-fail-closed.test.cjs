@@ -11,9 +11,9 @@
 // A BUILT quaude (test/built-binary.cjs), one turn per case, three Bash calls each writing a marker inside the working
 // directory and one outside it; a throwaway HOME, CLAUDE_CONFIG_DIR and TJS_HOME per run. With the sandbox on (user,
 // project or local settings, or the user's own --settings): every call is refused with the bundle's required-branch
-// reason and no marker exists. With it off: all three run. Measured on macOS; on Linux with bubblewrap and socat
-// present the same, and with them absent the bundle refuses at STARTUP (its own "sandbox required but unavailable"):
-// nothing runs either way, which this test accepts on Linux only.
+// reason and no marker exists. With it off: all three run. Measured on macOS, and on Linux with bubblewrap and socat
+// present. Where native would NOT sandbox (Linux without bubblewrap or socat: native prints its warning and runs every
+// call unsandboxed), quaude does as native does (round 3, USER ruling D2): the same warning, every call runs.
 //
 // Round 3 (C1): the user's own --settings is MERGED with quaude's (libexec/update-guard.cjs, "THE USER'S --settings"),
 // where it used to be discarded whole. Its sandbox setting fails closed like any other source's; its env, hooks and
@@ -77,14 +77,14 @@ const PRINT = ['-p', 'write the markers', '--allowedTools', 'Bash'];
 // One turn of a case. `source` writes ON to user, project or local settings ('off': none). `files` are written to the
 // run's base dir first (a value may be a function of { base, work }); `args` is argv, or a function of { base, work };
 // `script` the tool calls the mock answers with, in order. -> { mock, markers, r, files } (files: base's entries after).
-async function runCase(bin, { source = 'off', args = PRINT, script = SCRIPT, files = {} }) {
+async function runCase(bin, { source = 'off', sourceSettings = ON, args = PRINT, script = SCRIPT, files = {} }) {
   const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-fail-closed-')));
   try {
     const work = path.join(base, 'work'), home = path.join(base, 'home'), cfg = path.join(home, '.claude'), tjsHome = path.join(base, 'tjs-home');
     for (const d of [path.join(work, '.claude'), cfg, tjsHome]) fs.mkdirSync(d, { recursive: true });
-    if (source === 'user') fs.writeFileSync(path.join(cfg, 'settings.json'), JSON.stringify(ON));
-    if (source === 'project') fs.writeFileSync(path.join(work, '.claude', 'settings.json'), JSON.stringify(ON));
-    if (source === 'local') fs.writeFileSync(path.join(work, '.claude', 'settings.local.json'), JSON.stringify(ON));
+    if (source === 'user') fs.writeFileSync(path.join(cfg, 'settings.json'), JSON.stringify(sourceSettings));
+    if (source === 'project') fs.writeFileSync(path.join(work, '.claude', 'settings.json'), JSON.stringify(sourceSettings));
+    if (source === 'local') fs.writeFileSync(path.join(work, '.claude', 'settings.local.json'), JSON.stringify(sourceSettings));
     const ctx = { base, work };
     for (const [name, content] of Object.entries(files)) {
       const text = typeof content === 'function' ? content(ctx) : content;
@@ -130,6 +130,24 @@ const ON_CASES = [
   { name: 'user settings, `--add-dir config -- <prompt>` (no -p)', source: 'user', args: ['--add-dir', 'config', '--allowedTools', 'Bash', '--', 'write the markers'] },
 ];
 
+// Where native would sandbox (libexec/update-guard.cjs, sandboxWouldRun, by the bundle's own check): macOS always;
+// Linux unless WSL1 or bubblewrap or socat is missing from PATH (no managed policy in these throwaway runs).
+function onPath(name) {
+  return String(process.env.PATH || '').split(path.delimiter).some((d) => {
+    try { fs.accessSync(path.join(d, name), fs.constants.X_OK); return fs.statSync(path.join(d, name)).isFile(); } catch { return false; }
+  });
+}
+function nativeWouldSandbox() {
+  if (process.platform !== 'linux') return true;
+  let v = '';
+  try { v = fs.readFileSync('/proc/version', 'utf8'); } catch { /* none */ }
+  const m = v.match(/WSL(\d+)/i);
+  if ((m && m[1] === '1') || (!m && v.toLowerCase().includes('microsoft'))) return false;
+  return onPath('bwrap') && onPath('socat');
+}
+// Native's own warning when it will not sandbox an enabled sandbox (the 2.1.283 carve, print mode).
+const NATIVE_WARNING = /Sandbox disabled: sandbox is enabled but dependencies are missing: .*\n\s*Commands will run WITHOUT sandboxing/;
+
 const SKIP = process.platform === 'win32' ? 'the Bash tool needs bash; Windows sandboxing is not this gap' : false;
 test('sandboxed Bash fails CLOSED under quaude: every call refused, nothing written, from any settings source; off, all run', { skip: SKIP }, async (t) => {
   const q = builtQuaude();
@@ -137,12 +155,20 @@ test('sandboxed Bash fails CLOSED under quaude: every call refused, nothing writ
   assertFailsOnMissingOutput(refused1, M1); assertFailsOnMissingOutput(refused2, M2); assertFailsOnMissingOutput(refused3, M3);
   assertFailsOnMissingOutput(ran1, M1); assertFailsOnMissingOutput(ran2, M2); assertFailsOnMissingOutput(ran3, M3);
   const findings = [];
+  const sandboxes = nativeWouldSandbox();
+  t.diagnostic(`native would sandbox here: ${sandboxes}`);
   for (const c of ON_CASES) {
     const { mock, markers, r } = await runCase(q.path, c);
     const verdict = verdicts(mock);
-    const startupRefused = process.platform === 'linux' && r.status !== 0 && STARTUP_REFUSAL.test(r.stderr);
-    if (markers.length) findings.push(`${c.name}: wrote ${markers.join(', ')} (ran unsandboxed)`);
-    if (!startupRefused && !verdict.refused.every(Boolean)) findings.push(`${c.name}: not every call was refused by the required branch: ${JSON.stringify(verdict)} rc ${r.status} ${r.stderr.slice(0, 300)}`);
+    if (STARTUP_REFUSAL.test(r.stderr)) findings.push(`${c.name}: refused to START (native starts): rc ${r.status} ${r.stderr.slice(0, 300)}`);
+    if (sandboxes) {
+      if (markers.length) findings.push(`${c.name}: wrote ${markers.join(', ')} (ran unsandboxed)`);
+      if (!verdict.refused.every(Boolean)) findings.push(`${c.name}: not every call was refused by the required branch: ${JSON.stringify(verdict)} rc ${r.status} ${r.stderr.slice(0, 300)}`);
+    } else {
+      // D2: native warns and runs every call unsandboxed here; so must quaude.
+      if (!NATIVE_WARNING.test(r.stderr)) findings.push(`${c.name}: no native sandbox warning: rc ${r.status} ${r.stderr.slice(0, 300)}`);
+      if (!verdict.ran.every(Boolean) || markers.length !== 6) findings.push(`${c.name}: not every call ran as native runs it: ${JSON.stringify(verdict)} markers ${markers.join(', ')}`);
+    }
   }
   const off = await runCase(q.path, {});
   const offVerdict = verdicts(off.mock);

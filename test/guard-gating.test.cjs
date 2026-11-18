@@ -128,3 +128,26 @@ test('decodeSettingsBytes: UTF-16LE after FF FE, else UTF-8 (the bundle\'s encod
   assert.strictEqual(ug.decodeSettingsBytes(u16), '{"a":1}');
   assert.strictEqual(ug.decodeSettingsBytes(Buffer.from('{"a":1}')), '{"a":1}');
 });
+
+// D2 (grep-native sandbox round 3, USER: match native): quaude injects sandbox.failIfUnavailable only where native
+// would actually sandbox, by the bundle's own check (the 2.1.283 carve; see sandboxWouldRun).
+test('wslVersion: the bundle\'s /proc/version reading (WSL<n>, else "microsoft" is WSL1)', () => {
+  assert.strictEqual(ug.wslVersion(undefined), undefined, 'no /proc/version (macOS, NetBSD): not WSL');
+  assert.strictEqual(ug.wslVersion('Linux version 6.8.0-45-generic (buildd@lcy02-amd64-075) (gcc 13.2.0)'), undefined);
+  assert.strictEqual(ug.wslVersion('Linux version 5.15.153.1-microsoft-standard-WSL2'), '2');
+  assert.strictEqual(ug.wslVersion('Linux version 4.4.0-19041-Microsoft (Microsoft@Microsoft.com)'), '1');
+});
+
+test('sandboxWouldRun: macOS always; Linux with bwrap and socat (or a policy that may point at them), never WSL1', () => {
+  const linux = (o) => ug.sandboxWouldRun({ providerPlatform: 'linux', procVersion: 'Linux version 6.8.0', ...o });
+  assert.strictEqual(ug.sandboxWouldRun({ providerPlatform: 'darwin' }), true, 'sandbox-exec: no dependency check');
+  assert.strictEqual(linux({ hasBwrap: true, hasSocat: true }), true);
+  assert.strictEqual(linux({ hasBwrap: false, hasSocat: true }), false, 'native: "bubblewrap (bwrap) not installed", warns, runs');
+  assert.strictEqual(linux({ hasBwrap: true, hasSocat: false }), false, 'native: "socat not installed", warns, runs');
+  assert.strictEqual(linux({ hasBwrap: false, hasSocat: false, policyMayOverride: true }), true,
+    'a policy source may set sandbox.bwrapPath/socatPath that quaude cannot read: closed');
+  assert.strictEqual(linux({ procVersion: 'Linux version 4.4.0-19041-Microsoft', hasBwrap: true, hasSocat: true }), false,
+    'WSL1 is an unsupported platform: native warns, runs');
+  assert.strictEqual(ug.sandboxWouldRun({ providerPlatform: 'win32' }), true, 'Windows: unmeasured, closed');
+  assert.strictEqual(ug.sandboxWouldRun({ providerPlatform: 'unknown' }), true, 'an unknown baked platform: closed');
+});

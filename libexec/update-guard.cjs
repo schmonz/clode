@@ -227,10 +227,33 @@ function withSettingsArg(argv, found, file) {
   }
   return out;
 }
+// WHERE NATIVE WOULD SANDBOX (grep-native sandbox round 3, D2; USER: match native). quaude says
+// sandbox.failIfUnavailable only where native would actually run the sandbox; elsewhere the bundle's own optional
+// branch prints its warning ("Sandbox disabled: ...") and runs commands unsandboxed, as native does, never attempting
+// the initialization quaude cannot finish. The bundle's own rule, from the 2.1.283 carve (its baked platform, which
+// is the provider carve's: manifest.providerPlatform): macOS always sandboxes (sandbox-exec, no dependency check);
+// Linux sandboxes unless /proc/version says WSL1 (/WSL(\d+)/i gives the version, else "microsoft" means 1) or its
+// dependency check fails: bubblewrap and socat looked up on PATH (Bun.which), or at sandbox.bwrapPath /
+// sandbox.socatPath, which only managed policy sets. quaude cannot read every policy source (server-managed settings, a
+// policy helper), so where any might exist (a managed-settings document, a cached remote-settings.json, a
+// --managed-settings argument) it keeps the setting: closed, never open. The check's third dependency, ripgrep, is
+// quaude's own binary and always present. Every other baked platform keeps the setting too (Windows is unmeasured:
+// closed, never open). -> true when quaude must inject sandbox.failIfUnavailable.
+function wslVersion(procVersion) {
+  if (typeof procVersion !== 'string') return undefined;
+  const m = procVersion.match(/WSL(\d+)/i);
+  if (m && m[1]) return m[1];
+  return procVersion.toLowerCase().includes('microsoft') ? '1' : undefined;
+}
+function sandboxWouldRun({ providerPlatform, procVersion, hasBwrap, hasSocat, policyMayOverride }) {
+  if (providerPlatform !== 'linux') return true;
+  if (wslVersion(procVersion) === '1') return false;
+  return Boolean((hasBwrap && hasSocat) || policyMayOverride);
+}
 // <<< guardGating <<<
 module.exports = {
   guardVerdict, SUBCOMMANDS, shouldInjectGuard, firstPositional, hasFlag,
   VALUE_OPTIONS, VARIADIC_OPTIONS, OPTIONAL_VALUE_OPTIONS,
   SETTINGS_FILE_MAX_BYTES, findSettingsArgs, settingsIsInline, decodeSettingsBytes, parseSettingsText, mergeSettings,
-  planGuardSettings, withSettingsArg,
+  planGuardSettings, withSettingsArg, wslVersion, sandboxWouldRun,
 };
