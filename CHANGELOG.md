@@ -75,13 +75,17 @@ error with the help under it, not a silent translation:
   call is refused (`Sandbox is required but failed to initialize: quaude does not support
   the sandbox yet: net.createServer`). Before this, the first call was refused and every
   later one ran UNSANDBOXED. Native runs these commands sandboxed. Where native would not
-  sandbox (Linux without bubblewrap or socat), quaude does as native does: it warns and runs
-  them unsandboxed
+  sandbox, quaude does as native does: it warns and runs them unsandboxed. That is
+  every quaude built from Claude Code's Linux build (on Linux, and on NetBSD, Haiku and the other
+  platforms built from it) where bubblewrap or socat is not on PATH, and WSL1
 - (`quaude` only) Your own `sandbox.failIfUnavailable: false` is overridden: with the sandbox
   enabled, quaude refuses sandboxed Bash calls even when you said to run them unsandboxed if
   the sandbox cannot start, because under quaude it never can yet
 - (`quaude` and `naude`) Fix your own `--settings` (a file or inline JSON) being ignored:
-  none of its permissions, hooks, environment or sandbox settings applied
+  none of its permissions, hooks, environment or sandbox settings applied. It now reaches
+  Claude Code unchanged, as it does natively; beside it, the update guard is a session
+  plugin (`clode-update-guard`) and the sandbox requirement a parent-managed setting.
+  Where managed policy may be present, quaude's settings are merged into yours instead
 
 ## 0.20260831.1
 

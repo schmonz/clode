@@ -4635,17 +4635,30 @@ absolute shell path, unmeasured.
 **Round 3 (2026-11-18, grep-native sandbox round 3).** Four corrections, each measured:
 - The user's own `--settings` (`X`, `=X`, file or inline JSON) was DISCARDED whole under quaude and naude: the bundle
   keeps the last `--settings`, and the guard's came last. So a sandbox enabled there failed OPEN (all three calls
-  ran, writing outside the working directory), and its env, hooks and permissions never applied. FIXED (88aacca):
-  the user's value is read by the bundle's own rule and merged with quaude's (hooks concatenated, quaude's scalars
-  win), one `--settings` reaches the bundle; a value the bundle refuses reaches it unchanged (its own rc-1 error).
-  LEFT: a user `--settings` FILE that parses but fails Claude Code's settings schema (say `{"permissions": 5}`) is
-  dropped WHOLE by the bundle, silently, as native drops it; under quaude the merged file is that file, so the
-  update guard and sandbox.failIfUnavailable go with it (fails OPEN for that run). Fixing it means validating
-  against the bundle's schema before merging (or handing the bundle two settings layers): not done.
+  ran, writing outside the working directory), and its env, hooks and permissions never applied. FIXED (88aacca) by
+  merging quaude's keys into the user's value; that merge had its own fail-open (fix round 1, I-1): a user file that
+  parses but fails Claude Code's settings schema (`{"permissions":5}`) is dropped WHOLE by the bundle, silently, as
+  native drops it, and quaude's keys went with it: with the sandbox enabled in user settings the optional branch
+  then ran calls 2 and 3 UNSANDBOXED, and a model-issued `claude update` was not stopped (measured). FIXED in fix
+  round 1: beside a user `--settings`, quaude no longer touches it (it reaches the bundle unchanged, native's
+  behaviour, errors and drops included); sandbox.failIfUnavailable rides `--managed-settings` (the policy tier a
+  parent process hands in; the bundle keeps only restrictive values from it, this one among them, above every
+  --settings) and the update guard a session plugin, `--plugin-dir` (managed settings carry no hooks). Without a
+  user `--settings`, quaude's own is inline JSON: nothing on disk. Where it must write (the plugin; the fallback
+  below) it writes into a private directory, `<tmp>/clode-guard-<uid>`, 0700, used only when it is a real
+  directory owned by the user and closed to others, else a fresh mkdtemp one. LEFT: (a) where a managed-policy
+  source may exist (a managed-settings document or drop-in, a macOS managed-preferences profile, a cached
+  remote-settings.json, the user's own `--managed-settings`; always on Windows, whose policy is in the registry),
+  quaude falls back to the merge, because policy can refuse `--plugin-dir` at startup (disableSideloadFlags) and
+  a managed-settings document or profile shuts the parent's managed settings out (first-wins): there a
+  schema-invalid user `--settings` file still drops quaude's keys. (b) The fallback's merged file is a copy of the
+  user's settings (possibly secrets) in the private directory, removed after seven days (tjs.exit runs no exit
+  handlers, so a session cannot remove its own). (c) The plugin is visible as a session plugin, `clode-update-guard`.
 - The guard took an option's value for a subcommand (`--add-dir config ...`): fixed by the bundle's own option
   table (c13f6b8), gated against the carve (guard-option-table-gate).
-- WHERE NATIVE WOULD NOT SANDBOX, quaude now does as native does (USER ruling D2): Linux without bubblewrap or socat
-  (or WSL1) gets native's `Sandbox disabled ... Commands will run WITHOUT sandboxing` and every call runs
+- WHERE NATIVE WOULD NOT SANDBOX, quaude now does as native does (USER ruling D2): every quaude built from the linux
+  carve (provider platform linux: Linux, and NetBSD, Haiku and the other legs built from it, none of which has
+  bubblewrap) where bubblewrap or socat is not on PATH, and WSL1, gets native's `Sandbox disabled ... Commands will run WITHOUT sandboxing` and every call runs
   unsandboxed; before, quaude refused to start there. Measured in a Linux container (node:24.21.0-bookworm,
   x86_64) with the 2.1.283 linux carve: native and the new quaude print the same warning and run; with bubblewrap
   and socat installed every call is refused. LEFT: (a) sandbox.bwrapPath/socatPath, which only managed policy sets:
