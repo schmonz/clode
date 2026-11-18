@@ -144,12 +144,71 @@ test('sandboxWouldRun: macOS always; Linux with bwrap and socat (or a policy tha
   assert.strictEqual(linux({ hasBwrap: true, hasSocat: true }), true);
   assert.strictEqual(linux({ hasBwrap: false, hasSocat: true }), false, 'native: "bubblewrap (bwrap) not installed", warns, runs');
   assert.strictEqual(linux({ hasBwrap: true, hasSocat: false }), false, 'native: "socat not installed", warns, runs');
-  assert.strictEqual(linux({ hasBwrap: false, hasSocat: false, policyMayOverride: true }), true,
-    'a policy source may set sandbox.bwrapPath/socatPath that quaude cannot read: closed');
+  assert.strictEqual(linux({ hasBwrap: false, hasSocat: false, policyMaySetDeps: true }), true,
+    'evidence a policy source may set sandbox.bwrapPath/socatPath that quaude cannot read: closed');
   assert.strictEqual(linux({ procVersion: 'Linux version 4.4.0-19041-Microsoft', hasBwrap: true, hasSocat: true }), false,
     'WSL1 is an unsupported platform: native warns, runs');
-  assert.strictEqual(ug.sandboxWouldRun({ providerPlatform: 'win32' }), true, 'Windows: unmeasured, closed');
   assert.strictEqual(ug.sandboxWouldRun({ providerPlatform: 'unknown' }), true, 'an unknown baked platform: closed');
+});
+
+// Fix round 3: Windows sandboxes only behind a gate (Eb -> sX: env CLAUDE_CODE_NANKEEN_KESTREL by the bundle's
+// truthy rule, or the server gate tengu_nankeen_kestrel, default off, cached in the global config).
+test('sandboxWouldRun: win32 only when CLAUDE_CODE_NANKEEN_KESTREL is truthy or the gate is cached on', () => {
+  const win = (o) => ug.sandboxWouldRun({ providerPlatform: 'win32', ...o });
+  assert.strictEqual(win({}), false, 'env unset, gate uncached: native warns and runs');
+  assert.strictEqual(win({ nankeenEnv: '1' }), true, 'env set');
+  assert.strictEqual(win({ nankeenEnv: ' TRUE ' }), true, 'the bundle\'s rule: case and spaces ignored');
+  assert.strictEqual(win({ nankeenEnv: '0' }), false, 'set but falsy: off');
+  assert.strictEqual(win({ nankeenEnv: 'nope' }), false, 'not one of 1/true/yes/on: off');
+  assert.strictEqual(win({ nankeenGate: true }), true, 'gate cached on');
+  for (const v of ['1', 'true', 'yes', 'on', 'On']) assert.strictEqual(ug.envTruthy(v), true, v);
+  for (const v of [undefined, '', '0', 'false', 'off', '2']) assert.strictEqual(ug.envTruthy(v), false, String(v));
+});
+
+test('nankeenGateCached: the bundle\'s cached gate, read from its global config text; anything else is off', () => {
+  assert.strictEqual(ug.nankeenGateCached(JSON.stringify({ cachedGrowthBookFeatures: { tengu_nankeen_kestrel: true } })), true);
+  assert.strictEqual(ug.nankeenGateCached(JSON.stringify({ cachedGrowthBookFeatures: { tengu_nankeen_kestrel: false } })), false);
+  assert.strictEqual(ug.nankeenGateCached(JSON.stringify({ cachedGrowthBookFeatures: {} })), false);
+  assert.strictEqual(ug.nankeenGateCached('{}'), false);
+  assert.strictEqual(ug.nankeenGateCached('not json'), false);
+  assert.deepStrictEqual(ug.globalConfigCandidates({ USERPROFILE: 'C:/u' }), ['C:/u/.claude/.config.json', 'C:/u/.claude.json']);
+  assert.deepStrictEqual(ug.globalConfigCandidates({ CLAUDE_CONFIG_DIR: '/c', HOME: '/h' }), ['/c/.config.json', '/c/.claude.json']);
+  assert.deepStrictEqual(ug.globalConfigCandidates({ HOME: '/h', CLAUDE_CODE_CUSTOM_OAUTH_URL: 'x' }),
+    ['/h/.claude/.config.json', '/h/.claude-custom-oauth.json']);
+});
+
+// Fix round 3: delivery's "policy may exist" (always on WSL) is NOT evidence that policy points at bwrap/socat.
+test('WSL2 without bwrap/socat and without evidence: the sandbox would not run, while delivery stays merge', () => {
+  const procVersion = 'Linux version 5.15.153.1-microsoft-standard-WSL2';
+  const argv = ['--settings', 'f.json', '-p', 'x'];
+  const probe = ug.policyProbe({ providerPlatform: 'linux', env: {}, procVersion });
+  assert.strictEqual(ug.guardDeliveryMode(argv, probe.always), 'merge');
+  assert.strictEqual(ug.sandboxWouldRun({ providerPlatform: 'linux', procVersion, hasBwrap: false, hasSocat: false,
+    policyMaySetDeps: ug.managedSettingsSetsDeps(argv) }), false, 'native: warns and runs');
+  assert.strictEqual(ug.sandboxWouldRun({ providerPlatform: 'linux', procVersion, hasBwrap: false, hasSocat: false,
+    policyMaySetDeps: true }), true, 'with evidence (an inherited Windows managed-settings): closed');
+});
+
+test('sandboxEvidencePaths: Linux policy sources, plus the Windows-side managed-settings under WSL; none elsewhere', () => {
+  const base = ['/etc/claude-code/managed-settings.json', '/etc/claude-code/managed-settings.d', '/c/remote-settings.json'];
+  assert.deepStrictEqual(ug.sandboxEvidencePaths({ providerPlatform: 'linux', env: { CLAUDE_CONFIG_DIR: '/c' },
+    procVersion: 'Linux version 6.8.0-45-generic' }), base);
+  assert.deepStrictEqual(ug.sandboxEvidencePaths({ providerPlatform: 'linux', env: { CLAUDE_CONFIG_DIR: '/c' },
+    procVersion: 'Linux version 5.15.153.1-microsoft-standard-WSL2' }), base.concat([
+    '/mnt/c/Program Files/ClaudeCode/managed-settings.json', '/mnt/c/Program Files/ClaudeCode/managed-settings.d']));
+  assert.deepStrictEqual(ug.sandboxEvidencePaths({ providerPlatform: 'darwin', env: {} }), []);
+  assert.deepStrictEqual(ug.sandboxEvidencePaths({ providerPlatform: 'win32', env: {} }), []);
+});
+
+test('managedSettingsSetsDeps: the user\'s --managed-settings counts only when it sets sandbox.bwrapPath or socatPath', () => {
+  assert.strictEqual(ug.managedSettingsSetsDeps(['-p', 'x']), false);
+  assert.strictEqual(ug.managedSettingsSetsDeps(['--managed-settings', '{}']), false, 'any --managed-settings is not evidence');
+  assert.strictEqual(ug.managedSettingsSetsDeps(['--managed-settings', '{"sandbox":{"enabled":true}}']), false);
+  assert.strictEqual(ug.managedSettingsSetsDeps(['--managed-settings', '{"sandbox":{"bwrapPath":"/b"}}']), true);
+  assert.strictEqual(ug.managedSettingsSetsDeps(['--managed-settings={"sandbox":{"socatPath":"/s"}}']), true);
+  assert.strictEqual(ug.managedSettingsSetsDeps(['--managed-settings', 'nope']), false, 'one the bundle ignores');
+  assert.strictEqual(ug.managedSettingsSetsDeps(['--managed-settings', '{"sandbox":{"bwrapPath":"/b"}}',
+    '--managed-settings', '{}']), false, 'the bundle keeps the last');
 });
 
 // Fix round 1 (I-1): quaude's keys never ride inside a user --settings value where that can be avoided, because the

@@ -248,10 +248,10 @@ function withSettingsArg(argv, found, file) {
 // (com.anthropic.claudecode, device and per-user), and a cached server-managed remote-settings.json in the config
 // dir. -> { always: true } on Windows (its policy is in the registry, which quaude cannot probe) and under WSL
 // (`procVersion`, /proc/version: it inherits Windows' policy), else { paths }:
-// policy may exist when any of them exists, or argv has --managed-settings. Policy can set sandbox.bwrapPath/socatPath
-// (sandboxWouldRun), refuse --plugin-dir at startup (disableSideloadFlags), and a managed-settings document or profile
-// shuts a parent's managed settings out (first-wins), so quaude then delivers its keys by the path that does not
-// depend on any of that (guardDeliveryMode's 'merge').
+// policy may exist when any of them exists. This drives delivery only (guardDeliveryMode); whether the sandbox would
+// run reads evidence instead (sandboxEvidencePaths, fix round 3). Policy can refuse --plugin-dir at startup
+// (disableSideloadFlags), and a managed-settings document or profile shuts a parent's managed settings out
+// (first-wins), so quaude then delivers its keys by the path that does not depend on any of that ('merge').
 function policyProbe({ providerPlatform, env, procVersion }) {
   if (providerPlatform === 'win32') return { always: true, paths: [] };
   // WSL inherits Windows' admin policy (the registry, the Windows-side managed-settings file), which quaude cannot
@@ -333,21 +333,73 @@ function withGuardLayers(argv, pluginDir, sandboxRequired) {
 // is the provider carve's: manifest.providerPlatform): macOS always sandboxes (sandbox-exec, no dependency check);
 // Linux sandboxes unless /proc/version says WSL1 (/WSL(\d+)/i gives the version, else "microsoft" means 1) or its
 // dependency check fails: bubblewrap and socat looked up on PATH (Bun.which), or at sandbox.bwrapPath /
-// sandbox.socatPath, which only managed policy sets. quaude cannot read every policy source (server-managed settings, a
-// policy helper), so where any might exist (a managed-settings document, a cached remote-settings.json, a
-// --managed-settings argument) it keeps the setting: closed, never open. The check's third dependency, ripgrep, is
-// quaude's own binary and always present. Every other baked platform keeps the setting too (Windows is unmeasured:
-// closed, never open). -> true when quaude must inject sandbox.failIfUnavailable.
+// sandbox.socatPath, which only managed policy sets. Windows sandboxes only behind a gate (Eb -> sX): the env
+// CLAUDE_CODE_NANKEEN_KESTREL, truthy by the bundle's rule (envTruthy), or the server gate tengu_nankeen_kestrel
+// (default off), which quaude reads where the bundle caches it (nankeenGateCached). The check's third dependency,
+// ripgrep, is quaude's own binary and always present. Every other baked platform keeps the setting (closed, never
+// open). -> true when quaude must inject sandbox.failIfUnavailable.
+//
+// Whether policy may point at bwrap/socat (`policyMaySetDeps`) is EVIDENCE only (fix round 3), never the "may exist"
+// of policyProbe: that one drives guardDeliveryMode, and is "always" on WSL, where every box without the deps would
+// then refuse to start while native warns and runs. Evidence is: a policy source quaude can see (sandboxEvidencePaths)
+// exists, or the user's own --managed-settings carries sandbox.bwrapPath or sandbox.socatPath
+// (managedSettingsSetsDeps). quaude cannot read every policy source (the Windows registry from WSL, a policy helper),
+// so where one of those alone sets the paths, quaude says nothing and the bundle's own check decides: native's warning.
 function wslVersion(procVersion) {
   if (typeof procVersion !== 'string') return undefined;
   const m = procVersion.match(/WSL(\d+)/i);
   if (m && m[1]) return m[1];
   return procVersion.toLowerCase().includes('microsoft') ? '1' : undefined;
 }
-function sandboxWouldRun({ providerPlatform, procVersion, hasBwrap, hasSocat, policyMayOverride }) {
+// The bundle's truthy-env rule (Le): "1", "true", "yes", "on", any case, trimmed.
+function envTruthy(v) {
+  if (!v) return false;
+  return ['1', 'true', 'yes', 'on'].includes(String(v).toLowerCase().trim());
+}
+// The bundle's global config, where it caches server gates (cachedGrowthBookFeatures): the legacy
+// <config dir>/.config.json when it exists, else <CLAUDE_CONFIG_DIR or home>/.claude[-custom-oauth].json (2.1.283
+// carve, qs/ea). -> [legacy, config]; the first that exists is the one the bundle reads.
+function globalConfigCandidates(env) {
+  const e = env || {};
+  const home = e.USERPROFILE || e.HOME || '';
+  const suffix = e.CLAUDE_CODE_CUSTOM_OAUTH_URL ? '-custom-oauth' : '';
+  return [(e.CLAUDE_CONFIG_DIR || (home + '/.claude')) + '/.config.json',
+    (e.CLAUDE_CONFIG_DIR || home) + '/.claude' + suffix + '.json'];
+}
+// Whether the bundle's cached copy of the gate is on, from the global config's text (as the bundle's x(): the value
+// itself, in a boolean context). Unreadable or absent: off, the gate's default.
+function nankeenGateCached(configText) {
+  try {
+    const c = JSON.parse(configText);
+    return Boolean(c && c.cachedGrowthBookFeatures && c.cachedGrowthBookFeatures.tengu_nankeen_kestrel);
+  } catch (_) { return false; }
+}
+// The policy sources quaude can see that could set sandbox.bwrapPath/socatPath on Linux: the managed-settings document
+// and drop-ins, the cached server-managed remote-settings.json, and under WSL the Windows-side managed-settings the
+// bundle inherits (OD, "/mnt/c/Program Files/ClaudeCode"). Not the registry (HKLM\SOFTWARE\Policies\ClaudeCode,
+// read through reg.exe): quaude does not run reg.exe at every start, a residual (BACKLOG).
+function sandboxEvidencePaths({ providerPlatform, env, procVersion }) {
+  if (providerPlatform !== 'linux') return [];
+  const e = env || {};
+  const paths = ['/etc/claude-code/managed-settings.json', '/etc/claude-code/managed-settings.d',
+    (e.CLAUDE_CONFIG_DIR || ((e.HOME || '') + '/.claude')) + '/remote-settings.json'];
+  if (wslVersion(procVersion) !== undefined) {
+    paths.push('/mnt/c/Program Files/ClaudeCode/managed-settings.json', '/mnt/c/Program Files/ClaudeCode/managed-settings.d');
+  }
+  return paths;
+}
+// Whether the user's own --managed-settings (the one the bundle keeps, the last) sets sandbox.bwrapPath or socatPath.
+function managedSettingsSetsDeps(argv) {
+  const m = findOptionArgs(argv, '--managed-settings');
+  const v = m ? parseManagedSettings(m.value) : null;
+  const sb = v && isPlainObject(v.sandbox) ? v.sandbox : null;
+  return Boolean(sb && (sb.bwrapPath !== undefined || sb.socatPath !== undefined));
+}
+function sandboxWouldRun({ providerPlatform, procVersion, hasBwrap, hasSocat, policyMaySetDeps, nankeenEnv, nankeenGate }) {
+  if (providerPlatform === 'win32') return envTruthy(nankeenEnv) || Boolean(nankeenGate);
   if (providerPlatform !== 'linux') return true;
   if (wslVersion(procVersion) === '1') return false;
-  return Boolean((hasBwrap && hasSocat) || policyMayOverride);
+  return Boolean((hasBwrap && hasSocat) || policyMaySetDeps);
 }
 // <<< guardGating <<<
 module.exports = {
@@ -355,5 +407,6 @@ module.exports = {
   VALUE_OPTIONS, VARIADIC_OPTIONS, OPTIONAL_VALUE_OPTIONS,
   SETTINGS_FILE_MAX_BYTES, findSettingsArgs, settingsIsInline, decodeSettingsBytes, parseSettingsText, mergeSettings,
   planGuardSettings, withSettingsArg, wslVersion, sandboxWouldRun, findOptionArgs, GUARD_PLUGIN_NAME, guardPluginFiles,
-  guardDeliveryMode, withGuardLayers, policyProbe, parseManagedSettings,
+  guardDeliveryMode, withGuardLayers, policyProbe, parseManagedSettings, envTruthy, globalConfigCandidates,
+  nankeenGateCached, sandboxEvidencePaths, managedSettingsSetsDeps,
 };
