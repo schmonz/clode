@@ -179,10 +179,18 @@ test('attestTarget asks for the CANONICAL flag spelling', async () => {
 test('nothing in the tree still mentions --quaude-attest or the quaude-attest: prefix', () => {
   const REPO = path.resolve(__dirname, '..');
   const offenders = [];
-  // .superpowers is untracked scratch (agent reports + saved review diffs) — a record of
-  // past sessions, not shipped text.
-  const SKIP_DIRS = new Set(['.git', '.superpowers', 'node_modules', 'build', 'deps',
-    '.harness', 'tjs-src', 'toolchain', '.matrix']);
+  // The tree is what git TRACKS: `git ls-files`, nothing else. It used to walk the filesystem
+  // with a hand-kept SKIP_DIRS list, so every git-ignored directory it did not name (a stale
+  // agent worktree under .claude/worktrees, bench/results/) turned it red on the box that had
+  // one and green on a clean checkout; dev-box state decided the verdict. No untracked input is
+  // needed: the shipped text (man page, libexec, scripts, docs) is all tracked, and build output
+  // is generated from it.
+  const tracked = require('node:child_process')
+    .execFileSync('git', ['ls-files', '-z'], { cwd: REPO, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
+    .split('\0').filter(Boolean);
+  // A sweep over nothing passes vacuously: if git answered with almost no files (not a
+  // checkout, a sparse one, the wrong cwd), that is BROKEN, not clean.
+  assert.ok(tracked.length > 200, `git ls-files listed ${tracked.length} files; this sweep needs the checkout's tree`);
   // The ONLY places the retired name may still appear, each for a stated reason. An
   // allowlist rather than a blanket test/ exemption: a gate that greps a dead string is
   // exactly the failure this sweep exists to catch, and gates live in test/ too.
@@ -192,28 +200,21 @@ test('nothing in the tree still mentions --quaude-attest or the quaude-attest: p
     ['test/quaude-build.test.cjs', 'proves a real quaude no longer answers the retired flag'],
     ['test/naude-entry.test.cjs', 'proves a naude passes the retired flag through instead of attesting'],
   ]);
-  const walk = (d) => {
-    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
-      if (SKIP_DIRS.has(e.name)) continue;
-      const p = path.join(d, e.name);
-      if (e.isDirectory()) { walk(p); continue; }
-      // POSIX separators, ALWAYS: path.relative gives backslashes on Windows, so the
-      // forward-slash ALLOWED keys matched nothing there and this sweep flagged its OWN
-      // file. Failed on windows-latest only, at 32e88de, with the allowlist intact.
-      const rel = path.relative(REPO, p).split(path.sep).join("/");
-      if (ALLOWED.has(rel)) continue;
-      let src;
-      try { src = fs.readFileSync(p, 'utf8'); } catch { continue; }
-      if (src.includes('\0')) continue; // binary
-      for (const line of src.split('\n')) {
-        // BARE 'quaude-attest', not just '--quaude-attest': the man page spells its flags
-        // with a single leading dash (.Fl -quaude-attest) and the old output prefix had no
-        // dashes at all. A narrower pattern here missed both on the first run.
-        if (line.includes('quaude-attest')) offenders.push(`${rel}: ${line.trim()}`);
-      }
+  // git prints POSIX separators on every platform, so the forward-slash ALLOWED keys match on
+  // Windows too (the old walk needed path.relative(...).split(path.sep) for that; it failed
+  // on windows-latest only, at 32e88de).
+  for (const rel of tracked) {
+    if (ALLOWED.has(rel)) continue;
+    let src;
+    try { src = fs.readFileSync(path.join(REPO, rel), 'utf8'); } catch { continue; } // deleted, or a gitlink
+    if (src.includes('\0')) continue; // binary
+    for (const line of src.split('\n')) {
+      // BARE 'quaude-attest', not just '--quaude-attest': the man page spells its flags
+      // with a single leading dash (.Fl -quaude-attest) and the old output prefix had no
+      // dashes at all. A narrower pattern here missed both on the first run.
+      if (line.includes('quaude-attest')) offenders.push(`${rel}: ${line.trim()}`);
     }
-  };
-  walk(REPO);
+  }
   // The allowlist must not rot into a list of files that no longer exist (which would
   // quietly re-open a hole the day one of them is renamed).
   for (const rel of ALLOWED.keys()) {
