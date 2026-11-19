@@ -688,8 +688,11 @@ jobs:
           # #ifdef __GLIBC__), so tar's KAT and `clode fetch node` died "no tar
           # tool found on PATH". Fixed in txiki-sync-spawn.patch (parent-side chdir
           # dance on musl); this file runs on musl as the standing guard.
-          EXCLUDE='node-shim-tty'
+          EXCLUDE='node-shim-tty|node-shim-agentic'
           FILES=$(ls test/node-shim-*.test.cjs | grep -vE "$EXCLUDE")
+          # node-shim-agentic is out of the glob and named here: it drives this job's Bash and Edit cells
+          # (test/build-gates/tool-coverage-gates.test.cjs, CELL_JOBS), and a claimed file is named in a run line.
+          FILES="$FILES test/node-shim-agentic.test.cjs"
           # The parity gate's input: cli.cjs is staged from this provider and run
           # under BOTH targets' runtimes (naude = node, quaude = tjs+shim), then
           # diffed. Fail loud if it is missing — a skipped oracle is not a pass.
@@ -751,7 +754,6 @@ jobs:
       # THE CELLS this job drives (test/build-gates/tool-coverage-gates.test.cjs, CELL_JOBS): every test that runs a
       # claimed driver's control PASSED above, on this engine, as test/cell-reporter.mjs recorded it. A skip, a failure or
       # a test that never ran means the tool x mode cell ran nowhere, and this step names it (observability plan Task 1).
-      # Claimed here: test/node-shim-agentic.test.cjs (its Bash and Edit rows), one of the FILES glob above.
       - name: Cells — every tool x mode cell this job claims, it ran
         if: ${{ !cancelled() }}
         run: CLODE_CELL_JOB=node-shim-oracle CLODE_CELL_RAN="$RUNNER_TEMP/cells" node --test --test-name-pattern=cells-ran-in-ci-job test/build-gates/tool-coverage-gates.test.cjs
@@ -1425,8 +1427,11 @@ jobs:
           # AND the new node-shim-api-surface-gate (hard-gates upstream Bun.*/require
           # drift against the latest provider this job installs). (Ctrl-Z moved to the
           # opt-in test/e2e-ctrlz-tui.test.cjs; the wiring stays in node-shim-signals.)
-          EXCLUDE='node-shim-tty'
+          EXCLUDE='node-shim-tty|node-shim-agentic'
           FILES=$(ls test/node-shim-*.test.cjs | grep -vE "$EXCLUDE")
+          # node-shim-agentic is out of the glob and named here: it drives this job's Bash and Edit cells
+          # (test/build-gates/tool-coverage-gates.test.cjs, CELL_JOBS), and a claimed file is named in a run line.
+          FILES="$FILES test/node-shim-agentic.test.cjs"
           PROV="$(node scripts/stage-provider.mjs)" || exit 1
           echo "provider: $PROV"
           export CLODE_PROVIDER_BIN="$PROV"
@@ -1466,7 +1471,6 @@ jobs:
       # THE CELLS this job drives (test/build-gates/tool-coverage-gates.test.cjs, CELL_JOBS): every test that runs a
       # claimed driver's control PASSED above, on this engine, as test/cell-reporter.mjs recorded it. A skip, a failure or
       # a test that never ran means the tool x mode cell ran nowhere, and this step names it (observability plan Task 1).
-      # Claimed here: test/node-shim-agentic.test.cjs (its Bash and Edit rows), one of the FILES glob above.
       - name: Cells — every tool x mode cell this job claims, it ran
         if: ${{ !cancelled() }}
         run: CLODE_CELL_JOB=node-shim-oracle-darwin CLODE_CELL_RAN="$RUNNER_TEMP/cells" node --test --test-name-pattern=cells-ran-in-ci-job test/build-gates/tool-coverage-gates.test.cjs

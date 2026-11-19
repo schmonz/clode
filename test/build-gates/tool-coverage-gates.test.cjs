@@ -1036,9 +1036,14 @@ function skipOf(text, m, code, pos, lineOf) {
 // ==========================================================================
 // THE CI JOBS: where a driver actually runs, per engine
 // ==========================================================================
-// The jobs of .github/workflows/ci.yml, each job's own block of text (its key at two spaces).
+// The jobs of .github/workflows/ci.yml, each job's own block of text (its key at two spaces), with
+// comments stripped (a `#` at a line's start or after whitespace, YAML's and the shell's), so a
+// comment that names a file or a flag never stands in for a step that runs it. A `#` inside a
+// quoted string after a space is stripped too: that can only lose a match, never invent one.
+const stripComments = (yaml) => yaml.replace(/(^|[ \t])#.*$/gm, '$1');
 function jobBlocks(yaml) {
   const out = new Map();
+  yaml = stripComments(yaml);
   const at = [...yaml.matchAll(/^ {2}([\w-]+):[ \t]*$/gm)];
   at.forEach((h, k) => out.set(h[1], yaml.slice(h.index, k + 1 < at.length ? at[k + 1].index : yaml.length)));
   return out;
@@ -1976,6 +1981,10 @@ test('a job ci.yml does not run as a cell job drives nothing, and says why', () 
   assert.deepStrictEqual(lost.findings, ['CELL_JOBS fixture-job claims test/none.cjs, which is not in the tree',
     'CELL_JOBS fixture-job claims test/synthetic/near-misses.test.cjs, which the job never names in ci.yml']);
   assert.deepStrictEqual(lost.valid.map((j) => j.files), [FX_JOBS[0].files], 'the job\'s other files still drive their cells');
+  // A comment is not a step: naming the file, the reporter or the check only in a comment drives nothing.
+  const commented = fxWorkflow().replace(/^(\s+- run: node --test .*)$/m, '      # $1');
+  const c = checkJobs({ workflow: commented, jobs: FX_JOBS, sources: DRIVER_SOURCES, engines: SHIPPING_ENGINES });
+  assert.deepStrictEqual(c.findings, ['CELL_JOBS fixture-job (linux-x64-musl) drives no cell: it runs no test under test/cell-reporter.mjs']);
 });
 
 test('a test whose only driver can skip drives its cell where a job runs it; the job\'s run is what refuses the skip', () => {
