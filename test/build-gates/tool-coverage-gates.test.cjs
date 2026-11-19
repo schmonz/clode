@@ -83,9 +83,14 @@
 //   counts only when .github/workflows/ci.yml has it, downloads the engine's tjs artifact
 //   (tjs-<engine>), names each claimed file, runs its tests under test/cell-reporter.mjs, and
 //   runs this file with CLODE_CELL_JOB=<job>: that run (the guard cells-ran-in-ci-job, below)
-//   fails the job unless every test that runs a claimed driver's control PASSED, not skipped, in
-//   that job, on a host of that engine. So the static claim here and what the job did are held
-//   together on every push.
+//   fails the job unless every test that runs a claimed driver's control PASSED in that job, on a
+//   host of that engine. A failed or unreported test always fails it; a SKIPPED one fails it unless
+//   another passing test in the job drives each of that driver's cells (one branch of a host fact:
+//   agentic-sandbox-fail-closed's fail-closed and D2 tests). So the static claim here and what the
+//   job did are held together on every push. (Comments in ci.yml are stripped before any of this
+//   is read: a comment naming a file is not a step running it.)
+//   A DECLARED MODE must be spelled in the driver's file (MODE_EVIDENCE: the permission flag, a
+//   sandbox settings literal, SHELL), or it is a finding and drives nothing.
 //   EXEMPTIONS are per cell: { tool, reason, date, until }, optionally narrowed by `modes` and
 //   `engines`; a cell both driven and exempted is a finding, as is one neither driven nor
 //   exempted. The dates are the every-tool plan's phases (UNTIL_PHASE_A/B/C), carried as set.
@@ -1286,13 +1291,24 @@ function checkJobRan({ job, jobs, sources, records, host }) {
   const result = new Map([...outcomes].map(([k, os]) => [k, os.find((o) => o !== 'passed') || 'passed']));
   const ran = [];
   for (const f of entry.files) if (!d.drivers.some((x) => x.file === f)) findings.push(`${f}: claimed by ${job}, but holds no driver`);
-  for (const x of d.drivers) {
-    if (!x.tests.length) { findings.push(`${x.file}:${x.line}: no test(...) runs this ${x.name} control, so nothing reports it`); continue; }
-    const bad = x.tests.map((t) => [t, result.get(`${x.file}:${t.line}`) || 'not run']).filter(([, o]) => o !== 'passed');
-    if (bad.length) {
-      findings.push(`${x.file}:${x.line} (${x.name} x ${x.modes.join('/')} @ ${entry.engine}): ${bad.map(([t, o]) => `test "${t.name}" `
-        + `(line ${t.line}) ${o}`).join('; ')} in ${job}; a cell is driven only where its test passes`);
-    } else ran.push(`${x.name} x ${x.modes.join('/')} @ ${entry.engine} <- ${x.file}:${x.line}`);
+  // A FAILED or unreported test is always a finding. A SKIPPED one is a finding unless every cell its
+  // driver declares is driven by another driver whose tests all passed in this job: a test that
+  // judges one branch of a host fact (agentic-sandbox-fail-closed's fail-closed and D2 tests) skips
+  // where the other branch applies, and the cell is still judged; the fail-closed test's sandbox:on
+  // controls have no such twin, so its skip fails the job.
+  const judged = d.drivers.filter((x) => x.tests.length).map((x) => ({ x,
+    bad: x.tests.map((t) => [t, result.get(`${x.file}:${t.line}`) || 'not run']).filter(([, o]) => o !== 'passed') }));
+  const passedCells = new Set();
+  for (const { x, bad } of judged) if (!bad.length) for (const mo of x.modes) passedCells.add(`${x.name}|${mo}`);
+  for (const x of d.drivers) if (!x.tests.length) findings.push(`${x.file}:${x.line}: no test(...) runs this ${x.name} control, so nothing reports it`);
+  for (const { x, bad } of judged) {
+    const tag = `${x.file}:${x.line} (${x.name} x ${x.modes.join('/')} @ ${entry.engine})`;
+    if (!bad.length) { ran.push(`${x.name} x ${x.modes.join('/')} @ ${entry.engine} <- ${x.file}:${x.line}`); continue; }
+    const onlySkips = bad.every(([, o]) => o.startsWith('skipped'));
+    const alone = x.modes.filter((mo) => !passedCells.has(`${x.name}|${mo}`));
+    if (onlySkips && !alone.length) continue;
+    findings.push(`${tag}: ${bad.map(([t, o]) => `test "${t.name}" (line ${t.line}) ${o}`).join('; ')} in ${job}; a cell is driven `
+      + `only where its test passes${onlySkips ? ` (no other passing test here drives ${alone.map((mo) => `${x.name} x ${mo}`).join(', ')})` : ''}`);
   }
   const cells = [...new Set(ran)];
   return { findings, examined: d.drivers.length, ran: cells,
@@ -1992,7 +2008,8 @@ test('a test whose only driver can skip drives its cell where a job runs it; the
   assert.ok(r.driven.has(`Grep|print|${FX_ENGINE}`));
   const skipped = checkJobRan(fxJobRun({ records: fxRecords({ 32: { skip: 'refused' } }) }));
   assert.deepStrictEqual(skipped.findings, ['test/synthetic/drivers.test.cjs:35 (Grep x print @ linux-x64-musl): test "grep, which '
-    + 'skips on its own outcome" (line 32) skipped (refused) in fixture-job; a cell is driven only where its test passes']);
+    + 'skips on its own outcome" (line 32) skipped (refused) in fixture-job; a cell is driven only where its test passes '
+    + '(no other passing test here drives Grep x print)']);
 });
 
 test('a declared mode the tool has no cell for, and a claimed driver no test runs, are findings', () => {
@@ -2141,7 +2158,25 @@ test('checkJobRan refuses a failed, skipped or missing test, a run on another en
   const missing = checkJobRan(fxJobRun({ records: fxRecords().filter((x) => x.line !== 11) }));
   assert.match(missing.findings[0], /:15 \(Bash x print @ linux-x64-musl\): test "bash, scripted in place" \(line 11\) not run in fixture-job/);
   const twice = checkJobRan(fxJobRun({ records: [...fxRecords(), { ...fxRecords()[0], skip: 'second run' }] }));
-  assert.match(twice.findings[0], /\(line 11\) skipped \(second run\)/, 'a test run twice passes only if both runs pass');
+  assert.match(twice.findings[0], /\(line 11\) skipped \(second run\) in fixture-job; a cell is driven only where its test passes \(no other passing test here drives Bash x print\)$/,
+    'a test run twice passes only if both runs pass');
+  // A skip whose every cell another passing driver drives here (one branch of a host fact) is no finding;
+  // the same skip with the twin's test failed is.
+  const twin = { file: 'test/synthetic/twin.test.cjs', text: lines(
+    "const T = { name: 'Bash', input: { command: 'echo T-$((6*7))' }, id: 'toolu_t' };",
+    "const ok = (m) => toolResultText(m, T.id).includes('T-42');",
+    "test('one branch', async (t) => {",
+    "  if (branch) { t.skip('the other branch'); return; }",
+    '  assertFailsOnMissingOutput(ok, T);',
+    '  await startMockAnthropic({ respond: () => cannedToolUseSSE(T.name, T.input, T.id) });',
+    '});',
+  ) };
+  const twinJobs = [{ ...FX_JOBS[0], files: [...FX_JOBS[0].files, twin.file] }];
+  const twinRun = (rec) => checkJobRan(fxJobRun({ jobs: twinJobs, sources: [...DRIVER_SOURCES, twin], records: [...fxRecords(), rec] }));
+  assert.deepStrictEqual(twinRun({ type: 'test:pass', file: twin.file, line: 3, name: 'one branch', nesting: 0, skip: 'the other branch' }).findings, []);
+  assert.match(twinRun({ type: 'test:fail', file: twin.file, line: 3, name: 'one branch', nesting: 0 }).findings[0],
+    /twin\.test\.cjs:5 \(Bash x print @ linux-x64-musl\): test "one branch" \(line 3\) failed in fixture-job; a cell is driven only where its test passes$/,
+    'a failure is never excused by a twin');
   const host = checkJobRan(fxJobRun({ host: { platform: 'darwin', arch: 'arm64' } }));
   assert.deepStrictEqual(host.findings, ['fixture-job claims linux-x64-musl, but runs on darwin-arm64']);
   assert.match(checkJobRan(fxJobRun({ job: 'nope' })).findings[0], /^CLODE_CELL_JOB=nope is not a job CELL_JOBS names/);

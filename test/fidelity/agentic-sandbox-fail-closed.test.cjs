@@ -168,37 +168,58 @@ function nativeWouldSandbox() {
 const NATIVE_WARNING = /Sandbox disabled: sandbox is enabled but dependencies are missing: .*\n\s*Commands will run WITHOUT sandboxing/;
 
 const SKIP = process.platform === 'win32' ? 'the Bash tool needs bash; Windows sandboxing is not this gap' : false;
-test('sandboxed Bash fails CLOSED under quaude: every call refused, nothing written, from any settings source; off, all run', { skip: SKIP }, async (t) => {
-  const q = builtQuaude();
-  if (q.skip) { t.skip(q.skip); return; }
-  // The cells (test/build-gates/tool-coverage-gates.test.cjs): the refusals judge Bash with the sandbox enabled; the runs
-  // judge the sandbox-off turn (print, in bash), and, where native would not sandbox, the enabled one too.
-  assertFailsOnMissingOutput(refused1, M1, 'sandbox:on');
-  assertFailsOnMissingOutput(refused2, M2, 'sandbox:on');
-  assertFailsOnMissingOutput(refused3, M3, 'sandbox:on');
-  assertFailsOnMissingOutput(ran1, M1, ['print', 'shell:bash', 'sandbox:on']);
-  assertFailsOnMissingOutput(ran2, M2, ['print', 'shell:bash', 'sandbox:on']);
-  assertFailsOnMissingOutput(ran3, M3, ['print', 'shell:bash', 'sandbox:on']);
-  const findings = [];
-  const sandboxes = nativeWouldSandbox();
-  t.diagnostic(`native would sandbox here: ${sandboxes}`);
-  for (const c of ON_CASES) {
-    const { mock, markers, r } = await runCase(q.path, c);
-    const verdict = verdicts(mock);
-    if (STARTUP_REFUSAL.test(r.stderr)) findings.push(`${c.name}: refused to START (native starts): rc ${r.status} ${r.stderr.slice(0, 300)}`);
-    if (sandboxes) {
-      if (markers.length) findings.push(`${c.name}: wrote ${markers.join(', ')} (ran unsandboxed)`);
-      if (!verdict.refused.every(Boolean)) findings.push(`${c.name}: not every call was refused by the required branch: ${JSON.stringify(verdict)} rc ${r.status} ${r.stderr.slice(0, 300)}`);
-    } else {
-      // D2: native warns and runs every call unsandboxed here; so must quaude.
-      if (!NATIVE_WARNING.test(r.stderr)) findings.push(`${c.name}: no native sandbox warning: rc ${r.status} ${r.stderr.slice(0, 300)}`);
-      if (!verdict.ran.every(Boolean) || markers.length !== 6) findings.push(`${c.name}: not every call ran as native runs it: ${JSON.stringify(verdict)} markers ${markers.join(', ')}`);
-    }
-  }
+// Two tests, one per branch, so a job cannot report the fail-closed branch as judged when only the D2 one ran: the
+// Bash x sandbox:on cell's controls live only in the first, which SKIPS wherever native would not sandbox, and a
+// skipped driver whose cell no other passing test drives fails its job's cells check
+// (test/build-gates/tool-coverage-gates.test.cjs, cells-ran-in-ci-job). Both judge the sandbox-off turn (print, in
+// bash), so whichever branch applies, that cell is driven and the other test's skip is no finding.
+const sandboxOff = async (q, findings) => {
   const off = await runCase(q.path, {});
   const offVerdict = verdicts(off.mock);
   if (!offVerdict.ran.every(Boolean)) findings.push(`off: not every call ran: ${JSON.stringify(offVerdict)} rc ${off.r.status} ${off.r.stderr.slice(0, 300)}`);
   if (off.markers.length !== 6) findings.push(`off: markers ${off.markers.join(', ')} (want all six)`);
+};
+test('sandboxed Bash fails CLOSED under quaude: every call refused, nothing written, from any settings source; off, all run', { skip: SKIP }, async (t) => {
+  const q = builtQuaude();
+  if (q.skip) { t.skip(q.skip); return; }
+  if (!nativeWouldSandbox()) { t.skip('native would not sandbox here (no bubblewrap or socat, or WSL1): the fail-closed branch cannot be judged'); return; }
+  // The cells: the refusals judge Bash with the sandbox enabled; the runs judge the sandbox-off turn (print, in bash).
+  assertFailsOnMissingOutput(refused1, M1, 'sandbox:on');
+  assertFailsOnMissingOutput(refused2, M2, 'sandbox:on');
+  assertFailsOnMissingOutput(refused3, M3, 'sandbox:on');
+  assertFailsOnMissingOutput(ran1, M1, ['print', 'shell:bash']);
+  assertFailsOnMissingOutput(ran2, M2, ['print', 'shell:bash']);
+  assertFailsOnMissingOutput(ran3, M3, ['print', 'shell:bash']);
+  const findings = [];
+  for (const c of ON_CASES) {
+    const { mock, markers, r } = await runCase(q.path, c);
+    const verdict = verdicts(mock);
+    if (STARTUP_REFUSAL.test(r.stderr)) findings.push(`${c.name}: refused to START (native starts): rc ${r.status} ${r.stderr.slice(0, 300)}`);
+    if (markers.length) findings.push(`${c.name}: wrote ${markers.join(', ')} (ran unsandboxed)`);
+    if (!verdict.refused.every(Boolean)) findings.push(`${c.name}: not every call was refused by the required branch: ${JSON.stringify(verdict)} rc ${r.status} ${r.stderr.slice(0, 300)}`);
+  }
+  await sandboxOff(q, findings);
+  assert.deepStrictEqual(findings, []);
+});
+
+test('where native would not sandbox, quaude does as native does (D2): its warning, and every call runs', { skip: SKIP }, async (t) => {
+  const q = builtQuaude();
+  if (q.skip) { t.skip(q.skip); return; }
+  if (nativeWouldSandbox()) { t.skip('native would sandbox here: the D2 branch does not apply'); return; }
+  // The cells: the sandbox-off turn, as in the first test. The enabled turn here is D2 (warn and run), which is not
+  // the sandbox:on cell: that cell is the fail-closed branch.
+  assertFailsOnMissingOutput(ran1, M1, ['print', 'shell:bash']);
+  assertFailsOnMissingOutput(ran2, M2, ['print', 'shell:bash']);
+  assertFailsOnMissingOutput(ran3, M3, ['print', 'shell:bash']);
+  const findings = [];
+  for (const c of ON_CASES) {
+    const { mock, markers, r } = await runCase(q.path, c);
+    const verdict = verdicts(mock);
+    if (STARTUP_REFUSAL.test(r.stderr)) findings.push(`${c.name}: refused to START (native starts): rc ${r.status} ${r.stderr.slice(0, 300)}`);
+    if (!NATIVE_WARNING.test(r.stderr)) findings.push(`${c.name}: no native sandbox warning: rc ${r.status} ${r.stderr.slice(0, 300)}`);
+    if (!verdict.ran.every(Boolean) || markers.length !== 6) findings.push(`${c.name}: not every call ran as native runs it: ${JSON.stringify(verdict)} markers ${markers.join(', ')}`);
+  }
+  await sandboxOff(q, findings);
   assert.deepStrictEqual(findings, []);
 });
 

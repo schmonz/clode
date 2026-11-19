@@ -1326,14 +1326,19 @@ jobs:
       # SANDBOXED BASH FAILS CLOSED (8b088ef): until then an enabled sandbox let every Bash call after the first run
       # UNSANDBOXED under quaude, and no job ran Bash with the sandbox on. This is the Bash x sandbox:on cell
       # (test/build-gates/tool-coverage-gates.test.cjs) on this engine: a built quaude, one turn per settings source.
-      # Where native would not sandbox (a Linux runner without bubblewrap or socat) quaude must do as native does, warn
-      # and run every call (USER ruling D2), and the test judges that instead. No skip is accepted.
+      # The runner gets bubblewrap and socat, so native WOULD sandbox here and the fail-closed test (which holds the
+      # cell's controls) runs; without them it skips, and the cells step below fails by name. The D2 test (where
+      # native would not sandbox, quaude warns and runs as native does, USER ruling D2) is the ONE skip accepted here.
+      # quaude's refusal is its own (node-shim has no net.createServer), so bwrap need not work, only be present.
       - name: sandboxed Bash fails closed — agentic-sandbox-fail-closed against a built quaude
         if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
         env:
           CLODE_TJS: ${{ runner.temp }}/tjs/tjs
         run: |
           set -euo pipefail
+          sudo apt-get -o Acquire::Retries=3 update -qq
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends bubblewrap socat
+          command -v bwrap && command -v socat
           mkdir -p "$RUNNER_TEMP/cells"
           PROV="$(node scripts/stage-provider.mjs)" || exit 1
           CLODE_PROVIDER_BIN="$PROV" CLODE_CLAUDE_BIN="$PROV" \
@@ -1341,8 +1346,8 @@ jobs:
               --test-reporter=spec --test-reporter-destination=stdout \
               --test-reporter=./test/cell-reporter.mjs --test-reporter-destination="$RUNNER_TEMP/cells/pty-sandbox.jsonl" \
               test/fidelity/agentic-sandbox-fail-closed.test.cjs 2>&1 | tee sandbox.out
-          grep -qE '^(ℹ|#) skipped 0$' sandbox.out \
-            || { echo "ERROR: agentic-sandbox-fail-closed SKIPPED (no built quaude?): it judged nothing, so this is not a pass" >&2; exit 1; }
+          grep -qE '^(ℹ|#) skipped 1$' sandbox.out && grep -qE '^﹣ where native would not sandbox' sandbox.out \
+            || { echo "ERROR: agentic-sandbox-fail-closed skipped something other than its D2 test (no built quaude? no bwrap/socat?): the fail-closed branch was not judged" >&2; exit 1; }
       # THE CELLS this job drives (test/build-gates/tool-coverage-gates.test.cjs, CELL_JOBS): every test that runs a
       # claimed driver's control PASSED above, on this engine, as test/cell-reporter.mjs recorded it. A skip, a failure or
       # a test that never ran means the tool x mode cell ran nowhere, and this step names it (observability plan Task 1).
