@@ -151,11 +151,14 @@ const { spawnSync } = require('node:child_process');
 const { defineGuard, guardTests, checkGate, BROKEN, VIOLATION, OK } = require('../guard.cjs');
 const { lexicalCodeMask } = require('../../libexec/scc-merge.cjs');
 const { decodeGraphRunner } = require('../../libexec/inspect-claude-bundle.cjs');
-const { moduleNameOfMetaUrl } = require('../../libexec/extract-claude-js.cjs');
 const { discoverFilesByExt } = require('../source-scan.cjs');
 
 const REPO = path.resolve(__dirname, '..', '..');
 const EXTRACT = path.join(REPO, 'libexec', 'extract-claude-js.cjs');
+// The extractor's own helpers (a chunk's name from its url; the fixtures' headers), borrowed, not controlled: loaded
+// through EXTRACT, not a require() literal, which guards-population would read as this guard controlling
+// extract-claude-js (bun-ant-surface-gate.test.cjs, same).
+const { moduleNameOfMetaUrl, moduleWithMeta } = require(EXTRACT);
 const posixRel = (f) => path.relative(REPO, f).split(path.sep).join('/');
 
 // ==========================================================================
@@ -1612,7 +1615,6 @@ function readJobRun() {
 const lines = (...ls) => ls.join('\n');
 // A chunk's header as the extractor writes it (its own first line, url and directory included), so a
 // fixture never spells a url the extractor would not: a win32 name B:/~BUN/root/x.js gets file:///B:/....
-const { moduleWithMeta } = require('../../libexec/extract-claude-js.cjs');
 const HDR = (name) => moduleWithMeta(name, '').replace(/\n$/, '');
 const NOOP_RESULT = 'mapToolResultToToolResultBlockParam(e,n){return{tool_use_id:n,content:e}}';
 

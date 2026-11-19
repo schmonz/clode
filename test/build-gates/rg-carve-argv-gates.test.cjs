@@ -33,10 +33,12 @@ const P = require('../../scripts/lib/rg-probe.cjs');
 const rgn = require('../../libexec/rg-native.cjs');
 const { providerBin } = require('../provider-resolve.cjs');
 const { decodeGraphRunner } = require('../../libexec/inspect-claude-bundle.cjs');
-const { moduleWithMeta } = require('../../libexec/extract-claude-js.cjs');
 
 const REPO = path.resolve(__dirname, '..', '..');
 const EXTRACT = path.join(REPO, 'libexec', 'extract-claude-js.cjs');
+// The chunk header as the extractor writes it, a FIXTURE: loaded through EXTRACT, not a require() literal, which
+// guards-population would read as this guard controlling extract-claude-js (bun-ant-surface-gate.test.cjs, same).
+const { moduleWithMeta } = require(EXTRACT);
 const FLOOR = 46;
 
 // VERBATIM from the 2.1.283 darwin-arm64 carve (decoded graph.json, 2026-10-04): each `["--files"` array with
