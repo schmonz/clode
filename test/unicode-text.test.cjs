@@ -15,6 +15,7 @@ const { graphemeBoundaries, clusterWidth, codePointWidth, escapeLayer, forEachCe
   wrapAnsi, UNICODE_DATA } = require('../libexec/unicode-text.cjs');
 const { ucdInput } = require('./ucd-input.cjs');
 const { census, rngBias, assertCensus, firstSighting, intRng } = require('./shape-census.cjs');
+const { defineGuard, guardTests } = require('./guard.cjs');
 const ucd = require('../scripts/lib/ucd.cjs');
 
 async function breakTest(t) {
@@ -1116,9 +1117,59 @@ test('wrapAnsi: a line wraps the same whatever the other lines hold (the fast pa
   }
   assert.strictEqual(differ, 0, `${differ} of ${WRAP_N} strings wrap differently beside another line; first: ${first}`);
 });
+// MUTATION CONTROL (observability Task 4, review fix round 1): the property must still catch a broken fast path on
+// the NEW inputs. The 2026-09-26 mutant (a sequence ended by an ESC alone counted 0 wide) was never committed, so two
+// stand-ins break the ESC_ONLY path's own width sum in libexec/unicode-text.cjs, loaded with the mutation into a fresh
+// module: a lone ESC counted 1 wide, and an ESC (then a space) after a sequence swallowed into it. Measured 2026-11-19
+// over the old float-LCG inputs and the new intRng ones: the first, 1 and 84 strings differ; the second, 416 and 742.
+const WRAP_MUTANTS = [
+  ['a lone ESC counted 1 wide in the ESC_ONLY sum', '      width -= e - i;\n      i = e;', '      width -= e - i === 1 ? 0 : e - i;\n      i = e;'],
+  ['an ESC (then a space) after a sequence swallowed into it', '      const e = readSequence(str, i, 0, null, b);\n      width -= e - i;',
+    '      let e = readSequence(str, i, 0, null, b);\n      if (e < b && str.charCodeAt(e - 1) !== 0x1b && str.charCodeAt(e) === 0x1b && (e + 1 >= b || str.charCodeAt(e + 1) === 0x20)) e = e + 1;\n      width -= e - i;'],
+];
+// A guard (defineGuard): read() applies each mutation to the real source, scan() runs the property's inputs through
+// each mutant and names any mutant they do NOT catch. Its control is a mutation that changes nothing, which no input
+// can catch, so the guard must name it.
+function wrapMutantModule(src, file) {
+  const Module = require('node:module');
+  const m = new Module(file, null);
+  m.filename = file;
+  m.paths = Module._nodeModulePaths(path.dirname(file));
+  m._compile(src, file);
+  return m.exports;
+}
+function readWrapMutants(mutants = WRAP_MUTANTS) {
+  const file = path.join(__dirname, '..', 'libexec', 'unicode-text.cjs');
+  const src = require('node:fs').readFileSync(file, 'utf8');
+  return { mutants: mutants.map(([name, from, to]) => (src.split(from).length !== 2
+    ? { name, moved: true } : { name, wrap: wrapMutantModule(src.replace(from, to), file).wrapAnsi })) };
+}
+function scanWrapMutants({ mutants }) {
+  const inputs = wrapInputs();
+  const findings = [];
+  for (const { name, moved, wrap } of mutants) {
+    if (moved) { findings.push(`${name}: the mutation site moved in libexec/unicode-text.cjs; re-anchor it`); continue; }
+    let differ = 0;
+    for (const { s, cols, o: oi, other: ki } of inputs) {
+      const o = WRAP_OPTS[oi], other = WRAP_OTHERS[ki];
+      if (wrap(s + other, cols, o) !== wrap(s, cols, o) + '\n' + wrap(other.slice(1), cols, o)) differ++;
+    }
+    if (differ < 20) findings.push(`${name}: only ${differ} of ${WRAP_N} inputs catch it (floor 20; 84 and 742 measured)`);
+  }
+  return { findings, examined: mutants.length };
+}
+guardTests(defineGuard({
+  name: 'wrapAnsi-fast-path-mutants-caught',
+  floor: WRAP_MUTANTS.length,
+  read: () => readWrapMutants(),
+  scan: scanWrapMutants,
+  control: () => readWrapMutants([['an identity mutation', 'width -= e - i;', 'width -= e - i;']]),
+}));
 test('wrapAnsi\'s fast-path property: distinct inputs, every option beside every other line, every escape shape, an unbiased RNG (census)', (t) => {
   const ESC_ALONE = new Set(['\x1b ', '\x1b  ', '\x1b', '\x1b\x1b'].map((a) => WRAP_ATOMS.indexOf(a)));
   const has = (x, a) => x.atoms.includes(WRAP_ATOMS.indexOf(a));
+  // The floors: a floor written as a fraction of today's count is a regression tripwire on a deterministic count (the
+  // seeds are fixed), not a coverage requirement.
   // Floors measured 2026-11-19 over the 40,000 intRng inputs: 39,467 distinct; each of the 24 (option, other line)
   // pairs 1,583-1,741 (1,667 expected); ESC alone 20,112, OSC-8 12,186, unterminated CSI 6,692; a long word 7,067.
   const shapes = [

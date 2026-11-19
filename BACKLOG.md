@@ -8,6 +8,21 @@ Concrete clode-under-Node divergences from native Claude Code, to triage and fix
 That page is GENERATED from `scripts/build-graph.cjs` — the one declaration of the build — so it
 cannot drift from it; it is also where the honest answer to "does this need node?" lives.
 
+## Six test generators drew from a JS "LCG" that cycles; their inputs were replaced (2026-11-19)
+
+`(seed * 1103515245 + 12345) & 0x7fffffff` rounds past 2^53 into a 10,466-state cycle (419 for the `>>> 0` form). Task 4
+of the observability plan replaced the inputs of six property and random tests: the rg-regex oracle (500 cases,
+regenerated from native 2.1.283), the 5 MB bundle line (NATIVE_BUNDLE_LINE re-measured), RG-RE-LITERAL-RANGES, wrapAnsi's
+40,000 fast-path inputs, and UTF8-REPLACEMENT's fuzz. A case the old inputs caught and the new ones do not would be a
+lost catch. For wrapAnsi, the guard wrapAnsi-fast-path-mutants-caught proves the new inputs still catch a broken ESC_ONLY
+width sum: two stand-in mutants, caught by 84 and 742 of the new inputs against 1 and 416 of the old. The 2026-09-26
+mutant was never committed. The old rg-regex cases had no mutant to replay; the new 500 equal native on every case.
+
+Measured: test/unicode-text.test.cjs wrapAnsi-fast-path-mutants-caught; test/rg-regex.test.cjs census (2026-11-19)
+
+Unmeasured. Whether the old rg-regex cases caught anything the new ones miss: replaying a planted RG-RE-ALT-LIFT
+regression against both fixtures would measure it.
+
 ## quaude created the config file world-readable (~/.claude/.claude.json 0644 at creation, native's 0600): FIXED in the shim for new files; the full-turn row is still to write (2026-11-19)
 
 Found by observability Task 2: after one `-p` turn that CREATED the config file (account and project state) it was
