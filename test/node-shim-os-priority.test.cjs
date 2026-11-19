@@ -72,3 +72,45 @@ test('the nice increment is never cancelled by the host\'s own nice (a runner at
   assert.strictEqual(unmaskedIncrement(7, -7), 8);
   assert.strictEqual(unmaskedIncrement(7, 15), 7);   // clamped to 19 by the kernel, still not 0
 });
+
+// WINDOWS, on the real kernel through real PowerShell (no fakes; runs on CI's windows-amd64-tests job). There is no
+// nice(1), so the run starts at the runner's priority class; the rows move it down (BelowNormal, Idle) and back to
+// Normal, which an unprivileged process may do, and quaude must answer every row as host node does. The injected
+// rows in test/node-shim-os-priority-win32.test.cjs judge the mapping; this judges PowerShell and the kernel.
+const PROG_WIN = `
+const os = require('node:os');
+const rows = [];
+const call = (what, f) => {
+  try { rows.push([what, { v: f() }]); }
+  catch (e) { rows.push([what, { code: e.code, errCode: e.info ? e.info.code : undefined, syscall: e.info ? e.info.syscall : undefined, name: e.name }]); }
+};
+call('getPriority(0)', () => os.getPriority(0));
+call('getPriority(process.pid)', () => os.getPriority(process.pid));
+call('setPriority(0, 10)', () => os.setPriority(0, 10));
+call('getPriority(0) after 10', () => os.getPriority(0));
+call('setPriority(19) (one-argument form)', () => os.setPriority(19));
+call('getPriority(0) after 19', () => os.getPriority(0));
+call('setPriority(0, 5) (back up into Normal)', () => os.setPriority(0, 5));
+call('getPriority(0) after 5', () => os.getPriority(0));
+call('setPriority(0, 99)', () => os.setPriority(0, 99));
+call('getPriority("x")', () => os.getPriority('x'));
+console.log(JSON.stringify(rows));
+`;
+test('os.getPriority/setPriority under quaude answer as host node does on the real Windows kernel (PowerShell, no fakes)', { skip: process.platform === 'win32' ? false : 'Windows only: the POSIX row above judges ps/renice' }, (t) => {
+  if (skipUnlessTjs(t)) return;
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-os-priority-win-'));
+  try {
+    const prog = path.join(base, 'prog.cjs');
+    fs.writeFileSync(prog, PROG_WIN);
+    const run = (cmd, argv) => {
+      const r = spawnSync(cmd, argv, { encoding: 'utf8', timeout: 120000 });
+      assert.strictEqual(r.status, 0, `${cmd}: ${r.stderr}`);
+      return JSON.parse(r.stdout.trim().split(/\r?\n/).pop());
+    };
+    const node = run(process.execPath, [prog]);
+    // the oracle really moved: BelowNormal reads 10 and Idle 19 (libuv's mapping), so a constant could not pass
+    assert.deepStrictEqual([node[3][1].v, node[5][1].v, node[7][1].v], [10, 19, 0], JSON.stringify(node));
+    const [cmd, argv] = engineSpawn(['run', LOADER, prog]);
+    assert.deepStrictEqual(run(cmd, argv), node);
+  } finally { fs.rmSync(base, { recursive: true, force: true }); }
+});
