@@ -295,7 +295,7 @@ function gateUploads(block) {
   for (const step of block.split(/^\s*- /m)) {
     if (!/actions\/upload-artifact@/.test(step)) continue;
     const m = /\bname:\s*['"]?(gates-ran-[^\s,'"}]+)/.exec(step);
-    if (m) out.push({ name: m[1], overwrite: /\boverwrite:\s*true\b/.test(step) });
+    if (m) out.push({ name: m[1], overwrite: /\boverwrite:\s*true\b/.test(step), multiPath: /\bpath:\s*[|>]/.test(step) });
   }
   return out;
 }
@@ -351,6 +351,9 @@ function checkPlacement({ manifest, registry, texts, files, legCallers = [] }) {
       seen.set(key, true);
       for (const u of gateUploads(blocks.get(j.id))) {
         if (!u.overwrite) findings.push(`job ${j.id} uploads ${u.name} without overwrite: true, so a re-run of it collides with its own earlier list`);
+        // in a container job the runner maps only the FIRST line of a multi-line path into the container
+        // (run 44597568635: node-shim-oracle's gates/ was silently left out), so a gate list is one directory
+        if (u.multiPath) findings.push(`job ${j.id} uploads ${u.name} from a multi-line path: in a container job only the first line reaches the upload; stage one directory`);
       }
     }
     const owners = new Map();
@@ -464,6 +467,17 @@ function needKey(j, aggregator = AGGREGATOR) {
 // not in `needs`; a row's own list, when it exists, is the per-row evidence, and its reported skips stay DARK.
 function checkRan({ manifest, records, registry = [], needs = null }) {
   const { jobs, placed, exempt, files: gateFiles } = manifest;
+  // node's reporter names the file where test() was CALLED, and guardTests() calls it inside test/guard.cjs: so
+  // "guard gate: X" and "guard control: X can fail" carry test/guard.cjs, never the file that registered X. A file
+  // whose only tests are guards then looked unrun (CI run 44597568635: guard-subcommands-gate, paint-differential,
+  // lead-scrub-equivalence). They are attributed to the file the registry says registered X.
+  const registeredIn = new Map(registry.map((g) => [g.name, g.file]));
+  const fileOf = (r) => {
+    const f = repoFile(r.file);
+    if (f !== 'test/guard.cjs') return f;
+    const m = /^guard (?:gate|control): (.+?)(?: can fail)?$/.exec(r.name || '');
+    return (m && registeredIn.get(m[1])) || f;
+  };
   const raw = [];
   const findings = { push: (msg, j, absent = false) => raw.push({ msg, j, absent }) };
   const universe = new Set([...registry.map((g) => g.name), ...Object.keys(placed), ...Object.keys(exempt)]);
@@ -483,7 +497,7 @@ function checkRan({ manifest, records, registry = [], needs = null }) {
     for (const r of rs) {
       const g = gateOf(r.name);
       if (g) byGate.set(g, [...(byGate.get(g) || []), r]);
-      const f = repoFile(r.file);
+      const f = fileOf(r);
       if (f) byFile.set(f, [...(byFile.get(f) || []), r]);
     }
     for (const [g, reps] of byGate) if (outcomeOf(reps) === 'passed') passedIn.set(g, [...(passedIn.get(g) || []), j.id]);

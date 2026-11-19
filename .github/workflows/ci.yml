@@ -346,8 +346,7 @@ jobs:
         uses: actions/upload-artifact@v7.0.2
         with:
           name: gates-ran-windows-amd64-tests
-          path: |
-            ${{ runner.temp }}/gates
+          path: ${{ runner.temp }}/gates
           if-no-files-found: warn
           overwrite: true   # a re-run attempt replaces its own list (artifacts are run-scoped and immutable)
 
@@ -449,8 +448,7 @@ jobs:
         uses: actions/upload-artifact@v7.0.2
         with:
           name: gates-ran-windows-amd64-tui
-          path: |
-            ${{ runner.temp }}/gates
+          path: ${{ runner.temp }}/gates
           if-no-files-found: warn
           overwrite: true   # a re-run attempt replaces its own list (artifacts are run-scoped and immutable)
 
@@ -531,8 +529,7 @@ jobs:
         uses: actions/upload-artifact@v7.0.2
         with:
           name: gates-ran-windows-arm64-tests
-          path: |
-            ${{ runner.temp }}/gates
+          path: ${{ runner.temp }}/gates
           if-no-files-found: warn
           overwrite: true   # a re-run attempt replaces its own list (artifacts are run-scoped and immutable)
 
@@ -863,14 +860,18 @@ jobs:
       # THIS JOB'S GATE LIST (observability plan Task 5): every record test/cell-reporter.mjs wrote above, for ci.yml's
       # gates-ran-in-ci job to hold against test/ci-gates.cjs. Uploaded whatever happened above: a red job's list still
       # says which gates ran, and a job that uploads none is itself a finding there.
+      # ONE upload path: in a container job (node-shim-oracle) the runner rewrites only the FIRST line of a multi-line
+      # `path` to the container's mount, so a second directory was silently left out (CI run 44597568635 lost its
+      # gates/). Both directories are copied under one first.
+      - name: Stage this job's gate list in one directory
+        if: ${{ !cancelled() }}
+        run: node -e "const fs=require('fs'),p=require('path'),t=process.env.RUNNER_TEMP;for(const d of ['cells','gates'])if(fs.existsSync(p.join(t,d)))fs.cpSync(p.join(t,d),p.join(t,'gates-ran',d),{recursive:true})"
       - name: Upload this job's gate list (judged by gates-ran-in-ci)
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v7.0.2
         with:
           name: gates-ran-node-shim-oracle
-          path: |
-            ${{ runner.temp }}/cells
-            ${{ runner.temp }}/gates
+          path: ${{ runner.temp }}/gates-ran
           if-no-files-found: warn
           overwrite: true   # a re-run attempt replaces its own list (artifacts are run-scoped and immutable)
 
@@ -1061,14 +1062,18 @@ jobs:
       # THIS JOB'S GATE LIST (observability plan Task 5): every record test/cell-reporter.mjs wrote above, for ci.yml's
       # gates-ran-in-ci job to hold against test/ci-gates.cjs. Uploaded whatever happened above: a red job's list still
       # says which gates ran, and a job that uploads none is itself a finding there.
+      # ONE upload path: in a container job (node-shim-oracle) the runner rewrites only the FIRST line of a multi-line
+      # `path` to the container's mount, so a second directory was silently left out (CI run 44597568635 lost its
+      # gates/). Both directories are copied under one first.
+      - name: Stage this job's gate list in one directory
+        if: ${{ !cancelled() }}
+        run: node -e "const fs=require('fs'),p=require('path'),t=process.env.RUNNER_TEMP;for(const d of ['cells','gates'])if(fs.existsSync(p.join(t,d)))fs.cpSync(p.join(t,d),p.join(t,'gates-ran',d),{recursive:true})"
       - name: Upload this job's gate list (judged by gates-ran-in-ci)
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v7.0.2
         with:
           name: gates-ran-native-builder-oracle
-          path: |
-            ${{ runner.temp }}/cells
-            ${{ runner.temp }}/gates
+          path: ${{ runner.temp }}/gates-ran
           if-no-files-found: warn
           overwrite: true   # a re-run attempt replaces its own list (artifacts are run-scoped and immutable)
 
@@ -1529,14 +1534,18 @@ jobs:
       # THIS JOB'S GATE LIST (observability plan Task 5): every record test/cell-reporter.mjs wrote above, for ci.yml's
       # gates-ran-in-ci job to hold against test/ci-gates.cjs. Uploaded whatever happened above: a red job's list still
       # says which gates ran, and a job that uploads none is itself a finding there.
+      # ONE upload path: in a container job (node-shim-oracle) the runner rewrites only the FIRST line of a multi-line
+      # `path` to the container's mount, so a second directory was silently left out (CI run 44597568635 lost its
+      # gates/). Both directories are copied under one first.
+      - name: Stage this job's gate list in one directory
+        if: ${{ !cancelled() }}
+        run: node -e "const fs=require('fs'),p=require('path'),t=process.env.RUNNER_TEMP;for(const d of ['cells','gates'])if(fs.existsSync(p.join(t,d)))fs.cpSync(p.join(t,d),p.join(t,'gates-ran',d),{recursive:true})"
       - name: Upload this job's gate list (judged by gates-ran-in-ci)
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v7.0.2
         with:
           name: gates-ran-linux-x64-pty
-          path: |
-            ${{ runner.temp }}/cells
-            ${{ runner.temp }}/gates
+          path: ${{ runner.temp }}/gates-ran
           if-no-files-found: warn
           overwrite: true   # a re-run attempt replaces its own list (artifacts are run-scoped and immutable)
 
@@ -1737,14 +1746,18 @@ jobs:
       # THIS JOB'S GATE LIST (observability plan Task 5): every record test/cell-reporter.mjs wrote above, for ci.yml's
       # gates-ran-in-ci job to hold against test/ci-gates.cjs. Uploaded whatever happened above: a red job's list still
       # says which gates ran, and a job that uploads none is itself a finding there.
+      # ONE upload path: in a container job (node-shim-oracle) the runner rewrites only the FIRST line of a multi-line
+      # `path` to the container's mount, so a second directory was silently left out (CI run 44597568635 lost its
+      # gates/). Both directories are copied under one first.
+      - name: Stage this job's gate list in one directory
+        if: ${{ !cancelled() }}
+        run: node -e "const fs=require('fs'),p=require('path'),t=process.env.RUNNER_TEMP;for(const d of ['cells','gates'])if(fs.existsSync(p.join(t,d)))fs.cpSync(p.join(t,d),p.join(t,'gates-ran',d),{recursive:true})"
       - name: Upload this job's gate list (judged by gates-ran-in-ci)
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v7.0.2
         with:
           name: gates-ran-node-shim-oracle-darwin
-          path: |
-            ${{ runner.temp }}/cells
-            ${{ runner.temp }}/gates
+          path: ${{ runner.temp }}/gates-ran
           if-no-files-found: warn
           overwrite: true   # a re-run attempt replaces its own list (artifacts are run-scoped and immutable)
 

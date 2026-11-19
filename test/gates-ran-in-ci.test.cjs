@@ -175,6 +175,8 @@ test('ci-gate-placement: each way the manifest can disagree with the tree is nam
     [{ texts: { [G.CI]: FX_CI.replace('  gates-ran-in-ci:', '  other:') } }, /the aggregator: .* has no job gates-ran-in-ci/],
     [{ texts: { [G.CI]: FX_CI.replace('NEEDS: ${{ toJSON(needs) }}', 'X: y') } }, /the aggregator never passes NEEDS/],
     [{ texts: { [G.CI]: FX_CI.replace('gates-ran-oracle, overwrite: true', 'gates-ran-oracle') } }, /job oracle uploads gates-ran-oracle without overwrite: true/],
+    [{ texts: { [G.CI]: FX_CI.replace("        with: { name: gates-ran-oracle, overwrite: true }", "        with:\n          name: gates-ran-oracle\n          overwrite: true\n          path: |\n            a\n            b") } },
+      /job oracle uploads gates-ran-oracle from a multi-line path/],
     [{ texts: { 'suite.yml': FX_SUITE.replace('gates-ran-test-${{ matrix.os }}', 'gates-ran-oracle') } }, /artifact gates-ran-oracle is uploaded by suite.yml:suite and .*:oracle/],
     [{ legCallers: [{ workflow: 'w.yml', job: 'fast', only: 'fast', legs: ['a', 'b'] }, { workflow: 'w.yml', job: 'slow', only: 'slow', legs: ['b', 'c'] }] },
       /w.yml: jobs fast \(only: fast\) and slow \(only: slow\) both build b/],
@@ -275,4 +277,34 @@ test('gates-ran-in-ci: the artifacts are read one dir per job, at any depth; a m
     assert.strictEqual(r.get('oracle').length, 2);
     assert.strictEqual(r.get('oracle')[1].type, 'test:fail', 'an unparseable line is a failure, never dropped');
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+// THE LIVE SHAPE, not a hand-made record (CI run 44597568635: the static guard and every unit row here were green, and
+// the aggregator's first live run went red, because every fixture record named the gate's own file; the real reporter
+// names test/guard.cjs for every guardTests() row). This runs node --test under test/cell-reporter.mjs on a file whose
+// only tests are a guard, and judges what the reporter really wrote.
+test('gates-ran-in-ci: a gate file whose only tests are guards is accounted from the real reporter\'s records', () => {
+  const os = require('node:os');
+  const { spawnSync } = require('node:child_process');
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'gates-ran-live-'));
+  try {
+    fs.mkdirSync(path.join(base, 'test'));
+    const file = path.join(base, 'test', 'fx.test.cjs');
+    fs.writeFileSync(file, `const { defineGuard, guardTests } = require(${JSON.stringify(path.join(REPO, 'test', 'guard.cjs'))});
+guardTests(defineGuard({ name: 'fx-gate', read: () => ({ n: 1 }), scan: ({ n }) => ({ findings: n ? [] : ['x'], examined: 1 }), control: () => ({ n: 0 }) }));
+`);
+    const out = path.join(base, 'records.jsonl');
+    const r = spawnSync(process.execPath, ['--test', `--test-reporter=${path.join(REPO, 'test', 'cell-reporter.mjs')}`, `--test-reporter-destination=${out}`, file],
+      // without NODE_TEST_CONTEXT: inside a node:test run it makes the nested --test report to its parent, not to the reporter
+      { cwd: base, encoding: 'utf8', env: Object.fromEntries(Object.entries(process.env).filter(([k]) => k !== 'NODE_TEST_CONTEXT')) });
+    assert.strictEqual(r.status, 0, r.stderr);
+    const records = fs.readFileSync(out, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+    assert.ok(records.some((x) => /guard\.cjs$/.test(x.file)), `the reporter no longer names guard.cjs: ${JSON.stringify(records)}`);
+    const verdict = G.checkRan({
+      manifest: fxManifest({ placed: { b: { jobs: ['oracle'], why: 'x' }, 'fx-gate': { jobs: ['oracle'], why: 'x' } }, files: { 'test/fx.test.cjs': { jobs: ['oracle'] } } }),
+      registry: [...FX_REGISTRY, { name: 'fx-gate', file: 'test/fx.test.cjs' }],
+      records: new Map([['test-ubuntu-latest', [rec('guard gate: a'), rec('guard gate: b', { skip: 'x' })]], ['oracle', [rec('guard gate: b'), ...records]]]),
+    });
+    assert.deepStrictEqual(verdict.findings, []);
+  } finally { fs.rmSync(base, { recursive: true, force: true }); }
 });
