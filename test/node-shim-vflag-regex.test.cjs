@@ -50,7 +50,7 @@ test('string-width on mixed non-ASCII+ASCII input matches host node (no throw)',
   // ASCII-letter graphemes that the buggy class would strip to "".
   const INPUT = '←/→ to navigate · ';
   const root = path.join(REPO, 'deps', 'claude', 'node_modules');
-  const oracle = (await import(path.join(root, 'string-width', 'index.js'))).default(INPUT);
+  const oracle = (await import(require('./esm-href.cjs').esmHref(path.join(root, 'string-width', 'index.js')))).default(INPUT);
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-sw-'));
   const f = path.join(dir, 'sw.cjs');

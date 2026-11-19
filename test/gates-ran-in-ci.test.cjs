@@ -296,7 +296,7 @@ test('gates-ran-in-ci: a gate file whose only tests are guards is accounted from
 g.guardTests(define({ name: 'fx-gate', read: () => ({ n: 1 }), scan: ({ n }) => ({ findings: n ? [] : ['x'], examined: 1 }), control: () => ({ n: 0 }) }));
 `);
     const out = path.join(base, 'records.jsonl');
-    const r = spawnSync(process.execPath, ['--test', `--test-reporter=${path.join(REPO, 'test', 'cell-reporter.mjs')}`, `--test-reporter-destination=${out}`, file],
+    const r = spawnSync(process.execPath, ['--test', `--test-reporter=${require('./esm-href.cjs').esmHref(path.join(REPO, 'test', 'cell-reporter.mjs'))}`, `--test-reporter-destination=${out}`, file],
       // without NODE_TEST_CONTEXT: inside a node:test run it makes the nested --test report to its parent, not to the reporter
       { cwd: base, encoding: 'utf8', env: Object.fromEntries(Object.entries(process.env).filter(([k]) => k !== 'NODE_TEST_CONTEXT')) });
     assert.strictEqual(r.status, 0, r.stderr);

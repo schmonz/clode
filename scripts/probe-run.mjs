@@ -27,7 +27,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
 
@@ -179,7 +179,7 @@ async function runApicheck() {
     credentialsSeeded = true;
   }
 
-  const apicheckMod = await import(path.join(REPO, 'scripts', 'apicheck.mjs'));
+  const apicheckMod = await import(pathToFileURL(path.join(REPO, 'scripts', 'apicheck.mjs')).href);
   const models = require(path.join(REPO, 'test', 'oracle-models.cjs'));
 
   const hits = [];

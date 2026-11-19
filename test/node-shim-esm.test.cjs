@@ -1,4 +1,5 @@
 'use strict';
+const { esmHref } = require('./esm-href.cjs');
 // Characterization: the loader's minimal ESM->CJS transpile + Intl.Segmenter
 // polyfill let the ESM-only text deps in deps/claude (string-width / strip-ansi and
 // their ESM graph) load and run under tjs with results identical to the genuine
@@ -25,12 +26,12 @@ const EXPR_DEFAULT = 'const answer = 40;\nexport default answer + 2;\n';
 // Oracle: the real ESM packages under host node.
 async function hostWidths(exprDefault) {
   const root = path.resolve(__dirname, '..', 'deps', 'claude', 'node_modules');
-  const sw = (await import(path.join(root, 'string-width', 'index.js'))).default;
-  const sa = (await import(path.join(root, 'strip-ansi', 'index.js'))).default;
+  const sw = (await import(esmHref(path.join(root, 'string-width', 'index.js')))).default;
+  const sa = (await import(esmHref(path.join(root, 'strip-ansi', 'index.js')))).default;
   return {
     widths: INPUTS.map((s) => sw(s)),
     stripped: sa(ESC + '[31mred' + ESC + '[0m'),
-    exprDefault: (await import(exprDefault)).default,
+    exprDefault: (await import(esmHref(exprDefault))).default,
   };
 }
 
