@@ -690,6 +690,9 @@ jobs:
           # dance on musl); this file runs on musl as the standing guard.
           EXCLUDE='node-shim-tty|node-shim-agentic'
           FILES=$(ls test/node-shim-*.test.cjs | grep -vE "$EXCLUDE")
+          # The glob carries test/node-shim-differential.test.cjs (observability Task 3): every call the carve
+          # makes to a shim module, judged against this job's node. It needs exactly CLODE_TJS and
+          # CLODE_PROVIDER_BIN, both set here, and skips without them, so the skip count below names it.
           # node-shim-agentic is out of the glob and named here: it drives this job's Bash and Edit cells
           # (test/build-gates/tool-coverage-gates.test.cjs, CELL_JOBS), and a claimed file is named in a run line.
           FILES="$FILES test/node-shim-agentic.test.cjs"
@@ -1451,6 +1454,9 @@ jobs:
           # opt-in test/e2e-ctrlz-tui.test.cjs; the wiring stays in node-shim-signals.)
           EXCLUDE='node-shim-tty|node-shim-agentic'
           FILES=$(ls test/node-shim-*.test.cjs | grep -vE "$EXCLUDE")
+          # The glob carries test/node-shim-differential.test.cjs (observability Task 3): every call the carve
+          # makes to a shim module, judged against this job's node. It needs exactly CLODE_TJS and
+          # CLODE_PROVIDER_BIN, both set here, and skips without them, so the skip count below names it.
           # node-shim-agentic is out of the glob and named here: it drives this job's Bash and Edit cells
           # (test/build-gates/tool-coverage-gates.test.cjs, CELL_JOBS), and a claimed file is named in a run line.
           FILES="$FILES test/node-shim-agentic.test.cjs"

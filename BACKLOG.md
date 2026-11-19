@@ -29,6 +29,81 @@ Measured: a probe under `tjs run libexec/node-shim/loader.cjs` and under node 24
 Unmeasured. Which call the bundle's config writer makes; `--debug` with the shim's fs tracing on the
 config path would name it. Other files the bundle writes owner-only (credentials, history) were not checked.
 
+## node-shim against node: what the behaviour differential names (2026-11-19)
+
+test/node-shim-differential.test.cjs (observability Task 3) replays every call the 2.1.283 carve makes to fs,
+fs/promises, os, path, child_process, net, stream, events, buffer, util, tty, process and zlib, with the arguments
+it passes, under host node and under tjs + node-shim, and judges every field of every answer against node's. Its
+first run judged 1785 calls and found 372 that answer differently. Each cause below is one entry of
+test/shim-differential/known.cjs, by the same name; the gate tolerates exactly these, and a cause that stops
+diverging fails it until its line here and in known.cjs go. 35 inventoried APIs are not driven yet (the gate's
+note lists them; child_process, streams, events, watchers, the zlib streams), each with its reason in
+test/shim-differential/table.cjs UNCOVERED.
+
+- DIFF-OPEN-FLAGS: the engine's sync open takes only r/w/a/r+/w+ (spike/quickjs/patches/txiki-sync-fs.patch
+  js_fss_open), so node-shim's opens drop O_EXCL (`openSync(f, "wx")`, `writeFileSync(f, d, {flag: "wx"})` and
+  `O_WRONLY|O_CREAT|O_EXCL` overwrite an existing file where node throws EEXIST: an exclusive create, a lock, is
+  not one), O_DIRECTORY and O_NOFOLLOW (a file opens), truncate on `O_WRONLY|O_CREAT` without O_TRUNC, chmod an
+  EXISTING file to a create mode (node applies the mode only when it creates), and `fs.promises.open(p, flags,
+  mode)` ignores the mode. That last one is the config writer's: 2.1.283 writes ~/.claude/.claude.json through
+  `fs.promises.open(tmp, O_WRONLY|O_CREAT|O_EXCL, 0o600)` then renames, so quaude's is 0644 (the entry above).
+- DIFF-WRITESTREAM-THROWS: `fs.createWriteStream` on a directory or a missing parent throws at once; node returns
+  the stream and emits 'error'.
+- DIFF-WRITESTREAM-FD: `fs.createWriteStream(p, {fd})` ignores the fd and writes to the path.
+- DIFF-MKDIR-RECURSIVE: `mkdirSync(p, {recursive: true, mode})` ignores the mode (0755 where node makes 0700),
+  returns undefined where node returns the first directory it made, and succeeds on a path that is a regular file
+  where node throws EEXIST.
+- DIFF-ASYNC-ERRORS: errors from tjs's async calls (fs.promises.readFile, link, utimes, lutimes, statfs; the
+  callback readFile; a read stream's 'error') carry no errno, syscall or path, and their message lacks node's
+  `, read`/`, link 'a' -> 'b'` tail.
+- DIFF-SCANDIR: readdir and opendir errors say syscall `readdir`; node says `scandir` (`opendir` for opendir).
+- DIFF-ENCODINGS: `readlink(p, "buffer")` and `readdir(p, {encoding: "buffer"})` answer strings where node answers
+  Buffers; `readFileSync(p, {encoding: "ascii"})` answers a Buffer where node answers a string.
+- DIFF-FD-PRIMITIVES: `fs.fchmod` (callback) is absent; `fchmodSync`, `fsyncSync` and `ftruncateSync` on a bad or
+  read-only descriptor do not throw node's EBADF/EINVAL (`ftruncateSync` is absent, as the gap map says).
+- DIFF-READSYNC-RANGE: `readSync` with a length past the buffer reads first and fails in the engine; node throws
+  ERR_OUT_OF_RANGE before reading.
+- DIFF-REALPATH-SYSCALL: realpathSync of a dangling link says syscall `realpath`; node says `stat`.
+- DIFF-RM: `rmSync(dir)` without recursive says ENOTEMPTY/rmdir where node says ERR_FS_EISDIR; `rmSync` with
+  force through a regular file throws ENOTDIR where node succeeds.
+- DIFF-MKDTEMP-ERROR: mkdtemp's error names syscall `mkdir` and the random name; node says `mkdtemp` and
+  `prefixXXXXXX`.
+- DIFF-COPYFILE: `fs.promises.copyFile` is a read and a write, so its errors are the read's (EISDIR `read`), never
+  node's `copyfile 'a' -> 'b'`, and a directory symlink source says EISDIR where node says ENOTSUP.
+- DIFF-STATFS-CLASS: `fs.promises.statfs` answers a plain object; node a StatFs.
+- DIFF-ARG-VALIDATION: a missing path or data argument (`fs.promises.unlink()`, `writeFileSync(p)`,
+  `path.dirname(undefined)`, `util.formatWithOptions(undefined, ...)`) fails late with the engine's words or not at
+  all; node throws ERR_INVALID_ARG_TYPE.
+- DIFF-MISSING-MEMBERS: `fs.promises` lacks chown, constants, glob, lchmod, lchown, mkdtempDisposable;
+  `fs/promises.constants` is absent; `path.win32`/`path.posix` lack format, matchesGlob, toNamespacedPath,
+  _makeLong; `util.types` has 2 of node's predicates.
+- DIFF-STDIO-CLASS: `process.stdout`/`stderr` are EventEmitters, node's (a pipe here) Sockets; `process.env` is a
+  plain object, node's has no prototype.
+- DIFF-ZLIB: gzipSync, deflateSync, inflateSync and inflateRawSync throw `not implemented` (the gzipSync entry
+  under "Grep, Glob and the Bash tool's rg" below has its consequence); `zlib.constants.ZLIB_VERNUM` is not node's.
+- DIFF-OS-MEMORY-RELEASE: `os.totalmem()` and `os.freemem()` answer 0, `os.release()` and `os.version()` "".
+- DIFF-NET-SERVER: `net.createServer` throws (the named stub; the sandbox entries below).
+- DIFF-PATH-DOTDOT: `path.parse` answers dir "." where node answers "" for a bare name, and `path.parse("..")`,
+  `path.extname("..")` treat ".." as an extension.
+- DIFF-ISATTY-DEVNULL: `tty.isatty(0)` is true when fd 0 is /dev/null.
+- DIFF-UTIL-FORMAT: `util.format("%%")` answers "%" (node "%%" with no arguments); `util.inspect("a")` answers a
+  where node answers 'a'.
+- DIFF-PROCFS-EMPTY (Linux): `readFileSync("/proc/version")` and `readFileSync("/proc/self/cgroup")` answer ""
+  under quaude: the shim reads a file's fstat size, and a procfs file says 0. The carve reads both (the WSL and
+  container checks), so on Linux they see an empty kernel string.
+- DIFF-STATFS-SYNC (Linux): the linux carve calls `fs.statfsSync`, absent from the shim (the gap map's entry).
+
+Measured: `node --test test/node-shim-differential.test.cjs` on darwin-arm64 (the scratch tjs built from this
+tree, node 24.21.0, the 2.1.283 macos-arm64 provider): 1785 calls judged, 372 diverging, every one under a cause
+above (2026-11-19).
+
+Measured: the same test in a node:24.22.0-alpine container (linux-x64, musl) with the tjs-linux-x64-musl engine of CI
+run 44460009323 (HEAD 2cca33a) and the 2.1.283 linux-x64-musl provider: 1791 calls judged, every divergence under a
+cause above, and every cause above seen diverging there too (2026-11-19).
+
+Unmeasured. NetBSD and Windows: the gate does not run there (no job has an engine, a provider and a node at once on
+NetBSD; the Windows jobs run named files only); running it on the NetBSD VM would measure it.
+
 ## Grep, Glob and the Bash tool's `rg` are native's; what the grep-native plan left open (2026-10-05)
 
 The plan closed with its Task 11 (2026-10-05): the Grep and Glob tools answer as native in every mode, end to end

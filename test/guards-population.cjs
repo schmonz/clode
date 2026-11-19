@@ -197,6 +197,13 @@ const TEST_VERDICT_EXTRA = [
   // classifier could not see, exactly as it said of text-differential. Narrow on purpose:
   // `runPaintNative(` names the native run, not the probe's own unit tests.
   /\brunPaintNative\s*\(/,
+  // A BEHAVIOUR DIFFERENTIAL: every call the carve makes to a shim module, run under host node
+  // and under tjs + node-shim and compared field by field (test/shim-differential/compare.cjs's
+  // compareRuns). Added 2026-11-19 for node-shim-differential (observability Task 3), a
+  // registered defineGuard guard whose findings are derived from what the two runtimes
+  // answered; the FLOOR test said the classifier could not see it, as it said of
+  // text-differential. Narrow on purpose: `compareRuns(` names the three-run comparison.
+  /\bcompareRuns\s*\(/,
 ];
 
 function classifyTestFile(src) {
