@@ -45,10 +45,22 @@ test('guardDirRefusal: the type everywhere; ownership, mode and the parent where
   assert.match(guardDirRefusal('/g', { ...dir, mode: 0o40750 }, parent, 501), /open to other users \(mode 750/);
   assert.match(guardDirRefusal('/g', dir, { ...parent, uid: 502 }, 501), /parent is owned by uid 502/);
   assert.match(guardDirRefusal('/g', dir, { ...parent, mode: 0o40777 }, 501), /parent is writable by every user/);
-  // Windows: uid -1 (libuv) or none (node): no owner to judge, so only the type is. A symlink is still refused.
-  assert.strictEqual(guardDirRefusal('C:\\g', { type: 'dir', uid: 0, mode: 0o40666 }, null, -1), null);
-  assert.strictEqual(guardDirRefusal('C:\\g', { type: 'dir', uid: 0, mode: 0o40666 }, null, undefined), null);
-  assert.match(guardDirRefusal('C:\\g', { type: 'link', uid: 0, mode: 0o120666 }, null, -1), /symbolic link/);
+  // A POSIX caller that could not learn its uid is refused, never waved through.
+  assert.match(guardDirRefusal('/g', dir, parent, undefined), /uid is unknown/);
+  assert.match(guardDirRefusal('/g', dir, parent, -1), /uid is unknown/);
+});
+
+// WHAT REAL WINDOWS REPORTS (windows-latest, CI 44572930594): node's stat gives st_uid 0 and mode 0o40666 for a
+// directory, whatever its ACL; process.getuid does not exist; libuv's uv_os_get_passwd (tjs.system.userInfo) gives uid
+// -1. The rows before that run synthesized uid -1 on the STAT side, which real Windows never reports: an instrument that
+// could not see the bug. These facts are the real ones, and the platform, not the uid, decides.
+const WIN_DIR = { type: 'dir', uid: 0, mode: 0o40666 };
+test('guardDirRefusal, real Windows facts: only the type is judged on win32; the same numbers on POSIX are refused', () => {
+  for (const uid of [undefined, -1, 0]) {
+    assert.strictEqual(guardDirRefusal('C:\\g', WIN_DIR, WIN_DIR, uid, 'win32'), null, `uid ${uid}`);
+  }
+  assert.match(guardDirRefusal('C:\\g', { ...WIN_DIR, type: 'link', mode: 0o120666 }, WIN_DIR, undefined, 'win32'), /symbolic link/);
+  assert.match(guardDirRefusal('/g', WIN_DIR, WIN_DIR, 0, 'linux'), /open to other users \(mode 666/, 'POSIX judges these numbers');
 });
 
 test('guardSettingsToPrune: only settings-<hex>.json, only older than a week', () => {
@@ -89,8 +101,10 @@ test('quaude: two sessions get ONE directory, under the clode cache, 0700 where 
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qguard-'));
   try {
     const env = { CLODE_CACHE: path.join(root, 'cache') };
-    const a = await privateGuardDir(fakeTjs({ home: root, uid: UID }), env, path.sep);
-    const b = await privateGuardDir(fakeTjs({ home: root, uid: UID }), env, path.sep);
+    // The real platform and its real facts: on windows-latest this is the real-Windows row (an ordinary start succeeds
+    // and reuses the directory).
+    const a = await privateGuardDir(fakeTjs({ home: root, uid: UID }), env, path.sep, process.platform);
+    const b = await privateGuardDir(fakeTjs({ home: root, uid: UID }), env, path.sep, process.platform);
     assert.deepStrictEqual(a, { dir: path.join(root, 'cache', 'guard') });
     assert.deepStrictEqual(b, a, 'reused, not a second directory');
     assert.deepStrictEqual(fs.readdirSync(path.join(root, 'cache')), ['guard']);
@@ -102,7 +116,7 @@ test('quaude: the week-old merged settings are pruned; a fresh one and the plugi
   const { privateGuardDir, pruneGuardSettings } = loadQuaudeGuardDir();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qguard-'));
   try {
-    const { dir } = await privateGuardDir(fakeTjs({ home: root, uid: UID }), { CLODE_CACHE: root }, path.sep);
+    const { dir } = await privateGuardDir(fakeTjs({ home: root, uid: UID }), { CLODE_CACHE: root }, path.sep, process.platform);
     const stale = path.join(dir, 'settings-00000000deadbeef.json');
     const fresh = path.join(dir, 'settings-1111111111111111.json');
     fs.writeFileSync(stale, '{"secret":1}'); fs.writeFileSync(fresh, '{}'); fs.mkdirSync(path.join(dir, 'plugin-abc'));
@@ -113,37 +127,45 @@ test('quaude: the week-old merged settings are pruned; a fresh one and the plugi
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test('quaude: a hostile parent or a symlinked guard is REFUSED, and nothing else is made', async () => {
+test('quaude: a symlinked guard (a junction on Windows) is REFUSED on every platform', async () => {
   const { privateGuardDir } = loadQuaudeGuardDir();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qguard-'));
   try {
     const cache = path.join(root, 'cache');
     fs.mkdirSync(cache);
-    // A symlink (a junction on Windows: no privilege needed) where the guard directory belongs: refused everywhere.
     const elsewhere = path.join(root, 'elsewhere');
     fs.mkdirSync(elsewhere);
     fs.symlinkSync(elsewhere, path.join(cache, 'guard'), 'junction');
-    const linked = await privateGuardDir(fakeTjs({ home: root, uid: UID }), { CLODE_CACHE: cache }, path.sep);
+    const linked = await privateGuardDir(fakeTjs({ home: root, uid: UID }), { CLODE_CACHE: cache }, path.sep, process.platform);
     assert.match(linked.refusal || '', /guard is a symbolic link/);
-    fs.unlinkSync(path.join(cache, 'guard'));
-    // A parent every user can write (POSIX facts; a fixed uid where the platform has none, so the rule runs anyway).
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('quaude, POSIX: a parent every user can write is REFUSED, and nothing else is made', { skip: process.platform === 'win32' && 'POSIX only: Windows has no POSIX owner or mode (node reports st_uid 0 and a mode synthesized from the read-only bit, and chmod cannot grant other users anything), so there is no hostile parent to plant; the Windows rule is the Windows-facts rows' }, async () => {
+  const { privateGuardDir } = loadQuaudeGuardDir();
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qguard-'));
+  try {
+    const cache = path.join(root, 'cache');
+    fs.mkdirSync(cache);
+    fs.mkdirSync(path.join(root, 'elsewhere'));
     fs.chmodSync(cache, 0o777);
-    if ((fs.statSync(cache).mode & 0o002) === 0) return;   // Windows: chmod cannot grant other users anything
-    const hostile = await privateGuardDir(fakeTjs({ home: root, uid: UID < 0 ? fs.statSync(cache).uid : UID }), { CLODE_CACHE: cache }, path.sep);
+    const hostile = await privateGuardDir(fakeTjs({ home: root, uid: UID }), { CLODE_CACHE: cache }, path.sep, process.platform);
     assert.match(hostile.refusal || '', /parent is writable by every user/);
     assert.strictEqual(hostile.dir, undefined, 'no directory is handed back');
     assert.deepStrictEqual(fs.readdirSync(root).sort(), ['cache', 'elsewhere'], 'no fallback directory anywhere');
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test('quaude, Windows-shaped: uid -1 and a synthesized mode are not a refusal (the profile ACL is the privacy)', async () => {
+test('quaude, real Windows facts: tjs uid -1, st_uid 0, mode 0o40666 are not a refusal on win32 (the profile ACL is the privacy)', async () => {
   const { privateGuardDir } = loadQuaudeGuardDir();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qguard-'));
   try {
     const tjs = fakeTjs({ home: root, uid: -1 });
     const realLstat = tjs.lstat;
-    tjs.lstat = async (p) => ({ ...(await realLstat(p)), uid: 0, mode: 0o40666 });   // what libuv reports there
-    assert.deepStrictEqual(await privateGuardDir(tjs, { CLODE_CACHE: path.join(root, 'c') }, path.sep), { dir: path.join(root, 'c', 'guard') });
+    tjs.lstat = async (p) => ({ ...(await realLstat(p)), uid: 0, mode: 0o40666 });   // what windows-latest reports
+    assert.deepStrictEqual(await privateGuardDir(tjs, { CLODE_CACHE: path.join(root, 'c') }, path.sep, 'win32'), { dir: path.join(root, 'c', 'guard') });
+    // The SAME numbers on a POSIX platform are refused: the platform, not the uid, decides.
+    assert.match((await privateGuardDir(tjs, { CLODE_CACHE: path.join(root, 'c') }, path.sep, 'linux')).refusal || '', /uid is unknown/);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 

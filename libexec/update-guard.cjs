@@ -420,15 +420,20 @@ function guardDirPath(env, home, sep) {
 }
 // Defence in depth, judged on lstat facts ({ type: 'dir'|'link'|'other', uid, mode }) gathered by the caller.
 // EVERYWHERE: the directory is a real directory, not a symbolic link (or junction). WHERE THE PLATFORM REPORTS
-// OWNERSHIP (uid >= 0: POSIX), also: it is ours and closed to group and other, and its parent is ours or root's and
-// not writable by other (otherwise it could be renamed away and replaced). Windows reports no owner (uid -1), so
-// there the directory's privacy is its home's ACL. A refusal is a reason string. The caller REFUSES to start on it,
+// OWNERSHIP, on every platform but Windows (`platform`, a fact; a POSIX caller with no uid is refused): it is ours
+// and closed to group and other, and its parent is ours or root's and not writable by other (otherwise it could be
+// renamed away and replaced). Windows has no POSIX owner or mode to judge, so there the directory's privacy is its
+// home's ACL. A refusal is a reason string. The caller REFUSES to start on it,
 // and never falls back to another directory.
-function guardDirRefusal(dir, st, parent, uid) {
+function guardDirRefusal(dir, st, parent, uid, platform) {
   if (!st) return `${dir} could not be created`;
   if (st.type === 'link') return `${dir} is a symbolic link`;
   if (st.type !== 'dir') return `${dir} is not a directory`;
-  if (!(typeof uid === 'number' && uid >= 0)) return null;
+  // Owner and mode are judged by PLATFORM, a fact, never by whether a uid came back (windows-latest, CI 44572930594:
+  // node reports st_uid 0 and a mode synthesized from the read-only bit, 0o40666, whatever the ACL says, so a uid-based
+  // guess would judge those numbers as if they were POSIX). Windows has neither; there the profile ACL is the privacy.
+  if (platform === 'win32') return null;
+  if (!(typeof uid === 'number' && uid >= 0)) return `${dir}: this user's uid is unknown, so its owner cannot be judged`;
   if (st.uid !== uid) return `${dir} is owned by uid ${st.uid}, not by this user (uid ${uid})`;
   if ((st.mode & 0o077) !== 0) return `${dir} is open to other users (mode ${(st.mode & 0o777).toString(8)}, not 700)`;
   if (!parent || parent.type !== 'dir') return `${dir}'s parent is not a directory`;

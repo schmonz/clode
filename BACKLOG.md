@@ -5075,6 +5075,15 @@ filesystem: two sessions give one directory; the week-old settings are pruned; a
 are refused, with no fallback; Windows-shaped facts are accepted) and test/naude-entry.test.cjs (the same three rows for
 naude), both also under the forced-win32 pass (2026-11-19).
 
+CORRECTED after windows-latest ran it (CI 44572930594): "where the platform reports an owner" was decided by the uid
+(uid >= 0), and the Windows-shaped rows synthesized uid -1. Real Windows node reports st_uid 0 and a synthesized
+0o40666, and a test passing uid 0 there was refused as "open to other users (mode 666)". Ordinary starts did not
+refuse (naude's process.getuid is absent and tjs userInfo gives -1, so both took the Windows path), but only by that
+accident. guardDirRefusal now takes the PLATFORM (process.platform in naude; the bootstrap's resolved platform in
+quaude): win32 judges only the type; elsewhere an unknown uid is refused rather than waved through. The fixtures use
+the real Windows facts, and the hostile-parent rows are POSIX-only by name. Measured: test/update-guard-dir.test.cjs and
+test/naude-entry.test.cjs real-Windows-facts rows, on this host and forced-win32 (2026-11-19).
+
 Unmeasured. On real Windows: that the profile ACL keeps `%USERPROFILE%\.cache\clode\guard` private (an icacls row on
 windows-latest would measure it), and a real quaude session there reusing one directory. And an OPEN QUESTION, not
 yet decided: on Windows clodeCacheDir is `%USERPROFILE%\.cache\clode` (os.homedir), and in a roaming profile
