@@ -152,6 +152,65 @@ test('the real set is DERIVED from the tree and meets a floor', () => {
   assert.ok(files.length < F.discover(path.join(REPO, 'test')).length);
 });
 
+// ----------------------------------------------------- no file leaves silently ----
+
+// Rule 1 (forced-win32.cjs, NO FILE LEAVES THE PASS SILENTLY): every file that is OUT only because a production module
+// spawns is named in PRODUCTION_SPAWN_EXCLUDED, and every name there still is.
+test('no file leaves the pass unnamed: each one OUT only by a production spawn is listed, with a reason', () => {
+  assert.deepStrictEqual(F.exclusionFindings(F.discover(path.join(REPO, 'test')), REPO), []);
+  for (const [k, why] of Object.entries(F.PRODUCTION_SPAWN_EXCLUDED)) assert.ok(why && why.length > 20, `${k}: no reason`);
+});
+
+test('CONTROL: a file pushed OUT by a production spawn, unlisted, is named; a listed one no longer OUT is stale', () => {
+  const repo = T;
+  const files = {
+    [DA]: "const p = require('../libexec/prod.cjs'); process.platform;\n",   // undeclared, prod spawns: OUT
+    [PROD]: "const cp = require('node:child_process');\n",
+  };
+  const io = fakeIo(files);
+  assert.deepStrictEqual(F.forcedWin32Files([DA], io), [], 'sanity: it is OUT');
+  const findings = F.exclusionFindings([DA], repo, io, { 'test/gone.test.cjs': 'a reason long enough to count' });
+  assert.strictEqual(findings.length, 2, findings.join('\n'));
+  assert.match(findings[0], /^test\/d\.test\.cjs: LEFT the forced-win32 pass/);
+  assert.match(findings[1], /^test\/gone\.test\.cjs: listed .* no longer excluded/);
+  assert.deepStrictEqual(F.exclusionFindings([DA], repo, io, { 'test/d.test.cjs': 'a reason long enough to count' }), []);
+});
+
+// Rule 2: node --test's stand-in for a file that reported nothing of its own, as it really spells it (measured on
+// node 26: "ok N - empty.test.cjs" for a file with no test() and for one that exits 0 at require time; "not ok N -
+// throws.test.cjs" for one that throws). A real test's name is never mistaken for a file.
+test('silentFiles reads the stand-ins, relative or absolute, and TAP-escaped', () => {
+  const cwd = path.resolve(path.sep === '\\' ? 'C:\\r' : '/r');
+  const abs = path.join(cwd, 'test', 'empty.test.cjs');
+  const tap = ['TAP version 13', `ok 1 - ${path.join('test', 'empty.test.cjs').replace(/\\/g, '\\\\')}`,
+    'not ok 2 - test/throws.test.cjs', 'ok 3 - a real test about test/fine.test.cjs', '    ok 1 - test/fine.test.cjs', '1..3'].join('\n');
+  assert.deepStrictEqual(F.silentFiles([abs, 'test/throws.test.cjs', 'test/fine.test.cjs'], tap, cwd).sort(),
+    [abs, 'test/throws.test.cjs'].sort());
+});
+
+test('CONTROL: a file that throws at require time, and one with no tests, are RED BY NAME under the pass', () => {
+  const d = mkdtemp();
+  try {
+    const w = (n, src) => { const p = path.join(d, n); fs.writeFileSync(p, src); return p; };
+    const throws = w('throws.test.cjs', "throw new Error('boom at require time');\n");
+    const empty = w('empty.test.cjs', '// registers no test, exits 0\n');
+    const fine = w('fine.test.cjs', "require('node:test').test('fine', () => {});\n");
+    const env = { ...process.env };
+    for (const k of Object.keys(env)) if (k.startsWith('NODE_TEST_')) delete env[k];
+    const run = (...files) => spawnSync(process.execPath, [path.join(__dirname, 'forced-win32.cjs'), '--run', ...files],
+      { env, encoding: 'utf8' });
+    const red = run(throws, empty, fine);
+    assert.notStrictEqual(red.status, 0, red.stdout + red.stderr);
+    assert.ok(red.stderr.includes(`forced-win32: ${throws} reported NO tests`), red.stderr);
+    assert.ok(red.stderr.includes(`forced-win32: ${empty} reported NO tests`), red.stderr);
+    assert.ok(!red.stderr.includes(`${fine} reported`), 'the healthy file is not blamed');
+    // The zero-test file alone exits 0 under plain node --test: only the by-name rule makes it red.
+    const emptyOnly = run(empty);
+    assert.notStrictEqual(emptyOnly.status, 0, 'a file with no tests is red, not a green "ok - <file>"');
+    assert.strictEqual(run(fine).status, 0, run(fine).stderr);
+  } finally { fs.rmSync(d, { recursive: true, force: true }); }
+});
+
 // ------------------------------------------------------------------- control ----
 
 // ON A REAL WINDOWS RUNNER THE FORCING IS A NO-OP, so neither half of this control can
@@ -319,6 +378,9 @@ const WIRING_GUARD = defineGuard({
     rule(/PRELOAD/.test(i.run),
       'test/run.mjs no longer passes the preload to the second `node --test`, so the pass '
       + 'runs with the real platform and proves nothing');
+    rule(/silentFiles\(forcedFiles/.test(i.run),
+      'test/run.mjs no longer names a forced file that reported no tests of its own: a file that dies or registers '
+      + 'nothing would read as a green "ok - <file>" again');
     rule(/forcedWin32Files/.test(i.run),
       'test/run.mjs no longer calls forcedWin32Files — the pass is a script nobody invokes, '
       + 'which is the gate-that-never-runs shape this repo has already paid for');

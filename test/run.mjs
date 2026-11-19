@@ -739,7 +739,7 @@ if (!testsRan) {
 // built (CLODE_NODE, CLODE_STATE_ROOT, the offline gate, the hermeticity snapshot), so
 // it is covered by the same postflight guards as the main pass.
 {
-  const { forcedWin32Files, PRELOAD } = require('./forced-win32.cjs');
+  const { forcedWin32Files, PRELOAD, silentFiles } = require('./forced-win32.cjs');
   const forcedFiles = forcedWin32Files(files);
   if (forcedFiles.length === 0) {
     console.error('run: the forced-win32 pass derived ZERO files from '
@@ -766,7 +766,13 @@ if (!testsRan) {
     try { winTapText = fs.readFileSync(winTap, 'utf8'); } catch { /* handled below */ }
     finally { try { fs.unlinkSync(winTap); } catch { /* best-effort */ } }
     const ran = winTapText ? winTapText.match(/^# tests (\d+)/m) : null;
-    if (res2.status === 0 && ran && Number(ran[1]) > 0) {
+    // A file that reported no tests of its own (it registered none, exited early, or died before reporting) is red BY
+    // NAME: node --test counts its stand-in as a passing test, so '# tests N' alone cannot see it (forced-win32.cjs).
+    const silent = winTapText ? silentFiles(forcedFiles, winTapText) : forcedFiles;
+    for (const f of silent) {
+      console.error(`run: forced-win32: ${f} reported NO tests of its own (it registered none, exited early, or died before reporting)`);
+    }
+    if (res2.status === 0 && ran && Number(ran[1]) > 0 && silent.length === 0) {
       console.error(`run: forced-win32 pass OK — ${ran[1]} test(s) over `
         + `${forcedFiles.length} platform-sensitive fixture-only file(s). This is a `
         + 'pre-filter, NOT Windows coverage (see test/forced-win32.cjs).');

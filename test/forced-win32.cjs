@@ -155,6 +155,99 @@ function spawnInjectedContradictions(testFiles, io = realIo) {
   return testFiles.filter((f) => declaresSpawnInjected(f, io) && REAL_OS.test(testSideText(f, io)));
 }
 
+// ---------------------------------------------------------------------------------
+// NO FILE LEAVES THE PASS SILENTLY (2026-11-19). A row added to test/update-guard-dir.test.cjs required
+// libexec/naude-entry.cjs. That module requires child_process, so the file's closure reached REAL_OS, and the whole
+// file dropped out of the derived set. The pass stayed green with 13 fewer tests. The derivation was right, but
+// nothing reported the drop. Two rules close that gap, and test/forced-win32.test.cjs gates both:
+//
+//   1. Some files are platform-sensitive, and their own test-side code never spawns, yet they are OUT because a
+//      production module in their closure spawns. Such a file counts as excluded ON PURPOSE only when it is named here
+//      with a reason. A new one goes red by name: declare it spawn-injected or list it. An entry that no longer fits
+//      goes red as stale.
+//   2. Every file the pass runs must report tests of its own. When a file registers none, exits early or dies before
+//      reporting, node --test reports a stand-in under the file's own name instead of its tests. Before this rule, a
+//      zero-test file showed up as a GREEN "ok - <file>". silentFiles() finds those stand-ins in the TAP, and the pass
+//      goes red, naming the file.
+const AUDIT_PENDING = 'its production closure spawns, and its tests have not been audited for injecting every spawn '
+  + '(the 2026-11-19 baseline). Declare "forced-win32: spawn-injected:" once they are, and remove it from here.';
+const PRODUCTION_SPAWN_EXCLUDED = {
+  'test/bench-measure.test.cjs': AUDIT_PENDING,
+  'test/build-gates/build-runner-gates.test.cjs': AUDIT_PENDING,
+  'test/build-gates/carve-probe-gates.test.cjs': AUDIT_PENDING,
+  'test/build-gates/render-build-graph-gates.test.cjs': AUDIT_PENDING,
+  'test/build-graph-ci.test.cjs': AUDIT_PENDING,
+  'test/build-graph-render.test.cjs': AUDIT_PENDING,
+  'test/bunffi.test.cjs': AUDIT_PENDING,
+  'test/cell-profile-diff.test.cjs': AUDIT_PENDING,
+  'test/clode-build-args.test.cjs': AUDIT_PENDING,
+  'test/clode-build-smoke-home.test.cjs': AUDIT_PENDING,
+  'test/clode-build-spinner.test.cjs': AUDIT_PENDING,
+  'test/clode-current.test.cjs': AUDIT_PENDING,
+  'test/clode-hosttools.test.cjs': AUDIT_PENDING,
+  'test/clode-manifest-fetch.test.cjs': AUDIT_PENDING,
+  'test/clode-net.test.cjs': AUDIT_PENDING,
+  'test/clode-paths.test.cjs': AUDIT_PENDING,
+  'test/clode-rcodesign.test.cjs': AUDIT_PENDING,
+  'test/clode-target-build.test.cjs': AUDIT_PENDING,
+  'test/clode-templates.test.cjs': AUDIT_PENDING,
+  'test/clode-watch.test.cjs': AUDIT_PENDING,
+  'test/env-verdicts.test.cjs': AUDIT_PENDING,
+  'test/extract-autoupdater.test.cjs': AUDIT_PENDING,
+  'test/extract-cache-key.test.cjs': AUDIT_PENDING,
+  'test/fidelity/applet-config.test.cjs': AUDIT_PENDING,
+  'test/graph-require-rewrite.test.cjs': AUDIT_PENDING,
+  'test/host-provision.test.cjs': AUDIT_PENDING,
+  'test/native-oracle.test.cjs': AUDIT_PENDING,
+  'test/node-shim-buffer-lite.test.cjs': AUDIT_PENDING,
+  'test/paint-probe.test.cjs': AUDIT_PENDING,
+  'test/platform-tag.test.cjs': AUDIT_PENDING,
+  'test/provider-platform.test.cjs': AUDIT_PENDING,
+  'test/rg-stream.test.cjs': AUDIT_PENDING,
+  'test/sea-sign.test.cjs': AUDIT_PENDING,
+  'test/templates-blob-pack.test.cjs': AUDIT_PENDING,
+  'test/text-probe.test.cjs': AUDIT_PENDING,
+  'test/tls-cacert-pem.test.cjs': AUDIT_PENDING,
+  'test/ucd.test.cjs': AUDIT_PENDING,
+  'test/undici.test.cjs': AUDIT_PENDING,
+};
+// Sensitive, OUT, undeclared, and its test-side code spawns nothing: out only through a production module.
+function productionSpawnOnly(testFiles, io = realIo) {
+  const out = [];
+  for (const f of testFiles) {
+    let text = '';
+    for (const c of requireClosure(f, io)) { try { text += `${io.read(c)}\n`; } catch { /* nothing */ } }
+    if (!SENSITIVE.test(text) || !REAL_OS.test(text) || declaresSpawnInjected(f, io)) continue;
+    if (!REAL_OS.test(testSideText(f, io))) out.push(f);
+  }
+  return out;
+}
+// Repo-relative, '/'-separated: the key PRODUCTION_SPAWN_EXCLUDED is spelled in.
+const repoKey = (f, repo) => path.relative(repo, f).split(path.sep).join('/');
+function exclusionFindings(testFiles, repo, io = realIo, listed = PRODUCTION_SPAWN_EXCLUDED) {
+  const found = productionSpawnOnly(testFiles, io).map((f) => repoKey(f, repo));
+  const unlisted = found.filter((k) => !(k in listed));
+  const stale = Object.keys(listed).filter((k) => !found.includes(k));
+  return [
+    ...unlisted.map((k) => `${k}: LEFT the forced-win32 pass only because a production module it requires spawns. `
+      + 'Declare "// forced-win32: spawn-injected: <why>" if its tests inject every spawn, or list it in '
+      + 'PRODUCTION_SPAWN_EXCLUDED with a reason'),
+    ...stale.map((k) => `${k}: listed in PRODUCTION_SPAWN_EXCLUDED but no longer excluded that way: remove the entry`),
+  ];
+}
+// The files of `files` that reported no test of their own (rule 2): node --test's stand-in, a top-level TAP line
+// named for the file as it was passed (absolute, or relative to cwd).
+function silentFiles(files, tapText, cwd = process.cwd()) {
+  const byName = new Map();
+  for (const f of files) { byName.set(f, f); byName.set(path.relative(cwd, path.resolve(cwd, f)), f); }
+  const out = new Set();
+  for (const m of String(tapText || '').matchAll(/^(?:not )?ok \d+ - (.*?)(?: # (?:SKIP|TODO)\b.*)?$/gm)) {
+    const name = m[1].replace(/\\([\\#])/g, '$1');
+    if (byName.has(name)) out.add(byName.get(name));
+  }
+  return [...out];
+}
+
 function forcedWin32Files(testFiles, io = realIo) {
   const out = [];
   for (const f of testFiles) {
@@ -170,7 +263,8 @@ function forcedWin32Files(testFiles, io = realIo) {
 }
 
 module.exports = { SENSITIVE, REAL_OS, SPAWN_INJECTED, PRELOAD, FLOOR, discover, requireClosure, forcedWin32Files,
-  declaresSpawnInjected, spawnInjectedContradictions };
+  declaresSpawnInjected, spawnInjectedContradictions, PRODUCTION_SPAWN_EXCLUDED, productionSpawnOnly, exclusionFindings,
+  silentFiles };
 
 // Triage mode, for the thing this machinery is actually best at: force ANY file, spawn
 // or not, and see what a Windows runner would be arguing with. This is how the fourth
@@ -183,10 +277,21 @@ if (require.main === module) {
   const files = argv.filter((a) => !a.startsWith('--'));
   if (argv.includes('--run') && files.length) {
     const { spawnSync } = require('node:child_process');
+    const os = require('node:os');
     const env = { ...process.env };
+    for (const k of Object.keys(env)) if (k.startsWith('NODE_TEST_')) delete env[k];
     env.NODE_OPTIONS = `${env.NODE_OPTIONS || ''} --require ${PRELOAD}`.trim();
-    process.exit(spawnSync(process.execPath, ['--test', ...files],
-      { env, stdio: 'inherit' }).status ?? 1);
+    const tap = path.join(os.tmpdir(), `clode-forced-win32-${process.pid}.tap`);
+    const status = spawnSync(process.execPath, ['--test', '--test-reporter', 'spec', '--test-reporter-destination', 'stdout',
+      '--test-reporter', 'tap', '--test-reporter-destination', tap, ...files], { env, stdio: 'inherit' }).status ?? 1;
+    let tapText = '';
+    try { tapText = fs.readFileSync(tap, 'utf8'); } catch { /* none: every file is silent */ }
+    finally { try { fs.unlinkSync(tap); } catch { /* best-effort */ } }
+    const silent = tapText ? silentFiles(files, tapText) : files;
+    for (const f of silent) {
+      console.error(`forced-win32: ${f} reported NO tests of its own (it registered none, exited early, or died before reporting)`);
+    }
+    process.exit(silent.length ? 1 : status);
   }
   for (const f of forcedWin32Files(discover(path.join(__dirname)))) {
     console.log(path.relative(path.join(__dirname, '..'), f));
