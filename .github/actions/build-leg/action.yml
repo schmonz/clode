@@ -1301,27 +1301,14 @@ runs:
         ARCH: ${{ inputs.guest-arch }}
       run: |
         set -euo pipefail
-        f=$(file -b "${{ steps.mode.outputs.out }}/tjs"); echo "engine: $f"
-        echo "$f" | grep -qiE 'x86-64|x86_64' \
-          && { echo "ERROR: cross engine is host x86-64 — the $ARCH toolchain was not used" >&2; exit 1; } || true
-        case "$ARCH" in
-          riscv64) want='RISC-V' ;;
-          s390x)   want='S/390' ;;
-          m68k)    want='Motorola|m68k' ;;
-          sparc64) want='SPARC' ;;
-          alpha)   want='Alpha' ;;
-          hppa)    want='PA-RISC' ;;
-          powerpc) want='PowerPC' ;;
-          mipsel|mipseb|mips64eb) want='MIPS' ;;
-          i386)    want='80386|Intel 386' ;;
-          earmv7hf) want='ARM' ;;
-          sh3el)   want='Renesas SH|SuperH|SH,' ;;
-          *)       want='' ;;
-        esac
-        if [ -n "$want" ]; then
-          echo "$f" | grep -qiE "$want" \
-            || { echo "ERROR: engine is not $ARCH (want /$want/) — got: $f" >&2; exit 1; }
-        fi
+        # file(1) is printed for the reader, NOT judged: its prose is not an interface.
+        # libmagic after 5.45 renamed e_machine 3 "Intel 80386" -> "Intel i386", and run
+        # 44572930594's netbsd-i386 leg went red on a correct engine because this gate
+        # grepped for the old wording. The verdict comes from the ELF header itself
+        # (e_machine + class + byte order), per arch, in scripts/elf-machine.cjs; an arch
+        # with no recorded expectation fails rather than passing unchecked.
+        f=$(file -b "${{ steps.mode.outputs.out }}/tjs" || true); echo "engine: $f"
+        node scripts/elf-machine.cjs check "$ARCH" "${{ steps.mode.outputs.out }}/tjs"
         echo "arch gate ok: $ARCH"
 
     - name: Cross-blobulate the tier-2 builder against the cross-built engine
@@ -1632,18 +1619,9 @@ runs:
         set -euo pipefail
         TJS="${{ steps.mode.outputs.out }}/tjs"
         f=$(file -b "$TJS"); echo "file: $f"
-        case "${{ inputs.guest-arch }}" in
-          x86_64) want="x86-64" ;;
-          aarch64) want="aarch64" ;;
-          s390x) want="S/390" ;;
-          x86) want="80386" ;;
-          armv7|armhf) want="ARM" ;;
-          ppc64le) want="PowerPC" ;;
-          riscv64) want="RISC-V" ;;
-          loongarch64) want="LoongArch" ;;
-          *) want="" ;;
-        esac
-        case "$f" in *"$want"*) ;; *) echo "ERROR: arch marker '$want' not in file output" >&2; exit 1 ;; esac
+        # Arch from the ELF header, not file(1)'s wording (x86 -> "80386" was the same
+        # latent break as the netbsd-i386 gate: libmagic now says "Intel i386").
+        node scripts/elf-machine.cjs check "${{ inputs.guest-arch }}" "$TJS"
         case "$f" in *"statically linked"*|*"static-pie linked"*) ;; *) echo "ERROR: not statically linked" >&2; exit 1 ;; esac
         ldd "$TJS" 2>&1 | head -3 || true   # informational: expect "not a dynamic executable"
 
