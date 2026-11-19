@@ -129,22 +129,23 @@ function chmodBestEffort(p, mode) {
   try { FSS.chmod(p, mode); }
   catch (e) { if (!_isWin) throw e; }
 }
-// THE CREATE MODE. node's open(2) takes the mode and the kernel applies it minus the umask, at
-// creation only. The engine's FSS.open has no mode (it creates 0666 minus the umask), so openPath()
-// applies a caller's mode right after it CREATED the file: chmod-after-create, the sibling of the
-// cpSync/copyFileSync mode fix (a 0755 script fixture once came out unexecutable). The umask is the
-// kernel's own answer, read off the file it just made (0666 & ~umask), with each class's execute bit
-// taken as masked when its read bit is (umask 022 -> 022, 077 -> 077); process.umask() here is a
-// constant 022, not the process's. Not atomic the way node's open(mode) is: the file exists at the
-// default mode for a moment (BACKLOG: "node-shim's exclusive create and create mode are checked").
-function applyCreateMode(p, mode) {
-  let made;
-  try { made = Number(FSS.stat(p).mode) & 0o777; } catch { return; }
-  let um = ~made & 0o666;
-  um |= (um & 0o444) >> 2;
-  const want = mode & 0o7777 & ~um;
-  if (want !== made) chmodBestEffort(p, want);
+// THE UMASK, as the kernel applies it. node's open(2) and mkdir(2) take a mode and the kernel masks it
+// with the process umask. The engine's FSS.open takes no mode, so openPath() applies the caller's mode
+// itself and needs the umask: read off a directory made 0777 (mkdir masks all nine bits; a file made
+// 0666 would say nothing of the execute bits), once per process, in the directory being written.
+// Until 2026-11-19 it was inferred from a created file's mode with a guessed execute bit; and
+// process.umask() is still a constant 022 (process.cjs), not this.
+let _umask = null;
+function umaskIn(dir) {
+  if (_umask !== null) return _umask;
+  const probe = path.join(dir, `.clode-umask-${_rand()}`);
+  try {
+    FSS.mkdir(probe, 0o777);
+    try { _umask = ~Number(FSS.stat(probe).mode) & 0o777; } finally { try { FSS.rmdir(probe); } catch { /* best effort */ } }
+  } catch { return 0o022; }
+  return _umask;
 }
+const _rand = () => `${(globalThis.process && process.pid) || 0}-${Math.random().toString(36).slice(2, 10)}`;
 // tjs's rename (__tjs_fs_sync.rename, mod_fs_sync.c) is the C library rename(a,b)
 // with no _WIN32 special-casing. POSIX rename(2) atomically REPLACES an existing
 // target; the Windows CRT rename() instead FAILS (errno EEXIST, sometimes EACCES/
@@ -191,18 +192,23 @@ const O = constants;
 // is how 2.1.283's config writer, `open(tmp, O_WRONLY|O_CREAT|O_EXCL, 0o600)` then rename, left
 // ~/.claude/.claude.json 0644 (BACKLOG; found by test/node-shim-differential.test.cjs).
 //
-// So openPath() keeps node's bits and answers each one the engine cannot, before or after its open:
-//   O_EXCL with O_CREAT   EEXIST when the path exists (lstat: a dangling link counts, as in open(2))
-//   O_NOFOLLOW            ELOOP when the path is a symlink
-//   O_DIRECTORY           ENOTDIR when what opened is not a directory (closed first)
-//   no O_TRUNC            an existing file opens 'r+', never 'w', so its bytes stay
-//   no O_CREAT            a missing path opens 'r'/'r+', so the engine says ENOENT
-//   a mode, at creation   applied minus the umask, ONLY when this call created the file
-// The checks before the open are not atomic with it, as node's single open(2) is: a racing creator
-// can still lose its file to us. That residual needs the engine's open to take O_* bits and a mode
-// (BACKLOG: "node-shim's exclusive create and create mode are checked"). O_NONBLOCK is passed through ('n'): the bundle's drainStdin opens
-// /dev/tty O_RDONLY|O_NONBLOCK and readSync()s until EAGAIN, and a blocking open there wedged the
-// engine (test/node-shim-fs-nonblock.test.cjs). The engine has no read+append, so a+ opens 'a'.
+// So openPath() keeps node's bits and answers each one the engine cannot:
+//   O_CREAT, path absent   createExclusive() below: the file is made, moded and put in place by
+//                          primitives that are each atomic, so nobody else's file is truncated or
+//                          taken and nobody else ever sees it at a mode other than the caller's
+//   O_EXCL with O_CREAT    EEXIST from that same atomic claim, not from a check before an open
+//   O_NOFOLLOW             ELOOP when the path is a symlink, checked before AND after the open
+//                          (identity: the file opened must be the one lstat names)
+//   O_DIRECTORY            ENOTDIR when what opened is not a directory (closed first)
+//   no O_TRUNC             an existing file opens 'r+', never 'w', so its bytes stay
+//   no O_CREAT             a missing path opens 'r'/'r+', so the engine says ENOENT
+// O_NONBLOCK is passed through ('n'): the bundle's drainStdin opens /dev/tty O_RDONLY|O_NONBLOCK and
+// readSync()s until EAGAIN, and a blocking open there wedged the engine
+// (test/node-shim-fs-nonblock.test.cjs). The engine has no read+append, so a+ opens 'a'. What is
+// still not node's is in BACKLOG ("node-shim's exclusive create ..."): O_WRONLY without O_TRUNC on an
+// existing file needs read permission ('r+'); O_TRUNC|O_NOFOLLOW can truncate a link swapped in after
+// the check; and where the filesystem refuses a symlink (Windows without the privilege, FAT) the
+// create falls back to check-then-open, with its window.
 const STRING_FLAGS = (() => {
   const S = O.O_SYNC || 0;
   const W = O.O_TRUNC | O.O_CREAT | O.O_WRONLY;
@@ -233,31 +239,110 @@ function sysError(code, op, p) {
   e.syscall = op;
   return require('../internal/node-errors.cjs').asNodeError(e, op, [p]);
 }
+// CREATE EXCLUSIVELY, from primitives that are each atomic (the engine has no O_EXCL, no link(2) and
+// no fchmod):
+//   1. mkdir a private directory beside the path, 0700: exclusive, so it is ours and nobody else can
+//      reach into it;
+//   2. open the file inside it and chmod it to the caller's mode minus the umask: no one else can see
+//      it at any other mode, because no one else can enter the directory;
+//   3. CLAIM the path with symlink(2), which never follows and fails EEXIST if anything is there: the
+//      exclusive create's one atomic step; a racing creator either got there first (we throw EEXIST and
+//      tidy up) or finds our link;
+//   4. rename the file over our own link (rename never follows the link it replaces) and rmdir.
+// The descriptor opened in 2 is the file now at the path. Returns null when the filesystem cannot
+// make a symlink (EPERM, ENOSYS, ENOTSUP...): the caller falls back to check-then-open.
+function createExclusive(p, base, mode) {
+  const dir = path.dirname(p);
+  const priv = path.join(dir, `.clode-create-${_rand()}`);
+  const inner = path.join(priv, 'f');
+  // the open's errors, as the open would have said them (ENOENT, ENOTDIR, EACCES, EROFS of the parent)
+  try { FSS.mkdir(priv, 0o700); } catch (e) { throw e && e.code ? sysError(e.code, 'open', p) : e; }
+  let fd = -1;
+  let placed = false;
+  try {
+    fd = FSS.open(inner, base === 'r' ? 'w' : base);
+    if (typeof mode === 'number') {
+      const want = mode & 0o7777 & ~umaskIn(dir);
+      if (want !== (Number(FSS.fstat(fd).mode) & 0o7777)) chmodBestEffort(inner, want);
+    }
+    if (base === 'r') { FSS.close(fd); fd = -1; fd = FSS.open(inner, 'r'); }
+    try {
+      FSS.symlink(path.join(path.basename(priv), 'f'), p);
+    } catch (e) {
+      if (e.code === 'EEXIST') throw sysError('EEXIST', 'open', p);
+      if (e.code === 'ENOENT' || e.code === 'ENOTDIR' || e.code === 'EACCES' || e.code === 'EROFS') throw e;
+      FSS.close(fd); fd = -1;
+      return null;
+    }
+    FSS.rename(inner, p);
+    placed = true;
+    return fd;
+  } catch (e) {
+    if (fd >= 0) { try { FSS.close(fd); } catch { /* closing */ } }
+    throw e;
+  } finally {
+    if (!placed) { try { FSS.unlink(inner); } catch { /* not made */ } }
+    try { FSS.rmdir(priv); } catch { /* best effort */ }
+  }
+}
+
 function openPath(p, flags, mode) {
   const of = toOflags(flags);
   const has = (b) => !!b && (of & b) === b;
   const creat = has(O.O_CREAT);
+  const excl = creat && has(O.O_EXCL);
   const rw = of & 3;
+  const nb = has(O.O_NONBLOCK) ? 'n' : '';
+  const createBase = has(O.O_APPEND) ? 'a' : rw === O.O_RDWR ? 'w+' : rw === O.O_RDONLY ? 'r' : 'w';
   let pre = null;
   try { pre = FSS.lstat(p); } catch { /* absent, or the open below says why */ }
+  if (creat && !pre) {
+    try {
+      const fd = createExclusive(p, createBase, mode);
+      if (fd !== null) return directoryCheck(fd, p, has);
+    } catch (e) {
+      if (e.code !== 'EEXIST' || excl) throw e;
+    }
+    try { pre = FSS.lstat(p); } catch { /* still absent: the fallback below creates it */ }
+  }
   const isLink = !!pre && typeIs(pre.mode, 'symlink');
-  if (creat && has(O.O_EXCL) && pre) throw sysError('EEXIST', 'open', p);
+  if (excl && pre) throw sysError('EEXIST', 'open', p);
   if (has(O.O_NOFOLLOW) && isLink) throw sysError('ELOOP', 'open', p);
   let exists = !!pre;
   if (isLink) { try { FSS.stat(p); } catch { exists = false; } }
   let base;
   if (!creat && !exists) base = rw === O.O_RDONLY ? 'r' : 'r+';
+  else if (!exists) base = createBase === 'r' ? 'w' : createBase;
   else if (has(O.O_APPEND)) base = 'a';
   else if (rw === O.O_RDONLY) base = 'r';
-  else if (has(O.O_TRUNC) || !exists) base = rw === O.O_RDWR ? 'w+' : 'w';
+  else if (has(O.O_TRUNC)) base = rw === O.O_RDWR ? 'w+' : 'w';
   else base = 'r+';
-  const fd = FSS.open(p, base + (has(O.O_NONBLOCK) ? 'n' : ''));
+  let fd = FSS.open(p, base + nb);
+  if (has(O.O_NOFOLLOW)) {
+    let same = false;
+    try {
+      const now = FSS.lstat(p);
+      const got = FSS.fstat(fd);
+      same = !typeIs(now.mode, 'symlink') && String(now.ino) === String(got.ino) && String(now.dev) === String(got.dev);
+    } catch { /* gone: not the file we checked */ }
+    if (!same) { FSS.close(fd); throw sysError('ELOOP', 'open', p); }
+  }
+  if (!exists && creat) {
+    // the fallback create (no symlinks here): chmod after, with its window (BACKLOG)
+    if (typeof mode === 'number') {
+      const want = mode & 0o7777 & ~umaskIn(path.dirname(p));
+      try { if (want !== (Number(FSS.fstat(fd).mode) & 0o7777)) chmodBestEffort(p, want); } catch (e) { FSS.close(fd); throw e; }
+    }
+    if (createBase === 'r') { FSS.close(fd); fd = FSS.open(p, 'r' + nb); }
+  }
+  return directoryCheck(fd, p, has);
+}
+function directoryCheck(fd, p, has) {
   if (has(O.O_DIRECTORY)) {
     let dir = false;
     try { dir = typeIs(FSS.fstat(fd).mode, 'dir'); } catch { /* not a directory we can tell */ }
     if (!dir) { FSS.close(fd); throw sysError('ENOTDIR', 'open', p); }
   }
-  if (!exists && creat && typeof mode === 'number') applyCreateMode(p, mode);
   return fd;
 }
 

@@ -8,41 +8,60 @@ Concrete clode-under-Node divergences from native Claude Code, to triage and fix
 That page is GENERATED from `scripts/build-graph.cjs` — the one declaration of the build — so it
 cannot drift from it; it is also where the honest answer to "does this need node?" lives.
 
-## quaude wrote the config file world-readable (~/.claude/.claude.json 0644, native's 0600): FIXED in the shim; the full-turn row is still to write (2026-11-19)
+## quaude created the config file world-readable (~/.claude/.claude.json 0644 at creation, native's 0600): FIXED in the shim for new files; the full-turn row is still to write (2026-11-19)
 
-Found by observability Task 2: after one `-p` turn the config file (account and project state) was `-rw-r--r--`
-under quaude and `-rw-------` under native, with the same umask. The call is 2.1.283's atomic writer (the async one
-in the carve's chunk-fsbhbn29.js): `fs.promises.open(tmp, O_WRONLY|O_CREAT|O_EXCL, 0o600)`, `FileHandle.writeFile`,
-`sync`, `close`, then a rename over the target. node-shim's `fs.promises.open` dropped its mode argument, so the
-temp file, and after the rename the config, kept the engine's default 0644. Fixed with every other open flag the
-shim collapsed (libexec/node-shim/modules/fs.cjs openPath: O_EXCL, O_DIRECTORY, O_NOFOLLOW, no truncation without
-O_TRUNC, and a create mode applied only at creation, minus the umask). test/node-shim-differential.test.cjs judges
-that open and 300-odd others against node on every push. A config file an earlier quaude already wrote 0644 stays
-0644: the writer preserves an existing file's mode (`Preserving file permissions`), as native's does.
+Found by observability Task 2: after one `-p` turn that CREATED the config file (account and project state) it was
+`-rw-r--r--` under quaude and `-rw-------` under native, with the same umask. The call is 2.1.283's atomic writer
+(the async one in the carve's chunk-fsbhbn29.js): `fs.promises.open(tmp, O_WRONLY|O_CREAT|O_EXCL, 0o600)`,
+`FileHandle.writeFile`, `sync`, `close`, then a rename over the target. node-shim's `fs.promises.open` dropped its
+mode argument, so the temp file, and after the rename the config, kept the engine's default 0644. Fixed with every
+other open flag the shim collapsed (libexec/node-shim/modules/fs.cjs openPath and createExclusive).
+
+0600 is native's answer ONLY when the file is created. The writer preserves an existing file's mode (`Preserving
+file permissions`), so a config file that already exists at 0644 (written by an earlier quaude, or by anything
+else) stays 0644 under native too, and under quaude now; the fix does not tighten files already on disk. 46bd197's
+title ("so ~/.claude.json is 0600") says more than that: it is 0600 when this quaude creates it.
 
 Measured: the writer's exact sequence (open with O_WRONLY|O_CREAT|O_EXCL and 0o600, writeFile, sync, close, rename)
-under `tjs run libexec/node-shim/loader.cjs`: 600 with the fix, 644 without it; node 24.21.0: 600 (2026-11-19).
+creating a new file under `tjs run libexec/node-shim/loader.cjs`: 600 with the fix, 644 without it; node 24.21.0:
+600 (2026-11-19).
 
-Measured: `ls -l $CLAUDE_CONFIG_DIR/.claude.json` after one canned-mock Read-tool turn: a quaude built from b4eb2f5
-(darwin-arm64, the 2.1.283 carve; throwaway HOME, canned mock): `-rw-r--r--`; native 2.1.283, same probe and umask:
-`-rw-------` (2026-11-18).
+Measured: `ls -l $CLAUDE_CONFIG_DIR/.claude.json` after one canned-mock Read-tool turn that created it: a quaude
+built from b4eb2f5 (darwin-arm64, the 2.1.283 carve; throwaway HOME, canned mock): `-rw-r--r--`; native 2.1.283,
+same probe and umask: `-rw-------` (2026-11-18).
 
-Unmeasured. A turn of a quaude built with the fix, asserting 0600 (the row this entry asked for); other files the
-bundle writes owner-only (credentials, history) were not checked by a turn, though their writes go through the same
-opens the differential now judges.
+Unmeasured. A turn of a quaude built with the fix, asserting 0600 on creation (the row this entry asked for; not
+cheap here: it needs a fresh quaude build and the canned-mock turn harness of Task 2); other files the bundle
+writes owner-only (credentials, history) were not checked by a turn, though their writes go through the same opens
+the differential now judges.
 
-## node-shim's exclusive create and create mode are checked around the engine's open, not atomic (2026-11-19)
+## SECURITY: node-shim's exclusive create was not exclusive, and a 0600 file was briefly 0644: closed, what is left (2026-11-19)
 
-The engine's sync open (spike/quickjs/patches/txiki-sync-fs.patch, js_fss_open) takes only r/w/a/r+/w+ and creates
-0666 minus the umask. node-shim's openPath (libexec/node-shim/modules/fs.cjs) answers node's O_EXCL, O_NOFOLLOW and
-O_DIRECTORY with an lstat before the open or an fstat after it, and a create mode with a chmod after it. node does
-each in one open(2). Two windows are left: a file another process creates between the lstat and the open is
-truncated and taken (a lock two quaudes race for can be held by both), and a file created with a mode exists at the
-default mode until the chmod (an owner-only file is briefly 0644). Closing both needs the engine's open to take
-O_* bits and a mode, with the shim refusing an engine without them (as it does for stat identity).
+The engine's sync open (spike/quickjs/patches/txiki-sync-fs.patch, js_fss_open) takes only r/w/a/r+/w+, creates
+0666 minus the umask, and has no O_EXCL, O_NOFOLLOW or mode; the engine has no link(2) or fchmod either. The
+2.1.283 carve creates with O_EXCL or "wx" for its config writer, the launcher settings, the MCP config and the seed
+reads' batch files. 46bd197 answered O_EXCL with an lstat before FSS.open(p, 'w') (which follows links and
+truncates) and the mode with a chmod after it: two creators could both win one path, and an owner-only file existed
+at 0644 until the chmod. openPath now creates through createExclusive (libexec/node-shim/modules/fs.cjs): a private
+0700 directory beside the path, the file made and chmodded inside it, the path claimed with symlink(2) (never
+follows, EEXIST if anything is there), then the file renamed over its own claim. Every step is atomic; nobody can
+reach the file before it has its mode, and a racing creator either got there first or meets the claim.
 
-Unmeasured. Neither window has been raced on purpose; two processes contending for one `wx` path in a loop would
-measure the first, and a watcher stat-ing a new 0600 file would measure the second.
+Measured: test/node-shim-exclusive-create.test.cjs on darwin-arm64 (node 24.21.0, the scratch tjs): 4 tjs workers
+racing `openSync(p, "wx")` over 400 paths: 327 paths with two winners under 46bd197's node-shim, 0 with this one; a
+node watcher lstat-ing 1500 `fs.promises.open(p, O_WRONLY|O_CREAT|O_EXCL, 0o600)` creates under umask 022: 6 files
+seen at 644 under 46bd197's, 0 of 215699 looks under this one; `wx` and O_NOFOLLOW over a planted link: EEXIST and
+ELOOP, the victim untouched, as node (2026-11-19).
+
+Measured: the same three rows in a node:24.22.0-alpine container (linux-x64 musl, tjs-linux-x64-musl of CI run
+44460009323): 0 double winners, 0 of 92857 looks at another mode, the planted link refused (2026-11-19).
+
+Unmeasured. What is still not node's: where the filesystem refuses a symlink (Windows without the privilege, FAT)
+the create falls back to check-then-open, with both windows; O_NOFOLLOW without O_CREAT is an lstat before the
+open and an identity check after it, so a link swapped in between is opened (and, with O_TRUNC, truncated) before
+the check refuses it; O_WRONLY without O_TRUNC on an existing file opens 'r+' and so needs read permission; and the
+transient `.clode-create-*` directory and claim link are visible to a directory watcher. Each needs the engine's
+open to take O_* bits and a mode. No row exercises the fallback or the O_NOFOLLOW swap.
 
 ## node-shim against node: what the behaviour differential names (2026-11-19)
 
