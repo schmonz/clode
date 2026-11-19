@@ -18,6 +18,7 @@ const { resolveClaudeBin } = require('../libexec/clode-resolve.cjs');
 const { tjsPath } = require('./node-shim-helper.cjs');
 const { stateRoot } = require('./state-root-helper.cjs');
 const { liveRenderSkipReason } = require('./live-render-helper.cjs');
+const { removeNamingRefusals } = require('./suite-home.cjs');
 
 const ENTRY = path.join(REPO, 'scripts', 'stage0.mjs');
 function realProvider() {
@@ -62,9 +63,14 @@ before(() => {
   if (build.status !== 0) { SKIP = `clode build failed:\n${build.stdout}\n${build.stderr}`; return; }
   SCREEN = capture(SBX, { seconds: 12, cmd: [quaude] });
 });
+// A dir that will not go is a finding, named entry by entry (suite-home.cjs removeNamingRefusals), never swallowed:
+// windows-amd64-tui (CI 44443821699) failed removing the suite home at exit with node's root-only EPERM, and these two
+// (DIR holds the built quaude.exe) used to fail, if they did, silently. Both are tried before either failure is thrown.
 after(() => {
-  if (SBX) { try { fs.rmSync(SBX.dir, { recursive: true, force: true }); } catch { /* */ } }
-  if (DIR) { try { fs.rmSync(DIR, { recursive: true, force: true }); } catch { /* */ } }
+  const failures = [];
+  if (SBX) { try { removeNamingRefusals(SBX.dir, { what: 'the e2e sandbox' }); } catch (e) { failures.push(e); } }
+  if (DIR) { try { removeNamingRefusals(DIR, { what: 'the build dir (quaude, its cache and state)' }); } catch (e) { failures.push(e); } }
+  if (failures.length) throw new Error(failures.map((e) => e.message).join('\n'));
 });
 
 test('TUI renders the welcome box (Claude Code) under a built quaude', (t) => {

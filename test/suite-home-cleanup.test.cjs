@@ -106,3 +106,28 @@ test('a suite home that cannot be removed fails naming the entry that refused, n
     assert.deepStrictEqual(got.left, { held: true, free: false }, 'the free entries are removed on the way; the held one is not');
   } finally { fs.rmSync(s, { recursive: true, force: true }); }
 });
+
+// A delete-pending entry on Windows (another process holds it open with FILE_SHARE_DELETE) still sits in readdir but
+// fails lstat with EPERM: that is the entry to name, never one to count as gone. Only ENOENT is gone. Simulated by an
+// lstat and an rm that refuse it (fix round 1, review finding 1).
+test('an entry whose lstat fails other than ENOENT is named (mode ?), never counted as gone', () => {
+  const { removeNamingRefusals } = require(SUITE_HOME);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'suite-home-pending-'));
+  const pending = path.join(dir, 'sub', 'pending.txt');
+  fs.mkdirSync(path.dirname(pending));
+  fs.writeFileSync(pending, 'x');
+  fs.writeFileSync(path.join(dir, 'free.txt'), 'x');
+  const eperm = (p) => { const e = new Error(`EPERM, Permission denied: ${p}`); e.code = 'EPERM'; return e; };
+  const rm = (p, o) => { if (p === pending || (fs.existsSync(pending) && pending.startsWith(p + path.sep))) throw eperm(p); return fs.rmSync(p, o); };
+  const lstat = (p) => { if (p === pending) throw eperm(p); return fs.lstatSync(p); };
+  try {
+    let err = null;
+    try { removeNamingRefusals(dir, { rm, lstat, what: 'the fixture' }); } catch (e) { err = e; }
+    assert.ok(err, 'a refused removal must fail');
+    assert.strictEqual(err.code, 'EPERM');
+    const want = `1 entry under it refused removal: ${path.join('sub', 'pending.txt')} (EPERM, mode ?)`;
+    assert.ok(err.message.includes(want), `${err.message}\nmust name: ${want}`);
+    assert.ok(err.message.startsWith(`could not remove the fixture ${dir} (EPERM)`), err.message);
+    assert.ok(!fs.existsSync(path.join(dir, 'free.txt')), 'the free entry is removed on the way');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
