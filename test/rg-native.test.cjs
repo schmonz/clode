@@ -1338,6 +1338,20 @@ test('RG-JSON: finding each match\'s line steps over the text at most once (coun
 // printed (rgn.searchStats.printed) must stay within one slice of a 1 MB maxBuffer, on both twins, and
 // every call must end in execFile's maxBuffer error (ENOBUFS for the sync twin), never its timeout.
 // The loop's longest gap is the one wall-clock bound left: it is what the review measured.
+//
+// SLOW IS NOT STALLED (2026-11-19). On c840eb8 the full suite failed the -n -o row: SIGKILL at the probe's
+// 20 s timeout, printed 0. Measured with ugrep wrapped to tee its stdout, under 16 CPU hogs and an IO loop
+// (reproduced 4 of 4): ugrep wrote all 30.6 MB (1.2M records) and tjs RECEIVED all of it and saw ugrep close
+// within 0.9 s every time. The 20 s went to quaude's own work after that: the async twin parses EVERY record
+// before printing (14-16 s under that load, 3.2-4.0 s alone) and then prints to the 1 MB maxBuffer (7-12 s
+// loaded, 1.8-2.2 s alone). With a timeout that cannot fire, all three loaded runs ended in the maxBuffer error
+// at 23.6-28.6 s. So it was load on a cost that scales with ALL matches, not with maxBuffer (BACKLOG: "quaude's
+// rg parses every ugrep record before printing"), not a pipe stall. The probe's timeout is therefore NOT the
+// Grep tool's 20 s: PROBE_TIMEOUT_MS is 120 s, 4.2x the worst loaded run. And each row now SAYS which it was:
+// ugrepClosed records how the ugrep child ended. A stall (bytes ugrep wrote that never reached the tjs reader,
+// the Haiku >64 KB write family) leaves the child open until the timeout kills it; a slow search shows it closed
+// on its own, with every byte received, long before.
+const PROBE_TIMEOUT_MS = 120000;
 const MB_SLACK = 512 * 1024;   // one 64 KiB slice of JSON, every byte of it escaped (x6), and change
 test('rg stops printing at the caller\'s maxBuffer and the async twin never holds the loop (tjs, counted)', {
   skip: needUgrep.skip || NO_TJS,
@@ -1353,29 +1367,54 @@ test('rg stops printing at the caller\'s maxBuffer and the async twin never hold
     fs.writeFileSync(prog, `
       const rgn = require(${JSON.stringify(path.join(__dirname, '..', 'libexec', 'rg-native.cjs'))});
       const cp = require('child_process');
-      const ctx = { spawn: cp.spawn, spawnSync: cp.spawnSync, ugrep: () => ${JSON.stringify(UGREP)} };
+      // Every ugrep search child (not the --version probe): how it ended, and what the tjs reader got from it.
+      let kids = [];
+      const spawn = (bin, args, o) => {
+        const c = cp.spawn(bin, args, o);
+        if (args.some((x) => String(x).startsWith('--format'))) {
+          const k = { t0: Date.now(), received: 0, closedMs: null, status: null, signal: null };
+          kids.push(k);
+          c.stdout.on('data', (d) => { k.received += d.length; });
+          c.on('close', (status, signal) => { k.closedMs = Date.now() - k.t0; k.status = status; k.signal = signal; });
+        }
+        return c;
+      };
+      const ctx = { spawn, spawnSync: cp.spawnSync, ugrep: () => ${JSON.stringify(UGREP)} };
       const cwd = ${JSON.stringify(dir)}, out = [], maxBuffer = 1000000;
       (async () => {
         for (const argv of [['--json', '', 'lines50k.txt'], ['--json', 'needle', 'lines.txt'], ['--json', 'from', 'line5m.js'], ['-n', '-o', 'e', 'lines.txt']]) {
           let last = Date.now(), maxGap = 0;
+          kids = [];
+          const t0 = Date.now();
           const iv = setInterval(() => { const n = Date.now(); maxGap = Math.max(maxGap, n - last); last = n; }, 10);
-          const a = await new Promise((res) => rgn.rgExecFile(argv, { cwd, encoding: 'buffer', maxBuffer, timeout: 20000, killSignal: 'SIGKILL' },
+          const a = await new Promise((res) => rgn.rgExecFile(argv, { cwd, encoding: 'buffer', maxBuffer, timeout: ${PROBE_TIMEOUT_MS}, killSignal: 'SIGKILL' },
             (e, so) => res({ code: e ? e.code : 0, signal: e ? e.signal : null, bytes: so.length }), 'rg', ctx));
           clearInterval(iv);
-          out.push({ argv, twin: 'async', maxGap, printed: rgn.searchStats.printed, ...a });
+          const ugrepClosed = kids.map(({ received, closedMs, status, signal }) => ({ received, closedMs, status, signal }));
+          out.push({ argv, twin: 'async', maxGap, printed: rgn.searchStats.printed, ms: Date.now() - t0, ugrepClosed, ...a });
         }
         const s = rgn.runRg(['--json', 'needle', 'lines.txt'], { ...ctx, cwd, maxBuffer });
         out.push({ twin: 'sync', code: s.errorCode || s.status, printed: rgn.searchStats.printed, bytes: s.stdout.length });
         process.stdout.write('PROBE:' + JSON.stringify(out) + '\\n');
       })();
     `);
-    const res = runLoader(prog, [], { timeout: 180000 });
+    const res = runLoader(prog, [], { timeout: 5 * PROBE_TIMEOUT_MS });
     const line = (res.stdout || '').split('\n').find((l) => l.startsWith('PROBE:'));
     assert.ok(line, `the tjs probe printed nothing (exit ${res.status}): ${(res.stderr || '').slice(0, 1500)}`);
     const got = JSON.parse(line.slice('PROBE:'.length));
     if (process.env.RG_TIMINGS) console.log(JSON.stringify(got));
     for (const r of got) {
       const what = JSON.stringify(r);
+      if (r.twin === 'async') {
+        // A ugrep child the timeout had to kill never reached EOF in the tjs reader: a stall, named as one.
+        const open = r.ugrepClosed.filter((k) => k.closedMs === null || k.signal);
+        assert.ok(r.ugrepClosed.length && !open.length, `STALL? ugrep's output never reached EOF in the tjs reader before the `
+          + `${PROBE_TIMEOUT_MS} ms timeout killed it (received ${open.map((k) => k.received).join(', ')} bytes): ${what}`);
+        if (r.code !== 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') {
+          assert.fail(`SLOW, not stalled: every ugrep child closed on its own (${r.ugrepClosed.map((k) => `${k.received} bytes by ${k.closedMs} ms`).join(', ')}), `
+            + `then quaude's own parse and print did not reach maxBuffer in ${r.ms} ms: ${what}`);
+        }
+      }
       assert.strictEqual(r.code, r.twin === 'sync' ? 'ENOBUFS' : 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER', what);
       assert.ok(r.printed > 1000000 && r.printed <= 1000000 + MB_SLACK, `printed ${r.printed} bytes for a 1 MB maxBuffer: ${what}`);
       if (r.twin === 'async') assert.ok(r.maxGap < 600, `the loop was held ${r.maxGap} ms: ${what}`);

@@ -8,6 +8,21 @@ Concrete clode-under-Node divergences from native Claude Code, to triage and fix
 That page is GENERATED from `scripts/build-graph.cjs` — the one declaration of the build — so it
 cannot drift from it; it is also where the honest answer to "does this need node?" lives.
 
+## quaude's rg parses every ugrep record before printing, so a huge answer can hit the Grep tool's 20 s timeout where native ends at maxBuffer (2026-11-19)
+
+The async twin (libexec/rg-native.cjs ugrepMatchesAsync) reads all of ugrep's output, parses EVERY record, and only then
+prints; the caller's maxBuffer stops the printing, not the parse. So the work grows with all matches, not with
+maxBuffer. `-n -o e` over 200,000 lines is 1.2M records (30.6 MB from ugrep): parse 3.2-4.0 s, then printing to a 1 MB
+maxBuffer 1.8-2.2 s, alone; under 16 CPU hogs, 14-16 s plus 7-12 s. The Grep tool runs rg with a 20 s timeout, so on a
+loaded machine it gets the timeout (nothing printed) where native, which streams, ends in the maxBuffer error within
+about 100 ms. The fix is to bound the parse by what can still be printed: stream records into the printer, or stop
+parsing once the printed answer must exceed maxBuffer (careful: -c, -l and -v print nothing per match).
+
+Measured: test/rg-native.test.cjs's maxBuffer probe, row `-n -o e lines.txt`, with ugrep wrapped to tee its stdout and
+phase timestamps in a scratch copy of rg-native.cjs, alone and beside 16 CPU hogs and an IO loop: ugrep closed and all
+30.6 MB reached the tjs reader within 0.9 s every run, and 4 of 4 loaded runs hit a 20 s timeout before printing
+(2026-11-19)
+
 ## release.yml and upstream-drift.yml run gates that no aggregator judges (2026-11-19)
 
 test/ci-gates.cjs and ci.yml's gates-ran-in-ci job judge ci.yml runs only. Two other workflows run gates outside them:
