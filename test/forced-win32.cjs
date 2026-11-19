@@ -80,6 +80,27 @@ const REAL_OS = /child_process|spawnSync|execFileSync|execSync|execFile\(|\bspaw
 
 const PRELOAD = path.join(__dirname, 'forced-win32-preload.cjs');
 
+// THE ONE WAY BACK IN: a test file whose PRODUCTION closure spawns, but whose tests never let it (every spawn they
+// reach is injected), declares so in its own text, with a reason:
+//
+//     // forced-win32: spawn-injected: <why: which seams the tests inject>
+//
+// Its REAL_OS check then reads the TEST FILE and its test/ helpers only, not the production modules it requires. A
+// declaring file whose own test-side code still matches REAL_OS stays OUT, and spawnInjectedContradictions() names it
+// (test/forced-win32.test.cjs holds that list empty). WHY (fix round 1 of CI 44443821699, #2087): naude-entry.test.cjs
+// injects spawn into runNaude for every first pass, yet was OUT because libexec/naude-entry.cjs requires
+// child_process at top level; its win32 policy branch went untested until a real Windows runner turned it red.
+const SPAWN_INJECTED = /^\s*\/\/\s*forced-win32: spawn-injected: \S.*$/m;
+// Test-side: under the test file's own `test` directory (its nearest ancestor of that name; its own directory when it
+// has none). Production modules (libexec/, scripts/) lie outside it.
+function testRoot(f) {
+  for (let d = path.dirname(f); ; d = path.dirname(d)) {
+    if (path.basename(d) === 'test') return d;
+    if (path.dirname(d) === d) return path.dirname(f);
+  }
+}
+const isTestSide = (c, f) => { const r = path.relative(testRoot(f), c); return !r.startsWith('..') && !path.isAbsolute(r); };
+
 // A floor, not a list: if the derivation regresses to near-nothing the gate goes red
 // instead of quietly covering three files. Chosen below today's set with room for
 // ordinary churn; raising it as the suite grows is fine, lowering it to pass is not.
@@ -120,6 +141,20 @@ function requireClosure(file, io = realIo, seen = new Set()) {
   return seen;
 }
 
+function declaresSpawnInjected(f, io = realIo) {
+  try { return SPAWN_INJECTED.test(io.read(f)); } catch { return false; }
+}
+// The test file and its test/ helpers (not the production modules): what a spawn-injected file's own code reaches.
+function testSideText(f, io = realIo) {
+  let text = '';
+  for (const c of requireClosure(f, io)) if (isTestSide(c, f)) { try { text += `${io.read(c)}\n`; } catch { /* nothing */ } }
+  return text;
+}
+// Declared spawn-injected, yet its own test-side code reaches the real OS: the declaration is false.
+function spawnInjectedContradictions(testFiles, io = realIo) {
+  return testFiles.filter((f) => declaresSpawnInjected(f, io) && REAL_OS.test(testSideText(f, io)));
+}
+
 function forcedWin32Files(testFiles, io = realIo) {
   const out = [];
   for (const f of testFiles) {
@@ -128,13 +163,14 @@ function forcedWin32Files(testFiles, io = realIo) {
       try { text += `${io.read(c)}\n`; } catch { /* unreadable member: it contributes nothing */ }
     }
     if (!SENSITIVE.test(text)) continue;
-    if (REAL_OS.test(text)) continue;
+    if (REAL_OS.test(declaresSpawnInjected(f, io) ? testSideText(f, io) : text)) continue;
     out.push(f);
   }
   return out;
 }
 
-module.exports = { SENSITIVE, REAL_OS, PRELOAD, FLOOR, discover, requireClosure, forcedWin32Files };
+module.exports = { SENSITIVE, REAL_OS, SPAWN_INJECTED, PRELOAD, FLOOR, discover, requireClosure, forcedWin32Files,
+  declaresSpawnInjected, spawnInjectedContradictions };
 
 // Triage mode, for the thing this machinery is actually best at: force ANY file, spawn
 // or not, and see what a Windows runner would be arguing with. This is how the fourth

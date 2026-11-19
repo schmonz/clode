@@ -22,6 +22,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
+const { providerArchOf } = require('../libexec/extract-claude-js.cjs');
 
 const REPO = path.resolve(__dirname, '..');
 const TARGET = path.join(REPO, 'libexec', 'rg-types.cjs');
@@ -37,14 +38,11 @@ function nativeRg(bin, args) {
   return r.stdout;
 }
 
-// The native's architecture as node spells it, read from the binary's header (Mach-O or ELF).
+// The native's architecture as node spells it, read from the binary's header by the ONE reader of
+// a provider's arch (extract-claude-js providerArchOf: Mach-O, ELF and PE). A private reader here
+// knew Mach-O and ELF only, so a win32 native (and node.exe) read 'unknown' (CI 44443821699).
 function binaryArch(bin) {
-  const fd = fs.openSync(bin, 'r');
-  const h = Buffer.alloc(20);
-  try { fs.readSync(fd, h, 0, 20, 0); } finally { fs.closeSync(fd); }
-  if (h.readUInt32LE(0) === 0xfeedfacf) return { 0x0100000c: 'arm64', 0x01000007: 'x64' }[h.readUInt32LE(4)] || 'unknown';
-  if (h[0] === 0x7f && h.toString('latin1', 1, 4) === 'ELF') return { 0xb7: 'arm64', 0x3e: 'x64' }[h.readUInt16LE(18)] || 'unknown';
-  return 'unknown';
+  return providerArchOf(bin) || 'unknown';
 }
 
 function generate(bin) {

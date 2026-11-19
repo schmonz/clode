@@ -100,17 +100,37 @@ function sortOf(argv) {
 const TIME = new Map();
 for (const [rel, data, t] of FILES_TREE) TIME.set(path.basename(rel), t);
 for (const [rel, data] of FILES_TREE) if (data && data.symlink) TIME.set(path.basename(rel), TIME.get(data.symlink));
-// A listing as groups of equal time, each group's names sorted (the order WITHIN a group is readdir's).
-function timeGroups(recs) {
+// A sorted output as groups of equal time, each group's units sorted (the order WITHIN a group is readdir's). A unit
+// is one file's part of the output, keyed by its path: a listing's record, a count's `PATH:N` record, or a --json
+// search's begin..end messages (keyed by the begin's path; the closing summary is a unit of its own). Every shape a
+// sorted row prints is read this way, so a tie compares as a set in each (CI 44443821699: on ext4, readdir gave
+// g.TXT before f.txt, and a -c row and two --json rows compared exactly, as if the tie had one order).
+function timeGroups(units) {
   const out = [];
-  for (const r of recs) {
-    const t = TIME.get(path.basename(r.replace(/[\0\n]$/, '')));
+  for (const u of units) {
+    const t = u.key === null ? undefined : TIME.get(path.basename(u.key));
     const last = out[out.length - 1];
-    if (last && t !== undefined && last.t === t) last.recs.push(r); else out.push({ t, recs: [r] });
+    if (last && t !== undefined && last.t === t) last.recs.push(u.text); else out.push({ t, recs: [u.text] });
   }
   return out.map((g) => g.recs.sort().join(''));
 }
 const records = (s, sep) => s.split(sep).filter(Boolean).map((x) => x + sep);
+function units(s, sep, argv) {
+  if (argv.includes('--json') && s.startsWith('{')) {
+    const out = [];
+    let cur = null;
+    // a {bytes} path (not UTF-8) has no text: no key, so no time group; it compares as its own unit
+    for (const line of records(s, '\n')) {
+      const m = JSON.parse(line);
+      if (m.type === 'begin') { cur = { key: (m.data && m.data.path && m.data.path.text) ?? null, text: line }; out.push(cur); } else if (cur) cur.text += line;
+      else out.push({ key: null, text: line });
+      if (m.type === 'end') cur = null;
+    }
+    return out;
+  }
+  const count = argv.includes('-c') || argv.includes('--count');
+  return records(s, sep).map((r) => ({ key: count ? r.slice(0, -1).replace(/:\d+$/, '') : r.slice(0, -1), text: r }));
+}
 function check(row, got, root) {
   const [rule, , argv, status, out, err] = row;
   const want = out.split('<ROOT>').join(root);
@@ -119,8 +139,8 @@ function check(row, got, root) {
   assert.strictEqual(got.stderr, err.split('<ROOT>').join(root), what);
   const sep = argv.includes('--null') ? '\0' : '\n';
   const elapsed = (x) => x.replace(/"(elapsed|elapsed_total)":\{[^{}]*\}/g, '"$1":{}');   // rg-probe's named normalization 2
-  if (argv.includes('--json')) assert.strictEqual(elapsed(got.stdout), elapsed(want), what);
-  else if (sortOf(argv)) assert.deepStrictEqual(timeGroups(records(got.stdout, sep)), timeGroups(records(want, sep)), what);
+  if (sortOf(argv)) assert.deepStrictEqual(timeGroups(units(elapsed(got.stdout), sep, argv)), timeGroups(units(elapsed(want), sep, argv)), what);
+  else if (argv.includes('--json')) assert.strictEqual(elapsed(got.stdout), elapsed(want), what);
   else assert.deepStrictEqual(records(got.stdout, sep).sort(), records(want, sep).sort(), what);
 }
 function syncRun(root, [, cwdRel, argv]) {
@@ -136,6 +156,27 @@ function asyncRun(root, [, cwdRel, argv]) {
     if (child.stdin) child.stdin.end();
   });
 }
+
+// The comparison itself, on every sorted row in every output shape (a listing, --null, -c, --json --files, a --json
+// search): the tie f.txt/g.TXT in the other readdir order (ext4's, CI 44443821699) is native's answer too, and the
+// non-tie e.txt (7.0) before f.txt (5.1) is not. Text swaps in the native literals, so no filesystem decides.
+test('RG-SORT-MODIFIED: a tie compares in either readdir order, in every output shape; anything else in the times\' order', () => {
+  const swap = (x, a, b) => x.split(a).map((p) => p.split(b).join('\u0001')).join(b).split('\u0001').join(a);
+  const root = '/R';
+  let ties = 0, strict = 0;
+  for (const row of P10_FILES_NATIVE) {
+    const [, , argv, status, out, err] = row;
+    if (!sortOf(argv) || !out.includes('deep/f.txt') || !out.includes('deep/g.TXT')) continue;
+    const got = (o) => ({ status, stdout: o.split('<ROOT>').join(root), stderr: err.split('<ROOT>').join(root) });
+    check(row, got(swap(out, 'deep/f.txt', 'deep/g.TXT')), root);
+    ties++;
+    if (out.includes('sub/e.txt')) {
+      assert.throws(() => check(row, got(swap(out, 'sub/e.txt', 'sub/deep/f.txt')), root), assert.AssertionError, argv.join(' '));
+      strict++;
+    }
+  }
+  assert.ok(ties >= 15 && strict >= 10, `rows judged: ${ties} ties, ${strict} non-ties`);
+});
 
 const RULES = [...new Set(P10_FILES_NATIVE.map((r) => r[0]))];
 for (const rule of RULES) {
@@ -206,6 +247,14 @@ test('RG-SORT-MODIFIED: equal times keep the walk\'s readdir order, --sortr keep
     assert.ok(L.indexOf(`./sub/deep/${d1}`) + 1 === L.indexOf(`./sub/deep/${d2}`), `${d1} then ${d2}: ${L}`);
   }
   assert.deepStrictEqual(list(['--files', '--sort=modified', 'c.tsx', 'b.ts']), ['c.tsx', 'b.ts']);
+  // The same ties in a count and in a --json search (the output shapes check() now groups): readdir's order there too.
+  const search = (argv) => l1(rgn.runRg(argv, { cwd: root, spawnSync: cp.spawnSync, ugrep: () => null, matchFiles: rgn.matchFilesAlone }).stdout)
+    .split('\n').filter(Boolean);
+  const counts = search(['-c', '--sort=modified', '--hidden', '--no-ignore', 'x', '.']);
+  assert.ok(counts.indexOf(`./sub/deep/${d1}:1`) + 1 === counts.indexOf(`./sub/deep/${d2}:1`), `-c: ${d1} then ${d2}: ${counts}`);
+  const begins = search(['--json', '--sort=modified', 'x', 'sub']).map((l) => JSON.parse(l)).filter((m) => m.type === 'begin')
+    .map((m) => m.data.path.text);
+  assert.deepStrictEqual(begins.filter((p) => p.startsWith('sub/deep/')), [`sub/deep/${d1}`, `sub/deep/${d2}`], `--json: ${begins}`);
 }));
 
 // RULING G12, end to end: files written within ONE second, their times as the filesystem gave them (none set):

@@ -102,6 +102,43 @@ test('the reach is TRANSITIVE: a sensitive file whose helper spawns is OUT too',
   assert.strictEqual(path.resolve(path.dirname(A), './helper.cjs'), HELPER);
 });
 
+// THE SPAWN-INJECTED DECLARATION (fix round 1 of CI 44443821699, #2087). naude-entry.test.cjs injects spawn into every
+// runNaude it calls, yet was OUT because the PRODUCTION module it tests requires child_process; its win32 branch went
+// unseen until a Windows runner. A test file may declare `// forced-win32: spawn-injected: <why>`: its REAL_OS check
+// then reads its own test-side closure only. A declaration whose test-side code still spawns stays OUT, and is named.
+const TT = path.join(T, 'test');
+const DA = path.join(TT, 'd.test.cjs');
+const DHELP = path.join(TT, 'd-helper.cjs');
+const PROD = path.join(T, 'libexec', 'prod.cjs');
+const DECL = '// forced-win32: spawn-injected: every call injects spawn\n';
+test('a declared spawn-injected file is IN though its production module spawns; undeclared, it is OUT', () => {
+  const files = {
+    [DA]: `${DECL}const p = require('../libexec/prod.cjs'); process.platform;\n`,
+    [PROD]: "const cp = require('node:child_process');\n",
+  };
+  assert.deepStrictEqual(F.forcedWin32Files([DA], fakeIo(files)), [DA]);
+  assert.deepStrictEqual(F.spawnInjectedContradictions([DA], fakeIo(files)), []);
+  const undeclared = { ...files, [DA]: files[DA].replace(DECL, '') };
+  assert.deepStrictEqual(F.forcedWin32Files([DA], fakeIo(undeclared)), []);
+  // a declaration with no reason is no declaration
+  const bare = { ...files, [DA]: files[DA].replace(DECL, '// forced-win32: spawn-injected:\n') };
+  assert.deepStrictEqual(F.forcedWin32Files([DA], fakeIo(bare)), []);
+});
+test('a declared file whose OWN test-side code spawns (itself or a test/ helper) stays OUT and is named a contradiction', () => {
+  const self = { [DA]: `${DECL}process.platform; spawnSync('sh', []);\n` };
+  assert.deepStrictEqual(F.forcedWin32Files([DA], fakeIo(self)), []);
+  assert.deepStrictEqual(F.spawnInjectedContradictions([DA], fakeIo(self)), [DA]);
+  const helper = { [DA]: `${DECL}require('./d-helper.cjs'); process.platform;\n`, [DHELP]: "require('node:child_process');\n" };
+  assert.deepStrictEqual(F.forcedWin32Files([DA], fakeIo(helper)), []);
+  assert.deepStrictEqual(F.spawnInjectedContradictions([DA], fakeIo(helper)), [DA]);
+});
+test('no test file in the tree declares spawn-injected falsely, and naude-entry.test.cjs is in the pass', () => {
+  const all = F.discover(path.join(REPO, 'test'));
+  assert.deepStrictEqual(F.spawnInjectedContradictions(all).map((f) => path.relative(REPO, f)), []);
+  assert.ok(F.forcedWin32Files(all).some((f) => path.basename(f) === 'naude-entry.test.cjs'),
+    'naude-entry.test.cjs (#2087\'s win32 policy branch) must run under forcing');
+});
+
 test('the real set is DERIVED from the tree and meets a floor', () => {
   const files = F.forcedWin32Files(F.discover(path.join(REPO, 'test')));
   assert.ok(files.length >= F.FLOOR,
@@ -147,6 +184,10 @@ function runFixture(withPreload) {
   const d = mkdtemp();
   const f = path.join(d, 'control.test.cjs');
   fs.writeFileSync(f, POSIX_ASSUMING_FIXTURE);
+  try { return runTestFile(f, withPreload); } finally { fs.rmSync(d, { recursive: true, force: true }); }
+}
+
+function runTestFile(f, withPreload) {
   // NODE_TEST_CONTEXT et al. are set by the `node --test` running THIS file, and an
   // inner `node --test` that inherits them thinks it is a reporter child: it exits 0
   // having run nothing, so the control would report "cannot fail" for a reason that has
@@ -154,10 +195,8 @@ function runFixture(withPreload) {
   const env = { ...process.env };
   for (const k of Object.keys(env)) if (k.startsWith('NODE_TEST_')) delete env[k];
   if (withPreload) env.NODE_OPTIONS = `${env.NODE_OPTIONS || ''} --require ${F.PRELOAD}`.trim();
-  const r = spawnSync(process.execPath, ['--test', '--test-reporter', 'tap', f],
+  return spawnSync(process.execPath, ['--test', '--test-reporter', 'tap', f],
     { env, encoding: 'utf8' });
-  fs.rmSync(d, { recursive: true, force: true });
-  return r;
 }
 
 test('CONTROL: the pass can actually FAIL — a POSIX assumption goes red under it',
@@ -176,6 +215,40 @@ test('CONTROL: the same fixture is GREEN without the preload',
   // breaks node:test outright — "it went red" would prove nothing about the forcing.
   const green = runFixture(false);
   assert.strictEqual(green.status, 0, green.stdout + green.stderr);
+});
+
+// A spawn-injected declaration is checked against the file's TEXT (above), and the text
+// check reads only the test side: a spawn that hides in a production module the test
+// requires is invisible to it. The preload's spawn trap is what makes the declaration
+// binding — this fixture is IN the set by text, and still goes red at the spawn.
+test('CONTROL: a false spawn-injected declaration goes RED under the preload',
+  { skip: NO_FORCING_ON_WIN32 }, () => {
+  const d = mkdtemp();
+  try {
+    const tdir = path.join(d, 'test');
+    const ldir = path.join(d, 'libexec');
+    fs.mkdirSync(tdir); fs.mkdirSync(ldir);
+    fs.writeFileSync(path.join(ldir, 'spawner.cjs'),
+      "module.exports = () => require('node:child_process').spawnSync(process.execPath, ['-e', '']).status;\n");
+    const f = path.join(tdir, 'liar.test.cjs');
+    fs.writeFileSync(f, `${DECL}const { test } = require('node:test');
+const run = require('../libexec/spawner.cjs');
+test('declared injected, really spawns', () => { if (process.platform === 'win32') run(); });
+`);
+    assert.deepStrictEqual(F.forcedWin32Files([f]), [f],
+      'sanity: the fixture must be IN the forced set by its text, or this control proves nothing');
+    const red = runTestFile(f, true);
+    assert.notStrictEqual(red.status, 0, red.stdout + red.stderr);
+    assert.match(red.stdout, /forced-win32: a real spawn in a forced run/);
+    assert.strictEqual(runTestFile(f, false).status, 0, 'and it is green unforced');
+  } finally { fs.rmSync(d, { recursive: true, force: true }); }
+});
+
+test('CONTROL: the honest declarer, test/naude-entry.test.cjs, stays GREEN under the trap',
+  { skip: NO_FORCING_ON_WIN32 }, () => {
+  const r = runTestFile(path.join(__dirname, 'naude-entry.test.cjs'), true);
+  assert.strictEqual(r.status, 0, r.stdout + r.stderr);
+  assert.doesNotMatch(r.stdout, /a real spawn in a forced run/);
 });
 
 // -------------------------------------------------------------------- limits ----

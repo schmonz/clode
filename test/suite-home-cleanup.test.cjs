@@ -76,3 +76,58 @@ test('removeOwnSuiteHome refuses anything it did not make here, under tmp, with 
     assert.ok(fs.existsSync(path.join(s, 'KEEP')));
   } finally { fs.rmSync(s, { recursive: true, force: true }); }
 });
+
+// windows-amd64-tui (CI 44443821699) died at exit with node's bare "EPERM, Permission denied: <the suite home>": node's
+// rm names the root, never the entry that refused. Now the failure names each refusing entry by path, code and mode,
+// and still fails. A held file is simulated by an rm that refuses it (and the root while it is there), as Windows does.
+test('a suite home that cannot be removed fails naming the entry that refused, not just the root', () => {
+  const s = sentinel();
+  const r = child({ ...baseEnv(), HOME: s }, `
+    const { removeOwnSuiteHome } = require(${JSON.stringify(SUITE_HOME)});
+    const fs = require('fs'), path = require('path');
+    const home = process.env.HOME, held = path.join(home, '.claude', 'held.txt');
+    fs.writeFileSync(held, 'x');
+    fs.writeFileSync(path.join(home, 'free.txt'), 'x');
+    const rm = (p, o) => {
+      if (p === held || (p === home && fs.existsSync(held))) { const e = new Error('EPERM, Permission denied: ' + p); e.code = 'EPERM'; throw e; }
+      return fs.rmSync(p, o);
+    };
+    let err = null;
+    try { removeOwnSuiteHome(home, { rm }); } catch (e) { err = { code: e.code, message: e.message }; }
+    const left = { held: fs.existsSync(held), free: fs.existsSync(path.join(home, 'free.txt')) };
+    process.stderr.write('RESULT:' + JSON.stringify({ err, left }) + '\\n');`);
+  try {
+    assert.strictEqual(r.status, 0, r.stderr);
+    const got = JSON.parse(r.stderr.split('RESULT:')[1]);
+    assert.ok(got.err, 'a refused removal must fail, never pass silently');
+    assert.strictEqual(got.err.code, 'EPERM');
+    const want = `1 entry under it refused removal: ${path.join('.claude', 'held.txt')} (EPERM, mode `;
+    assert.ok(got.err.message.includes(want), `${got.err.message}\nmust name: ${want}`);
+    assert.deepStrictEqual(got.left, { held: true, free: false }, 'the free entries are removed on the way; the held one is not');
+  } finally { fs.rmSync(s, { recursive: true, force: true }); }
+});
+
+// A delete-pending entry on Windows (another process holds it open with FILE_SHARE_DELETE) still sits in readdir but
+// fails lstat with EPERM: that is the entry to name, never one to count as gone. Only ENOENT is gone. Simulated by an
+// lstat and an rm that refuse it (fix round 1, review finding 1).
+test('an entry whose lstat fails other than ENOENT is named (mode ?), never counted as gone', () => {
+  const { removeNamingRefusals } = require(SUITE_HOME);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'suite-home-pending-'));
+  const pending = path.join(dir, 'sub', 'pending.txt');
+  fs.mkdirSync(path.dirname(pending));
+  fs.writeFileSync(pending, 'x');
+  fs.writeFileSync(path.join(dir, 'free.txt'), 'x');
+  const eperm = (p) => { const e = new Error(`EPERM, Permission denied: ${p}`); e.code = 'EPERM'; return e; };
+  const rm = (p, o) => { if (p === pending || (fs.existsSync(pending) && pending.startsWith(p + path.sep))) throw eperm(p); return fs.rmSync(p, o); };
+  const lstat = (p) => { if (p === pending) throw eperm(p); return fs.lstatSync(p); };
+  try {
+    let err = null;
+    try { removeNamingRefusals(dir, { rm, lstat, what: 'the fixture' }); } catch (e) { err = e; }
+    assert.ok(err, 'a refused removal must fail');
+    assert.strictEqual(err.code, 'EPERM');
+    const want = `1 entry under it refused removal: ${path.join('sub', 'pending.txt')} (EPERM, mode ?)`;
+    assert.ok(err.message.includes(want), `${err.message}\nmust name: ${want}`);
+    assert.ok(err.message.startsWith(`could not remove the fixture ${dir} (EPERM)`), err.message);
+    assert.ok(!fs.existsSync(path.join(dir, 'free.txt')), 'the free entry is removed on the way');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});

@@ -1698,6 +1698,20 @@ function moduleWithMeta(name, src) {
     + '\n' + src;
 }
 
+// The inverse of moduleWithMeta's url: the module NAME a generated header's import.meta.url was
+// derived from, which is the spelling every other module's `from"..."` uses for it. A POSIX carve
+// names its modules /$bunfs/root/x.js (url file:///$bunfs/root/x.js); a win32 carve names them
+// B:/~BUN/root/x.js, and the url gains a '/' before the drive (file:///B:/~BUN/root/x.js), which a
+// reader that only strips "file://" keeps -- so its /B:/... matched no import and every cross-chunk
+// resolution in a win32 carve came up empty (CI 44443821699: rg-resolution-accounted and
+// every-tool-driven BROKEN on windows-latest only). Readers of a decoded carve use this, not
+// their own strip. null for anything that is not a file:// url.
+function moduleNameOfMetaUrl(url) {
+  if (typeof url !== 'string' || !url.startsWith('file://')) return null;
+  const body = url.slice('file://'.length);
+  return /^\/[A-Za-z]:/.test(body) ? body.slice(1) : body;
+}
+
 function graphRunnerSource(doc) {
   // JSON.stringify twice = a valid JS string literal. U+2028/2029 are legal in JS
   // strings since ES2019 but not in every engine this output may meet, so escape them.
@@ -1952,10 +1966,28 @@ function providerArchOf(binpath) {
   }
 }
 
+// THE BYTES THOSE TWO READ, for a writer that must carry them (scripts/make-min-provider.cjs
+// prefixes a minimised provider with its source's header so both still answer). The first 64
+// bytes hold Mach-O's and ELF's answers and PE's 'MZ'; PE's Machine sits at e_lfanew + 4, past
+// them (0x7c in upstream's claude.exe), so a 64-byte prefix carried the platform but not the
+// arch: a minimised win32 provider answered null to providerArchOf, and windows-latest's
+// RG-VERSION-SIMD test read 'unknown' for an x64 native (CI 44443821699). For a PE the header
+// runs through the Machine field; e_lfanew past 4KB is not a header we carry.
+function containerHeader(buf) {
+  let n = Math.min(64, buf.length);
+  if (n === 64 && buf[0] === 0x4d && buf[1] === 0x5a) {
+    const off = buf.readUInt32LE(0x3c);
+    if (off <= 4096 && off + 6 <= buf.length) n = Math.max(n, off + 6);
+  }
+  return Buffer.from(buf.subarray(0, n));
+}
+
 module.exports = {
   BUNFS,
+  containerHeader,
   BUNDLE_VERSION,
   moduleWithMeta,
+  moduleNameOfMetaUrl,
   pickEntry,
   describeBundleFormat,
   patchDoctorWarnings,

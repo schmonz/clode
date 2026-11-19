@@ -74,8 +74,30 @@ function spawnEval(js, opts = {}) {
   check('fs write+read byte-exact', dec.decode(back) === 'FSDATA', dec.decode(back));
   const st = __tjs_fs_sync.stat(fp);
   check('fs stat size', st.size === 6, String(st.size));
-  check('fs stat mtimeMs present', typeof st.mtimeMs === 'number' && st.mtimeMs > 0, String(st.mtimeMs));
+  // The raw shape since txiki-sync-stat-identity.patch (6d43ee6): no whole-second mtimeMs (node-shim builds
+  // Stats from these, test/node-shim-fs-stat-identity.test.cjs); each time as BigInt seconds and nanoseconds,
+  // dev and ino as BigInts. On Windows libuv fills them from FILETIME (100 ns ticks), the volume serial number
+  // and the FileId. This line asked for mtimeMs until CI 44443821699 said undefined on both Windows legs.
+  check('fs stat mtimeSec/mtimeNsec present', typeof st.mtimeSec === 'bigint' && st.mtimeSec > 0n
+    && typeof st.mtimeNsec === 'bigint' && st.mtimeNsec >= 0n && st.mtimeNsec < 1000000000n && st.mtimeNsec % 100n === 0n,
+    String(st.mtimeSec) + ' ' + String(st.mtimeNsec));
+  check('fs stat no stale mtimeMs', st.mtimeMs === undefined, String(st.mtimeMs));
+  check('fs stat identity: dev and ino BigInts, ino nonzero', typeof st.dev === 'bigint' && typeof st.ino === 'bigint' && st.ino !== 0n,
+    String(st.dev) + ' ' + String(st.ino));
   check('fs stat kind file', st.kind === 'file', st.kind);
+  // End to end through node-shim: fs.statSync(fp).mtimeMs under the loader (the repo's own, from this job's cwd, the
+  // checkout root) is node's ms from the same raw stat, sec * 1e3 + nsec / 1e6.
+  {
+    const probe = dir + '\\shim-stat.cjs';
+    const pfd = __tjs_fs_sync.open(probe, 'w');
+    __tjs_fs_sync.write(pfd, enc.encode("process.stdout.write(String(require('fs').statSync(process.argv[2]).mtimeMs))").buffer, -1);
+    __tjs_fs_sync.close(pfd);
+    const r = globalThis.__tjs_spawn_sync(SELF, ['run', tjs.cwd + '\\libexec\\node-shim\\loader.cjs', probe, fp], {});
+    const want = Number(st.mtimeSec) * 1e3 + Number(st.mtimeNsec) / 1e6;
+    const got = dec.decode(r.stdout);
+    check('shim fs.statSync().mtimeMs is node\'s ms from the raw stat', r.status === 0 && got === String(want),
+      'status ' + r.status + ', got ' + got + ', want ' + want + ', stderr ' + dec.decode(r.stderr).slice(0, 300));
+  }
   const names = __tjs_fs_sync.readdir(dir);
   check('fs readdir sees the file', names.indexOf('rt.bin') >= 0, JSON.stringify(names));
   const rp = __tjs_fs_sync.realpath(fp);

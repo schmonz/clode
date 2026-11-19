@@ -219,6 +219,9 @@ test('a minimised provider still reports the platform it was carved from', opts,
     assert.strictEqual(providerPlatformOf(out), before,
       `${bin}: minimising lost the platform (${before} -> ${providerPlatformOf(out)}); the `
       + 'extract cache key cannot tell two platforms apart');
+    // ... and the ARCH: a PE's Machine sits past the first 64 bytes (containerHeader carries it).
+    const { providerArchOf } = require('../libexec/extract-claude-js.cjs');
+    assert.strictEqual(providerArchOf(out), providerArchOf(bin), `${bin}: minimising lost the arch`);
     // ... and the result must still decode, i.e. the header prefix did not disturb the layout.
     // A split provider decodes as a graph; a CJS one has no Bun trailer and carves instead.
     if (isSplitBundle(out)) {

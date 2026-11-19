@@ -104,3 +104,38 @@ test('the real provider carves for THIS host, not another platform', (t) => {
     `provider ${bin} is a ${got} binary but this host is ${process.platform} — `
     + 'a graph carved from it would have this platform\'s branches dead-coded away');
 });
+
+// THE HEADER A MINIMISED PROVIDER CARRIES (containerHeader, which scripts/make-min-provider.cjs
+// prefixes its output with) must answer platform AND arch as the whole container does. A PE's
+// Machine sits at e_lfanew + 4, past the first 64 bytes (upstream's claude.exe: e_lfanew 0x78), and
+// a 64-byte prefix carried 'win32' but not 'x64': windows-latest read 'unknown' for its minimised
+// x64 provider (CI 44443821699, RG-VERSION-SIMD). Built from test/fixtures/binfmt.cjs, so the
+// containers are whole, real-shaped executables, the fixture's PE signature at 0x80.
+test('containerHeader carries the platform and the arch of every container, a PE\'s Machine included', () => {
+  const bf = require('./fixtures/binfmt.cjs');
+  const cases = [
+    ['pe-x64', bf.pe({ machine: 0x8664 }), 'win32', 'x64'],
+    ['pe-arm64', bf.pe({ machine: 0xaa64 }), 'win32', 'arm64'],
+    ['elf-x64', bf.elf({ machine: 62 }), 'linux', 'x64'],
+    ['elf-arm64', bf.elf({ machine: 0xb7 }), 'linux', 'arm64'],
+    ['macho-arm64', bf.macho({ cputype: bf.CPU_ARM64 }), 'darwin', 'arm64'],
+    ['macho-x64', bf.macho({ cputype: bf.CPU_X86_64 }), 'darwin', 'x64'],
+  ];
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-provhdr-'));
+  try {
+    for (const [name, whole, plat, arch] of cases) {
+      const full = path.join(dir, name), min = path.join(dir, `${name}-min`);
+      fs.writeFileSync(full, whole);
+      // what make-min-provider writes: the header, then bytes that are no header at all
+      fs.writeFileSync(min, Buffer.concat([ex.containerHeader(whole), Buffer.from('// @bun @bytecode\n'.repeat(64))]));
+      assert.deepStrictEqual([ex.providerPlatformOf(full), ex.providerArchOf(full)], [plat, arch], `${name}: the fixture itself`);
+      assert.deepStrictEqual([ex.providerPlatformOf(min), ex.providerArchOf(min)], [plat, arch], `${name}: its carried header`);
+    }
+    // the control: the 64-byte prefix the minimiser used to carry loses a PE's arch, and only a PE's
+    const short = path.join(dir, 'pe-64');
+    fs.writeFileSync(short, Buffer.concat([bf.pe({ machine: 0x8664 }).subarray(0, 64), Buffer.from('// @bun @bytecode\n'.repeat(64))]));
+    assert.deepStrictEqual([ex.providerPlatformOf(short), ex.providerArchOf(short)], ['win32', null]);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

@@ -8,7 +8,7 @@
 // test file is edited — this is exactly the wrapper shape that produced the RED for the
 // third round of Windows-only failures, promoted from a one-off into a standing pass.
 //
-// TWO THINGS HAVE TO HAPPEN HERE, IN THIS ORDER.
+// THREE THINGS HAPPEN HERE; THE FIRST TWO IN THIS ORDER.
 //
 // 1. A TEMP DIRECTORY THAT EXISTS. `os.tmpdir()` on the win32 branch answers
 //    `process.env.TEMP || process.env.TMP || ...`, and on a POSIX box neither is set —
@@ -33,3 +33,27 @@ Object.defineProperty(process, 'platform', { value: 'win32', configurable: true 
 // A witness, so the pass can PROVE the flip reached the child rather than assuming a
 // --require that silently did not load (test/forced-win32.test.cjs asserts on it).
 process.env.CLODE_FORCED_WIN32 = '1';
+
+// 3. A SPAWN TRAP. A file is in the forced set only because nothing it reaches starts a
+//    child process (see test/forced-win32.cjs), and a file that declares
+//    "forced-win32: spawn-injected" is let in on its word that every spawn is injected.
+//    That word is checked here, at run time, instead of only against the file's text:
+//    every child_process entry point is replaced with one that throws, so a false
+//    declaration goes red the moment the spawn is reached. Replaced on the module object
+//    BEFORE the test file loads, so `const { spawnSync } = require(...)` in product code
+//    picks up the trap too, and synced to the ESM named exports for `import` sites.
+//
+//    The one process exempt is the `node --test` RUNNER itself: NODE_OPTIONS reaches it
+//    too, and it must spawn the per-file children. It is the only process whose
+//    execArgv carries `--test` (measured: the per-file children get `--test-*` options
+//    and NODE_TEST_CONTEXT, never `--test`), so that is the test, not an env var a
+//    nested runner could inherit.
+if (!process.execArgv.includes('--test')) {
+  const cp = require('node:child_process');
+  for (const name of ['spawn', 'spawnSync', 'exec', 'execSync', 'execFile', 'execFileSync', 'fork']) {
+    cp[name] = function forcedWin32SpawnTrap() {
+      throw new Error(`forced-win32: a real spawn in a forced run (child_process.${name})`);
+    };
+  }
+  require('node:module').syncBuiltinESMExports();
+}

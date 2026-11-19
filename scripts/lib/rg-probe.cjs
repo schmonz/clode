@@ -15,6 +15,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { runProbeOurs } = require('./text-probe.cjs');
+const { moduleNameOfMetaUrl } = require('../../libexec/extract-claude-js.cjs');
 
 // ---- the fixture trees ------------------------------------------------------------------------
 // GENERATED, never committed: binaries and invalid UTF-8 do not belong in git, and a generator
@@ -539,8 +540,8 @@ function carveChunks(t) {
   if (!marks.length) return [{ start: 0, end: t.length, path: null }];
   const chunks = [{ start: 0, end: marks[0], path: null }];
   marks.forEach((m, k) => {
-    const u = /import\.meta\.url = "file:\/\/([^"]+)"/.exec(t.slice(m, m + 300));
-    chunks.push({ start: m, end: k + 1 < marks.length ? marks[k + 1] : t.length, path: u ? u[1] : null });
+    const u = /import\.meta\.url = ("file:\/\/[^"]+")/.exec(t.slice(m, m + 300));
+    chunks.push({ start: m, end: k + 1 < marks.length ? marks[k + 1] : t.length, path: u ? moduleNameOfMetaUrl(JSON.parse(u[1])) : null });
   });
   return chunks;
 }

@@ -1,4 +1,8 @@
 'use strict';
+// forced-win32: spawn-injected: every runNaude call here injects spawn (firstPass and the guard dispatch), or stops before
+// one (requireMain for the second pass, requireRg for rg); libexec/naude-entry.cjs's top-level require of node's process module is
+// the only reach into the real OS, and no test calls it. So the forced-win32 pass runs this file: the win32 policy branch
+// (#2087, CI 44443821699) is a branch in OUR code it can see.
 const { test } = require('node:test');
 const assert = require('node:assert');
 const os = require('node:os');
@@ -85,12 +89,16 @@ function fakeChild() {
 
 // Run the first pass with sensible defaults, letting the caller override seams and
 // capture what happened. Returns { call, child, exited, handlers, registered, removed }.
+const NO_POLICY_HOST = { platform: 'linux', procVersion: () => undefined, exists: () => false };
 function firstPass(overrides = {}) {
   const captured = { call: null, exited: 'unset', handlers: {}, registered: [], removed: [] };
   const child = overrides.child || fakeChild();
   runNaude(Object.assign({
     argv: ['--version'], execPath: '/naude',
     sea: fakeSea(), env: {}, cacheDir: os.tmpdir(),
+    // A host with no admin policy, whatever the runner's: windows-latest is "always" (policyProbe), and a runner
+    // with /etc/claude-code "may" (CI 44443821699 took 'merge' for a 'layers' test there).
+    policyHost: NO_POLICY_HOST,
     materializeDeps: () => '/deps',
     materializeAssets: ({ destDir }) => destDir,
     workDir: '/work',
@@ -410,6 +418,31 @@ test('first pass: the user\'s --settings reaches the child unchanged; the guard 
   assert.strictEqual(fs.statSync(path.dirname(pluginDir)).mode & 0o777, 0o700, 'a private directory');
   fs.rmSync(path.dirname(pluginDir), { recursive: true, force: true });
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+// The host decides 'layers' or 'merge' (policyProbe): Windows always may hold admin policy (the registry), WSL inherits
+// it, and elsewhere a managed-policy path that exists may. Each takes 'merge': the user's value merged into a file of
+// quaude's AND the plugin. Named hosts, so the verdict is the rule's on every runner (windows-latest is the first row).
+test('first pass: a host where admin policy may exist merges the hook into the user\'s --settings; one where it cannot, does not', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naude-user-settings-'));
+  const userFile = path.join(dir, 'mine.json');
+  fs.writeFileSync(userFile, JSON.stringify({ env: { MINE: '1' } }));
+  const hosts = [
+    ['win32', { platform: 'win32', procVersion: () => undefined, exists: () => false }, 'merge'],
+    ['WSL', { platform: 'linux', procVersion: () => 'Linux version 6.6.87.2-microsoft-standard-WSL2 (gcc)', exists: () => false }, 'merge'],
+    ['linux with /etc/claude-code', { platform: 'linux', procVersion: () => undefined, exists: (p) => p === '/etc/claude-code/managed-settings.d' }, 'merge'],
+    ['darwin, no policy', { platform: 'darwin', procVersion: () => undefined, exists: () => false }, 'layers'],
+    ['linux, no policy', NO_POLICY_HOST, 'layers'],
+  ];
+  try {
+    for (const [name, policyHost, want] of hosts) {
+      const cap = firstPass({ argv: ['-p', 'x', '--settings', userFile], policyHost, onExit: (cb) => cb(0, null) });
+      const at = cap.call.args.flatMap((a, i) => (a === '--settings' ? [i] : []));
+      assert.strictEqual(at.length, 1, name);
+      assert.ok(cap.call.args.includes('--plugin-dir'), `${name}: the plugin rides in both modes`);
+      assert.strictEqual(cap.call.args[at[0] + 1] === userFile ? 'layers' : 'merge', want, name);
+    }
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
 test('first pass: a --settings value the bundle refuses reaches it unchanged (it prints its own error)', () => {

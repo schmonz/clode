@@ -36,6 +36,9 @@ const { decodeGraphRunner } = require('../../libexec/inspect-claude-bundle.cjs')
 
 const REPO = path.resolve(__dirname, '..', '..');
 const EXTRACT = path.join(REPO, 'libexec', 'extract-claude-js.cjs');
+// The chunk header as the extractor writes it, a FIXTURE: loaded through EXTRACT, not a require() literal, which
+// guards-population would read as this guard controlling extract-claude-js (bun-ant-surface-gate.test.cjs, same).
+const { moduleWithMeta } = require(EXTRACT);
 const FLOOR = 46;
 
 // VERBATIM from the 2.1.283 darwin-arm64 carve (decoded graph.json, 2026-10-04): each `["--files"` array with
@@ -222,6 +225,30 @@ test('betaAgentToolset\'s grep: rg found by its own PATH scan, its runner\'s arg
   assert.deepStrictEqual(shapes.map((x) => x.argv), [['-n', '--no-heading', '-e', 'x', '--', '.']]);
   assert.deepStrictEqual(scan({ results: answer(shapes), what: 'betaAgentToolset' }).findings, []);
 });
+// THE CLASS, ON THE REAL CARVE, ON EVERY HOST (fix round 1 of CI 44443821699): only windows-latest reads a win32
+// carve, so the pinned carve in hand, spelled the way a win32 carve spells its chunks (measured on the real 2.1.283
+// win32-x64 decode: urls file:///B:/~BUN/root/x.js, imports from"B:/~BUN/root/x.js"), must account for the same
+// references and runner calls as it does, each classified the same.
+// WHAT IT DOES NOT PROVE. The rewrite is textual and blunt: it rewrites EVERY "/$bunfs/root" literal in the carve,
+// not only the chunk headers and import specifiers, so a string that names that path for another reason is rewritten
+// too and no longer reads as a real win32 carve would. It does not model Bun's build-time platform folding either: a
+// win32 carve was built with process.platform/arch constant-folded to win32, so its code differs from this POSIX one
+// in places no spelling change reaches. It checks the chunk-NAME class only; the windows-latest gates, reading a real
+// win32 carve, remain the check for everything else.
+test('the pinned carve spelled the win32 way (B:/~BUN/root/...) accounts for the same resolution', (t) => {
+  const c = carveText();
+  if (c.skip) { t.skip(c.skip); return; }
+  if (!c.text.includes('file:///$bunfs/root/')) { t.skip('the carve is already a win32 one: rg-resolution-accounted itself reads it'); return; }
+  const w = c.text.replaceAll('file:///$bunfs/root/', 'file:///B:/~BUN/root/').replaceAll('/$bunfs/root', 'B:/~BUN/root');
+  assert.ok(w.includes('import.meta.url = "file:///B:/~BUN/root/') && w.includes('from"B:/~BUN/root/'), 'the win32 spelling took');
+  const shape = (text) => {
+    const r = resolutionOf(text, 'x');
+    return { refs: r.refs.map((x) => [x.what, x.cls]), calls: r.calls.map((x) => [x.local, x.runner, x.kind]) };
+  };
+  const a = shape(c.text), b = shape(w);
+  assert.ok(a.refs.length + a.calls.length >= RESOLUTION_FLOOR, `the POSIX carve examined ${a.refs.length + a.calls.length}`);
+  assert.deepStrictEqual(b, a);
+});
 test('runner calls are scoped to the runner\'s chunk and the chunks importing it, by their local name', () => {
   const mark = (n) => `\nimport.meta.require = globalThis.__quaudeRequire; import.meta.url = "file:///$bunfs/root/chunk-${n}.js";\n`;
   const t = `${mark('a')}function bD(e,r,n){let{rgPath:b,rgArgs:S,argv0:T}=Q4();return 0}async function oX(e,r,n){return bD(e,r,n)}export{oX};`
@@ -229,4 +256,11 @@ test('runner calls are scoped to the runner\'s chunk and the chunks importing it
     + `${mark('c')}function oX(h){return yRt(h.path)}let w=oX(v)`;
   const calls = P.rgRunnerCalls(t);
   assert.deepStrictEqual(calls.map((c) => [c.local, c.kind]), [['bD', 'forward (oX hands its argv on)'], ['Lq', 'shape'], ['Lq', null]]);
+  // A win32 carve names its chunks B:/~BUN/root/x.js, and its url is file:///B:/~BUN/root/x.js (the extractor's
+  // own header): the chunk's name is read back from that url, or no import matches it and the importing chunk's
+  // calls are never seen (CI 44443821699: windows-latest examined 23 of the pinned carve's 30).
+  const w = [`\n${moduleWithMeta('B:/~BUN/root/chunk-a.js', '')}`, `\n${moduleWithMeta('B:/~BUN/root/chunk-b.js', '')}`, `\n${moduleWithMeta('B:/~BUN/root/chunk-c.js', '')}`];
+  const tw = t.replace(mark('a'), w[0]).replace(mark('b'), w[1]).replace(mark('c'), w[2]).replace('from"/$bunfs/root/chunk-a.js"', 'from"B:/~BUN/root/chunk-a.js"');
+  assert.ok(tw.includes('import.meta.url = "file:///B:/~BUN/root/chunk-b.js"') && tw.includes('from"B:/~BUN/root/chunk-a.js"'));
+  assert.deepStrictEqual(P.rgRunnerCalls(tw).map((c) => [c.local, c.kind]), calls.map((c) => [c.local, c.kind]));
 });

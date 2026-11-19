@@ -171,9 +171,10 @@ function writeMinSplitProvider(inPath, outPath) {
   // where the container is appended to a complete executable. Copying the real header bytes
   // in front is therefore the same shape the real thing has, not a hack around the layout —
   // and the self-check below re-decodes the result to prove it.
-  const MAGIC_BYTES = 64;
+  // And its ARCH: containerHeader runs a PE's prefix through its COFF Machine field, which sits
+  // past the first 64 bytes (providerArchOf answered null for every minimised win32 provider).
   const out = Buffer.concat([
-    Buffer.from(src.subarray(0, Math.min(MAGIC_BYTES, src.length))),
+    containerHeader(src),
     ...chunks.map((c) => Buffer.from(c)),
     Buffer.from(table), Buffer.alloc(1), Buffer.from(offs), Buffer.from(TRAILER),
   ]);
@@ -183,7 +184,7 @@ function writeMinSplitProvider(inPath, outPath) {
            inflated, bytes: out.length, entry: g.entryName, from: src.length };
 }
 
-const { isSplitBundle } = require(path.join(__dirname, '..', 'libexec', 'extract-claude-js.cjs'));
+const { isSplitBundle, containerHeader } = require(path.join(__dirname, '..', 'libexec', 'extract-claude-js.cjs'));
 if (isSplitBundle(inPath)) {
   let r;
   try { r = writeMinSplitProvider(inPath, outPath); }
@@ -259,7 +260,7 @@ const synth = 'entrypoints/cli.js' + NUL + marker + cli.body + '})' + NUL;
 // extract cache key stops distinguishing a linux carve from a darwin one. Safe here because
 // carveBlocks finds the block by its MARKER and then scans BACK at most 4KB for a `...js\0`
 // name — and the trailing NUL below means that scan can never wander into the header bytes.
-const hdr = Buffer.concat([Buffer.from(data.slice(0, 64), 'latin1'), Buffer.from([0])]);
+const hdr = Buffer.concat([containerHeader(Buffer.from(data.slice(0, 4096 + 6), 'latin1')), Buffer.from([0])]);
 fs.writeFileSync(outPath, Buffer.concat([hdr, Buffer.from(synth, 'latin1')]));
 console.error(`make-min-provider: wrote ${outPath}: ${synth.length + hdr.length} bytes`);
 

@@ -85,7 +85,18 @@ test('the generator\'s staleness names what moved: a type, the version, nothing 
   assert.match(gen.staleness(cur, cur.replace('"*.tsx"]]', '"*.tsx","*.tsz"]]'))[0], /: type ts$/);
   assert.match(gen.staleness(cur, cur.replace('"features":"+pcre2"', '"features":"-pcre2"'))[0], /version\.features/);
 });
-test('the generator reads a native\'s architecture from its header (Mach-O, ELF), for RG-VERSION-SIMD', () => {
+test('the generator reads a native\'s architecture from its header (Mach-O, ELF, PE), for RG-VERSION-SIMD', () => {
+  // A win32 native and node.exe are PE: a reader that knew Mach-O and ELF alone read 'unknown' for
+  // both on windows-latest (CI 44443821699). Every format, here, on every host:
+  const bf = require('../fixtures/binfmt.cjs');
+  const dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'rg-types-arch-'));
+  try {
+    for (const [name, bytes, want] of [['pe-x64', bf.pe({ machine: 0x8664 }), 'x64'], ['pe-arm64', bf.pe({ machine: 0xaa64 }), 'arm64'],
+      ['elf-x64', bf.elf({ machine: 62 }), 'x64'], ['macho-arm64', bf.macho({ cputype: bf.CPU_ARM64 }), 'arm64']]) {
+      fs.writeFileSync(path.join(dir, name), bytes);
+      assert.strictEqual(gen.binaryArch(path.join(dir, name)), want, name);
+    }
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
   const bin = providerBin(process.env);
   if (bin) assert.strictEqual(gen.binaryArch(bin), process.arch === 'arm64' || process.arch === 'x64' ? process.arch : gen.binaryArch(bin));
   assert.strictEqual(gen.binaryArch(process.execPath), process.arch === 'arm64' || process.arch === 'x64' ? process.arch : 'unknown');
