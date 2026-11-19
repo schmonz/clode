@@ -511,6 +511,38 @@ test('first pass, win32 with real Windows facts: an ordinary start runs and reus
   }
 });
 
+// naude's platform is process.platform, with NOTHING injected (no opts.platform, no opts.uid): flip it and the verdict
+// on the same directory flips. As 'win32' only the type is judged, so it runs over a parent every user can write; as
+// 'linux' it is refused: for that parent where the host has a getuid, as an unknown uid where it has none (Windows).
+test('first pass: the platform judged is process.platform itself, uninjected', () => {
+  const cache = fs.mkdtempSync(path.join(os.tmpdir(), 'naude-platform-cache-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naude-user-settings-'));
+  const userFile = path.join(dir, 'mine.json');
+  fs.writeFileSync(userFile, '{}');
+  const real = Object.getOwnPropertyDescriptor(process, 'platform');
+  const as = (platform) => {
+    const stderr = [];
+    Object.defineProperty(process, 'platform', { ...real, value: platform });
+    try {
+      const cap = firstPass({ argv: ['-p', 'x', '--settings', userFile], env: { CLODE_CACHE: cache },
+        stderr: { write: (t) => { stderr.push(t); } } });
+      return { cap, stderr: stderr.join('') };
+    } finally { Object.defineProperty(process, 'platform', real); }
+  };
+  try {
+    fs.chmodSync(cache, 0o777);
+    const win = as('win32');
+    assert.ok(win.cap.call, `judged as win32 (type only): the session runs\n${win.stderr}`);
+    const posix = as('linux');
+    assert.strictEqual(posix.cap.call, null);
+    assert.strictEqual(posix.cap.exited, 1);
+    assert.match(posix.stderr, typeof process.getuid === 'function' ? /parent is writable by every user/ : /uid is unknown/);
+  } finally {
+    fs.rmSync(cache, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // The host decides 'layers' or 'merge' (policyProbe): Windows always may hold admin policy (the registry), WSL inherits
 // it, and elsewhere a managed-policy path that exists may. Each takes 'merge': the user's value merged into a file of
 // quaude's AND the plugin. Named hosts, so the verdict is the rule's on every runner (windows-latest is the first row).

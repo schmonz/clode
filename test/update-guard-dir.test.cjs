@@ -82,19 +82,20 @@ function loadQuaudeGuardDir() {
     return src.slice(s.index + s[0].length, e.index);
   };
   // eslint-disable-next-line no-new-func
-  return new Function(`${block('guardGating')}\n${block('quaudeGuardDir')}\nreturn { privateGuardDir, pruneGuardSettings };`)();
+  return new Function(`${block('tjsPlatform')}\n${block('guardGating')}\n${block('quaudeGuardDir')}\nreturn { privateGuardDir, pruneGuardSettings, hostPlatform };`)();
 }
-function fakeTjs({ home, uid }) {
+// tjs.system.userInfo THROWS where the uid has no passwd entry (docker -u 1234, OpenShift); quaude must never read it
+// for the guard, so the fake's throws on every read.
+function fakeTjs({ home }) {
   return {
     homeDir: home,
-    system: { userInfo: { userId: uid } },
+    system: { get userInfo() { throw new Error('uv_os_get_passwd: ENOENT (no passwd entry for this uid)'); } },
     makeDir: async (p, o = {}) => { fs.mkdirSync(p, { recursive: !!o.recursive, mode: o.mode }); },
     lstat: async (p) => { const s = fs.lstatSync(p); return { mode: s.mode, uid: s.uid, mtim: s.mtime }; },
     readDir: async (d) => (async function* entries() { for (const name of fs.readdirSync(d)) yield { name }; })(),
-    remove: async (p) => { fs.rmSync(p); },
+    remove: async (p) => { fs.rmSync(p, { recursive: true }); },
   };
 }
-const UID = typeof process.getuid === 'function' ? process.getuid() : -1;
 
 test('quaude: two sessions get ONE directory, under the clode cache, 0700 where modes exist', async () => {
   const { privateGuardDir } = loadQuaudeGuardDir();
@@ -103,8 +104,8 @@ test('quaude: two sessions get ONE directory, under the clode cache, 0700 where 
     const env = { CLODE_CACHE: path.join(root, 'cache') };
     // The real platform and its real facts: on windows-latest this is the real-Windows row (an ordinary start succeeds
     // and reuses the directory).
-    const a = await privateGuardDir(fakeTjs({ home: root, uid: UID }), env, path.sep, process.platform);
-    const b = await privateGuardDir(fakeTjs({ home: root, uid: UID }), env, path.sep, process.platform);
+    const a = await privateGuardDir(fakeTjs({ home: root }), env, path.sep, process.platform);
+    const b = await privateGuardDir(fakeTjs({ home: root }), env, path.sep, process.platform);
     assert.deepStrictEqual(a, { dir: path.join(root, 'cache', 'guard') });
     assert.deepStrictEqual(b, a, 'reused, not a second directory');
     assert.deepStrictEqual(fs.readdirSync(path.join(root, 'cache')), ['guard']);
@@ -116,13 +117,13 @@ test('quaude: the week-old merged settings are pruned; a fresh one and the plugi
   const { privateGuardDir, pruneGuardSettings } = loadQuaudeGuardDir();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qguard-'));
   try {
-    const { dir } = await privateGuardDir(fakeTjs({ home: root, uid: UID }), { CLODE_CACHE: root }, path.sep, process.platform);
+    const { dir } = await privateGuardDir(fakeTjs({ home: root }), { CLODE_CACHE: root }, path.sep, process.platform);
     const stale = path.join(dir, 'settings-00000000deadbeef.json');
     const fresh = path.join(dir, 'settings-1111111111111111.json');
     fs.writeFileSync(stale, '{"secret":1}'); fs.writeFileSync(fresh, '{}'); fs.mkdirSync(path.join(dir, 'plugin-abc'));
     const eightDaysAgo = (Date.now() - 8 * 24 * 60 * 60 * 1000) / 1000;
     fs.utimesSync(stale, eightDaysAgo, eightDaysAgo);
-    await pruneGuardSettings(fakeTjs({ home: root, uid: UID }), dir, path.sep, Date.now());
+    await pruneGuardSettings(fakeTjs({ home: root }), dir, path.sep, Date.now());
     assert.deepStrictEqual(fs.readdirSync(dir).sort(), ['plugin-abc', 'settings-1111111111111111.json']);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
@@ -136,7 +137,7 @@ test('quaude: a symlinked guard (a junction on Windows) is REFUSED on every plat
     const elsewhere = path.join(root, 'elsewhere');
     fs.mkdirSync(elsewhere);
     fs.symlinkSync(elsewhere, path.join(cache, 'guard'), 'junction');
-    const linked = await privateGuardDir(fakeTjs({ home: root, uid: UID }), { CLODE_CACHE: cache }, path.sep, process.platform);
+    const linked = await privateGuardDir(fakeTjs({ home: root }), { CLODE_CACHE: cache }, path.sep, process.platform);
     assert.match(linked.refusal || '', /guard is a symbolic link/);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
@@ -149,23 +150,69 @@ test('quaude, POSIX: a parent every user can write is REFUSED, and nothing else 
     fs.mkdirSync(cache);
     fs.mkdirSync(path.join(root, 'elsewhere'));
     fs.chmodSync(cache, 0o777);
-    const hostile = await privateGuardDir(fakeTjs({ home: root, uid: UID }), { CLODE_CACHE: cache }, path.sep, process.platform);
+    const hostile = await privateGuardDir(fakeTjs({ home: root }), { CLODE_CACHE: cache }, path.sep, process.platform);
     assert.match(hostile.refusal || '', /parent is writable by every user/);
     assert.strictEqual(hostile.dir, undefined, 'no directory is handed back');
     assert.deepStrictEqual(fs.readdirSync(root).sort(), ['cache', 'elsewhere'], 'no fallback directory anywhere');
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test('quaude, real Windows facts: tjs uid -1, st_uid 0, mode 0o40666 are not a refusal on win32 (the profile ACL is the privacy)', async () => {
+test('quaude, real Windows facts: st_uid 0, mode 0o40666 and a throwing userInfo are not a refusal on win32 (the profile ACL is the privacy)', async () => {
   const { privateGuardDir } = loadQuaudeGuardDir();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qguard-'));
   try {
-    const tjs = fakeTjs({ home: root, uid: -1 });
+    const tjs = fakeTjs({ home: root });
     const realLstat = tjs.lstat;
     tjs.lstat = async (p) => ({ ...(await realLstat(p)), uid: 0, mode: 0o40666 });   // what windows-latest reports
     assert.deepStrictEqual(await privateGuardDir(tjs, { CLODE_CACHE: path.join(root, 'c') }, path.sep, 'win32'), { dir: path.join(root, 'c', 'guard') });
     // The SAME numbers on a POSIX platform are refused: the platform, not the uid, decides.
-    assert.match((await privateGuardDir(tjs, { CLODE_CACHE: path.join(root, 'c') }, path.sep, 'linux')).refusal || '', /uid is unknown/);
+    assert.match((await privateGuardDir(tjs, { CLODE_CACHE: path.join(root, 'c') }, path.sep, 'linux')).refusal || '', /open to other users \(mode 666/);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+// MAIN'S REAL PATH, nothing injected but the host: main() resolves { platform, sep } ONCE with hostPlatform from
+// navigator.userAgentData.platform and target-env.cjs's real mapPlatform, and hands both to privateGuardDir (the
+// wiring is the quaude-guard-dir-fails-closed guard below). af7b803 resolved it from NO signal: 'linux' on every
+// host, so a Windows quaude judged its guard directory by the POSIX rule and refused to start.
+function withNavigator(platform, fn) {
+  const had = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  Object.defineProperty(globalThis, 'navigator', { value: platform === undefined ? undefined : { userAgentData: { platform } }, configurable: true, writable: true });
+  return Promise.resolve().then(fn).finally(() => {
+    if (had) Object.defineProperty(globalThis, 'navigator', had); else delete globalThis.navigator;
+  });
+}
+const { mapPlatform } = require('../libexec/target-env.cjs');
+test('quaude main path on a Windows host (userAgentData "Windows", real Windows facts, userInfo throws): it STARTS', async () => {
+  const { privateGuardDir, hostPlatform } = loadQuaudeGuardDir();
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qguard-'));
+  try {
+    await withNavigator('Windows', async () => {
+      const { platform, sep } = hostPlatform(mapPlatform);
+      assert.deepStrictEqual({ platform, sep }, { platform: 'win32', sep: '\\' });
+      const tjs = fakeTjs({ home: root });
+      const realLstat = tjs.lstat;
+      tjs.lstat = async (p) => ({ ...(await realLstat(p)), uid: 0, mode: 0o40666 });   // what windows-latest reports
+      const cache = path.join(root, 'c');
+      assert.deepStrictEqual(await privateGuardDir(tjs, { CLODE_CACHE: cache }, sep, platform), { dir: cache + sep + 'guard' });
+    });
+    await withNavigator('macOS', () => assert.deepStrictEqual(hostPlatform(mapPlatform), { platform: 'darwin', sep: '/' }));
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('quaude: the uid is the owner of a probe made in the guard directory, never tjs.system.userInfo (it throws)', async () => {
+  const { privateGuardDir } = loadQuaudeGuardDir();
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qguard-'));
+  try {
+    const env = { CLODE_CACHE: path.join(root, 'c') };
+    // This host's platform, with a userInfo that throws: it starts, and no probe is left behind.
+    const got = await privateGuardDir(fakeTjs({ home: root }), env, path.sep, process.platform);
+    assert.deepStrictEqual(got, { dir: path.join(root, 'c', 'guard') });
+    assert.deepStrictEqual(fs.readdirSync(got.dir), [], 'the probe is removed');
+    // No probe can be made (a POSIX platform): the uid is unknown, so it is REFUSED, never waved through.
+    const noProbe = fakeTjs({ home: root });
+    const realMakeDir = noProbe.makeDir;
+    noProbe.makeDir = async (p, o) => { if (p.includes('.uid-probe-')) throw new Error('EACCES'); return realMakeDir(p, o); };
+    assert.match((await privateGuardDir(noProbe, env, path.sep, 'linux')).refusal || '', /uid is unknown/);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -181,8 +228,17 @@ guardTests(defineGuard({
     for (const { rel, src } of srcs) {
       if (!REFUSES.test(src)) findings.push(`${rel}: no die() on the guard directory's refusal: quaude would start with an unsafe guard`);
       if (TMP_FALLBACK.test(src)) findings.push(`${rel}: a fresh-temp clode-guard fallback survives`);
+      // The platform: from the host's signal, once, and handed to the guard directory (the review of af7b803).
+      if (/tjsPlatform\(\s*undefined/.test(src)) findings.push(`${rel}: tjsPlatform(undefined, ...) is 'linux' on every host`);
+      if ((src.match(/hostPlatform\(/g) || []).length !== 2 || !/const \{ platform, sep \} = hostPlatform\(tem0\.mapPlatform\);/.test(src)) {
+        findings.push(`${rel}: main must resolve { platform, sep } once, with hostPlatform (one definition, one call)`);
+      }
+      if (!/privateGuardDir\(tjs, tjs\.env, sep, platform\)/.test(src)) findings.push(`${rel}: the guard directory is not handed main's platform`);
+      if (/system\.userInfo\s*[.?[]/.test(src)) findings.push(`${rel}: tjs.system.userInfo is read (it throws for a uid with no passwd entry)`);
     }
     return { findings, examined: srcs.length };
   },
-  control: () => [{ rel: 'planted', src: "const dir = await tjs.makeTempDir(tmpBase + sep + 'clode-guard-XXXXXX');" }],
+  control: () => [{ rel: 'planted', src: "const dir = await tjs.makeTempDir(tmpBase + sep + 'clode-guard-XXXXXX');" },
+    { rel: 'planted-platform', src: fs.readFileSync(path.join(__dirname, '..', 'libexec', 'quaude-bootstrap.mjs'), 'utf8')
+      .replace('const { platform, sep } = hostPlatform(tem0.mapPlatform);', "const platform = tjsPlatform(undefined, globalThis.__clodeMapPlatform); const sep = '/';") }],
 }));

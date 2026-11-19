@@ -5084,6 +5084,16 @@ quaude): win32 judges only the type; elsewhere an unknown uid is refused rather 
 the real Windows facts, and the hostile-parent rows are POSIX-only by name. Measured: test/update-guard-dir.test.cjs and
 test/naude-entry.test.cjs real-Windows-facts rows, on this host and forced-win32 (2026-11-19).
 
+REVIEW of that fix (af7b803), two more. (1) quaude's guard step took its platform from tjsPlatform with no signal, which
+is 'linux' on every host, so a real Windows quaude would have refused to start. main() now resolves { platform, sep }
+ONCE with hostPlatform (navigator.userAgentData.platform via target-env.cjs's mapPlatform) and hands it to the target
+env, the rg check and the guard directory; the separator there was '/' on Windows by the same lie. (2) quaude read its
+uid from tjs.system.userInfo, which THROWS for a uid with no passwd entry (docker -u 1234, OpenShift). The uid is now the
+owner of a probe directory made in the guard directory (the effective uid); no probe, refused. Measured:
+test/update-guard-dir.test.cjs (main's path on a "Windows" userAgent starts; userInfo throws; the guard refuses a
+no-signal platform) and test/naude-entry.test.cjs (process.platform flipped, uninjected), plus a real tjs run of the
+bootstrap's blocks on darwin (2026-11-19). Unmeasured on a real Windows tjs.
+
 Unmeasured. On real Windows: that the profile ACL keeps `%USERPROFILE%\.cache\clode\guard` private (an icacls row on
 windows-latest would measure it), and a real quaude session there reusing one directory. And an OPEN QUESTION, not
 yet decided: on Windows clodeCacheDir is `%USERPROFILE%\.cache\clode` (os.homedir), and in a roaming profile
