@@ -21,7 +21,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { parseArgs, parseScript, settleVerdict, SCRIPT_DEFAULTS } = require('./tui-screen.cjs');
+const { parseArgs, parseScript, settleVerdict, SCRIPT_DEFAULTS, stopChild } = require('./tui-screen.cjs');
 const { captureSession } = require('./e2e-pty.cjs');
 const { sandbox } = require('./e2e.cjs');
 const { frameShows } = require('./frame-diff.cjs');
@@ -145,6 +145,55 @@ test('settleVerdict: output after the step, then quiet for the window, settles',
 test('settleVerdict: the cap turns a step that never goes quiet (or never answers) into a timeout', () => {
   assert.strictEqual(at({ now: 16000, lastOut: 15990 }), 'timeout', 'still painting at the cap');
   assert.strictEqual(at({ now: 16000, lastOut: -4000 }), 'timeout', 'never answered at all');
+});
+
+// stopChild (CI 44460009323, windows-amd64-tui: the built quaude.exe outlived the driver). A fake pty per shape, a
+// fake clock: no process, no wait.
+function fakeChild({ signals }) {
+  const c = { pid: 4242, kills: [], live: true, exitedEvent: false };
+  c.kill = (sig) => {
+    if (sig !== undefined && !signals) throw new Error('Signals not supported on windows.'); // node-pty's Windows terminal
+    c.kills.push(sig === undefined ? 'kill()' : sig);
+  };
+  return c;
+}
+// groups: false is Windows (a negative pid is refused: ESRCH); the group then counts as gone.
+function stopWith(c, { diesAfterPolls = 1, exitEventAfterPolls = diesAfterPolls, groupDiesAfterPolls = diesAfterPolls,
+  deadlineMs = 15000, groups = true } = {}) {
+  let t = 0; let polls = 0;
+  return stopChild(c, {
+    exited: () => polls >= exitEventAfterPolls,
+    alive: (pid) => (pid < 0 ? groups && polls < groupDiesAfterPolls : polls < diesAfterPolls),
+    killGroup: (pid) => { if (!groups) throw Object.assign(new Error('kill ESRCH'), { code: 'ESRCH' }); c.kills.push(`group ${pid}`); },
+    deadlineMs, pollMs: 50, now: () => t, sleep: async (ms) => { t += ms; polls += 1; },
+  });
+}
+test('stopChild: a terminal that takes no signal names (node-pty on Windows) still gets killed', async () => {
+  const c = fakeChild({ signals: false });
+  assert.deepStrictEqual(await stopWith(c, { groups: false }), { gone: true, ms: 50 });
+  assert.deepStrictEqual(c.kills, ['kill()']);
+});
+test('stopChild: a POSIX pty: SIGKILL to its process group (the grandchildren), then to it', async () => {
+  const c = fakeChild({ signals: true });
+  assert.strictEqual((await stopWith(c)).gone, true);
+  assert.deepStrictEqual(c.kills, ['group 4242', 'SIGKILL']);
+});
+test('stopChild: the child gone is not enough while its process group lives on', async () => {
+  const c = fakeChild({ signals: true });
+  const r = await stopWith(c, { diesAfterPolls: 1, groupDiesAfterPolls: Infinity, deadlineMs: 500 });
+  assert.strictEqual(r.gone, false);
+  assert.match(r.why, /had exited, but its process group had not/);
+});
+test('stopChild: the exit event alone is not "gone" (Windows fires it when node-pty closes its own end)', async () => {
+  const c = fakeChild({ signals: false });
+  const r = await stopWith(c, { exitEventAfterPolls: 0, diesAfterPolls: 4 });
+  assert.deepStrictEqual(r, { gone: true, ms: 200 }, 'waited for the pid, not the event');
+});
+test('stopChild: a child still alive at the deadline is reported by pid, never waited on forever', async () => {
+  const c = fakeChild({ signals: false });
+  const r = await stopWith(c, { diesAfterPolls: Infinity, deadlineMs: 500 });
+  assert.strictEqual(r.gone, false);
+  assert.match(r.why, /pid 4242\) was still running 500ms after it was killed/);
 });
 
 test('settleVerdict: a wait step expects no output, so earlier quiet counts', () => {

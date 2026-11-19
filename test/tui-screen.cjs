@@ -8,7 +8,7 @@
 // (node-pty) with a real VT100 emulator (@xterm/headless) on the other end, so
 // capability-query-gated apps (Claude Code's Ink TUI probes DA/DSR/OSC/XTVERSION
 // at startup and waits for answers) actually render. Prints the final rendered
-// screen to stdout for the test to assert on. Exit 0 always.
+// screen to stdout for the test to assert on. Exit 0, or 4 when the child outlived its stop (stopChild).
 // Load the PTY harness (node-pty + @xterm/headless) from the per-platform tag dir
 // EXPLICITLY, not via NODE_PATH. Callers like test_tui.bats' _tui_capture scrub
 // NODE_PATH so the world prefix alone decides the child's `ws` visibility; that must
@@ -286,8 +286,10 @@ async function main() {
 
   if (steps) {
     const frames = await runScript({ steps, child, term, state, spawnedAt, opts });
-    try { child.kill('SIGKILL'); } catch { /* */ }
-    finish(JSON.stringify({ format: 'clode-frames-v1', exit: state.exit, frames }) + '\n');
+    // `exit` is how the child ended ON ITS OWN, so it is read before the stop below makes it exit.
+    const exit = state.exit;
+    const stopped = await stopChild(child, { exited: () => state.exited });
+    finish(JSON.stringify({ format: 'clode-frames-v1', exit, frames }) + '\n', stopped);
     return;
   }
   for (const [delay, bytes] of sends) setTimeout(() => { try { child.write(bytes); } catch { /* */ } }, delay * 1000);
@@ -300,21 +302,21 @@ async function main() {
   await new Promise((res) => {
     const iv = setInterval(() => { if (exited || (Date.now() - start) / 1000 > secs) { clearInterval(iv); res(); } }, 100);
   });
-  try { child.kill('SIGKILL'); } catch { /* */ }
+  const stopped = await stopChild(child, { exited: () => state.exited });
 
   if (process.env.TUI_DEBUG) {
     process.stderr.write(`RAW bytes=${seen.length} answered=${[...answered].sort()}\n`);
     process.stderr.write(`RAW tail: ${JSON.stringify(seen.slice(-160))}\n`);
   }
 
-  if (cells) { finish(JSON.stringify(dumpCells(term)) + '\n'); return; }
+  if (cells) { finish(JSON.stringify(dumpCells(term)) + '\n', stopped); return; }
 
   const buf = term.buffer.active; const out = [];
   for (let i = 0; i < term.rows; i++) {
     const line = buf.getLine(i);
     out.push(line ? line.translateToString(true).replace(/\s+$/, '') : '');
   }
-  finish(out.join('\n') + '\n');
+  finish(out.join('\n') + '\n', stopped);
 }
 
 // The scripted session: frame 0 when boot has settled, then one frame per step after
@@ -372,14 +374,61 @@ async function runScript({ steps, child, term, state, spawnedAt, opts }) {
 // frame is the worst possible failure for a differential harness: it looks like
 // a real capture that happens to differ. The exit waits for the flush callback,
 // with a timer so a wedged pipe still terminates rather than hanging the test.
-function finish(text) {
+// `stopped` is stopChild's verdict: a child still alive after the stop is named on stderr and the exit is 4,
+// after the result is written (the screen is still real; the leak is a separate finding).
+function finish(text, stopped = { gone: true }) {
   let done = false;
   const bye = (code) => { if (!done) { done = true; process.exit(code); } };
   const timer = setTimeout(() => bye(3), 10000);
   timer.unref();
-  process.stdout.write(text, () => bye(0));
+  if (!stopped.gone) process.stderr.write(`tui-screen: ${stopped.why}\n`);
+  process.stdout.write(text, () => bye(stopped.gone ? 0 : 4));
 }
-module.exports = { hexPayload, parseArgs, parseScript, settleVerdict, SCRIPT_DEFAULTS };
+
+// STOP THE CHILD, AND WAIT UNTIL IT IS GONE. The driver used to `child.kill('SIGKILL')` and exit at once. On Windows
+// that stopped nothing: node-pty's Windows terminal THROWS on any signal name ("Signals not supported on windows":
+// ConPTY has no signals), the throw was swallowed, and the driver exited with the child still running. Its console
+// closing was all that ever ended it, on the child's own schedule, so windows-amd64-tui (CI 44460009323) found the
+// built quaude.exe still mapped when the test removed its build dir (EPERM). And node-pty's no-signal kill() on
+// Windows kills the console's process list (the child and every grandchild attached to that console) only after an
+// asynchronous lookup, which an immediate exit cut short.
+//
+// One implementation, the TREE and not just the child:
+//  1. SIGKILL the child's process group. A pty child is a session leader, so its group is its pid, and every
+//     grandchild that did not leave the group goes with it (one that ignores SIGHUP survived the old kill: measured,
+//     `sh -c 'trap "" HUP; sleep 30'` left the sleep running). Where there are no process groups (Windows: a negative
+//     pid is refused) this throws and step 2 does the work.
+//  2. Ask the pty for SIGKILL; a terminal that takes no signal names takes the plain kill() (on Windows: the whole
+//     console process list, the child and every grandchild attached to that console, then the pseudoconsole closed).
+//  3. Wait for node-pty's exit event AND for the pid and its group to be gone (signal 0: ESRCH). Not the event alone:
+//     on Windows it also fires when node-pty closes its own end of the pty, which can precede the process's end; on
+//     POSIX the pid stays a zombie until node-pty reaps it.
+// A tree not gone by the deadline is reported, never waited on forever.
+function pidAlive(pid) {
+  try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
+}
+async function stopChild(child, { exited, alive = pidAlive, killGroup = (pid) => process.kill(-pid, 'SIGKILL'),
+  deadlineMs = 15000, pollMs = 50, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), now = Date.now } = {}) {
+  try { killGroup(child.pid); } catch { /* no process groups here, or none left: step 2 */ }
+  try { child.kill('SIGKILL'); } catch {
+    try { child.kill(); } catch { /* already gone: the wait below says so */ }
+  }
+  const t0 = now();
+  for (;;) {
+    const exitedNow = exited();
+    const childAlive = alive(child.pid);
+    const groupAlive = alive(-child.pid);
+    if (exitedNow && !childAlive && !groupAlive) return { gone: true, ms: now() - t0 };
+    if (now() - t0 > deadlineMs) {
+      const what = childAlive ? 'was still running' : groupAlive ? 'had exited, but its process group had not'
+        : 'was gone but never reported its exit';
+      return { gone: false, ms: now() - t0,
+        why: `the child (pid ${child.pid}) ${what} ${deadlineMs}ms after it was killed: it would outlive this driver` };
+    }
+    await sleep(pollMs);
+  }
+}
+module.exports = { hexPayload, parseArgs, parseScript, settleVerdict, SCRIPT_DEFAULTS, stopChild };
 
 // Honor the "Exit 0 always" contract even if pty.spawn/setup throws: fail loud
 // with a nonzero exit rather than crashing on an unhandled rejection.

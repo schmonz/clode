@@ -168,4 +168,4 @@ function parseSession(r) {
 }
 
 module.exports = { seedClaudeProfile, capture, captureFrame, captureFrameAsync, captureSession, parseSession,
-  driveArgs, apeCmd, TUI_SCREEN };
+  drive, driveArgs, apeCmd, TUI_SCREEN };
