@@ -1,4 +1,8 @@
 'use strict';
+// forced-win32: spawn-injected: every runNaude call here injects spawn (firstPass and the guard dispatch), or stops before
+// one (requireMain for the second pass, requireRg for rg); libexec/naude-entry.cjs's top-level require of node's process module is
+// the only reach into the real OS, and no test calls it. So the forced-win32 pass runs this file: the win32 policy branch
+// (#2087, CI 44443821699) is a branch in OUR code it can see.
 const { test } = require('node:test');
 const assert = require('node:assert');
 const os = require('node:os');

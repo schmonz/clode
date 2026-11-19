@@ -102,6 +102,43 @@ test('the reach is TRANSITIVE: a sensitive file whose helper spawns is OUT too',
   assert.strictEqual(path.resolve(path.dirname(A), './helper.cjs'), HELPER);
 });
 
+// THE SPAWN-INJECTED DECLARATION (fix round 1 of CI 44443821699, #2087). naude-entry.test.cjs injects spawn into every
+// runNaude it calls, yet was OUT because the PRODUCTION module it tests requires child_process; its win32 branch went
+// unseen until a Windows runner. A test file may declare `// forced-win32: spawn-injected: <why>`: its REAL_OS check
+// then reads its own test-side closure only. A declaration whose test-side code still spawns stays OUT, and is named.
+const TT = path.join(T, 'test');
+const DA = path.join(TT, 'd.test.cjs');
+const DHELP = path.join(TT, 'd-helper.cjs');
+const PROD = path.join(T, 'libexec', 'prod.cjs');
+const DECL = '// forced-win32: spawn-injected: every call injects spawn\n';
+test('a declared spawn-injected file is IN though its production module spawns; undeclared, it is OUT', () => {
+  const files = {
+    [DA]: `${DECL}const p = require('../libexec/prod.cjs'); process.platform;\n`,
+    [PROD]: "const cp = require('node:child_process');\n",
+  };
+  assert.deepStrictEqual(F.forcedWin32Files([DA], fakeIo(files)), [DA]);
+  assert.deepStrictEqual(F.spawnInjectedContradictions([DA], fakeIo(files)), []);
+  const undeclared = { ...files, [DA]: files[DA].replace(DECL, '') };
+  assert.deepStrictEqual(F.forcedWin32Files([DA], fakeIo(undeclared)), []);
+  // a declaration with no reason is no declaration
+  const bare = { ...files, [DA]: files[DA].replace(DECL, '// forced-win32: spawn-injected:\n') };
+  assert.deepStrictEqual(F.forcedWin32Files([DA], fakeIo(bare)), []);
+});
+test('a declared file whose OWN test-side code spawns (itself or a test/ helper) stays OUT and is named a contradiction', () => {
+  const self = { [DA]: `${DECL}process.platform; spawnSync('sh', []);\n` };
+  assert.deepStrictEqual(F.forcedWin32Files([DA], fakeIo(self)), []);
+  assert.deepStrictEqual(F.spawnInjectedContradictions([DA], fakeIo(self)), [DA]);
+  const helper = { [DA]: `${DECL}require('./d-helper.cjs'); process.platform;\n`, [DHELP]: "require('node:child_process');\n" };
+  assert.deepStrictEqual(F.forcedWin32Files([DA], fakeIo(helper)), []);
+  assert.deepStrictEqual(F.spawnInjectedContradictions([DA], fakeIo(helper)), [DA]);
+});
+test('no test file in the tree declares spawn-injected falsely, and naude-entry.test.cjs is in the pass', () => {
+  const all = F.discover(path.join(REPO, 'test'));
+  assert.deepStrictEqual(F.spawnInjectedContradictions(all).map((f) => path.relative(REPO, f)), []);
+  assert.ok(F.forcedWin32Files(all).some((f) => path.basename(f) === 'naude-entry.test.cjs'),
+    'naude-entry.test.cjs (#2087\'s win32 policy branch) must run under forcing');
+});
+
 test('the real set is DERIVED from the tree and meets a floor', () => {
   const files = F.forcedWin32Files(F.discover(path.join(REPO, 'test')));
   assert.ok(files.length >= F.FLOOR,
