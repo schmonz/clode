@@ -45,8 +45,9 @@ function filledPipe(dir, tag) {
 // Every executor runs under `nice -n DIFF_NICE` (off Windows): a deliberately non-default niceness, so
 // os.getPriority is judged at a value no constant can match by luck. The shim answered a constant 0 for
 // months, and only a CI runner that happened to run at nice -10 (node-shim-oracle-darwin, run 44597568635)
-// showed it. Node and the subject get the same nice; it is added to whatever the host runs at.
-const DIFF_NICE = 7;
+// showed it. Node and the subject get the same nice; it is added to whatever the host runs at, so the increment is
+// bumped when the host's own nice would cancel it to 0 (test/nice-increment.cjs).
+const DIFF_NICE = require('../nice-increment.cjs').unmaskedIncrement(7, process.platform === 'win32' ? 0 : require('node:os').getPriority(0));
 const niced = (argv) => (process.platform === 'win32' ? argv : ['nice', '-n', String(DIFF_NICE), ...argv]);
 
 function runOne(argv, { planFile, outFile, cwd, timeout, pipeFd, base, tag, exec = EXEC }) {

@@ -22,86 +22,24 @@
 // about platforms nobody was standing on. The engine knows; ask it.
 const EC = require('./../internal/engine-constants.cjs');
 
-// os.getPriority / os.setPriority. tjs exposes no getpriority/setpriority (its tjs.* and tjs.system.* hold no
-// such member), so both ask what the kernel already publishes: /proc/<pid>/stat where there is one (see procNice),
-// else `ps -o nice= -p <pid>` reads a process's nice value, `renice <priority> -p <pid>` sets it (the absolute form, which BSD, macOS, util-linux and busybox renice
-// all read as absolute; `-n` is an increment on some and absolute on others, so it is not used). The pattern is
-// process.cjs's unixGetuid falling back to `id -u`. These used to answer a constant 0 and do nothing, so the
-// 2.1.283 bundle's background daemon, which lowers its own priority by 5 off Windows, silently ran at full
-// priority (found by node-shim-oracle-darwin, whose runner runs at nice -10; judged under a deliberate nice by
-// test/node-shim-os-priority.test.cjs and the differential, which runs every executor under nice).
-// Arguments are validated as node's validateInt32 does; a failure is node's SystemError (ERR_SYSTEM_ERROR,
-// info { errno, code, message, syscall: uv_os_getpriority / uv_os_setpriority }). Without the utility (Windows,
-// or a PATH that lacks it) the call THROWS that SystemError with ENOSYS, naming the utility: never a fake answer.
-function argTypeError(name, v) {
-  const e = new TypeError(`The "${name}" argument must be of type number. Received ${v === null ? 'null' : `type ${typeof v} (${String(v)})`}`);
-  e.code = 'ERR_INVALID_ARG_TYPE';
-  return e;
-}
-function validateInt32(v, name, min = -2147483648, max = 2147483647) {
-  if (typeof v !== 'number') throw argTypeError(name, v);
-  if (!Number.isInteger(v)) { const e = new RangeError(`The value of "${name}" is out of range. It must be an integer. Received ${v}`); e.code = 'ERR_OUT_OF_RANGE'; throw e; }
-  if (v < min || v > max) { const e = new RangeError(`The value of "${name}" is out of range. It must be >= ${min} && <= ${max}. Received ${v}`); e.code = 'ERR_OUT_OF_RANGE'; throw e; }
-}
-const UV_TEXT = { ESRCH: 'no such process', EACCES: 'permission denied', EPERM: 'operation not permitted', ENOSYS: 'function not implemented', EINVAL: 'invalid argument' };
-class NodeError extends Error {}
-function systemError(syscall, code, detail) {
-  const n = EC.errno && typeof EC.errno[code] === 'number' ? -EC.errno[code] : undefined;
-  const text = UV_TEXT[code] || code;
-  // node's SystemError is an instance of its internal class NodeError (constructor.name), named 'SystemError'
-  const e = new NodeError(`A system error occurred: ${syscall} returned ${code} (${text})${detail ? `: ${detail}` : ''}`);
-  e.name = 'SystemError';
-  e.code = 'ERR_SYSTEM_ERROR';
-  e.info = { errno: n, code, message: text, syscall };
-  e.errno = n;
-  e.syscall = syscall;
-  return e;
-}
-function runUtility(cmd, args) {
-  const r = require('node:child_process').spawnSync(cmd, args, { encoding: 'utf8' });
-  if (r.error) return { missing: `${cmd} could not be run (${r.error.code || r.error.message})` };
-  return { status: r.status, stdout: String(r.stdout || ''), stderr: String(r.stderr || '') };
-}
-const selfPid = (pid) => (pid === 0 ? process.pid : pid);
-// Where /proc/<pid>/stat exists (Linux), its 19th field IS the nice value, read with no subprocess; that comes
-// first because busybox's ps (the alpine images) has no -p, so ps cannot answer there. A pid with no
-// /proc/<pid> is no process. Elsewhere, ps.
-function procNice(pid) {
-  const fs = require('node:fs');
-  if (!fs.existsSync('/proc/self/stat')) return undefined;
-  let text;
-  try { text = fs.readFileSync(`/proc/${pid}/stat`, 'utf8'); } catch { return null; }
-  // pid (comm) state ppid ...: comm may hold spaces and parens, so split after the LAST ')'
-  const rest = text.slice(text.lastIndexOf(')') + 2).split(' ');
-  const v = parseInt(rest[19 - 3], 10);
-  return Number.isFinite(v) ? v : undefined;
-}
-function getPriority(pid) {
-  if (pid === undefined) pid = 0; else validateInt32(pid, 'pid');
-  const proc = procNice(selfPid(pid));
-  if (proc === null) throw systemError('uv_os_getpriority', 'ESRCH');
-  if (proc !== undefined) return proc;
-  const r = runUtility('ps', ['-o', 'nice=', '-p', String(selfPid(pid))]);
-  if (r.missing) throw systemError('uv_os_getpriority', 'ENOSYS', r.missing);
-  const v = r.status === 0 ? parseInt(r.stdout.trim(), 10) : NaN;
-  if (Number.isFinite(v)) return v;
-  // ps exits non-zero (or prints nothing) for a pid that is no process, and for one too large to be one
-  if (r.status !== 0 || r.stdout.trim() === '') throw systemError('uv_os_getpriority', 'ESRCH');
-  throw systemError('uv_os_getpriority', 'ENOSYS', `ps printed no nice value: ${JSON.stringify(r.stdout.trim())}`);
-}
-function setPriority(pid, priority) {
-  if (priority === undefined) { priority = pid; pid = 0; }
-  validateInt32(pid, 'pid');
-  validateInt32(priority, 'priority', -20, 19);
-  const r = runUtility('renice', [String(priority), '-p', String(selfPid(pid))]);
-  if (r.missing) throw systemError('uv_os_setpriority', 'ENOSYS', r.missing);
-  if (r.status === 0) return;
-  const t = r.stderr;
-  const code = /Permission denied/i.test(t) ? 'EACCES' : /not permitted/i.test(t) ? 'EPERM'
-    : /No such process|too large|does not exist/i.test(t) ? 'ESRCH' : null;
-  if (code) throw systemError('uv_os_setpriority', code);
-  throw systemError('uv_os_setpriority', 'EINVAL', `renice exited ${r.status}: ${t.trim()}`);
-}
+// os.getPriority / os.setPriority: see internal/priority.cjs (a real value on every platform, PowerShell on Windows).
+// The system is reached through the deps passed here, so that file loads under host node and its Windows branch is
+// judged off Windows (test/node-shim-os-priority-win32.test.cjs).
+const { getPriority, setPriority } = require('./../internal/priority.cjs').makePriority({
+  platform: () => process.platform,
+  pid: () => process.pid,
+  errno: EC.errno,
+  run(cmd, args) {
+    const r = require('node:child_process').spawnSync(cmd, args, { encoding: 'utf8' });
+    if (r.error) return { missing: `${cmd} could not be run (${r.error.code || r.error.message})` };
+    return { status: r.status, stdout: String(r.stdout || ''), stderr: String(r.stderr || '') };
+  },
+  readProcStat(pid) {
+    const fs = require('node:fs');
+    if (!fs.existsSync('/proc/self/stat')) return undefined;
+    try { return fs.readFileSync(`/proc/${pid}/stat`, 'utf8'); } catch { return null; }
+  },
+});
 
 // process.platform -> node's os.type() spelling (uname -s). One case per
 // release-matrix identity; unknown values pass through untouched.
