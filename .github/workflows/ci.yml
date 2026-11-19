@@ -754,6 +754,14 @@ jobs:
           # It needs CLODE_TJS and nothing else, and the suite job has no engine, so
           # without this line it would run on dev boxes only.
           FILES="$FILES test/engine-regexp-reuse.test.cjs"
+          # The gates that read the pinned carve seeded above, or stage the provider (which needs CLODE_TJS):
+          # each skipped in both suite rows of CI run 44572930594 ("pinned carve not found", "provider found but
+          # staging it failed"), and no job ran them (observability Task 5; test/ci-gates.cjs PLACED). Measured
+          # before adding them, in node:24.22.0-alpine with this job's engine, provider and seeded carve: every
+          # gate passed and none of the five added a skip.
+          FILES="$FILES test/build-gates/dep-closure-gates.test.cjs test/build-gates/lexical-code-mask.test.cjs"
+          FILES="$FILES test/build-gates/renameable-positions.test.cjs test/zlib-zstd-stream-gap.test.cjs"
+          FILES="$FILES test/fidelity/regexp-capture-census.test.cjs"
           mkdir -p "$RUNNER_TEMP/cells"
           node --require ./test/file-watchdog-preload.cjs --test --test-concurrency=1 --test-reporter=spec --test-reporter-destination=stdout \
             --test-reporter=./test/cell-reporter.mjs --test-reporter-destination="$RUNNER_TEMP/cells/node-shim-oracle.jsonl" \
@@ -1324,6 +1332,12 @@ jobs:
       #                       rg and one with a tripwire rg. CLODE_E2E_NATIVE=1 runs its instrument too: native's
       #                       own turn here must still give those recorded answers, so a Linux native that moved
       #                       is named, not hidden.
+      #   rg-regex-gates, rg-types-gates   the generated rg tables are what their generators make from THIS native
+      #                       run as rg (the suite's minimised provider does not run as rg, so they skipped there).
+      #   lead-scrub-equivalence, rg-spawn  need the engine AND a provider that runs here, or a POSIX shell for a
+      #                       ugrep stub as a non-root user; both skipped in the suite rows and ran in no job (observability
+      #                       Task 5). Measured before adding all four, on ubuntu:24.04 as a non-root user with this native,
+      #                       ugrep 5.0.0 and the musl engine: 43 tests, 43 pass, 0 skipped.
       # postject into deps/clode because the gate builds a naude (test/built-binary.cjs builtNaude), which also
       # fetches the pinned Node. The gate's named normalizations (compareRg: walk order, --json elapsed times, and
       # on THIS x86_64 runner the CPU-read simd(runtime) line of `rg --version`) are the only differences forgiven.
@@ -1355,7 +1369,11 @@ jobs:
               --test-reporter=spec --test-reporter-destination=stdout \
               --test-reporter=./test/cell-reporter.mjs --test-reporter-destination="$RUNNER_TEMP/cells/pty-rg.jsonl" \
               test/fidelity/rg-differential.test.cjs \
-              test/fidelity/agentic-grep-glob.test.cjs 2>&1 | tee rg-gates.out
+              test/fidelity/agentic-grep-glob.test.cjs \
+              test/build-gates/rg-regex-gates.test.cjs \
+              test/build-gates/rg-types-gates.test.cjs \
+              test/fidelity/lead-scrub-equivalence.test.cjs \
+              test/rg-spawn.test.cjs 2>&1 | tee rg-gates.out
           SKIPPED=$(sed -nE 's/^(ℹ|#) skipped ([0-9]+)$/\2/p' rg-gates.out | tail -1)
           NAMED=$(grep -cE '# macOS only$' rg-gates.out || true)
           echo "skipped: ${SKIPPED:-?}; accepted by name (macOS only): $NAMED"
