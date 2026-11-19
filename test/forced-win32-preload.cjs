@@ -50,8 +50,15 @@ process.env.CLODE_FORCED_WIN32 = '1';
 //    nested runner could inherit.
 if (!process.execArgv.includes('--test')) {
   const cp = require('node:child_process');
+  // The ONE spawn let through: the file watchdog's sleeper (test/file-watchdog.cjs), started by its preload for every
+  // test-file process. It is the runner's machinery, not the test's, and it runs on the real platform.
+  const realSpawn = cp.spawn;
+  const SLEEPER = require('node:path').join(__dirname, 'file-watchdog-sleeper.cjs');
   for (const name of ['spawn', 'spawnSync', 'exec', 'execSync', 'execFile', 'execFileSync', 'fork']) {
-    cp[name] = function forcedWin32SpawnTrap() {
+    cp[name] = function forcedWin32SpawnTrap(...args) {
+      if (name === 'spawn' && args[0] === process.execPath && Array.isArray(args[1]) && args[1][0] === SLEEPER) {
+        return realSpawn.apply(this, args);
+      }
       throw new Error(`forced-win32: a real spawn in a forced run (child_process.${name})`);
     };
   }
