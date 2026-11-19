@@ -54,7 +54,9 @@ function both(argv, dir, stdinBytes, piece, readSize) {
 }
 
 // THE GENERATOR'S SHAPE CENSUS (observability Task 4; test/shape-census.cjs). The 36 texts below are this file's whole
-// claim about where a window's edges fall, so they must hold the shapes the header names. Measured 2026-11-19 over the
+// claim about where a window's edges fall, so they must hold the shapes the header names. The floors: a floor written
+// as a fraction of today's count is a regression tripwire on a deterministic count (the seeds are fixed), not a
+// coverage requirement. Measured 2026-11-19 over the
 // 36 texts: a line past 64 KiB 35, needle on such a line 31, CRLF 36, a NUL 13 (before the first match 2, after it 11),
 // a BOM 3, an unterminated last line 8, needle across a 3001-byte read edge 9, CRLF split by a 7-byte stdin piece 17
 // (odd seeds), a \n exactly at a read edge's last byte 2. UTF-16 is not drawn here: its own test below holds it.

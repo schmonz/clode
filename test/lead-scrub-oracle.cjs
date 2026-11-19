@@ -326,7 +326,10 @@ function buildCorpus(free, list, symbols, sizes = { structured: 3000, targeted: 
 
 // THE CORPUS'S SHAPE CENSUS (observability Task 4): run by test/fidelity/lead-scrub-equivalence.test.cjs over the corpus
 // it really builds from the carve's classes, so its findings join that guard's. The shapes are the ones the paragraph
-// above buildCorpus names. Floors from the 2.1.283 corpus measured 2026-11-19 (see each `why`).
+// above buildCorpus names. Floors from the 2.1.283 corpus measured 2026-11-19 (see each `why`): a floor written as a
+// fraction of today's count is a regression tripwire on a deterministic count (the seeds are fixed), not a coverage
+// requirement
+// (the two large inputs are a requirement).
 const CORPUS_SEED = 20260927;
 function corpusCensus(parts, joinerTerminators) {
   const inputs = Object.values(parts).flat();

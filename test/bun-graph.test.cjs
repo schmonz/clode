@@ -874,6 +874,8 @@ const UTF8_SHAPES = [
   ['a surrogate (ED A0-BF)', (b) => b.some((x, i) => x === 0xed && b[i + 1] >= 0xa0 && b[i + 1] <= 0xbf)],
   ['past U+10FFFF (F4 90-BF, F5-FF)', (b) => b.some((x, i) => x >= 0xf5 || (x === 0xf4 && b[i + 1] >= 0x90 && b[i + 1] <= 0xbf))],
 ];
+// The floors: a floor written as a fraction of today's count is a regression tripwire on a deterministic count (the
+// seeds are fixed), not a coverage requirement.
 // Measured 2026-11-19 over the 4,000 intRng strings, floored at a third: 2-byte 388, 3-byte 100, lone continuation 1,320,
 // truncated 1,471, interrupted 1,863, overlong 889, surrogate 58, past U+10FFFF 1,503. A valid 4-byte sequence needs four
 // draws in a row from 19 bytes and was drawn 7 times; its floor is 3 (and utf8Corpus's fixed rows hold more).

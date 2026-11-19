@@ -515,6 +515,8 @@ function literalCorpus() {
 const occurrences = (buf, s) => { const b = Buffer.from(s); let k = 0; for (let i = buf.indexOf(b); i >= 0; i = buf.indexOf(b, i + 1)) k++; return k; };
 test('RG-RE-LITERAL-RANGES\' corpus: every literal occurs, every piece is drawn, the RNG is unbiased (census)', (t) => {
   const corpus = literalCorpus();
+  // The piece floors: a floor written as a fraction of today's count is a regression tripwire on a deterministic
+  // count (the seeds are fixed), not a coverage requirement; the literal floor of 1 is a requirement.
   // Floors measured 2026-11-19: every literal 1 or more (the tail's own literals 1-6, the others 12-93); every piece
   // 12-32 times over the 200 lines (an expected 4 x 200 / 39 = 20.5 each).
   const lits = census('RG-RE-LITERAL-RANGES literals', LITS.map((l) => ({ shape: `occurs: ${JSON.stringify(l)}`, min: 1, has: (b) => occurrences(b, l),

@@ -10,13 +10,16 @@
 // of those promises, detected on the parsed pattern (libexec/rg-regex.cjs parseForCensus) or, for the lift, by the
 // emulation's own RG-RE-ALT-LIFT firing (SHAPE_EVENTS.lift) — the rule the shape exists to exercise.
 //
-// THE FLOORS (N). Measured 2026-11-19 over the 500 patterns of the fixed generator (Math.imul, high bits): lift 99,
+// THE FLOORS (N): a floor written as a fraction of today's count is a regression tripwire on a deterministic count
+// (the seeds are fixed), not a coverage requirement; the lift floor is a requirement (below). Measured 2026-11-19
+// over the 500 patterns of the fixed generator (Math.imul, high bits): lift 99,
 // nested counted 16, nullable branch 63, lazy 175, capture 124, empty-sub repetition 44, edge assertion 40,
 // fold-special 63, -i 53. Each floor sits near a fifth to a half of that: high enough that a generator which mostly
 // stopped producing a shape fails, low enough that a reasoned change to the grammar's weights does not. The lift floor
 // is 40 (a fifth of the 200-pattern lift family) because the lift is the shape that escaped; the pre-fix generator drew
 // 0 of 500 and the round-4 generator with its float-rounded LCG drew 85.
 const R = require('../libexec/rg-regex.cjs');
+const { firstSighting } = require('./shape-census.cjs');
 
 const walk = (n, f, up = []) => {
   if (!n || typeof n !== 'object') return;
@@ -39,7 +42,7 @@ const nullable = (n) => {
 function facts([pattern, ic]) {
   const before = R.SHAPE_EVENTS.lift;
   R.translateRgRegex(pattern, { ignoreCase: !!ic });
-  const f = { lift: R.SHAPE_EVENTS.lift > before, nested: false, nullalt: false, lazy: false, cap: false, emptyrep: false, ic: !!ic };
+  const f = { key: `${pattern}\u0000${ic ? 1 : 0}`, lift: R.SHAPE_EVENTS.lift > before, nested: false, nullalt: false, lazy: false, cap: false, emptyrep: false, ic: !!ic };
   let ast = null;
   try { ast = R.parseForCensus(pattern, !!ic); } catch { /* rg rejects it: no structure to count */ }
   walk(ast, (n, up) => {
@@ -59,7 +62,10 @@ function facts([pattern, ic]) {
   return f;
 }
 
-const PATTERN_SHAPES = [
+// a fresh list per census (firstSighting is stateful)
+const patternShapes = () => [
+  { shape: 'a distinct pattern', min: 400, has: firstSighting((f) => f.key),
+    why: 'tripwire: 451 of 500 measured (the repeats are one-atom grammar draws like `a`); a short RNG cycle would collapse it' },
   { shape: 'shared branch prefix (RG-RE-ALT-LIFT fires)', min: 40, has: (f) => f.lift,
     why: 'the escaped shape: a fifth of the 200-pattern lift family (99 measured); the pre-fix generator drew 0' },
   { shape: 'nested counted repetition', min: 8, has: (f) => f.nested,
@@ -114,4 +120,4 @@ function recordModuli(rnd) {
   return { rec, moduli };
 }
 
-module.exports = { facts, PATTERN_SHAPES, CORPUS_SHAPES, corpusLines, utf8Bad, recordModuli };
+module.exports = { facts, patternShapes, CORPUS_SHAPES, corpusLines, utf8Bad, recordModuli };

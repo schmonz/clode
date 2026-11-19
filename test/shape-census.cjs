@@ -34,6 +34,12 @@
 //       generator caught in a short cycle shows itself (one whose 40,000 draws are 1,000 inputs drawn 40 times).
 //       Stateful: make a fresh one for each census() call.
 //
+// WHAT A FLOOR MEANS. The seeds are fixed, so every count is deterministic and exactly reproducible. A floor stated as a
+// fraction of the count measured today ("a third of the 63 measured") is a REGRESSION TRIPWIRE: it goes red when an
+// edit to the generator or its grammar silently stops producing a shape. It is not a coverage requirement and not a
+// statistical bound. A floor with its own reason (the escaped lift shape; a literal that must occur at least once; the
+// two large inputs buildCorpus always makes) is a requirement, and says so in its `why`.
+//
 // What it does NOT judge: whether the declared shapes are the RIGHT shapes (the author's claim, read in review), or
 // whether a shape that appeared was then checked against an oracle (the property test's own job).
 

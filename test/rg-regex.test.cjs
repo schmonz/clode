@@ -511,7 +511,7 @@ const RC = require('./rg-regex-census.cjs');
 function oracleCensus(cases, corpus) {
   const { rec, moduli } = RC.recordModuli(gen.makeRnd());
   gen.draw(rec);
-  return [census('rg-regex oracle patterns', RC.PATTERN_SHAPES, cases.map(RC.facts)),
+  return [census('rg-regex oracle patterns', RC.patternShapes(), cases.map(RC.facts)),
     census('rg-regex oracle corpus', RC.CORPUS_SHAPES, RC.corpusLines(corpus)),
     rngBias('rg-regex oracle RNG', () => gen.makeRnd(), [...moduli].sort((a, b) => a - b))];
 }
