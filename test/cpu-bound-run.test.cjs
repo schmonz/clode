@@ -58,22 +58,25 @@ test('without ps, the wall ceiling still holds and the result says CPU was not s
 });
 
 // Fake snapshots: the child's own CPU never moves; with `spawning`, one new descendant joins the tree at every poll.
+// Fake pids sit above every kernel's pid_max (Linux's ceiling is 4194304), so the STALLED kill cannot reach a real process.
 function fakeTree(spawning) {
   let n = 0;
   return (root) => {
     const rows = [{ pid: root, ppid: 1, ms: 100 }];
-    if (spawning) { n++; for (let k = 1; k <= n; k++) rows.push({ pid: 900000 + k, ppid: root, ms: 0 }); }
+    if (spawning) { n++; for (let k = 1; k <= n; k++) rows.push({ pid: 5000000 + k, ppid: root, ms: 0 }); }
     return rows;
   };
 }
-test('a new process joining the tree counts as progress, though the tree\'s CPU has not moved', async () => {
-  const [c, a] = node('setTimeout(() => {}, 2500)');
+test('a loop that keeps spawning sleepers adds processes but no CPU, and is STALLED', async () => {
+  const [c, a] = node('setTimeout(() => {}, 4000)');
   const r = await runCpuBounded(c, a, {}, { cpuBudgetMs: 600000, stallMs: 1000, wallMs: 60000, pollMs: 200, snapshot: fakeTree(true) });
+  assert.match(r.bound || '', /^STALLED: no CPU progress/);
+});
+test('CONTROL: a run that does add CPU between polls is not STALLED', async () => {
+  let ms = 0;
+  const [c, a] = node('setTimeout(() => {}, 2500)');
+  const r = await runCpuBounded(c, a, {}, { cpuBudgetMs: 600000, stallMs: 1000, wallMs: 60000, pollMs: 200,
+    snapshot: (root) => [{ pid: root, ppid: 1, ms: (ms += 50) }] });
   assert.strictEqual(r.bound, null);
   assert.strictEqual(r.status, 0);
-});
-test('CONTROL: the same run with no new process is STALLED', async () => {
-  const [c, a] = node('setTimeout(() => {}, 2500)');
-  const r = await runCpuBounded(c, a, {}, { cpuBudgetMs: 600000, stallMs: 1000, wallMs: 60000, pollMs: 200, snapshot: fakeTree(false) });
-  assert.match(r.bound || '', /^STALLED: /);
 });
