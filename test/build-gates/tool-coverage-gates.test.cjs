@@ -1909,6 +1909,23 @@ test('a win32-named carve (B:/~BUN/root/...) reads the same registry and modes a
   assert.deepStrictEqual(extractModes(w), extractModes(miniCarve()));
 });
 
+// THE CLASS, ON THE REAL CARVE, ON EVERY HOST (fix round 1 of CI 44443821699). Only windows-latest reads a win32 carve,
+// so a reader that misnames win32 chunks is otherwise seen there alone. The pinned carve in hand, spelled the way a
+// win32 carve spells its chunks (WIN32: measured against the real 2.1.283 win32-x64 decode, its urls
+// file:///B:/~BUN/root/x.js and its imports from"B:/~BUN/root/x.js"), must read the same registry and modes.
+test('the pinned carve spelled the win32 way (B:/~BUN/root/...) reads the same registry and modes', (t) => {
+  const c = readInputs();
+  if ('skip' in c) { t.skip(c.skip); return; }
+  if (!c.carve.includes('file:///$bunfs/root/')) { t.skip('the carve is already a win32 one: every-tool-driven itself reads it'); return; }
+  const w = WIN32(c.carve);
+  assert.ok(w.includes('import.meta.url = "file:///B:/~BUN/root/') && w.includes('from"B:/~BUN/root/'), 'the win32 spelling took');
+  const a = extractRegistry(c.carve), b = extractRegistry(w);
+  assert.ok(a.tools.size > 50, `the POSIX carve's registry: ${a.tools.size} tools`);
+  assert.deepStrictEqual([...b.tools.keys()].sort(), [...a.tools.keys()].sort());
+  assert.deepStrictEqual(b.findings, a.findings);
+  assert.deepStrictEqual(extractModes(w), extractModes(c.carve));
+});
+
 // ==========================================================================
 // THE MODES
 // ==========================================================================
