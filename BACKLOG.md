@@ -5102,6 +5102,63 @@ directory, with the merged settings copy, and the rest of the clode cache may tr
 clodeCacheDir should use %LOCALAPPDATA% on Windows is a question for clodeCacheDir itself, not for the guard alone:
 one cache resolution everywhere.
 
+## OPEN 2026-11-19 — 38 test files are outside the forced-win32 pass as AUDIT_PENDING (shrink-only debt)
+
+test/forced-win32.cjs leaves out any file whose require-closure spawns. These 38 are platform-sensitive, and their own
+test-side code spawns nothing, so they are out only because a production module they require spawns. Since f762894 a
+file cannot leave the pass silently: each of these is listed by name in PRODUCTION_SPAWN_EXCLUDED. Each one's reason
+is the shared AUDIT_PENDING, recorded on 2026-11-19 and frozen as AUDIT_PENDING_BASELINE, with a ceiling of 38 that
+only falls. A new exclusion must state its own reason; test/forced-win32.test.cjs makes a 39th AUDIT_PENDING red.
+
+THE AUDIT THAT CLEARS ONE: read the file's tests and find every spawn they reach through the production module.
+- If every one is injected (a spawn, exec or runner seam the test supplies), add
+  `// forced-win32: spawn-injected: <which seams>` to the file. It then runs under forcing, and the preload's spawn
+  trap makes the declaration binding.
+- If some spawn is real, give the file its own specific reason in PRODUCTION_SPAWN_EXCLUDED.
+
+Either way, delete the name from AUDIT_PENDING_BASELINE and lower AUDIT_PENDING_CEILING. Then run
+`node test/forced-win32.cjs --run <file>` on a POSIX host; any red it shows is a Windows-only failure in waiting.
+
+Unmeasured. None of the 38 has been audited:
+- test/bench-measure.test.cjs
+- test/build-gates/build-runner-gates.test.cjs
+- test/build-gates/carve-probe-gates.test.cjs
+- test/build-gates/render-build-graph-gates.test.cjs
+- test/build-graph-ci.test.cjs
+- test/build-graph-render.test.cjs
+- test/bunffi.test.cjs
+- test/cell-profile-diff.test.cjs
+- test/clode-build-args.test.cjs
+- test/clode-build-smoke-home.test.cjs
+- test/clode-build-spinner.test.cjs
+- test/clode-current.test.cjs
+- test/clode-hosttools.test.cjs
+- test/clode-manifest-fetch.test.cjs
+- test/clode-net.test.cjs
+- test/clode-paths.test.cjs
+- test/clode-rcodesign.test.cjs
+- test/clode-target-build.test.cjs
+- test/clode-templates.test.cjs
+- test/clode-watch.test.cjs
+- test/env-verdicts.test.cjs
+- test/extract-autoupdater.test.cjs
+- test/extract-cache-key.test.cjs
+- test/fidelity/applet-config.test.cjs
+- test/graph-require-rewrite.test.cjs
+- test/host-provision.test.cjs
+- test/native-oracle.test.cjs
+- test/node-shim-buffer-lite.test.cjs
+- test/paint-probe.test.cjs
+- test/platform-tag.test.cjs
+- test/provider-platform.test.cjs
+- test/rg-stream.test.cjs
+- test/sea-sign.test.cjs
+- test/templates-blob-pack.test.cjs
+- test/text-probe.test.cjs
+- test/tls-cacert-pem.test.cjs
+- test/ucd.test.cjs
+- test/undici.test.cjs
+
 ## Untracked-until-now findings from 2026-08-23/24 (three of them)
 
 These lived only in commit messages. Git preserves that; nobody browses it when

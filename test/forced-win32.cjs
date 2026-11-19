@@ -171,45 +171,54 @@ function spawnInjectedContradictions(testFiles, io = realIo) {
 //      goes red, naming the file.
 const AUDIT_PENDING = 'its production closure spawns, and its tests have not been audited for injecting every spawn '
   + '(the 2026-11-19 baseline). Declare "forced-win32: spawn-injected:" once they are, and remove it from here.';
+// SHRINK-ONLY DEBT (ruling 2026-11-19): the files excluded with AUDIT_PENDING on 2026-11-19, frozen. AUDIT_PENDING may
+// be the reason only for a name in this list, and the list may only lose names: clear one by auditing its tests (then
+// declare "forced-win32: spawn-injected:", or give it a specific reason below) and delete it here. A NEW exclusion
+// states its own reason. BACKLOG.md names each and the audit that clears it.
+const AUDIT_PENDING_BASELINE = Object.freeze([
+  'test/bench-measure.test.cjs',
+  'test/build-gates/build-runner-gates.test.cjs',
+  'test/build-gates/carve-probe-gates.test.cjs',
+  'test/build-gates/render-build-graph-gates.test.cjs',
+  'test/build-graph-ci.test.cjs',
+  'test/build-graph-render.test.cjs',
+  'test/bunffi.test.cjs',
+  'test/cell-profile-diff.test.cjs',
+  'test/clode-build-args.test.cjs',
+  'test/clode-build-smoke-home.test.cjs',
+  'test/clode-build-spinner.test.cjs',
+  'test/clode-current.test.cjs',
+  'test/clode-hosttools.test.cjs',
+  'test/clode-manifest-fetch.test.cjs',
+  'test/clode-net.test.cjs',
+  'test/clode-paths.test.cjs',
+  'test/clode-rcodesign.test.cjs',
+  'test/clode-target-build.test.cjs',
+  'test/clode-templates.test.cjs',
+  'test/clode-watch.test.cjs',
+  'test/env-verdicts.test.cjs',
+  'test/extract-autoupdater.test.cjs',
+  'test/extract-cache-key.test.cjs',
+  'test/fidelity/applet-config.test.cjs',
+  'test/graph-require-rewrite.test.cjs',
+  'test/host-provision.test.cjs',
+  'test/native-oracle.test.cjs',
+  'test/node-shim-buffer-lite.test.cjs',
+  'test/paint-probe.test.cjs',
+  'test/platform-tag.test.cjs',
+  'test/provider-platform.test.cjs',
+  'test/rg-stream.test.cjs',
+  'test/sea-sign.test.cjs',
+  'test/templates-blob-pack.test.cjs',
+  'test/text-probe.test.cjs',
+  'test/tls-cacert-pem.test.cjs',
+  'test/ucd.test.cjs',
+  'test/undici.test.cjs',
+]);
+const AUDIT_PENDING_CEILING = 38;   // lower it as names go; never raise it
 const PRODUCTION_SPAWN_EXCLUDED = {
-  'test/bench-measure.test.cjs': AUDIT_PENDING,
-  'test/build-gates/build-runner-gates.test.cjs': AUDIT_PENDING,
-  'test/build-gates/carve-probe-gates.test.cjs': AUDIT_PENDING,
-  'test/build-gates/render-build-graph-gates.test.cjs': AUDIT_PENDING,
-  'test/build-graph-ci.test.cjs': AUDIT_PENDING,
-  'test/build-graph-render.test.cjs': AUDIT_PENDING,
-  'test/bunffi.test.cjs': AUDIT_PENDING,
-  'test/cell-profile-diff.test.cjs': AUDIT_PENDING,
-  'test/clode-build-args.test.cjs': AUDIT_PENDING,
-  'test/clode-build-smoke-home.test.cjs': AUDIT_PENDING,
-  'test/clode-build-spinner.test.cjs': AUDIT_PENDING,
-  'test/clode-current.test.cjs': AUDIT_PENDING,
-  'test/clode-hosttools.test.cjs': AUDIT_PENDING,
-  'test/clode-manifest-fetch.test.cjs': AUDIT_PENDING,
-  'test/clode-net.test.cjs': AUDIT_PENDING,
-  'test/clode-paths.test.cjs': AUDIT_PENDING,
-  'test/clode-rcodesign.test.cjs': AUDIT_PENDING,
-  'test/clode-target-build.test.cjs': AUDIT_PENDING,
-  'test/clode-templates.test.cjs': AUDIT_PENDING,
-  'test/clode-watch.test.cjs': AUDIT_PENDING,
-  'test/env-verdicts.test.cjs': AUDIT_PENDING,
-  'test/extract-autoupdater.test.cjs': AUDIT_PENDING,
-  'test/extract-cache-key.test.cjs': AUDIT_PENDING,
-  'test/fidelity/applet-config.test.cjs': AUDIT_PENDING,
-  'test/graph-require-rewrite.test.cjs': AUDIT_PENDING,
-  'test/host-provision.test.cjs': AUDIT_PENDING,
-  'test/native-oracle.test.cjs': AUDIT_PENDING,
-  'test/node-shim-buffer-lite.test.cjs': AUDIT_PENDING,
-  'test/paint-probe.test.cjs': AUDIT_PENDING,
-  'test/platform-tag.test.cjs': AUDIT_PENDING,
-  'test/provider-platform.test.cjs': AUDIT_PENDING,
-  'test/rg-stream.test.cjs': AUDIT_PENDING,
-  'test/sea-sign.test.cjs': AUDIT_PENDING,
-  'test/templates-blob-pack.test.cjs': AUDIT_PENDING,
-  'test/text-probe.test.cjs': AUDIT_PENDING,
-  'test/tls-cacert-pem.test.cjs': AUDIT_PENDING,
-  'test/ucd.test.cjs': AUDIT_PENDING,
-  'test/undici.test.cjs': AUDIT_PENDING,
+  ...Object.fromEntries(AUDIT_PENDING_BASELINE.map((k) => [k, AUDIT_PENDING])),
+  // A file excluded since 2026-11-19 goes here with ITS OWN reason: what its tests reach that is real, and why.
 };
 // Sensitive, OUT, undeclared, and its test-side code spawns nothing: out only through a production module.
 function productionSpawnOnly(testFiles, io = realIo) {
@@ -224,11 +233,23 @@ function productionSpawnOnly(testFiles, io = realIo) {
 }
 // Repo-relative, '/'-separated: the key PRODUCTION_SPAWN_EXCLUDED is spelled in.
 const repoKey = (f, repo) => path.relative(repo, f).split(path.sep).join('/');
-function exclusionFindings(testFiles, repo, io = realIo, listed = PRODUCTION_SPAWN_EXCLUDED) {
+function exclusionFindings(testFiles, repo, io = realIo, listed = PRODUCTION_SPAWN_EXCLUDED,
+  baseline = AUDIT_PENDING_BASELINE, ceiling = AUDIT_PENDING_CEILING) {
   const found = productionSpawnOnly(testFiles, io).map((f) => repoKey(f, repo));
+  const debt = [];
+  if (baseline.length > ceiling) {
+    debt.push(`AUDIT_PENDING_BASELINE holds ${baseline.length} names, over its ceiling of ${ceiling}: it only shrinks`);
+  }
+  for (const [k, why] of Object.entries(listed)) {
+    if (why === AUDIT_PENDING && !baseline.includes(k)) {
+      debt.push(`${k}: excluded as AUDIT_PENDING but not in the frozen 2026-11-19 baseline: give it its own reason, or `
+        + 'declare "forced-win32: spawn-injected:"');
+    }
+  }
   const unlisted = found.filter((k) => !(k in listed));
   const stale = Object.keys(listed).filter((k) => !found.includes(k));
   return [
+    ...debt,
     ...unlisted.map((k) => `${k}: LEFT the forced-win32 pass only because a production module it requires spawns. `
       + 'Declare "// forced-win32: spawn-injected: <why>" if its tests inject every spawn, or list it in '
       + 'PRODUCTION_SPAWN_EXCLUDED with a reason'),
@@ -263,7 +284,7 @@ function forcedWin32Files(testFiles, io = realIo) {
 }
 
 module.exports = { SENSITIVE, REAL_OS, SPAWN_INJECTED, PRELOAD, FLOOR, discover, requireClosure, forcedWin32Files,
-  declaresSpawnInjected, spawnInjectedContradictions, PRODUCTION_SPAWN_EXCLUDED, productionSpawnOnly, exclusionFindings,
+  declaresSpawnInjected, spawnInjectedContradictions, PRODUCTION_SPAWN_EXCLUDED, AUDIT_PENDING, AUDIT_PENDING_BASELINE, AUDIT_PENDING_CEILING, productionSpawnOnly, exclusionFindings,
   silentFiles };
 
 // Triage mode, for the thing this machinery is actually best at: force ANY file, spawn

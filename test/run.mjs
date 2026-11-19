@@ -718,6 +718,15 @@ if (!testsRan) {
     + `e.g. an unbuilt asdf/nvm pin bump can make the whole invocation silently no-op.`);
   fails = 1;
 }
+// A file that reported no tests of its own is red BY NAME: node --test stands in for it with a PASSING "ok - <file>"
+// when it registers none, exits early, or dies before reporting, so neither the exit status nor "# tests N" sees it.
+const { silentFiles } = require('./forced-win32.cjs');
+if (tapText) {
+  for (const f of silentFiles(files, tapText)) {
+    console.error(`run: ${f} reported NO tests of its own (it registered none, exited early, or died before reporting)`);
+    fails = 1;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // THE FORCED-WIN32 SECOND PASS.
@@ -739,7 +748,7 @@ if (!testsRan) {
 // built (CLODE_NODE, CLODE_STATE_ROOT, the offline gate, the hermeticity snapshot), so
 // it is covered by the same postflight guards as the main pass.
 {
-  const { forcedWin32Files, PRELOAD, silentFiles } = require('./forced-win32.cjs');
+  const { forcedWin32Files, PRELOAD } = require('./forced-win32.cjs');
   const forcedFiles = forcedWin32Files(files);
   if (forcedFiles.length === 0) {
     console.error('run: the forced-win32 pass derived ZERO files from '
