@@ -656,8 +656,73 @@ shTest('an engine that fails the floor probe is REFUSED, naming the remedies', (
   });
   assert.strictEqual(r.status, 1, `expected a refusal, got ${r.status}: ${r.out}`);
   assert.match(r.err, /moduleMeta/, 'the refusal must name what the engine is missing');
-  assert.match(r.err, /cut a release/i, 'and the first remedy');
+  // NOT "cut a release" as a remedy on its own: release.yml builds through this same check,
+  // which is what made CI run 44443821699's red circular.
+  assert.match(r.err, /release cannot\s+fix it on its own/, 'the refusal must say a release alone cannot clear it');
+  assert.match(r.err, /buildHost: false/, 'and the first remedy');
   assert.match(r.err, /CLODE_TJS/, 'and the second');
+});
+
+// CI run 44443821699 (HEAD b4eb2f5, the first push in six weeks): EVERY tjs leg died at
+// "Construct the patched tjs tree from pins", because the pinned release's engine predates
+// two engine patches of 2026-10-04 (txiki-sync-stat-identity, txiki-strerror) and the
+// resolver held it to the WHOLE floor -- the floor of the engine quaude SHIPS. That made the
+// remedy it printed ("cut a release") circular: release.yml builds its engines through the
+// same build-leg, the same resolver and the same refusal.
+//
+// The bootstrap's ROLE is narrower: it hosts scripts/build-tjs.cjs (and the graph) under
+// HEAD's node-shim. Measured on the real v0.20260831.1 macos-arm64 slice, the whole engine
+// build -- --source-only, --regen-only, --build-only, including the new engine's own
+// full-floor smoke -- reads exactly one field of a Stats object: `mode`. So the resolver
+// accepts on the BUILD-HOST floor, and the engine that build produces is still held to the full
+// one (build-tjs.cjs's post-build smoke, build-leg's host-exec smoke, the guest bake, and
+// clode build's front door -- test/engine-api-floor.test.cjs pins all four to it).
+//
+// The stale engine here is a REAL current tjs with the old engine's stat shape and no
+// strerror swapped in (test/fixtures/stale-engine-prelude.js, measured on the published
+// slice) for every program the resolver runs -- except loader.cjs's generation run, which
+// cannot be relocated into a temp file without breaking its own relative requires.
+// test/bootstrap-engine-online.test.cjs drives the real published bytes end to end.
+const PRELUDE = path.join(REPO, 'test', 'fixtures', 'stale-engine-prelude.js');
+function staleEngine(dir) {
+  const { tjsPath } = require('./node-shim-helper.cjs');
+  const real = tjsPath();
+  if (!real) return null;
+  return fakeExe(path.join(dir, 'stale-tjs'), `#!/bin/sh
+# The last release's engine, as HEAD sees it: see test/fixtures/stale-engine-prelude.js.
+[ "$1" = run ] || exec ${JSON.stringify(real)} "$@"
+case "$2" in *loader.cjs) exec ${JSON.stringify(real)} "$@" ;; esac
+f=$2; shift 2
+t=$(mktemp "\${TMPDIR:-/tmp}/stale-engine.XXXXXX")
+cat ${JSON.stringify(PRELUDE)} "$f" > "$t"
+${JSON.stringify(real)} run "$t" "$@"; rc=$?
+rm -f "$t"; exit $rc
+`);
+}
+
+shTest('the LAST RELEASE\'s engine (no stat identity, no strerror) is accepted to HOST the build', (t) => {
+  const d = mkdtemp();
+  const stale = staleEngine(d);
+  if (!stale) { t.skip('no real tjs (CLODE_TJS or a local build) to stand the stale engine on'); return; }
+  const r = sh([], { CLODE_TJS: stale, CLODE_CACHE: path.join(d, 'cache') });
+  assert.strictEqual(r.status, 0,
+    `the resolver refused the engine every pinned slice actually is -- the circular red of CI run `
+    + `44443821699, where "cut a release" cannot run either, since release.yml builds through this `
+    + `same resolver:\n${r.err}`);
+  assert.strictEqual(r.out, stale);
+});
+
+shTest('...and that same stale engine is still REFUSED the full floor quaude ships on', (t) => {
+  const d = mkdtemp();
+  const stale = staleEngine(d);
+  if (!stale) { t.skip('no real tjs (CLODE_TJS or a local build) to stand the stale engine on'); return; }
+  const { engineFloorCheckFile } = require('../scripts/engine-api-floor.cjs');
+  const check = path.join(d, 'full-floor.js');
+  fs.writeFileSync(check, engineFloorCheckFile());
+  const r = spawnSync(stale, ['run', check], { encoding: 'utf8' });
+  assert.notStrictEqual(r.status, 0, 'the full floor must refuse an engine with no stat identity');
+  assert.match(r.stdout, /MISSING-ENGINE-API: __tjs_fs_sync\.stat identity \(bigint\), __tjs_fs_sync\.strerror \(function\)/,
+    `the simulation must reproduce CI's exact finding, or it is simulating something else:\n${r.stdout}${r.stderr}`);
 });
 
 shTest('the sha256 tool is KAT-tested, so a lying hasher is refused rather than trusted', () => {

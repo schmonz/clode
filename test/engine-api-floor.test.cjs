@@ -32,6 +32,7 @@ const BAKE = 'spike/quickjs/qemu/ci-guest-bake.sh';
 const ACTION = '.github/actions/build-leg/action.yml';
 const BUILD_TJS = 'scripts/build-tjs.cjs';
 const CLODE_BUILD = 'libexec/clode-build.cjs';
+const BOOTSTRAP_SH = 'scripts/bootstrap-engine.sh';
 
 // EVERY SPELLING OF "somebody regenerates the bytecode here", because the INVOCATION keeps
 // moving and this rule must not move with it in either direction. What the rule below is
@@ -84,6 +85,42 @@ test('the floor names moduleMeta, and says which patch provides it', async () =>
   assert.ok(id, 'the sync stat\'s file identity is not in the floor');
   assert.strictEqual(id.kind, 'bigint');
   assert.match(id.from, /txiki-sync-stat-identity\.patch/);
+});
+
+// TWO ROLES (scripts/engine-api-floor.cjs's header): the engine quaude ships on ('runtime',
+// every entry) and an engine that only hosts the build ('build-host'). The split is only honest
+// if each entry SAYS which it is and an exemption carries its measured reason; an entry that
+// does not say is a finding, not a default.
+test('every floor entry declares its build-host role, and every build-host exemption says why', async () => {
+  const { ENGINE_API_FLOOR, floorFor, ROLES } = await load();
+  assert.deepStrictEqual(ROLES, ['runtime', 'build-host']);
+  for (const b of ENGINE_API_FLOOR) {
+    assert.strictEqual(typeof b.buildHost, 'boolean', `${b.name}: no \`buildHost: true|false\` -- an undeclared role is a guess`);
+    if (b.buildHost) assert.strictEqual(b.notForBuildHost, undefined, `${b.name}: a build-host entry carries no exemption`);
+    else assert.ok(typeof b.notForBuildHost === 'string' && b.notForBuildHost.length > 80, `${b.name}: a build-host exemption needs its MEASURED reason`);
+  }
+  // runtime IS the whole list -- the same array, so a shipped-engine check cannot drift from it.
+  assert.strictEqual(floorFor(), ENGINE_API_FLOOR);
+  assert.strictEqual(floorFor('runtime'), ENGINE_API_FLOOR);
+  // Today's build-host exemptions, by name: widening this set is a decision, so it is a diff here.
+  assert.deepStrictEqual(ENGINE_API_FLOOR.filter((b) => !b.buildHost).map((b) => b.name),
+    ['__tjs_fs_sync.stat identity', '__tjs_fs_sync.strerror']);
+  assert.deepStrictEqual(floorFor('build-host').map((b) => b.name), ['__tjs_fs_sync', '__tjs_spawn_sync', 'tjs.engine.moduleMeta']);
+  assert.throws(() => floorFor('shipped'), /unknown role/);
+});
+
+test('the CLI: no role is the full floor; --role build-host is the build-host floor; anything else is refused', () => {
+  const run = (...a) => execFileSync(process.execPath, [path.join(repo, FLOOR_CJS), ...a], { encoding: 'utf8' });
+  const { ENGINE_API_FLOOR, floorFor } = require(path.join(repo, FLOOR_CJS));
+  assert.strictEqual(run('--list').trim().split('\n').length, ENGINE_API_FLOOR.length);
+  assert.strictEqual(run('--list', '--role', 'runtime'), run('--list'));
+  assert.strictEqual(run('--list', '--role', 'build-host').trim().split('\n').length, floorFor('build-host').length);
+  assert.match(run('--emit-check'), /stat\(".*"\)\.ino/);
+  assert.doesNotMatch(run('--emit-check', '--role', 'build-host'), /\.ino|strerror/);
+  for (const bad of [['--role', 'shipped'], ['--role'], ['--bogus']]) {
+    assert.throws(() => execFileSync(process.execPath, [path.join(repo, FLOOR_CJS), '--emit-check', ...bad], { stdio: 'pipe' }),
+      (e) => e.status === 2, `--emit-check ${bad.join(' ')} must be a usage error`);
+  }
 });
 
 test('the generated check reports OK, and on a miss names the binding AND exits nonzero', async () => {
@@ -140,7 +177,7 @@ test('the real floor passes on a locally built engine (skipped if none)', async 
 //
 // PURE: every check below is a presence/absence assertion against the three
 // already-read files (build-tjs.cjs, the build-leg action, the guest bake script).
-function scanEngineFloorConsumers({ buildTjsSrc, actionYml, bakeSrc, clodeBuildSrc,
+function scanEngineFloorConsumers({ buildTjsSrc, actionYml, bakeSrc, clodeBuildSrc, bootstrapSh,
   regenStepId, entryRel }) {
   const findings = [];
   let examined = 0;
@@ -238,6 +275,23 @@ function scanEngineFloorConsumers({ buildTjsSrc, actionYml, bakeSrc, clodeBuildS
     findings.push('clode build has grown its own hand-written binding name — that is the second list this file exists to prevent');
   }
 
+  // THE TWO ROLES. Exactly one consumer may take the build-host floor -- the bootstrap resolver,
+  // whose engine hosts the build and never ships -- and every consumer that judges an engine
+  // quaude WILL ship on must take the full one. A build-host role leaking into one of those is
+  // the shipped engine quietly losing its floor.
+  examined++;
+  if (!/engine-api-floor\.cjs" --emit-check --role build-host >/.test(bootstrapSh)) {
+    findings.push('scripts/bootstrap-engine.sh no longer accepts on the BUILD-HOST floor -- held to the runtime one, '
+      + 'the first engine patch after a release makes every leg red and "cut a release" circular (CI run 44443821699)');
+  }
+  examined++;
+  {
+    const leaks = [['scripts/build-tjs.cjs', buildTjsSrc], ['build-leg/action.yml', actionYml],
+      ['the guest bake', bakeSrc], ['libexec/clode-build.cjs', clodeBuildSrc]]
+      .filter(([, src]) => /--role|floorFor\(/.test(src)).map(([n]) => n);
+    if (leaks.length) findings.push(`a shipped-engine floor check names a role (${leaks.join(', ')}): those must take the FULL floor, i.e. no role at all`);
+  }
+
   return { findings, examined };
 }
 
@@ -250,23 +304,26 @@ const consumersGuard = defineGuard({
   // scanEngineFloorConsumers is supposed to report BROKEN. A legitimate retirement drops
   // `examined`, this fires, and a human lowers the floor deliberately — that is the
   // intended path, not a bug.
-  floor: 19,
+  floor: 21,
   read: () => Object.assign({
     buildTjsSrc: read(BUILD_TJS),
     actionYml: read(ACTION),
     bakeSrc: read(BAKE),
     clodeBuildSrc: read(CLODE_BUILD),
+    bootstrapSh: read(BOOTSTRAP_SH),
   }, graphRegen()),
   scan: scanEngineFloorConsumers,
   // Models the exact regression this guard exists to catch: every consumer back
   // to a hand-written inline check, and the guest bake's "no regen needed" claim
   // (the one that cost the sparc leg two days) reintroduced.
   control: () => ({
-    buildTjsSrc: 'typeof __tjs_fs_sync === "object" ? "tjs-shim-ok" : "tjs-shim-missing"',
+    buildTjsSrc: 'typeof __tjs_fs_sync === "object" ? "tjs-shim-ok" : "tjs-shim-missing"; engineFloorCheckJs(floorFor(\'build-host\'))',
     actionYml: 'typeof __tjs_fs_sync === "object" ? "tjs-shim-ok" : "tjs-shim-missing"',
     bakeSrc: 'echo "canonical-LE: no regen needed"',
     // The build back to no engine gate at all: the door with the hole in it.
     clodeBuildSrc: '// no engine capability gate here',
+    // The bootstrap back on the runtime floor, and the build-host role leaked into a shipped check.
+    bootstrapSh: '"$REPO/scripts/engine-api-floor.cjs" --emit-check > "$TMP/floor.js"',
     // The graph's REAL answers, so the control's regen finding comes from the yaml having
     // no regen in any spelling -- not from the derivation having been fed a blank.
     ...graphRegen(),

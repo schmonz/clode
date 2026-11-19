@@ -76,15 +76,17 @@ function resolve() {
 
 const runTjs = (tjs, args) => spawnSync(tjs, ['run', ...args], { cwd: REPO, encoding: 'utf8' });
 
-test('the last release still bootstraps HEAD: the pinned slice fetches and passes the floor', (t) => {
+test('the last release still bootstraps HEAD: the pinned slice fetches and passes the build-host floor', (t) => {
   const skip = why();
   if (skip) return t.skip(skip);
   const tjs = resolve();
   // The resolver already ran the floor probe (it would have refused otherwise). Assert it
   // again HERE, visibly, so a reader of this file sees the acceptance rather than trusting
-  // an exit code — and so the token comes from engine-api-floor.cjs both times.
+  // an exit code — and so the token comes from engine-api-floor.cjs both times. The
+  // BUILD-HOST floor, as the resolver checks it: this engine hosts the build and never ships
+  // (scripts/engine-api-floor.cjs's roles; CI run 44443821699 is why).
   const gen = runTjs(tjs, [path.join(REPO, 'libexec', 'node-shim', 'loader.cjs'),
-    path.join(REPO, 'scripts', 'engine-api-floor.cjs'), '--emit-check']);
+    path.join(REPO, 'scripts', 'engine-api-floor.cjs'), '--emit-check', '--role', 'build-host']);
   assert.strictEqual(gen.status, 0, `could not generate the floor check under the fetched engine:\n${gen.stderr}`);
   const check = path.join(mkdtemp(), 'floor.js');
   fs.writeFileSync(check, gen.stdout);
@@ -92,6 +94,36 @@ test('the last release still bootstraps HEAD: the pinned slice fetches and passe
   assert.strictEqual(ran.stdout.trim(), OK_TOKEN,
     `the pinned release's engine does not carry HEAD's engine API floor:\n${ran.stdout}${ran.stderr}`);
   assert.strictEqual(ran.status, 0);
+});
+
+// What the build-host floor's exemptions RELY ON, on the real published bytes: the one Stats
+// read the whole engine build makes (node-shim's copyFileSync carrying the executable bit --
+// the read that killed every leg of CI run 44443821699) works, and identity is refused rather
+// than invented whenever this engine cannot report it.
+test('under the fetched engine, copyFileSync keeps the mode and identity is never invented', (t) => {
+  const skip = why();
+  if (skip) return t.skip(skip);
+  const tjs = resolve();
+  const d = mkdtemp();
+  const exe = path.join(d, 'tool.sh');
+  fs.writeFileSync(exe, '#!/bin/sh\n');
+  fs.chmodSync(exe, 0o755);
+  const prog = path.join(d, 'prog.cjs');
+  fs.writeFileSync(prog, `const fs = require('fs');
+fs.copyFileSync(${JSON.stringify(exe)}, ${JSON.stringify(path.join(d, 'copy.sh'))});
+const s = fs.statSync(${JSON.stringify(exe)});
+let ino; try { ino = String(s.ino); } catch (e) { ino = e.code; }
+console.log(JSON.stringify({ mode: s.mode & 0o777, isFile: s.isFile(), ino }));
+`);
+  const r = runTjs(tjs, [path.join(REPO, 'libexec', 'node-shim', 'loader.cjs'), prog]);
+  assert.strictEqual(r.status, 0, `${r.stdout}${r.stderr}`);
+  const got = JSON.parse(r.stdout.trim().split('\n').pop());
+  assert.strictEqual(fs.statSync(path.join(d, 'copy.sh')).mode & 0o777, 0o755);
+  assert.strictEqual(got.mode, 0o755);
+  assert.strictEqual(got.isFile, true);
+  // Either this engine has identity (a release that carries the patch) and reports the real
+  // inode, or it refuses. Never 0.
+  assert.ok(got.ino === 'ERR_CLODE_ENGINE_FLOOR' || got.ino === String(fs.statSync(exe).ino), `ino: ${got.ino}`);
 });
 
 test("HEAD's build-tjs.cjs loads, top to bottom, under the fetched engine", (t) => {
