@@ -26,6 +26,7 @@ const { execFileSync } = require('node:child_process');
 
 const REPO = path.join(__dirname, '..');
 const bunGraph = require('../libexec/bun-graph.cjs');
+const { census, rngBias, assertCensus, firstSighting, intRng } = require('./shape-census.cjs');
 const {
   decodeBunGraph, loadGraphFromBytes, loadGraphFull, loadAssetsFromBytes, TRAILER, MODULE_FORMAT, LOADER,
 } = bunGraph;
@@ -845,12 +846,51 @@ function utf8Corpus() {
   const out = [[0xF0, 0x9F, 0xC3, 0x9F], [0x15, 0xC3, 0x9F, 0x71], [0xE0, 0xC3, 0x9F], [0xC3], [0xF0, 0x9F, 0x98],
     [0xED, 0xA0, 0x80], [0xE0, 0x80, 0x80], [0xF4, 0x90, 0x80, 0x80], [0xC0, 0xAF], [0xFF], [0x80, 0x80],
     [0xEF, 0xBB, 0xBF, 0x61], [0xEF, 0xBB, 0xBF, 0xFF], [0xF0, 0x90, 0x80]];
-  const pool = [0x00, 0x41, 0x7F, 0x80, 0x8F, 0x90, 0x9F, 0xA0, 0xBF, 0xC0, 0xC2, 0xDF, 0xE0, 0xED, 0xEF, 0xF0, 0xF4, 0xF5, 0xFF];
-  let seed = 0x2BD;
-  const rnd = (k) => { seed = (seed * 1103515245 + 12345) >>> 0; return (seed >>> 16) % k; };
-  for (let i = 0; i < 4000; i++) { const len = 1 + rnd(7); const b = []; for (let j = 0; j < len; j++) b.push(pool[rnd(pool.length)]); out.push(b); }
+  return out.concat(utf8Fuzz());
+}
+// THE FUZZ (observability Task 4): it drew with `(seed * 1103515245 + 12345) >>> 0`, a product past 2^53 that rounds,
+// so its state cycled every 419 draws and its 4,000 strings were 2,457 distinct (measured 2026-11-19). It draws from
+// test/shape-census.cjs's intRng now, and the census below proves every ill-formed class is drawn.
+const UTF8_POOL = [0x00, 0x41, 0x7F, 0x80, 0x8F, 0x90, 0x9F, 0xA0, 0xBF, 0xC0, 0xC2, 0xDF, 0xE0, 0xED, 0xEF, 0xF0, 0xF4, 0xF5, 0xFF];
+const UTF8_SEED = 0x2BD, UTF8_N = 4000, UTF8_MAX_LEN = 7;
+function utf8Fuzz(rnd = intRng(UTF8_SEED)) {
+  const out = [];
+  for (let i = 0; i < UTF8_N; i++) { const len = 1 + rnd(UTF8_MAX_LEN); const b = []; for (let j = 0; j < len; j++) b.push(UTF8_POOL[rnd(UTF8_POOL.length)]); out.push(b); }
   return out;
 }
+const cont = (x) => x >= 0x80 && x <= 0xbf;
+// [shape, has(bytes)]: where a multi-byte sequence is well formed, and each way it is not (the WHATWG maximal-subpart cases)
+const UTF8_SHAPES = [
+  ['a valid 2-byte sequence', (b) => b.some((x, i) => x >= 0xc2 && x <= 0xdf && cont(b[i + 1]))],
+  ['a valid 3-byte sequence', (b) => b.some((x, i) => ((x === 0xe0 && b[i + 1] >= 0xa0 && b[i + 1] <= 0xbf) || (x === 0xed && b[i + 1] >= 0x80 && b[i + 1] <= 0x9f)
+    || x === 0xef && cont(b[i + 1])) && cont(b[i + 2]))],
+  ['a valid 4-byte sequence', (b) => b.some((x, i) => ((x === 0xf0 && b[i + 1] >= 0x90 && b[i + 1] <= 0xbf) || (x === 0xf4 && b[i + 1] >= 0x80 && b[i + 1] <= 0x8f))
+    && cont(b[i + 2]) && cont(b[i + 3]))],
+  ['a lone continuation byte at the start', (b) => cont(b[0])],
+  ['a lead truncated by the end', (b) => b[b.length - 1] >= 0xc2 && b[b.length - 1] <= 0xf4],
+  ['a lead interrupted by a non-continuation', (b) => b.some((x, i) => x >= 0xc2 && x <= 0xf4 && i + 1 < b.length && !cont(b[i + 1]))],
+  ['an overlong lead (C0, E0 80-9F, F0 80-8F)', (b) => b.some((x, i) => x === 0xc0 || (x === 0xe0 && b[i + 1] >= 0x80 && b[i + 1] <= 0x9f)
+    || (x === 0xf0 && b[i + 1] >= 0x80 && b[i + 1] <= 0x8f))],
+  ['a surrogate (ED A0-BF)', (b) => b.some((x, i) => x === 0xed && b[i + 1] >= 0xa0 && b[i + 1] <= 0xbf)],
+  ['past U+10FFFF (F4 90-BF, F5-FF)', (b) => b.some((x, i) => x >= 0xf5 || (x === 0xf4 && b[i + 1] >= 0x90 && b[i + 1] <= 0xbf))],
+];
+// Measured 2026-11-19 over the 4,000 intRng strings, floored at a third: 2-byte 388, 3-byte 100, lone continuation 1,320,
+// truncated 1,471, interrupted 1,863, overlong 889, surrogate 58, past U+10FFFF 1,503. A valid 4-byte sequence needs four
+// draws in a row from 19 bytes and was drawn 7 times; its floor is 3 (and utf8Corpus's fixed rows hold more).
+const UTF8_FLOORS = {
+  'a valid 2-byte sequence': 120, 'a valid 3-byte sequence': 30, 'a valid 4-byte sequence': 3, 'a lone continuation byte at the start': 400,
+  'a lead truncated by the end': 450, 'a lead interrupted by a non-continuation': 600, 'an overlong lead (C0, E0 80-9F, F0 80-8F)': 290,
+  'a surrogate (ED A0-BF)': 19, 'past U+10FFFF (F4 90-BF, F5-FF)': 500,
+};
+test('UTF8-REPLACEMENT\'s fuzz: distinct strings, every ill-formed class, an unbiased RNG (census)', (t) => {
+  const shapes = [{ shape: 'a distinct byte string', min: 2800, has: firstSighting((b) => b.join(',')),
+    why: 'most of 4,000 (short strings over 19 bytes repeat by chance; 3,149 measured); the float-rounded LCG gave 2,457' },
+  ...UTF8_SHAPES.map(([shape, has]) => ({ shape, has, min: UTF8_FLOORS[shape], why: 'a third of the count measured 2026-11-19 (UTF8_FLOORS says each)' }))];
+  const fuzz = census('UTF8-REPLACEMENT fuzz', shapes, utf8Fuzz());
+  const bias = rngBias('UTF8-REPLACEMENT fuzz RNG', () => intRng(UTF8_SEED), [UTF8_MAX_LEN, UTF8_POOL.length]);
+  for (const r of [fuzz, bias]) t.diagnostic(r.summary);
+  assertCensus(assert, fuzz, bias);
+});
 const cps = (s) => Array.from(s, (ch) => ch.codePointAt(0));
 
 test('UTF8-REPLACEMENT: invalid bytes decode by the WHATWG rule, as Node\'s TextDecoder does', () => {
