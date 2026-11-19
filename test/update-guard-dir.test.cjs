@@ -63,6 +63,29 @@ test('guardDirRefusal, real Windows facts: only the type is judged on win32; the
   assert.match(guardDirRefusal('/g', WIN_DIR, WIN_DIR, 0, 'linux'), /open to other users \(mode 666/, 'POSIX judges these numbers');
 });
 
+test('guardSettingsToPrune: a uid probe left behind goes once an hour old, never sooner', () => {
+  const now = 10 * GUARD_SETTINGS_MAX_AGE_MS;
+  const hour = 60 * 60 * 1000;
+  assert.deepStrictEqual(guardSettingsToPrune([
+    { name: '.uid-probe-abc123', mtimeMs: now - hour - 1 }, { name: '.uid-probe-def456', mtimeMs: now - 1000 },
+    { name: '.uid-probe-', mtimeMs: now - hour - 1 }, { name: 'x.uid-probe-abc', mtimeMs: now - hour - 1 },
+  ], now), ['.uid-probe-abc123']);
+});
+
+test('quaude: the prune removes a stale uid probe directory for real (naude: test/naude-entry.test.cjs)', async () => {
+  const { privateGuardDir, pruneGuardSettings } = loadQuaudeGuardDir();
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qguard-'));
+  try {
+    const { dir } = await privateGuardDir(fakeTjs({ home: root }), { CLODE_CACHE: root }, path.sep, process.platform);
+    const twoHoursAgo = (Date.now() - 2 * 60 * 60 * 1000) / 1000;
+    const plant = (n) => { const p = path.join(dir, n); fs.mkdirSync(p); fs.utimesSync(p, twoHoursAgo, twoHoursAgo); };
+    plant('.uid-probe-stale1');
+    fs.mkdirSync(path.join(dir, '.uid-probe-fresh1'));
+    await pruneGuardSettings(fakeTjs({ home: root }), dir, path.sep, Date.now());
+    assert.deepStrictEqual(fs.readdirSync(dir), ['.uid-probe-fresh1'], 'the stale probe is gone, the fresh one stays');
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test('guardSettingsToPrune: only settings-<hex>.json, only older than a week', () => {
   const now = 10 * GUARD_SETTINGS_MAX_AGE_MS;
   const old = now - GUARD_SETTINGS_MAX_AGE_MS - 1;
@@ -170,7 +193,7 @@ test('quaude, real Windows facts: st_uid 0, mode 0o40666 and a throwing userInfo
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-// MAIN'S REAL PATH, nothing injected but the host: main() resolves { platform, sep } ONCE with hostPlatform from
+// AS MAIN COMPOSES THEM (not main itself), nothing injected but the host: main() resolves { platform, sep } ONCE with hostPlatform from
 // navigator.userAgentData.platform and target-env.cjs's real mapPlatform, and hands both to privateGuardDir (the
 // wiring is the quaude-guard-dir-fails-closed guard below). af7b803 resolved it from NO signal: 'linux' on every
 // host, so a Windows quaude judged its guard directory by the POSIX rule and refused to start.
@@ -182,7 +205,7 @@ function withNavigator(platform, fn) {
   });
 }
 const { mapPlatform } = require('../libexec/target-env.cjs');
-test('quaude main path on a Windows host (userAgentData "Windows", real Windows facts, userInfo throws): it STARTS', async () => {
+test('hostPlatform + privateGuardDir as main composes them, on a Windows userAgent (real Windows facts, userInfo throws): it starts', async () => {
   const { privateGuardDir, hostPlatform } = loadQuaudeGuardDir();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qguard-'));
   try {

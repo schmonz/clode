@@ -80,7 +80,7 @@ function pruneGuardSettingsSync(dir, nowMs) {
   try { names = fs.readdirSync(dir); } catch { return; }
   const entries = [];
   for (const name of names) { try { entries.push({ name, mtimeMs: fs.lstatSync(path.join(dir, name)).mtimeMs }); } catch { /* gone */ } }
-  for (const name of guardSettingsToPrune(entries, nowMs)) { try { fs.rmSync(path.join(dir, name), { force: true }); } catch { /* gone */ } }
+  for (const name of guardSettingsToPrune(entries, nowMs)) { try { fs.rmSync(path.join(dir, name), { force: true, recursive: true }); } catch { /* gone */ } }
 }
 // Write `text` to `file` unless it already holds exactly that: to a temporary name, then renamed over it, so a session
 // starting meanwhile reads the old bytes or the new, never a torn file (quaude-bootstrap.mjs writeFileOnce).

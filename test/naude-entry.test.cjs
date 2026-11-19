@@ -459,7 +459,13 @@ test('first pass: merged settings older than a week are pruned; a fresh one stay
   fs.writeFileSync(stale, '{"secret":1}', { mode: 0o600 });
   const eightDaysAgo = (Date.now() - 8 * 24 * 60 * 60 * 1000) / 1000;
   fs.utimesSync(stale, eightDaysAgo, eightDaysAgo);
+  // A quaude uid probe its session failed to remove (an empty directory), two hours old: naude prunes it too.
+  const probe = path.join(guard, '.uid-probe-stale1');
+  fs.mkdirSync(probe, { recursive: true });
+  const twoHoursAgo = (Date.now() - 2 * 60 * 60 * 1000) / 1000;
+  fs.utimesSync(probe, twoHoursAgo, twoHoursAgo);
   const cap = firstPass({ argv: ['-p', 'x', '--managed-settings', 'nope', '--settings', userFile] });
+  assert.strictEqual(fs.existsSync(probe), false, 'the stale uid probe directory is gone');
   const at = cap.call.args.indexOf('--settings');
   const fresh = cap.call.args[at + 1];
   assert.strictEqual(path.dirname(fresh), guard, 'the merge is written in the guard directory');
