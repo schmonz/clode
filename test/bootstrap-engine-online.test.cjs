@@ -67,8 +67,11 @@ function resolve() {
   const r = spawnSync('/bin/sh', [SH], { env, encoding: 'utf8' });
   assert.strictEqual(r.status, 0,
     `bootstrap-engine.sh refused (${r.status}):\n${r.stderr}\n`
-    + 'If this is the floor probe, the pinned release can no longer host HEAD\'s shim — '
-    + 'that is the finding, not a flake. Cut a release, or re-pin the bootstrap tag.');
+    + 'If this is the floor probe, the pinned release can no longer host HEAD\'s BUILD — '
+    + 'that is the finding, not a flake. A release alone cannot fix it (release.yml builds '
+    + 'through this same resolver): make the build not need the missing binding yet '
+    + '(`buildHost: false`, measured, in scripts/engine-api-floor.cjs), or set CLODE_TJS to an '
+    + 'engine built from this tree to cut that release by hand, then re-pin the bootstrap tag.');
   const tjs = r.stdout.trim();
   assert.ok(fs.existsSync(tjs), `resolver printed a path that does not exist: ${tjs}`);
   return tjs;

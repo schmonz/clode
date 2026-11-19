@@ -415,8 +415,13 @@ accept() {
   API floor check, so it cannot host scripts/build-tjs.cjs either.
   target $TARGET, bootstrap pack $TAG
 $(cat "$TMP/gen.err" 2>/dev/null || :)
-  Remedies: cut a release so the pack carries an engine built from these sources, or set
-  CLODE_TJS to an engine you built yourself."
+  A release cannot fix this on its own: release.yml builds its engines through this same
+  resolver, so it would stop here too. Remedies:
+    * make HEAD's node-shim loader run on that engine again (what it needs from the engine
+      is a build-host requirement; record it in scripts/engine-api-floor.cjs only once a
+      release carries it);
+    * set CLODE_TJS to an engine built from this tree (./build.sh --only engine.compile on a
+      machine that has one), e.g. to cut that release by hand."
   fi
   if [ ! -s "$TMP/floor.js" ]; then
     die "bootstrap: generating the engine API floor check under $ac_tjs produced nothing.

@@ -663,6 +663,20 @@ shTest('an engine that fails the floor probe is REFUSED, naming the remedies', (
   assert.match(r.err, /CLODE_TJS/, 'and the second');
 });
 
+// The OTHER refusal: the engine cannot even run HEAD's loader to generate the check. Same
+// circularity, so the same honesty about remedies.
+shTest('an engine that cannot run HEAD\'s loader is REFUSED, and "cut a release" is not offered alone', () => {
+  const d = mkdtemp();
+  const engine = fakeExe(path.join(d, 'no-loader'), '#!/bin/sh\necho "SyntaxError: something HEAD\'s loader needs" >&2\nexit 1\n');
+  const r = sh([], { CLODE_TJS: engine, CLODE_CACHE: path.join(d, 'cache') });
+  assert.strictEqual(r.status, 1, `expected a refusal, got ${r.status}: ${r.out}`);
+  assert.match(r.err, /could not run HEAD's node-shim loader/);
+  assert.match(r.err, /something HEAD's loader needs/, 'the engine\'s own complaint is passed on');
+  assert.match(r.err, /A release cannot fix this on its own/);
+  assert.doesNotMatch(r.err, /Remedies: cut a release/);
+  assert.match(r.err, /CLODE_TJS/);
+});
+
 // CI run 44443821699 (HEAD b4eb2f5, the first push in six weeks): EVERY tjs leg died at
 // "Construct the patched tjs tree from pins", because the pinned release's engine predates
 // two engine patches of 2026-10-04 (txiki-sync-stat-identity, txiki-strerror) and the

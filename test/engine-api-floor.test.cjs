@@ -263,8 +263,10 @@ function scanEngineFloorConsumers({ buildTjsSrc, actionYml, bakeSrc, clodeBuildS
     findings.push('clode build no longer gets its engine capability gate from engine-api-floor.cjs');
   }
   examined++;
-  if (!/engineFloorCheckJs\(\)/.test(clodeBuildSrc)) {
-    findings.push('clode build no longer GENERATES its engine probe from the floor');
+  // The CALL SITE, pinned exactly as build-tjs.cjs's is: a bare `engineFloorCheckJs()` anywhere in
+  // the file (a comment, an unused line) must not stand in for the probe the template is held to.
+  if (!/spawnSync\(template, \['eval', engineFloorCheckJs\(\)\]/.test(clodeBuildSrc)) {
+    findings.push('clode build no longer GENERATES its template probe from the full floor (spawnSync(template, [\'eval\', engineFloorCheckJs()]))');
   }
   examined++;
   if (!/OK_TOKEN/.test(clodeBuildSrc)) {
@@ -288,8 +290,10 @@ function scanEngineFloorConsumers({ buildTjsSrc, actionYml, bakeSrc, clodeBuildS
   {
     const leaks = [['scripts/build-tjs.cjs', buildTjsSrc], ['build-leg/action.yml', actionYml],
       ['the guest bake', bakeSrc], ['libexec/clode-build.cjs', clodeBuildSrc]]
-      .filter(([, src]) => /--role|floorFor\(/.test(src)).map(([n]) => n);
-    if (leaks.length) findings.push(`a shipped-engine floor check names a role (${leaks.join(', ')}): those must take the FULL floor, i.e. no role at all`);
+      // A role flag, the role helper, or ANY argument to a generator (a hand-filtered list --
+      // `engineFloorCheckJs(ENGINE_API_FLOOR.filter(...))` -- is a role by another name).
+      .filter(([, src]) => /--role|floorFor\(|engineFloorCheck(?:Js|File|Statements)\((?!\))/.test(src)).map(([n]) => n);
+    if (leaks.length) findings.push(`a shipped-engine floor check names a role or narrows the list (${leaks.join(', ')}): those must take the FULL floor, i.e. no argument at all`);
   }
 
   return { findings, examined };
@@ -330,3 +334,16 @@ const consumersGuard = defineGuard({
   }),
 });
 guardTests(consumersGuard);
+
+// The narrowing the review named: clode build's template probe handed a hand-filtered list. The
+// real sources must be clean, and that one-line change must be a finding on BOTH checks above.
+test('a narrowed shipped-engine probe in clode build is a finding, not a pass', () => {
+  const real = consumersGuard.read();
+  assert.deepStrictEqual(scanEngineFloorConsumers(real).findings, []);
+  const narrowed = real.clodeBuildSrc.replace("spawnSync(template, ['eval', engineFloorCheckJs()]",
+    "spawnSync(template, ['eval', engineFloorCheckJs(ENGINE_API_FLOOR.filter((b) => b.buildHost))]");
+  assert.notStrictEqual(narrowed, real.clodeBuildSrc, 'the call site moved: re-point this test at it');
+  const f = scanEngineFloorConsumers({ ...real, clodeBuildSrc: narrowed }).findings;
+  assert.ok(f.some((x) => /template probe from the full floor/.test(x)), f.join('\n'));
+  assert.ok(f.some((x) => /narrows the list \([^)]*clode-build/.test(x)), f.join('\n'));
+});
