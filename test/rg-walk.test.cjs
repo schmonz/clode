@@ -22,6 +22,7 @@ const rgTypes = require('../libexec/rg-types.cjs');
 const { normalizeRg } = require('../scripts/lib/rg-probe.cjs');
 const { TREES, makeWalkTree } = require('./rg-walk-cases.cjs');
 const { tjsPath, runLoader } = require('./node-shim-helper.cjs');
+const { judgeHold } = require('./loop-hold.cjs');
 const { missingExtDeps } = require('./shim-surface/collect.cjs');
 const { rgOracle, rgOracleSkip } = require('./provider-resolve.cjs');
 
@@ -616,27 +617,8 @@ test('N-2: a walked search never stats a file the walk listed (it reads only its
 // is 0.15: 3.7x above the worst fixed share measured, 2.7x below the best defect share. Both are written here so a
 // re-measurement can move it with a stated margin, never by bumping a number.
 //
-// A SECOND BOUND, independent of the walk's length. A share alone can be diluted: a walk made slower elsewhere (a
-// slower parse, more files) could hide a real multi-second hold under 0.15 of a long enough total. So the single
-// longest hold is also capped at HELD_MS_MAX = 2,000 ms: 4.0x the worst fixed hold measured under any load above
-// (497 ms, 16+ hogs), and below every loaded defect hold (2,730+ ms at 8 hogs). It does not catch the unloaded defect
-// (1,289 ms); the share does. Each bound covers the other's blind side: load inflates the ms, length dilutes the share.
-const HELD_SHARE_MAX = 0.15;
-const HELD_MS_MAX = 2000;
-function judgeHold({ maxGap, ms }) {
-  const share = maxGap / ms;
-  const why = [];
-  if (share >= HELD_SHARE_MAX) why.push(`${share.toFixed(3)} of the walk in one stretch (bound ${HELD_SHARE_MAX}: fixed <= 0.041 under any load, the sync sniff >= 0.40)`);
-  if (maxGap >= HELD_MS_MAX) why.push(`${maxGap} ms in one stretch (bound ${HELD_MS_MAX} ms: fixed <= 497 ms under any load measured)`);
-  return why.length ? `the loop was held ${maxGap} ms of a ${ms} ms walk: ${why.join('; ')}` : null;
-}
-
-test('RG-WALK-*: the hold bounds pass every measured fixed walk, and fail the defect and a diluted-but-held walk', () => {
-  for (const fixed of [{ maxGap: 123, ms: 3191 }, { maxGap: 295, ms: 7252 }, { maxGap: 497, ms: 14400 }]) assert.strictEqual(judgeHold(fixed), null, JSON.stringify(fixed));
-  for (const defect of [{ maxGap: 1289, ms: 3183 }, { maxGap: 2730, ms: 6722 }, { maxGap: 5283, ms: 13039 }]) assert.ok(judgeHold(defect), JSON.stringify(defect));
-  // The control the share alone would miss: a 2.5 s hold inside a 60 s walk (0.042 of it, under the share bound).
-  assert.match(judgeHold({ maxGap: 2500, ms: 60000 }) || '', /2500 ms in one stretch/);
-});
+// A second bound, a 2,000 ms ceiling, keeps a longer walk from diluting a real hold. Both bounds, and every probe's
+// measurements, now live in test/loop-hold.cjs (judgeHold), the one judgement for every loop-gap gate.
 test('RG-WALK-*: the async twin keeps the loop turning over a walk of 30,000 files (tjs)', { skip: needUgrep.skip || NO_TJS }, () => {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'rg-walk-gap-')));
   try {

@@ -17,6 +17,7 @@ const cp = require('node:child_process');
 const rgn = require('../libexec/rg-native.cjs');
 const { makeRgTree, normalizeRg } = require('../scripts/lib/rg-probe.cjs');
 const { tjsPath, runLoader, engineSpawn, LOADER } = require('./node-shim-helper.cjs');
+const { judgeHold } = require('./loop-hold.cjs');
 const { missingExtDeps } = require('./shim-surface/collect.cjs');
 const { census, rngBias, assertCensus, intRng } = require('./shape-census.cjs');
 // Why a test under tjs cannot run here: no engine, or the shim without its ext-dep closure (quaude
@@ -1388,7 +1389,7 @@ test('rg stops printing at the caller\'s maxBuffer and the async twin never hold
           const t0 = Date.now();
           const iv = setInterval(() => { const n = Date.now(); maxGap = Math.max(maxGap, n - last); last = n; }, 10);
           const a = await new Promise((res) => rgn.rgExecFile(argv, { cwd, encoding: 'buffer', maxBuffer, timeout: ${PROBE_TIMEOUT_MS}, killSignal: 'SIGKILL' },
-            (e, so) => res({ code: e ? e.code : 0, signal: e ? e.signal : null, bytes: so.length }), 'rg', ctx));
+            (e, so) => res({ code: e ? e.code : 0, signal: e ? e.signal : null, timedOut: !!(e && e.killed && e.code === null), bytes: so.length }), 'rg', ctx));
           clearInterval(iv);
           const ugrepClosed = kids.map(({ received, closedMs, status, signal }) => ({ received, closedMs, status, signal }));
           out.push({ argv, twin: 'async', maxGap, printed: rgn.searchStats.printed, ms: Date.now() - t0, ugrepClosed, ...a });
@@ -1402,12 +1403,14 @@ test('rg stops printing at the caller\'s maxBuffer and the async twin never hold
     const line = (res.stdout || '').split('\n').find((l) => l.startsWith('PROBE:'));
     assert.ok(line, `the tjs probe printed nothing (exit ${res.status}): ${(res.stderr || '').slice(0, 1500)}`);
     const got = JSON.parse(line.slice('PROBE:'.length));
-    if (process.env.RG_TIMINGS) console.log(JSON.stringify(got));
+    if (process.env.RG_TIMINGS) console.log('RG_TIMINGS ' + JSON.stringify(got));
     for (const r of got) {
       const what = JSON.stringify(r);
       if (r.twin === 'async') {
-        // A ugrep child the timeout had to kill never reached EOF in the tjs reader: a stall, named as one.
-        const open = r.ugrepClosed.filter((k) => k.closedMs === null || k.signal);
+        // A STALL is only when the probe's OWN timeout fired and a ugrep child was still open (killed, or never closed):
+        // its output never reached EOF in the tjs reader. A child ended by a signal otherwise is not one: once the
+        // BACKLOG fix streams records and kills ugrep at maxBuffer, SIGPIPE or SIGTERM there is the right outcome.
+        const open = r.timedOut ? r.ugrepClosed.filter((k) => k.closedMs === null || k.signal) : [];
         assert.ok(r.ugrepClosed.length && !open.length, `STALL? ugrep's output never reached EOF in the tjs reader before the `
           + `${PROBE_TIMEOUT_MS} ms timeout killed it (received ${open.map((k) => k.received).join(', ')} bytes): ${what}`);
         if (r.code !== 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') {
@@ -1417,7 +1420,7 @@ test('rg stops printing at the caller\'s maxBuffer and the async twin never hold
       }
       assert.strictEqual(r.code, r.twin === 'sync' ? 'ENOBUFS' : 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER', what);
       assert.ok(r.printed > 1000000 && r.printed <= 1000000 + MB_SLACK, `printed ${r.printed} bytes for a 1 MB maxBuffer: ${what}`);
-      if (r.twin === 'async') assert.ok(r.maxGap < 600, `the loop was held ${r.maxGap} ms: ${what}`);
+      if (r.twin === 'async') { const held = judgeHold(r); assert.ok(!held, `${held}: ${what}`); }
     }
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

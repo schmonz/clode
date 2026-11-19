@@ -16,7 +16,9 @@ maxBuffer. `-n -o e` over 200,000 lines is 1.2M records (30.6 MB from ugrep): pa
 maxBuffer 1.8-2.2 s, alone; under 16 CPU hogs, 14-16 s plus 7-12 s. The Grep tool runs rg with a 20 s timeout, so on a
 loaded machine it gets the timeout (nothing printed) where native, which streams, ends in the maxBuffer error within
 about 100 ms. The fix is to bound the parse by what can still be printed: stream records into the printer, or stop
-parsing once the printed answer must exceed maxBuffer (careful: -c, -l and -v print nothing per match).
+parsing once the printed answer must exceed maxBuffer (careful: -c, -l and -v print nothing per match). When it lands, the
+maxBuffer probe's ugrep child will END BY A SIGNAL (SIGPIPE or SIGTERM, killed at maxBuffer) as the right outcome: the
+probe counts a signal as a STALL only when its own timeout fired, which stays true; re-check that row's expectations.
 
 Measured: test/rg-native.test.cjs's maxBuffer probe, row `-n -o e lines.txt`, with ugrep wrapped to tee its stdout and
 phase timestamps in a scratch copy of rg-native.cjs, alone and beside 16 CPU hogs and an IO loop: ugrep closed and all

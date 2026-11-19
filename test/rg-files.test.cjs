@@ -72,6 +72,7 @@ const path = require('node:path');
 const cp = require('node:child_process');
 const rgn = require('../libexec/rg-native.cjs');
 const { tjsPath, runLoader } = require('./node-shim-helper.cjs');
+const { judgeHold } = require('./loop-hold.cjs');
 const { missingExtDeps } = require('./shim-surface/collect.cjs');
 const { FILES_TREE, makeFilesTree } = require('./rg-files-cases.cjs');
 
@@ -332,9 +333,11 @@ test('RG-SORT-MODIFIED: the async twin keeps the loop turning over 30,000 files 
     const res = runLoader(prog, [], { timeout: 240000 });
     const got = JSON.parse(((res.stdout || '').split('\n').find((l) => l.startsWith('PROBE:')) || 'PROBE:null').slice(6));
     assert.ok(got, `the tjs probe printed nothing (exit ${res.status}): ${(res.stderr || '').slice(0, 1500)}`);
+    if (process.env.RG_TIMINGS) console.log('RG_TIMINGS ' + JSON.stringify(got));
     assert.deepStrictEqual([got.full.code, got.full.n], [0, 30000], JSON.stringify(got.full));
-    assert.ok(got.maxGap < 600, `the loop was held ${got.maxGap} ms (the listing took ${got.full.ms} ms)`);
-    // COUNTED (fix round 2, review N3: with any ONE stage's yield removed the gap stayed under 600 ms on this host,
+    const held = judgeHold({ maxGap: got.maxGap, ms: got.full.ms });
+    assert.ok(!held, held);
+    // COUNTED (fix round 2, review N3: with any ONE stage's yield removed the gap stayed under the old 600 ms bound on this host,
     // 622 / 497 / 341 ms): each stage hands control back every 256 entries, so over 30,000 files each yields at least
     // 100 times (the walk: 33,060 entries; the sort and the printing: 30,000 files), whatever the host's speed
     for (const stage of ['walk', 'sort', 'list']) assert.ok(got.ticks[stage] >= 100, `the ${stage} stage yielded ${got.ticks[stage]} times: ${JSON.stringify(got.ticks)}`);
