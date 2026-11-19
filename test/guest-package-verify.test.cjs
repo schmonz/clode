@@ -40,10 +40,16 @@ function runWith(stubs, pkgs, runtimeTools = '') {
   return spawnSync('/bin/sh', [script], { encoding: 'utf8', env: { PATH: `${bin}:/usr/bin:/bin`, HOME: dir } });
 }
 
+// The guest action runs only inside Unix guests (its shell block is POSIX sh), and this harness runs it the same way:
+// /bin/sh, '#!/bin/sh' stubs and a ':'-separated PATH. windows-latest has none of those (CI 44572930594: spawnSync
+// '/bin/sh' fails, so stdout is undefined), and Git Bash would need every path translated: a different harness, not
+// this one. Skipped there by name.
+const UNIX_ONLY = { skip: process.platform === 'win32' && 'the guest action runs only in Unix guests; this harness needs /bin/sh, #!/bin/sh stubs and a POSIX PATH, which windows-latest lacks' };
+
 const OK = 'echo "$0 1.0"';
 const UNLOADABLE = 'echo \'Shared object "libcrypto.so.17" not found, required by "cmake"\' >&2; exit 1';
 
-test('a tool that is on PATH but cannot run fails the package step, with its own error shown', () => {
+test('a tool that is on PATH but cannot run fails the package step, with its own error shown', UNIX_ONLY, () => {
   const r = runWith({ cmake: UNLOADABLE, gmake: OK }, 'cmake gmake');
   assert.notStrictEqual(r.status, 0, `an unloadable cmake passed the check:\n${r.stdout}${r.stderr}`);
   assert.ok(!r.stdout.includes('REACHED_THE_BUILD'), 'the build ran after an unloadable tool');
@@ -52,14 +58,14 @@ test('a tool that is on PATH but cannot run fails the package step, with its own
   assert.doesNotMatch(r.stderr, /gmake\(gmake\)/, 'a healthy tool was blamed');
 });
 
-test('runnable tools pass and the build proceeds', () => {
+test('runnable tools pass and the build proceeds', UNIX_ONLY, () => {
   const r = runWith({ cmake: OK, gmake: OK, node: OK }, 'cmake gmake node');
   assert.strictEqual(r.status, 0, r.stderr);
   assert.match(r.stdout, /guest: verified on PATH and runnable -> cmake gmake node/);
   assert.match(r.stdout, /REACHED_THE_BUILD/);
 });
 
-test('a copyback tool the upgrade broke (rsync) fails the package step by name', () => {
+test('a copyback tool the upgrade broke (rsync) fails the package step by name', UNIX_ONLY, () => {
   const r = runWith({ cmake: OK, rsync: UNLOADABLE.replace('cmake', 'rsync'), sudo: OK }, 'cmake', 'rsync sudo');
   assert.notStrictEqual(r.status, 0, `an unloadable rsync passed:\n${r.stdout}${r.stderr}`);
   assert.match(r.stderr, /guest: rsync --version: Shared object/);
@@ -68,7 +74,7 @@ test('a copyback tool the upgrade broke (rsync) fails the package step by name',
   assert.strictEqual(ok.status, 0, ok.stderr);
 });
 
-test('a missing tool is still reported as missing (the older half of the check)', () => {
+test('a missing tool is still reported as missing (the older half of the check)', UNIX_ONLY, () => {
   const r = runWith({ gmake: OK }, 'cmake gmake');
   assert.notStrictEqual(r.status, 0);
   assert.match(r.stderr, /NOT on PATH: cmake\(cmake\)/);

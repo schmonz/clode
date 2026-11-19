@@ -459,7 +459,13 @@ test('first pass: merged settings older than a week are pruned; a fresh one stay
   fs.writeFileSync(stale, '{"secret":1}', { mode: 0o600 });
   const eightDaysAgo = (Date.now() - 8 * 24 * 60 * 60 * 1000) / 1000;
   fs.utimesSync(stale, eightDaysAgo, eightDaysAgo);
+  // A quaude uid probe its session failed to remove (an empty directory), two hours old: naude prunes it too.
+  const probe = path.join(guard, '.uid-probe-stale1');
+  fs.mkdirSync(probe, { recursive: true });
+  const twoHoursAgo = (Date.now() - 2 * 60 * 60 * 1000) / 1000;
+  fs.utimesSync(probe, twoHoursAgo, twoHoursAgo);
   const cap = firstPass({ argv: ['-p', 'x', '--managed-settings', 'nope', '--settings', userFile] });
+  assert.strictEqual(fs.existsSync(probe), false, 'the stale uid probe directory is gone');
   const at = cap.call.args.indexOf('--settings');
   const fresh = cap.call.args[at + 1];
   assert.strictEqual(path.dirname(fresh), guard, 'the merge is written in the guard directory');
@@ -468,7 +474,8 @@ test('first pass: merged settings older than a week are pruned; a fresh one stay
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test('first pass: a guard directory whose parent any user can write is REFUSED (fail closed), never replaced', () => {
+test('first pass, POSIX: a guard directory whose parent any user can write is REFUSED (fail closed), never replaced',
+  { skip: process.platform === 'win32' && 'POSIX only: Windows has no POSIX owner or mode (node reports st_uid 0 and a mode synthesized from the read-only bit, and chmod cannot grant other users anything), so there is no hostile parent to plant; the Windows rule is the real-Windows-facts row below' }, () => {
   const cache = fs.mkdtempSync(path.join(os.tmpdir(), 'naude-hostile-cache-'));
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naude-user-settings-'));
   const userFile = path.join(dir, 'mine.json');
@@ -476,21 +483,66 @@ test('first pass: a guard directory whose parent any user can write is REFUSED (
   const stderr = [];
   try {
     fs.chmodSync(cache, 0o777);   // the parent: writable by every user, so the guard directory could be swapped
-    // uid: the platform's own where it has one; a fixed one where it has none (Windows), so the rule is exercised on
-    // every runner and in the forced-win32 pass alike.
-    const uid = typeof process.getuid === 'function' ? process.getuid() : 0;
-    const writable = (fs.statSync(cache).mode & 0o002) !== 0;
-    const cap = firstPass({ argv: ['-p', 'x', '--settings', userFile], env: { CLODE_CACHE: cache }, uid,
+    const cap = firstPass({ argv: ['-p', 'x', '--settings', userFile], env: { CLODE_CACHE: cache },
       stderr: { write: (s) => { stderr.push(s); } } });
-    if (!writable) {
-      // Windows: chmod cannot grant other users anything (node maps it to the read-only bit), so there is no hostile
-      // parent to refuse; the session runs. This branch is the honest answer, not a skip.
-      assert.ok(cap.call, 'no POSIX mode to judge: the session runs');
-      return;
-    }
     assert.strictEqual(cap.call, null, 'nothing was spawned');
     assert.strictEqual(cap.exited, 1);
     assert.match(stderr.join(''), /refusing to start: the update guard's private directory is unsafe: .*parent is writable by every user/);
+  } finally {
+    fs.rmSync(cache, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// What real Windows reports (windows-latest, CI 44572930594): st_uid 0, mode 0o40666 whatever the ACL, and no
+// process.getuid. On win32 the platform, not the uid, decides: only the type is judged, so an ordinary start runs and
+// reuses the directory. The earlier row passed uid 0 with POSIX rules and read the synthesized 666 as "open to other
+// users": the bug class this row pins. On every host, by injecting the platform and the facts' uid.
+test('first pass, win32 with real Windows facts: an ordinary start runs and reuses the guard directory', () => {
+  const cache = fs.mkdtempSync(path.join(os.tmpdir(), 'naude-win-cache-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naude-user-settings-'));
+  const userFile = path.join(dir, 'mine.json');
+  fs.writeFileSync(userFile, '{}');
+  try {
+    fs.chmodSync(cache, 0o777);   // on POSIX hosts: numbers a POSIX rule would refuse, judged here by the win32 rule
+    const run = () => firstPass({ argv: ['-p', 'x', '--settings', userFile], env: { CLODE_CACHE: cache }, uid: 0,
+      platform: 'win32', onExit: (cb) => cb(0, null) });
+    const a = run(); const b = run();
+    assert.ok(a.call && b.call, 'both sessions ran');
+    assert.strictEqual(pluginHooks(a.call.args).dir, pluginHooks(b.call.args).dir, 'one directory, reused');
+    assert.strictEqual(path.dirname(pluginHooks(a.call.args).dir), path.join(cache, 'guard'));
+  } finally {
+    fs.rmSync(cache, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// naude's platform is process.platform, with NOTHING injected (no opts.platform, no opts.uid): flip it and the verdict
+// on the same directory flips. As 'win32' only the type is judged, so it runs over a parent every user can write; as
+// 'linux' it is refused: for that parent where the host has a getuid, as an unknown uid where it has none (Windows).
+test('first pass: the platform judged is process.platform itself, uninjected', () => {
+  const cache = fs.mkdtempSync(path.join(os.tmpdir(), 'naude-platform-cache-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naude-user-settings-'));
+  const userFile = path.join(dir, 'mine.json');
+  fs.writeFileSync(userFile, '{}');
+  const real = Object.getOwnPropertyDescriptor(process, 'platform');
+  const as = (platform) => {
+    const stderr = [];
+    Object.defineProperty(process, 'platform', { ...real, value: platform });
+    try {
+      const cap = firstPass({ argv: ['-p', 'x', '--settings', userFile], env: { CLODE_CACHE: cache },
+        stderr: { write: (t) => { stderr.push(t); } } });
+      return { cap, stderr: stderr.join('') };
+    } finally { Object.defineProperty(process, 'platform', real); }
+  };
+  try {
+    fs.chmodSync(cache, 0o777);
+    const win = as('win32');
+    assert.ok(win.cap.call, `judged as win32 (type only): the session runs\n${win.stderr}`);
+    const posix = as('linux');
+    assert.strictEqual(posix.cap.call, null);
+    assert.strictEqual(posix.cap.exited, 1);
+    assert.match(posix.stderr, typeof process.getuid === 'function' ? /parent is writable by every user/ : /uid is unknown/);
   } finally {
     fs.rmSync(cache, { recursive: true, force: true });
     fs.rmSync(dir, { recursive: true, force: true });

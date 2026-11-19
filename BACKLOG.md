@@ -5102,6 +5102,25 @@ filesystem: two sessions give one directory; the week-old settings are pruned; a
 are refused, with no fallback; Windows-shaped facts are accepted) and test/naude-entry.test.cjs (the same three rows for
 naude), both also under the forced-win32 pass (2026-11-19).
 
+CORRECTED after windows-latest ran it (CI 44572930594): "where the platform reports an owner" was decided by the uid
+(uid >= 0), and the Windows-shaped rows synthesized uid -1. Real Windows node reports st_uid 0 and a synthesized
+0o40666, and a test passing uid 0 there was refused as "open to other users (mode 666)". Ordinary starts did not
+refuse (naude's process.getuid is absent and tjs userInfo gives -1, so both took the Windows path), but only by that
+accident. guardDirRefusal now takes the PLATFORM (process.platform in naude; the bootstrap's resolved platform in
+quaude): win32 judges only the type; elsewhere an unknown uid is refused rather than waved through. The fixtures use
+the real Windows facts, and the hostile-parent rows are POSIX-only by name. Measured: test/update-guard-dir.test.cjs and
+test/naude-entry.test.cjs real-Windows-facts rows, on this host and forced-win32 (2026-11-19).
+
+REVIEW of that fix (af7b803), two more. (1) quaude's guard step took its platform from tjsPlatform with no signal, which
+is 'linux' on every host, so a real Windows quaude would have refused to start. main() now resolves { platform, sep }
+ONCE with hostPlatform (navigator.userAgentData.platform via target-env.cjs's mapPlatform) and hands it to the target
+env, the rg check and the guard directory; the separator there was '/' on Windows by the same lie. (2) quaude read its
+uid from tjs.system.userInfo, which THROWS for a uid with no passwd entry (docker -u 1234, OpenShift). The uid is now the
+owner of a probe directory made in the guard directory (the effective uid); no probe, refused. Measured:
+test/update-guard-dir.test.cjs (main's path on a "Windows" userAgent starts; userInfo throws; the guard refuses a
+no-signal platform) and test/naude-entry.test.cjs (process.platform flipped, uninjected), plus a real tjs run of the
+bootstrap's blocks on darwin (2026-11-19). Unmeasured on a real Windows tjs.
+
 Unmeasured. On real Windows: that the profile ACL keeps `%USERPROFILE%\.cache\clode\guard` private (an icacls row on
 windows-latest would measure it), and a real quaude session there reusing one directory. And an OPEN QUESTION, not
 yet decided: on Windows clodeCacheDir is `%USERPROFILE%\.cache\clode` (os.homedir), and in a roaming profile
@@ -5109,6 +5128,63 @@ yet decided: on Windows clodeCacheDir is `%USERPROFILE%\.cache\clode` (os.homedi
 directory, with the merged settings copy, and the rest of the clode cache may travel with the profile. Whether
 clodeCacheDir should use %LOCALAPPDATA% on Windows is a question for clodeCacheDir itself, not for the guard alone:
 one cache resolution everywhere.
+
+## OPEN 2026-11-19 — 38 test files are outside the forced-win32 pass as AUDIT_PENDING (shrink-only debt)
+
+test/forced-win32.cjs leaves out any file whose require-closure spawns. These 38 are platform-sensitive, and their own
+test-side code spawns nothing, so they are out only because a production module they require spawns. Since f762894 a
+file cannot leave the pass silently: each of these is listed by name in PRODUCTION_SPAWN_EXCLUDED. Each one's reason
+is the shared AUDIT_PENDING, recorded on 2026-11-19 and frozen as AUDIT_PENDING_BASELINE, with a ceiling of 38 that
+only falls. A new exclusion must state its own reason; test/forced-win32.test.cjs makes a 39th AUDIT_PENDING red.
+
+THE AUDIT THAT CLEARS ONE: read the file's tests and find every spawn they reach through the production module.
+- If every one is injected (a spawn, exec or runner seam the test supplies), add
+  `// forced-win32: spawn-injected: <which seams>` to the file. It then runs under forcing, and the preload's spawn
+  trap makes the declaration binding.
+- If some spawn is real, give the file its own specific reason in PRODUCTION_SPAWN_EXCLUDED.
+
+Either way, delete the name from AUDIT_PENDING_BASELINE and lower AUDIT_PENDING_CEILING. Then run
+`node test/forced-win32.cjs --run <file>` on a POSIX host; any red it shows is a Windows-only failure in waiting.
+
+Unmeasured. None of the 38 has been audited:
+- test/bench-measure.test.cjs
+- test/build-gates/build-runner-gates.test.cjs
+- test/build-gates/carve-probe-gates.test.cjs
+- test/build-gates/render-build-graph-gates.test.cjs
+- test/build-graph-ci.test.cjs
+- test/build-graph-render.test.cjs
+- test/bunffi.test.cjs
+- test/cell-profile-diff.test.cjs
+- test/clode-build-args.test.cjs
+- test/clode-build-smoke-home.test.cjs
+- test/clode-build-spinner.test.cjs
+- test/clode-current.test.cjs
+- test/clode-hosttools.test.cjs
+- test/clode-manifest-fetch.test.cjs
+- test/clode-net.test.cjs
+- test/clode-paths.test.cjs
+- test/clode-rcodesign.test.cjs
+- test/clode-target-build.test.cjs
+- test/clode-templates.test.cjs
+- test/clode-watch.test.cjs
+- test/env-verdicts.test.cjs
+- test/extract-autoupdater.test.cjs
+- test/extract-cache-key.test.cjs
+- test/fidelity/applet-config.test.cjs
+- test/graph-require-rewrite.test.cjs
+- test/host-provision.test.cjs
+- test/native-oracle.test.cjs
+- test/node-shim-buffer-lite.test.cjs
+- test/paint-probe.test.cjs
+- test/platform-tag.test.cjs
+- test/provider-platform.test.cjs
+- test/rg-stream.test.cjs
+- test/sea-sign.test.cjs
+- test/templates-blob-pack.test.cjs
+- test/text-probe.test.cjs
+- test/tls-cacert-pem.test.cjs
+- test/ucd.test.cjs
+- test/undici.test.cjs
 
 ## Untracked-until-now findings from 2026-08-23/24 (three of them)
 

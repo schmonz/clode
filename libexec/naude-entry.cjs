@@ -57,8 +57,8 @@ const {
 } = require('./update-guard.cjs');
 
 // The guard's private directory, naude's I/O around update-guard.cjs guardDirPath and guardDirRefusal (the same rule
-// quaude-bootstrap.mjs privateGuardDir applies). `opts.homeDir` and `opts.uid` are injectable for tests; the uid is
-// the platform's (process.getuid, absent on Windows, where guardDirRefusal judges only the type).
+// quaude-bootstrap.mjs privateGuardDir applies). `opts.homeDir`, `opts.uid` and `opts.platform` are injectable for
+// tests; the platform decides whether owner and mode are judged (on Windows only the type is).
 function privateGuardDirSync(env, opts = {}) {
   const home = env.HOME || (opts.homeDir || os.homedir)();
   const dir = guardDirPath(env, home, path.sep);
@@ -71,7 +71,8 @@ function privateGuardDirSync(env, opts = {}) {
     } catch { return null; }
   };
   const uid = 'uid' in opts ? opts.uid : (typeof process.getuid === 'function' ? process.getuid() : undefined);
-  const refusal = guardDirRefusal(dir, facts(dir), facts(path.dirname(dir)), uid);
+  const platform = 'platform' in opts ? opts.platform : process.platform;
+  const refusal = guardDirRefusal(dir, facts(dir), facts(path.dirname(dir)), uid, platform);
   return refusal ? { refusal } : { dir };
 }
 function pruneGuardSettingsSync(dir, nowMs) {
@@ -79,7 +80,7 @@ function pruneGuardSettingsSync(dir, nowMs) {
   try { names = fs.readdirSync(dir); } catch { return; }
   const entries = [];
   for (const name of names) { try { entries.push({ name, mtimeMs: fs.lstatSync(path.join(dir, name)).mtimeMs }); } catch { /* gone */ } }
-  for (const name of guardSettingsToPrune(entries, nowMs)) { try { fs.rmSync(path.join(dir, name), { force: true }); } catch { /* gone */ } }
+  for (const name of guardSettingsToPrune(entries, nowMs)) { try { fs.rmSync(path.join(dir, name), { force: true, recursive: true }); } catch { /* gone */ } }
 }
 // Write `text` to `file` unless it already holds exactly that: to a temporary name, then renamed over it, so a session
 // starting meanwhile reads the old bytes or the new, never a torn file (quaude-bootstrap.mjs writeFileOnce).

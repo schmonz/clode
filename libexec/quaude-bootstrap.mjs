@@ -100,6 +100,7 @@ async function sha256hex(bytes) {
 // of relying on main() (which never runs outside the blobulated binary) to
 // populate the global. tjs.system.platform is EMPTY, so
 // navigator.userAgentData.platform is the only source this early.
+// >>> tjsPlatform (test/update-guard-dir.test.cjs runs it with hostPlatform) >>>
 function tjsPlatform(uaPlatform, map = globalThis.__clodeMapPlatform) {
   // No map installed and none injected (e.g. a host-node caller that never
   // ran main()): fall back to the same "no signal" default target-env.cjs's
@@ -109,6 +110,7 @@ function tjsPlatform(uaPlatform, map = globalThis.__clodeMapPlatform) {
   if (typeof map === 'function') return map(uaPlatform);
   return uaPlatform ? String(uaPlatform).toLowerCase() : 'linux';
 }
+// <<< tjsPlatform <<<
 
 // POSIX st_mode bits (no node:fs constants module under tjs): S_IFMT/S_IFREG
 // isolate the file-type bits, S_IXUSR|S_IXGRP|S_IXOTH the executable ones.
@@ -132,7 +134,7 @@ export async function bootstrapTargetEnv(tjs, opts = {}) {
     map = globalThis.__clodeMapPlatform,
     uaPlatform = (typeof navigator !== 'undefined' && navigator.userAgentData && navigator.userAgentData.platform),
   } = opts;
-  const platform = tjsPlatform(uaPlatform, map);
+  const platform = opts.platform || tjsPlatform(uaPlatform, map);
   const delimiter = platform === 'win32' ? ';' : ':';
   const sep = platform === 'win32' ? '\\' : '/';
 
@@ -571,15 +573,20 @@ function guardDirPath(env, home, sep) {
 }
 // Defence in depth, judged on lstat facts ({ type: 'dir'|'link'|'other', uid, mode }) gathered by the caller.
 // EVERYWHERE: the directory is a real directory, not a symbolic link (or junction). WHERE THE PLATFORM REPORTS
-// OWNERSHIP (uid >= 0: POSIX), also: it is ours and closed to group and other, and its parent is ours or root's and
-// not writable by other (otherwise it could be renamed away and replaced). Windows reports no owner (uid -1), so
-// there the directory's privacy is its home's ACL. A refusal is a reason string. The caller REFUSES to start on it,
+// OWNERSHIP, on every platform but Windows (`platform`, a fact; a POSIX caller with no uid is refused): it is ours
+// and closed to group and other, and its parent is ours or root's and not writable by other (otherwise it could be
+// renamed away and replaced). Windows has no POSIX owner or mode to judge, so there the directory's privacy is its
+// home's ACL. A refusal is a reason string. The caller REFUSES to start on it,
 // and never falls back to another directory.
-function guardDirRefusal(dir, st, parent, uid) {
+function guardDirRefusal(dir, st, parent, uid, platform) {
   if (!st) return `${dir} could not be created`;
   if (st.type === 'link') return `${dir} is a symbolic link`;
   if (st.type !== 'dir') return `${dir} is not a directory`;
-  if (!(typeof uid === 'number' && uid >= 0)) return null;
+  // Owner and mode are judged by PLATFORM, a fact, never by whether a uid came back (windows-latest, CI 44572930594:
+  // node reports st_uid 0 and a mode synthesized from the read-only bit, 0o40666, whatever the ACL says, so a uid-based
+  // guess would judge those numbers as if they were POSIX). Windows has neither; there the profile ACL is the privacy.
+  if (platform === 'win32') return null;
+  if (!(typeof uid === 'number' && uid >= 0)) return `${dir}: this user's uid is unknown, so its owner cannot be judged`;
   if (st.uid !== uid) return `${dir} is owned by uid ${st.uid}, not by this user (uid ${uid})`;
   if ((st.mode & 0o077) !== 0) return `${dir} is open to other users (mode ${(st.mode & 0o777).toString(8)}, not 700)`;
   if (!parent || parent.type !== 'dir') return `${dir}'s parent is not a directory`;
@@ -591,8 +598,12 @@ function guardDirRefusal(dir, st, parent, uid) {
 // a week. tjs.exit runs no exit handlers, so a quaude session cannot remove its own copy, and a session still running
 // after a week read its settings long ago. `entries` is [{ name, mtimeMs }]; returns the names to remove.
 const GUARD_SETTINGS_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+// A quaude uid probe (`.uid-probe-*`, an empty directory) its session failed to remove goes once an hour old: never
+// sooner, so a probe another session is judging right now is never taken from under it.
+const GUARD_PROBE_MAX_AGE_MS = 60 * 60 * 1000;
 function guardSettingsToPrune(entries, nowMs) {
-  return entries.filter((e) => /^settings-[0-9a-f]+\.json$/.test(e.name) && nowMs - e.mtimeMs > GUARD_SETTINGS_MAX_AGE_MS)
+  return entries.filter((e) => (/^settings-[0-9a-f]+\.json$/.test(e.name) && nowMs - e.mtimeMs > GUARD_SETTINGS_MAX_AGE_MS)
+    || (/^\.uid-probe-[0-9a-z]+$/.test(e.name) && nowMs - e.mtimeMs > GUARD_PROBE_MAX_AGE_MS))
     .map((e) => e.name);
 }
 // <<< guardGating <<<
@@ -664,7 +675,26 @@ async function sandboxFacts(tjs, providerPlatform, procVersion, argv) {
 // with the default mode, the directory itself 0700, and guardDirRefusal judges what lstat then reports. A refusal
 // comes back as { refusal }, and the caller refuses to start: never a fallback to another directory. Inside it
 // nothing can be planted or swapped by another user, so the plain writes below are safe.
-async function privateGuardDir(tjs, env, sep) {
+//
+// The host's platform and path separator, resolved ONCE in main() and passed down. tjs.system.platform is empty, so
+// navigator.userAgentData.platform is the only signal; with no signal passed, tjsPlatform answers linux on EVERY host (a
+// Windows quaude then judged its guard directory by the POSIX rule and refused to start: the review of af7b803).
+function hostPlatform(map) {
+  const ua = typeof navigator !== 'undefined' && navigator.userAgentData && navigator.userAgentData.platform;
+  const platform = tjsPlatform(ua, map);
+  return { platform, sep: platform === 'win32' ? '\\' : '/' };
+}
+// The effective uid, from the owner of a directory made just now inside `dir`. Not tjs.system.userInfo: it THROWS when
+// the uid has no passwd entry (docker -u 1234, OpenShift's random uids). undefined when no probe can be made there, and
+// guardDirRefusal then refuses (fail closed).
+async function effectiveUid(tjs, dir, sep) {
+  const probe = dir + sep + '.uid-probe-' + Math.random().toString(36).slice(2);
+  try { await tjs.makeDir(probe, { mode: 0o700 }); } catch (_) { return undefined; }
+  try { return (await tjs.lstat(probe)).uid; } catch (_) { return undefined; } finally {
+    try { await tjs.remove(probe); } catch (_) { /* a leftover probe is empty and harmless */ }
+  }
+}
+async function privateGuardDir(tjs, env, sep, platform) {
   const dir = guardDirPath(env, env.HOME || tjs.homeDir || '', sep);
   const parent = dir.slice(0, dir.lastIndexOf(sep));
   try { await tjs.makeDir(parent, { recursive: true }); } catch (_) { /* judged below */ }
@@ -676,8 +706,10 @@ async function privateGuardDir(tjs, env, sep) {
       return { type: fmt === 0o040000 ? 'dir' : fmt === 0o120000 ? 'link' : 'other', uid: st.uid, mode: st.mode || 0 };
     } catch (_) { return null; }
   };
-  const uid = tjs.system && tjs.system.userInfo ? tjs.system.userInfo.userId : undefined;
-  const refusal = guardDirRefusal(dir, await facts(dir), await facts(parent), uid);
+  const st = await facts(dir);
+  // Only into a real directory (never through a link), and only where an owner is judged.
+  const uid = platform !== 'win32' && st && st.type === 'dir' ? await effectiveUid(tjs, dir, sep) : undefined;
+  const refusal = guardDirRefusal(dir, st, await facts(parent), uid, platform);
   return refusal ? { refusal } : { dir };
 }
 async function pruneGuardSettings(tjs, dir, sep, nowMs) {
@@ -751,8 +783,9 @@ async function main() {
   };
   const tem0 = evalMember(await smallMember('target-env.cjs'));
   const rgEntrySrc = await smallMember('rg-entry.cjs');
-  const uaPlatform = typeof navigator !== 'undefined' && navigator.userAgentData && navigator.userAgentData.platform;
-  const asRg = !!rgEntrySrc && evalMember(rgEntrySrc).isRgInvocation(tjs.args[0], tjs.env, tjsPlatform(uaPlatform, tem0.mapPlatform));
+  // The host's platform and separator, ONCE for all of main (hostPlatform, in the quaudeGuardDir block).
+  const { platform, sep } = hostPlatform(tem0.mapPlatform);
+  const asRg = !!rgEntrySrc && evalMember(rgEntrySrc).isRgInvocation(tjs.args[0], tjs.env, platform);
 
   // 0) Guard dispatch: quaude's own patched updater hook calls back
   // `"<quaude>" --clode-update-guard` as a PreToolUse(Bash) command (wired by
@@ -906,7 +939,7 @@ async function main() {
     // from the same evaluated member as shapeTargetEnv/probePaths, so there is
     // exactly one copy of the mapping running under tjs.
     globalThis.__clodeMapPlatform = tem.exports.mapPlatform;
-    await bootstrapTargetEnv(tjs);
+    await bootstrapTargetEnv(tjs, { platform });
 
     // 7.6) Guard injection: wire the model's Bash tool through the update
     // guard (a PreToolUse hook) and, where required, sandbox.failIfUnavailable,
@@ -915,8 +948,6 @@ async function main() {
     // analogue of naude-entry.cjs's execPath; see its matching injection).
     // tjs.exePath falsy -> skip entirely (nothing known to call back into).
     if (tjs.exePath && shouldInjectGuard(rest)) {
-      const platform = tjsPlatform(undefined, globalThis.__clodeMapPlatform);
-      const sep = platform === 'win32' ? '\\' : '/';
       // SANDBOXED BASH FAILS CLOSED (user ruling 2026-10-05) — THE NAMED DIVERGENCE, stated here once: quaude cannot
       // provide Claude Code's sandbox yet (its initialization needs node:net servers the node-shim lacks:
       // net.createServer throws "quaude does not support the sandbox yet"; BACKLOG), so where native WOULD sandbox,
@@ -950,7 +981,7 @@ async function main() {
         rest = withSettingsArg(rest, findSettingsArgs(rest), JSON.stringify(guardSettings));
       } else {
         // The guard is never left out for want of a private directory: refuse to start (fail closed) instead.
-        const got = await privateGuardDir(tjs, tjs.env, sep);
+        const got = await privateGuardDir(tjs, tjs.env, sep, platform);
         if (got.refusal) die(`refusing to start: the update guard's private directory is unsafe: ${got.refusal}`, 1);
         const dir = got.dir;
         await pruneGuardSettings(tjs, dir, sep, Date.now());

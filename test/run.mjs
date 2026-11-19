@@ -730,6 +730,15 @@ if (!testsRan) {
     + `e.g. an unbuilt asdf/nvm pin bump can make the whole invocation silently no-op.`);
   fails = 1;
 }
+// A file that reported no tests of its own is red BY NAME: node --test stands in for it with a PASSING "ok - <file>"
+// when it registers none, exits early, or dies before reporting, so neither the exit status nor "# tests N" sees it.
+const { silentFiles } = require('./forced-win32.cjs');
+if (tapText) {
+  for (const f of silentFiles(files, tapText)) {
+    console.error(`run: ${f} reported NO tests of its own (it registered none, exited early, or died before reporting)`);
+    fails = 1;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // THE FORCED-WIN32 SECOND PASS.
@@ -778,7 +787,13 @@ if (!testsRan) {
     try { winTapText = fs.readFileSync(winTap, 'utf8'); } catch { /* handled below */ }
     finally { try { fs.unlinkSync(winTap); } catch { /* best-effort */ } }
     const ran = winTapText ? winTapText.match(/^# tests (\d+)/m) : null;
-    if (res2.status === 0 && ran && Number(ran[1]) > 0) {
+    // A file that reported no tests of its own (it registered none, exited early, or died before reporting) is red BY
+    // NAME: node --test counts its stand-in as a passing test, so '# tests N' alone cannot see it (forced-win32.cjs).
+    const silent = winTapText ? silentFiles(forcedFiles, winTapText) : forcedFiles;
+    for (const f of silent) {
+      console.error(`run: forced-win32: ${f} reported NO tests of its own (it registered none, exited early, or died before reporting)`);
+    }
+    if (res2.status === 0 && ran && Number(ran[1]) > 0 && silent.length === 0) {
       console.error(`run: forced-win32 pass OK — ${ran[1]} test(s) over `
         + `${forcedFiles.length} platform-sensitive fixture-only file(s). This is a `
         + 'pre-filter, NOT Windows coverage (see test/forced-win32.cjs).');
