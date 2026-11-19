@@ -74,7 +74,15 @@ function realHome(env = process.env) {
 // after this module ran; but with CLODE_TEST_REAL_HOME already set this module leaves HOME alone, so that was the REAL
 // home. Remove a dir only if THIS process made it, it lies directly under os.tmpdir(), it carries the prefix, and it is
 // neither the real home nor an ancestor of it. Returns whether it removed anything.
-function removeOwnSuiteHome(dir) {
+//
+// A REMOVAL THAT FAILS SAYS WHAT REFUSED. windows-amd64-tui (CI 44443821699, the first run with a suite home) passed
+// its test and then died at exit with node's bare "EPERM, Permission denied: <the suite home>" from this rmSync:
+// node's rm names only the root it was given, never the entry inside that refused, so the log could not say which
+// file or which process. (Not a read-only file: an official Windows node clears that attribute and retries,
+// src/node_file.cc RmSync.) It stays a failure (something outlived the test with this home in its environment, or
+// holds a file in it), but now one that names each entry that refused removal, by path, code and mode.
+// `rm` is injectable for test/suite-home-cleanup.test.cjs.
+function removeOwnSuiteHome(dir, { rm = fs.rmSync } = {}) {
   if (!dir || !made) return false;
   const abs = path.resolve(String(dir));
   if (abs !== made) return false;
@@ -84,9 +92,40 @@ function removeOwnSuiteHome(dir) {
     const r = path.resolve(real.HOME);
     if (r === abs || r.startsWith(abs + path.sep)) return false;
   }
-  fs.rmSync(abs, { recursive: true, force: true });
+  try { rm(abs, { recursive: true, force: true }); } catch (e) { throw refusedRemoval(abs, e, rm); }
   made = null;
   return true;
+}
+// Each entry under `root` that still refuses removal, deepest first (the rest are removed on the way: the whole dir is
+// being removed anyway), as an Error naming them.
+function refusedRemoval(root, cause, rm) {
+  const refused = [];
+  // -> whether p is gone; a directory holding a refused entry is not tried itself (it would only refuse as not empty)
+  const visit = (p) => {
+    let st;
+    try { st = fs.lstatSync(p); } catch { return true; }
+    let clear = true;
+    if (st.isDirectory()) {
+      let names = [];
+      try { names = fs.readdirSync(p); } catch (e) { refused.push([p, e.code, st.mode]); return false; }
+      for (const n of names) clear = visit(path.join(p, n)) && clear;
+    }
+    if (p === root || !clear) return clear;
+    try { rm(p, { recursive: true, force: true }); return true; } catch (e) { refused.push([p, e.code, st.mode]); return false; }
+  };
+  visit(root);
+  let rootGone = false;
+  if (!refused.length) { try { rm(root, { recursive: true, force: true }); rootGone = true; } catch { /* named below */ } }
+  const named = refused.slice(0, 40).map(([p, code, mode]) => `${path.relative(root, p) || '.'} (${code}, mode ${(mode & 0o7777).toString(8)})`);
+  const e = new Error(`suite-home: could not remove ${root} at exit (${cause.code || cause.message}). `
+    + (refused.length ? `${refused.length} entr${refused.length === 1 ? 'y' : 'ies'} under it refused removal: ${named.join('; ')}${refused.length > 40 ? '; ...' : ''}. `
+      : rootGone ? 'On a second pass, entry by entry, nothing refused: whatever held it let go meanwhile. '
+        : 'Every entry under it was removed one by one; the directory itself refused. ')
+    + 'On Windows an entry refuses while another process holds it open or has it as its working directory: a process that '
+    + 'outlived this test with this home in its environment.');
+  e.code = cause.code;
+  e.cause = cause;
+  return e;
 }
 
 applySuiteHome();
