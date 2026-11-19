@@ -4947,7 +4947,9 @@ under the user's home on every platform). It is made 0700 and reused. The merged
 pruned after a week on every use (guardSettingsToPrune). guardDirRefusal judges lstat facts. Everywhere, a symlink or
 junction is refused. Where the platform reports an owner (POSIX), the directory must be ours and 0700, and its parent
 ours or root's and not writable by every user. A refusal makes quaude and naude refuse to start (fail closed), never
-fall back. naude no longer removes the directory at exit, because another session may be using it.
+fall back. naude no longer removes the directory at exit, because another session may be using it. A BEHAVIOUR CHANGE
+for naude: the merged copy of the user's settings it used to delete when the run ended now stays in that directory
+for up to seven days (pruned on the next use after that), as quaude's always has.
 
 Measured: test/update-guard-dir.test.cjs (quaude's block extracted from the bootstrap, on a fake tjs over the real
 filesystem: two sessions give one directory; the week-old settings are pruned; a hostile parent and a symlinked guard
@@ -4955,7 +4957,12 @@ are refused, with no fallback; Windows-shaped facts are accepted) and test/naude
 naude), both also under the forced-win32 pass (2026-11-19).
 
 Unmeasured. On real Windows: that the profile ACL keeps `%USERPROFILE%\.cache\clode\guard` private (an icacls row on
-windows-latest would measure it), and a real quaude session there reusing one directory.
+windows-latest would measure it), and a real quaude session there reusing one directory. And an OPEN QUESTION, not
+yet decided: on Windows clodeCacheDir is `%USERPROFILE%\.cache\clode` (os.homedir), and in a roaming profile
+%USERPROFILE% roams (copied to the server at logoff) while `%LOCALAPPDATA%` (AppData\Local) does not. So the guard
+directory, with the merged settings copy, and the rest of the clode cache may travel with the profile. Whether
+clodeCacheDir should use %LOCALAPPDATA% on Windows is a question for clodeCacheDir itself, not for the guard alone:
+one cache resolution everywhere.
 
 ## Untracked-until-now findings from 2026-08-23/24 (three of them)
 

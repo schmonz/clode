@@ -338,3 +338,19 @@ test('a child that exits mid-script ends the session and says during which step'
   assert.strictEqual(s.frames[1].settled, false, 'a frame the child died during is not a settled frame');
   assert.deepStrictEqual({ during: s.exit.during, code: s.exit.code }, { during: 'poke', code: 7 });
 });
+test('stopChild, Windows: a node-pty with no console process list is a blind stop, reported, never "gone"', async () => {
+  const { consoleList } = require('./tui-screen.cjs');
+  const c = fakeChild({ signals: false });
+  let t = 0;
+  const r = await stopChild(c, {
+    exited: () => true, alive: () => false,
+    killGroup: () => { throw Object.assign(new Error('kill ESRCH'), { code: 'ESRCH' }); }, killPid: () => {},
+    snapshot: (child) => snapshotTree(child, { listConsole: (ch) => consoleList(ch, 'win32'), table: () => [] }),
+    now: () => t, sleep: async (ms) => { t += ms; },
+  });
+  assert.strictEqual(r.gone, false);
+  assert.match(r.why, /pid 4242\) is gone, but its tree was never seen: this node-pty has no _agent\._getConsoleProcessList/);
+  assert.deepStrictEqual(await consoleList({}, 'darwin'), [], 'off Windows ps covers it: absence is no finding');
+  await assert.rejects(consoleList({ _agent: { _getConsoleProcessList: async () => { throw new Error('agent died'); } } }, 'win32'), /failed \(agent died\)/);
+  assert.deepStrictEqual(await consoleList({ _agent: { _getConsoleProcessList: async () => [1, 2] } }, 'win32'), [1, 2]);
+});

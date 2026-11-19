@@ -419,10 +419,19 @@ function psTable() {
     return r.stdout.split('\n').map((l) => l.trim().split(/\s+/).map(Number)).filter((x) => x.length === 2 && x.every(Number.isInteger));
   } catch { return []; }
 }
-async function consoleList(child) {
+// On Windows the console list is the ONLY way to see grandchildren (no process groups, no ps), so a node-pty that
+// lacks it, or a list that fails, is a BLIND stop: it throws, and stopChild reports it as a finding rather than
+// waiting on the child alone and calling that gone. Elsewhere the list is a bonus over ps and its absence is [].
+async function consoleList(child, platform = process.platform) {
   const agent = child && child._agent;
-  if (!agent || typeof agent._getConsoleProcessList !== 'function') return [];
-  try { return (await agent._getConsoleProcessList()) || []; } catch { return []; }
+  if (!agent || typeof agent._getConsoleProcessList !== 'function') {
+    if (platform === 'win32') throw new Error('this node-pty has no _agent._getConsoleProcessList, so the console\'s other processes cannot be seen');
+    return [];
+  }
+  try { return (await agent._getConsoleProcessList()) || []; } catch (e) {
+    if (platform === 'win32') throw new Error(`node-pty's console process list failed (${e.message})`);
+    return [];
+  }
 }
 async function snapshotTree(child, { listConsole = consoleList, table = psTable } = {}) {
   const pids = new Set([child.pid]);
@@ -437,7 +446,8 @@ async function snapshotTree(child, { listConsole = consoleList, table = psTable 
 async function stopChild(child, { exited, alive = pidAlive, killGroup = (pid) => process.kill(-pid, 'SIGKILL'),
   killPid = (pid) => process.kill(pid, 'SIGKILL'), snapshot = snapshotTree,
   deadlineMs = 15000, pollMs = 50, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), now = Date.now } = {}) {
-  const tree = await snapshot(child);
+  let tree = [child.pid], blind = null;
+  try { tree = await snapshot(child); } catch (e) { blind = e.message; }
   try { killGroup(child.pid); } catch { /* no process groups here, or none left: steps 2 and 3 */ }
   try { child.kill('SIGKILL'); } catch {
     try { child.kill(); } catch { /* already gone: the wait below says so */ }
@@ -448,7 +458,13 @@ async function stopChild(child, { exited, alive = pidAlive, killGroup = (pid) =>
     const exitedNow = exited();
     const living = tree.filter((pid) => alive(pid));
     const groupAlive = alive(-child.pid);
-    if (exitedNow && living.length === 0 && !groupAlive) return { gone: true, ms: now() - t0, tree };
+    if (exitedNow && living.length === 0 && !groupAlive) {
+      if (blind) {
+        return { gone: false, ms: now() - t0, tree,
+          why: `the child (pid ${child.pid}) is gone, but its tree was never seen: ${blind}; a grandchild may outlive this driver` };
+      }
+      return { gone: true, ms: now() - t0, tree };
+    }
     if (now() - t0 > deadlineMs) {
       const what = living.includes(child.pid) ? 'was still running'
         : living.length ? `had exited, but its descendant(s) ${living.join(', ')} had not`
@@ -459,7 +475,7 @@ async function stopChild(child, { exited, alive = pidAlive, killGroup = (pid) =>
     await sleep(pollMs);
   }
 }
-module.exports = { hexPayload, parseArgs, parseScript, settleVerdict, SCRIPT_DEFAULTS, stopChild, snapshotTree };
+module.exports = { hexPayload, parseArgs, parseScript, settleVerdict, SCRIPT_DEFAULTS, stopChild, snapshotTree, consoleList };
 
 // Honor the "Exit 0 always" contract even if pty.spawn/setup throws: fail loud
 // with a nonzero exit rather than crashing on an unhandled rejection.
