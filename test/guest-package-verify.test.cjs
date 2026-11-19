@@ -25,7 +25,7 @@ function verifyBlock() {
   return src.slice(start, end + endMark.length).split('\n').map((l) => l.replace(/^ {8}/, '')).join('\n');
 }
 
-function runWith(stubs, pkgs) {
+function runWith(stubs, pkgs, runtimeTools = '') {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'guest-verify-'));
   const bin = path.join(dir, 'bin');
   fs.mkdirSync(bin);
@@ -33,7 +33,7 @@ function runWith(stubs, pkgs) {
     fs.writeFileSync(path.join(bin, name), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
   }
   const script = path.join(dir, 'verify.sh');
-  fs.writeFileSync(script, `set -e\nPKGS="${pkgs}"\n${verifyBlock()}\necho REACHED_THE_BUILD\n`);
+  fs.writeFileSync(script, `set -e\nPKGS="${pkgs}"\nGUEST_RUNTIME_TOOLS="${runtimeTools}"\n${verifyBlock()}\necho REACHED_THE_BUILD\n`);
   // /usr/bin:/bin for sed/printf only; none of the stubbed tool names live there on a
   // dev box or runner that matters (and if one did, the stub dir is FIRST).
   return spawnSync('/bin/sh', [script], { encoding: 'utf8', env: { PATH: `${bin}:/usr/bin:/bin` } });
@@ -58,6 +58,15 @@ test('runnable tools pass and the build proceeds', () => {
   assert.match(r.stdout, /REACHED_THE_BUILD/);
 });
 
+test('a copyback tool the upgrade broke (rsync) fails the package step by name', () => {
+  const r = runWith({ cmake: OK, rsync: UNLOADABLE.replace('cmake', 'rsync'), sudo: OK }, 'cmake', 'rsync sudo');
+  assert.notStrictEqual(r.status, 0, `an unloadable rsync passed:\n${r.stdout}${r.stderr}`);
+  assert.match(r.stderr, /guest: rsync --version: Shared object/);
+  assert.match(r.stderr, /do NOT RUN.*rsync\(guest-runtime\)/);
+  const ok = runWith({ cmake: OK, rsync: OK, sudo: OK }, 'cmake', 'rsync sudo');
+  assert.strictEqual(ok.status, 0, ok.stderr);
+});
+
 test('a missing tool is still reported as missing (the older half of the check)', () => {
   const r = runWith({ gmake: OK }, 'cmake gmake');
   assert.notStrictEqual(r.status, 0);
@@ -66,25 +75,40 @@ test('a missing tool is still reported as missing (the older half of the check)'
 
 // The cause half: pkg resolves an installed dependency by NAME, so install-only can
 // leave the image's older openssl under packages built against a newer one.
+function branchOf(yml, label, next) {
+  const start = yml.indexOf(`          ${label})\n`);
+  const end = start < 0 ? -1 : yml.indexOf(`          ${next})\n`, start);
+  if (start < 0 || end < 0) return null;
+  return yml.slice(start, end).split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+}
+
+// Ruling (fix round 1): a FULL `pkg upgrade -y` before install, DRAGONFLY ONLY (freebsd
+// was green and is not exposed), and the copyback tools the upgrade rewrites are checked.
 function scanPkgUpgradeOrder({ yml }) {
-  const start = yml.indexOf('          freebsd|dragonflybsd)');
-  const end = yml.indexOf('          openbsd)', start);
-  if (start < 0 || end < 0) return { findings: [], examined: 0 };
-  const branch = yml.slice(start, end).split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
-  const up = branch.indexOf('pkg upgrade -y');
-  const inst = branch.indexOf('pkg install -y $PKGS');
+  const dfly = branchOf(yml, 'dragonflybsd', 'openbsd');
+  const fbsd = branchOf(yml, 'freebsd', 'dragonflybsd');
+  if (dfly === null || fbsd === null) return { findings: [], examined: 0 };
   const findings = [];
-  if (inst < 0) findings.push('freebsd|dragonflybsd branch no longer installs $PKGS');
-  else if (up < 0 || up > inst) findings.push('freebsd|dragonflybsd install $PKGS without `pkg upgrade -y` first (repo/installed skew: run 44460009323)');
-  return { findings, examined: 1 };
+  const up = dfly.indexOf('pkg upgrade -y\n');
+  const inst = dfly.indexOf('pkg install -y $PKGS');
+  if (inst < 0) findings.push('dragonflybsd branch no longer installs $PKGS');
+  else if (up < 0 || up > inst) findings.push('dragonflybsd installs $PKGS without a FULL `pkg upgrade -y` first (repo/installed skew: run 44460009323)');
+  if (/pkg upgrade/.test(fbsd)) findings.push('freebsd runs pkg upgrade: the ruling scopes it to dragonflybsd (freebsd was green)');
+  if (!/GUEST_RUNTIME_TOOLS="[^"]*\brsync\b[^"]*"/.test(dfly) || !/GUEST_RUNTIME_TOOLS="[^"]*\bsudo\b[^"]*"/.test(dfly)) {
+    findings.push('dragonflybsd upgrades but does not runnable-check rsync + sudo (the copyback tools)');
+  }
+  return { findings, examined: 4 };
 }
 
 const pkgUpgradeGuard = defineGuard({
   name: 'guest-pkg-upgrade-before-install',
   read: () => ({ yml: fs.readFileSync(ACTION, 'utf8') }),
   scan: scanPkgUpgradeOrder,
+  floor: 4,
   control: () => ({
-    yml: '          freebsd|dragonflybsd)\n'
+    yml: '          freebsd)\n'
+      + '            sudo env ASSUME_ALWAYS_YES=YES pkg upgrade -y\n'
+      + '          dragonflybsd)\n'
       + '            [ -z "$PKGS" ] || sudo env ASSUME_ALWAYS_YES=YES pkg install -y $PKGS ;;\n'
       + '          openbsd)\n',
   }),

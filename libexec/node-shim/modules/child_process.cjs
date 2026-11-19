@@ -613,10 +613,8 @@ function execFileSync(file, args, opts) {
   if (!Array.isArray(args)) { opts = args; args = []; }
   args = args || []; opts = opts || {};
   const r = spawnSync(file, args, opts);
-  if (!opts.stdio && r.stderr != null && r.stderr.length) {
-    const b = Buffer.isBuffer(r.stderr) ? r.stderr : Buffer.from(String(r.stderr));
-    try { writeSyncFdBytes(2, new Uint8Array(b.buffer, b.byteOffset, b.byteLength)); } catch { /* a closed fd 2 is not this call's failure */ }
-  }
+  // Exactly node's call: `if (inheritStderr && ret.stderr) process.stderr.write(ret.stderr)`.
+  if (!opts.stdio && r.stderr) process.stderr.write(r.stderr);
   if (r.error) throw Object.assign(r.error, r);
   if (r.status !== 0) {
     let msg = `Command failed: ${[opts.argv0 || file, ...args].join(' ')}`;

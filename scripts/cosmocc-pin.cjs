@@ -39,6 +39,13 @@ function cacheKey() {
   return `cosmocc-${COSMOCC_VERSION}-${COSMOCC_SHA256.slice(0, 16)}`;
 }
 
+// The directory the verified zip is extracted into, under <cache>/cosmocc/. Keyed by the
+// sha as well as the version: the extracted tree is reused without re-hashing, so its
+// name is what ties it to the verified zip it came from.
+function extractDirName() {
+  return `${COSMOCC_VERSION}-${COSMOCC_SHA256.slice(0, 16)}`;
+}
+
 // Fetch `dest` from the first mirror whose bytes hash to `sha256`. Injected
 // downloadFile/sha256Of (libexec/clode-net.cjs's in production) keep this testable
 // with file:// mirrors. Returns the name of the mirror that supplied the bytes.
@@ -71,7 +78,7 @@ async function fetchVerified({ mirrors, sha256, dest, downloadFile, sha256Of, lo
   throw new Error(`cosmo: every cosmocc mirror failed — refusing to build without a verified toolchain:\n  ${failures.join('\n  ')}`);
 }
 
-module.exports = { COSMOCC_VERSION, COSMOCC_SHA256, COSMOCC_ZIP, COSMOCC_MIRRORS, cacheKey, fetchVerified };
+module.exports = { COSMOCC_VERSION, COSMOCC_SHA256, COSMOCC_ZIP, COSMOCC_MIRRORS, cacheKey, extractDirName, fetchVerified };
 
 if (require.main === module) {
   const cmd = process.argv[2];

@@ -142,6 +142,8 @@ runs:
         # compile (build.sh's nbmake bootstrap and tools/Makefile.gnuhost's configure);
         # the TARGET cross-gcc and the sysroot are untouched. `-O` is build.sh's own
         # default for HOST_CFLAGS, kept. -V, so the nbmake wrapper carries it too.
+        # HOST_CXXFLAGS is untouched (C++ host tools keep their default dialect). The
+        # proof is a cold-cache CI run of all 12 cross legs, not the ar.c repro alone.
         HOSTCFLAGS=(-V "HOST_CFLAGS=-O -std=gnu17")
         ./build.sh -m "${{ inputs.machine }}" "${ARCHOPT[@]}" "${HOSTCFLAGS[@]}" -U -T "$TOOL" -D "$DEST" -j "$J" tools
         if [ "${{ inputs.sysroot-mode }}" = light ]; then

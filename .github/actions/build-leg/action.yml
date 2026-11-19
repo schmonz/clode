@@ -656,8 +656,12 @@ runs:
       if: inputs.cosmo == 'true' && steps.tjs-cache.outputs.cache-hit != 'true'
       shell: bash
       run: |
-        echo "key=$(node scripts/cosmocc-pin.cjs cache-key)" >> "$GITHUB_OUTPUT"
-        echo "zip=$(node scripts/cosmocc-pin.cjs zip)" >> "$GITHUB_OUTPUT"
+        # Assigned first: under bash -e a failing $(...) inside `echo` is swallowed and
+        # would write an EMPTY key; a failing assignment fails the step.
+        KEY="$(node scripts/cosmocc-pin.cjs cache-key)"
+        ZIP="$(node scripts/cosmocc-pin.cjs zip)"
+        echo "key=$KEY" >> "$GITHUB_OUTPUT"
+        echo "zip=$ZIP" >> "$GITHUB_OUTPUT"
     - name: Cache the cosmocc toolchain (cosmo APE leg)
       if: inputs.cosmo == 'true' && steps.tjs-cache.outputs.cache-hit != 'true'
       uses: actions/cache@v6.1.0

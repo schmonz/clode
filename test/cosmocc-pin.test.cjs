@@ -91,6 +91,10 @@ test('the shipped mirror list: >1 mirror, all https, all the same pinned zip nam
 
 // The CI cache key is DERIVED: it used to be the literal `cosmocc-4.0.2` in YAML, a
 // second copy of the pin a bump could leave behind.
+test('the extract dir is keyed by version AND sha', () => {
+  assert.strictEqual(pin.extractDirName(), `${pin.COSMOCC_VERSION}-${pin.COSMOCC_SHA256.slice(0, 16)}`);
+});
+
 test('the cache-key CLI answers the module\'s key, and the key names version AND sha', () => {
   const key = execFileSync(process.execPath, [path.join(REPO, 'scripts/cosmocc-pin.cjs'), 'cache-key'], { encoding: 'utf8' }).trim();
   assert.strictEqual(key, pin.cacheKey());
@@ -104,6 +108,11 @@ function scanCosmoccWiring({ action, buildTjs }) {
     [/key: \$\{\{ steps\.cosmocc-pin\.outputs\.key \}\}/.test(action), 'the cosmocc cache step is not keyed on steps.cosmocc-pin.outputs.key'],
     [!/key:\s*cosmocc-\d/.test(action), 'a literal cosmocc cache key is back in the build-leg action'],
     [!/COSMOCC_SHA256\s*=/.test(buildTjs), 'scripts/build-tjs.cjs re-declares the cosmocc pin instead of requiring cosmocc-pin.cjs'],
+    // A failing $(...) inside `echo` is swallowed under bash -e and writes an EMPTY key.
+    [/KEY="\$\(node scripts\/cosmocc-pin\.cjs cache-key\)"/.test(action), 'the cosmocc key is not assigned before use (a failing derivation would not fail the step)'],
+    // The extracted tree is reused unverified, so it must be named by the sha.
+    [/cosmoccExtractDirName\(\)/.test(buildTjs) && !/'cosmocc', COSMOCC_VERSION\)/.test(buildTjs),
+      'the extracted cosmocc dir is keyed by version alone (a re-pin would reuse old, unverified bytes)'],
   ];
   for (const [ok, why] of checks) if (!ok) findings.push(why);
   return { findings, examined: checks.length };
@@ -116,11 +125,11 @@ const cosmoccWiringGuard = defineGuard({
     buildTjs: fs.readFileSync(path.join(REPO, 'scripts/build-tjs.cjs'), 'utf8'),
   }),
   scan: scanCosmoccWiring,
-  floor: 4,
+  floor: 6,
   // The exact shape run 44460009323 ran with: a literal key, and the pin declared in build-tjs.
   control: () => ({
     action: '      with:\n        path: ~/.cache/clode/cosmocc\n        key: cosmocc-4.0.2\n',
-    buildTjs: "const COSMOCC_SHA256 = '85b8';\n",
+    buildTjs: "const COSMOCC_SHA256 = '85b8';\nconst dir = path.join(cacheRoot, 'cosmocc', COSMOCC_VERSION);\n",
   }),
 });
 guardTests(cosmoccWiringGuard);
