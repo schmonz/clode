@@ -147,8 +147,28 @@ function actualOf(m) {
 // 32 shim modules, `intl` the one allowed unenumerable, so 31; fewer means modules vanished from
 // the measurement and the map's silence means nothing.
 const SHIM_SURFACE_FLOOR = 31;
-function scanShimSurface({ actual, golden, unenumerable, moduleCount }) {
+// The upstream version a staged bundle carries: the most frequent standalone VERSION:"x.y.z" literal (graph.json
+// escapes its quotes, cli.cjs does not). Null when none is found, so an unknown version never blocks the diff.
+function bundleVersionOf(text) {
+  const counts = new Map();
+  for (const m of text.matchAll(/(?<![A-Za-z0-9_$])VERSION:\\?"(\d+\.\d+\.\d+)\\?"/g)) counts.set(m[1], (counts.get(m[1]) || 0) + 1);
+  let best = null;
+  for (const [v, n] of counts) if (!best || n > counts.get(best)) best = v;
+  return best;
+}
+
+function scanShimSurface({ actual, golden, unenumerable, moduleCount, bundleVersion = null }) {
   const findings = [];
+  // A provider that is not the one golden.json was measured against is a measuring-device fault (a dev box whose
+  // newest provider is ahead of the pin), not product drift: name that, and do not diff a map against the wrong
+  // upstream. Still red, because a pin bump with no re-measured golden also lands here.
+  const want = golden._measured_against_bundle;
+  if (bundleVersion && want && bundleVersion !== want) {
+    return { findings: [`the staged provider is ${bundleVersion}, but golden.json was measured against ${want}: this is a `
+      + 'version mismatch, not shim drift. Point CLODE_PROVIDER_BIN at the pinned provider; if the pin itself moved, '
+      + 're-measure with UPDATE_GOLDEN=1 and review the diff'], examined: moduleCount - unenumerable.length,
+    note: `${moduleCount} shim module(s), not diffed: provider ${bundleVersion} vs golden ${want}` };
+  }
   const deferred = new Set(golden.layer1_bun_props_missing_deferred || []);
   for (const key of Object.keys(actual)) {
     const exp = golden[key] || [];
@@ -180,8 +200,10 @@ const shimSurfaceGuard = defineGuard({
     if (inp.skip) return { skip: inp.skip };
     if (!fs.existsSync(GOLDEN_PATH)) throw new Error(`missing ${GOLDEN_PATH}; regenerate with UPDATE_GOLDEN=1`);
     const m = measure(inp.cli);
+    const graph = path.join(path.dirname(inp.cli), 'graph.json');
+    const bundleVersion = bundleVersionOf(fs.readFileSync(fs.existsSync(graph) ? graph : inp.cli, 'utf8'));
     return { actual: actualOf(m), golden: JSON.parse(fs.readFileSync(GOLDEN_PATH, 'utf8')),
-      unenumerable: m.l2.unenumerable, moduleCount: m.moduleCount };
+      unenumerable: m.l2.unenumerable, moduleCount: m.moduleCount, bundleVersion };
   },
   scan: scanShimSurface,
   // The golden as it stands, measured against an inventory that gained one gap nobody reviewed and
@@ -204,6 +226,19 @@ test('shim surface: the control names both kinds of finding', () => {
   assert.strictEqual(r.findings.length, 2, r.findings.join('\n'));
   assert.match(r.findings[0], /layer2_node_apis_missing drifted.*fs\.notARealApi/);
   assert.match(r.findings[1], /could not be enumerated.*"fs"/);
+});
+
+test('shim surface: a provider other than golden\'s is named as a version mismatch, not drift', () => {
+  const golden = { _measured_against_bundle: '2.1.283', layer2_node_apis_missing: [] };
+  const base = { actual: { layer2_node_apis_missing: ['fs.exists'] }, golden, unenumerable: [], moduleCount: 32 };
+  const off = scanShimSurface({ ...base, bundleVersion: '2.1.328' });
+  assert.strictEqual(off.findings.length, 1, off.findings.join('\n'));
+  assert.match(off.findings[0], /provider is 2\.1\.328, but golden\.json was measured against 2\.1\.283: this is a version mismatch/);
+  const on = scanShimSurface({ ...base, bundleVersion: '2.1.283' });
+  assert.match(on.findings.join('\n'), /layer2_node_apis_missing drifted/);
+  const unknown = scanShimSurface({ ...base, bundleVersion: null });
+  assert.match(unknown.findings.join('\n'), /layer2_node_apis_missing drifted/);
+  assert.strictEqual(bundleVersionOf('a,{ENGINE_VERSION:"9.9.9",VERSION:"2.1.283"},{VERSION:\\"2.1.283\\"},VERSION:"2.0.0"'), '2.1.283');
 });
 
 // UPDATE_GOLDEN regenerates instead of asserting. Declared only when asked for, so a normal run
