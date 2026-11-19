@@ -15,9 +15,9 @@
 // BLIND SPOTS: a collector more than 20 lines up, or the child bound under another name between collector and handler.
 const fs = require('node:fs');
 const path = require('node:path');
-const { defineGuard, guardTests } = require('../guard.cjs');
+const { defineGuard, guardTests } = require('./guard.cjs');
 
-const TEST_DIR = path.join(__dirname, '..');
+const TEST_DIR = path.resolve(__dirname);
 const WINDOW = 20;
 
 function listFiles(dir) {

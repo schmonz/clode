@@ -17,6 +17,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { guardDirPath, guardDirRefusal, guardSettingsToPrune, GUARD_SETTINGS_MAX_AGE_MS } = require('../libexec/update-guard.cjs');
 const { clodeCacheDir } = require('../libexec/clode-paths.cjs');
+const { defineGuard, guardTests } = require('./guard.cjs');
 
 test('guardDirPath is clodeCacheDir/guard, for each way the clode cache is named', () => {
   const home = path.join(os.tmpdir(), 'h');
@@ -146,8 +147,20 @@ test('quaude, Windows-shaped: uid -1 and a synthesized mode are not a refusal (t
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test('quaude refuses to start on a refusal, and prunes on every use of the directory', () => {
-  const src = fs.readFileSync(path.join(__dirname, '..', 'libexec', 'quaude-bootstrap.mjs'), 'utf8');
-  assert.match(src, /if \(got\.refusal\) die\(`refusing to start: the update guard's private directory is unsafe: \$\{got\.refusal\}`, 1\);/);
-  assert.doesNotMatch(src, /makeTempDir\([^)]*clode-guard/, 'no fresh-tmp fallback survives');
-});
+// quaude refuses to start on a refusal and never falls back to a fresh temp directory: read from the bootstrap's
+// source, so a guard. The control is the shape this replaced (bd68250): a makeTempDir clode-guard fallback, no die.
+const REFUSES = /if \(got\.refusal\) die\(`refusing to start: the update guard's private directory is unsafe: \$\{got\.refusal\}`, 1\);/;
+const TMP_FALLBACK = /makeTempDir\([^)]*clode-guard/;
+guardTests(defineGuard({
+  name: 'quaude-guard-dir-fails-closed',
+  read: () => [{ rel: 'libexec/quaude-bootstrap.mjs', src: fs.readFileSync(path.join(__dirname, '..', 'libexec', 'quaude-bootstrap.mjs'), 'utf8') }],
+  scan: (srcs) => {
+    const findings = [];
+    for (const { rel, src } of srcs) {
+      if (!REFUSES.test(src)) findings.push(`${rel}: no die() on the guard directory's refusal: quaude would start with an unsafe guard`);
+      if (TMP_FALLBACK.test(src)) findings.push(`${rel}: a fresh-temp clode-guard fallback survives`);
+    }
+    return { findings, examined: srcs.length };
+  },
+  control: () => [{ rel: 'planted', src: "const dir = await tjs.makeTempDir(tmpBase + sep + 'clode-guard-XXXXXX');" }],
+}));

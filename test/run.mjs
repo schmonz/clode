@@ -688,7 +688,12 @@ if (files.length === 0) {
 // `# tests N` line to floor-check without changing what anyone sees on a healthy
 // run.
 const tapCopy = path.join(os.tmpdir(), `clode-test-run-${process.pid}.tap`);
+// THE PER-FILE WALL-CLOCK LIMIT (test/file-watchdog.cjs): node --test hands this --require to each per-file process,
+// where it arms a timer that names the file and exits 1 at its limit. A file that never finishes is a named red, never
+// a silent wait (the 9h40m hang of 2026-11-19). Both passes below carry it.
+const WATCHDOG = path.join(HERE, 'file-watchdog-preload.cjs');
 const res = spawnSync(process.execPath, [
+  '--require', WATCHDOG,
   '--test',
   '--test-reporter', process.stdout.isTTY ? 'spec' : 'tap',
   '--test-reporter-destination', 'stdout',
@@ -745,6 +750,7 @@ if (!testsRan) {
   } else {
     const winTap = path.join(os.tmpdir(), `clode-test-win32-${process.pid}.tap`);
     const res2 = spawnSync(process.execPath, [
+      '--require', WATCHDOG,
       '--test',
       '--test-reporter', 'tap',
       '--test-reporter-destination', winTap,

@@ -56,7 +56,7 @@ test('async models build the SAME argv as their sync twins', async () => {
     seen.push({ cmd, args });
     return {
       stdout: { on() {} }, stderr: { on() {} },
-      on: (ev, cb) => { if (ev === 'exit') setImmediate(() => cb(0, null)); },
+      on: (ev, cb) => { if (ev === 'exit' || ev === 'close') setImmediate(() => cb(0, null)); }, // node emits both; the model settles on close
       kill() {},
     };
   };
@@ -66,14 +66,14 @@ test('async models build the SAME argv as their sync twins', async () => {
   assert.deepStrictEqual(seen[1], { cmd: '/t/tjs', args: ['run', path.join(REPO, 'libexec/node-shim/loader.cjs'), '/x/cli.cjs', '-p', 'hi'] });
 });
 
-test('async models collect output and resolve on exit', async () => {
+test('async models collect output and resolve on close', async () => {
   const { runNaudeModelAsync } = require('./oracle-models.cjs');
   const r = await runNaudeModelAsync('/x/cli.cjs', [], {
     node: '/n/node',
     spawn: () => ({
       stdout: { on: (e, cb) => { if (e === 'data') cb('PONG'); } },
       stderr: { on: (e, cb) => { if (e === 'data') cb('warn'); } },
-      on: (ev, cb) => { if (ev === 'exit') setImmediate(() => cb(0, null)); },
+      on: (ev, cb) => { if (ev === 'exit' || ev === 'close') setImmediate(() => cb(0, null)); }, // node emits both; the model settles on close
       kill() {},
     }),
   });
@@ -81,6 +81,30 @@ test('async models collect output and resolve on exit', async () => {
   assert.strictEqual(r.stdout, 'PONG');
   assert.strictEqual(r.stderr, 'warn');
   assert.ok(typeof r.ms === 'number');
+});
+
+// The race the 'close' settle exists for: node fires 'exit' while stdout still has bytes to deliver. A fake ordered that
+// way (exit, then the tail, then close) must come back with the tail.
+test('async models keep the output that arrives after exit (they settle on close)', async () => {
+  const { runNaudeModelAsync } = require('./oracle-models.cjs');
+  const h = {};
+  const r = await runNaudeModelAsync('/x/cli.cjs', [], {
+    node: '/n/node',
+    spawn: () => {
+      setImmediate(() => {
+        if (h.exit) h.exit(0, null);
+        h.data('head ');
+        setImmediate(() => { h.data('TAIL'); h.close(0, null); });
+      });
+      return {
+        stdout: { on: (e, cb) => { if (e === 'data') h.data = cb; } },
+        stderr: { on() {} },
+        on: (ev, cb) => { h[ev] = cb; },
+        kill() {},
+      };
+    },
+  });
+  assert.strictEqual(r.stdout, 'head TAIL');
 });
 
 test('caller env is preserved and NODE_PATH is prepended, not clobbered', () => {

@@ -10,6 +10,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { proveWorktrees, proveWorktreesOnDisk, compareRuns } = require('./worktrees-proof.cjs');
+const { defineGuard, guardTests } = require('./guard.cjs');
 
 // POSIX-shaped rows spell paths with path.posix, Windows-shaped rows with path.win32, whatever the host. Before CI
 // 44460009323 the rows used node:path, so on windows-latest path.join made the POSIX fixtures' entry paths
@@ -104,12 +105,29 @@ test('CONTROL, Windows-shaped: a realpath that keeps the 8.3 name (fs.realpathSy
   assert.deepStrictEqual(proveWorktrees(winFake('js')).findings,
     ['agent-1: not a worktree git registers for this repository']);
 });
-test('the on-disk proof canonicalizes with fs.realpathSync.native, never the JS walk', () => {
-  const src = fs.readFileSync(path.join(__dirname, 'worktrees-proof.cjs'), 'utf8');
-  const onDisk = src.slice(src.indexOf('function proveWorktreesOnDisk'), src.indexOf('function compareRuns'));
-  assert.match(onDisk, /fs\.realpathSync\.native\(/);
-  assert.doesNotMatch(onDisk, /fs\.realpathSync\(/);
-});
+// The on-disk proof canonicalizes with fs.realpathSync.native, never the JS walk: on Windows only the native call turns
+// an 8.3 name (RUNNER~1) into the long spelling git's porcelain uses (CI 44460009323). Read from the source, so a guard.
+function onDiskBody(src) {
+  const a = src.indexOf('function proveWorktreesOnDisk'), b = src.indexOf('function compareRuns');
+  return a < 0 || b < 0 ? null : src.slice(a, b);
+}
+function scanRealpath(srcs) {
+  const findings = [];
+  for (const { rel, src } of srcs) {
+    const body = onDiskBody(src);
+    if (body === null) { findings.push(`${rel}: proveWorktreesOnDisk or compareRuns not found, so nothing was examined`); continue; }
+    if (!/fs\.realpathSync\.native\(/.test(body)) findings.push(`${rel}: proveWorktreesOnDisk does not call fs.realpathSync.native`);
+    if (/fs\.realpathSync\(/.test(body)) findings.push(`${rel}: proveWorktreesOnDisk calls the JS fs.realpathSync, which keeps 8.3 names`);
+  }
+  return { findings, examined: srcs.filter(({ src }) => onDiskBody(src) !== null).length };
+}
+guardTests(defineGuard({
+  name: 'worktrees-proof-native-realpath',
+  read: () => [{ rel: 'test/worktrees-proof.cjs', src: fs.readFileSync(path.join(__dirname, 'worktrees-proof.cjs'), 'utf8') }],
+  scan: scanRealpath,
+  // The shape before e11b10f: the JS walk.
+  control: () => [{ rel: 'planted', src: 'function proveWorktreesOnDisk(root) { const realpath = (p) => fs.realpathSync(p); }\nfunction compareRuns() {}' }],
+}));
 
 test('an empty directory proves nothing (no blanket exclusion of an empty dir)', () => {
   assert.strictEqual(proveWorktrees(fake({}, PORCELAIN)).proven, false);
