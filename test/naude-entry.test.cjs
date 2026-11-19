@@ -415,7 +415,17 @@ test('first pass: the user\'s --settings reaches the child unchanged; the guard 
   assert.deepStrictEqual(hooks.hooks.PreToolUse.map((h) => h.hooks[0].command), ['"/naude" --clode-update-guard']);
   assert.ok(JSON.parse(fs.readFileSync(path.join(pluginDir, '.claude-plugin', 'plugin.json'), 'utf8')).name);
   assert.strictEqual(cap.call.args.indexOf('--managed-settings'), -1, 'naude injects no sandbox setting');
-  assert.strictEqual(fs.statSync(path.dirname(pluginDir)).mode & 0o777, 0o700, 'a private directory');
+  // A private directory. What makes it private differs, and each platform's assertion is the guarantee it has:
+  //  - EVERYWHERE: a FRESH directory, made by mkdtemp (it fails rather than reuse a name, so nothing another user
+  //    planted is ever adopted) directly in the cacheDir naude was given (here os.tmpdir()).
+  //  - POSIX: mode 0700, set by mkdtemp.
+  //  - Windows: there are no POSIX modes (node reports 0o666 for any writable directory: CI 44460009323 saw 438). The
+  //    directory inherits its parent's ACL, and os.tmpdir() there is the per-user %TEMP%
+  //    (%LOCALAPPDATA%\Temp, granting the user, SYSTEM and Administrators only).
+  const guardDir = path.dirname(pluginDir);
+  assert.strictEqual(path.dirname(guardDir), os.tmpdir(), 'directly in the cacheDir naude was given');
+  assert.match(path.basename(guardDir), /^clode-guard-[A-Za-z0-9]{6}$/, 'a fresh mkdtemp directory');
+  if (process.platform !== 'win32') assert.strictEqual(fs.statSync(guardDir).mode & 0o777, 0o700, 'mode 0700');
   fs.rmSync(path.dirname(pluginDir), { recursive: true, force: true });
   fs.rmSync(dir, { recursive: true, force: true });
 });

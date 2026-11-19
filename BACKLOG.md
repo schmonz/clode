@@ -4933,6 +4933,26 @@ canned mock): exit 1, "no stdin data received in 3s", 0 requests; native: 1 requ
 b4eb2f5 (darwin-arm64, 2.1.283): 1 request, answered; `quaude -p hello` with a piped stdin: the 3 s warning, then 1
 request; with a /dev/null stdin: no warning (2026-11-18).
 
+## quaude on Windows never reuses its private guard directory, and never removes the fresh ones (found 2026-11-19)
+
+libexec/quaude-bootstrap.mjs `privateGuardDir` reuses `<tmp>/clode-guard-<uid>` only when the uid is a number >= 0 and
+lstat says the directory is ours (`st.uid === uid`) and closed to others (`mode & 0o077 === 0`). On Windows none of
+those facts exist: libuv's uv_os_get_passwd sets uid to -1 there (deps/libuv/src/win/util.c), its stat reports
+`st_uid = 0` and synthesizes the mode from the read-only attribute (0o666 for any writable directory; node reports
+the same, 438, CI 44460009323), so the check can never pass and every quaude session that writes there (on Windows
+every session given a user `--settings`: policy "may exist" there, so delivery is 'merge') makes a FRESH
+`clode-guard-XXXXXX` under %TEMP%. Nothing removes it (tjs.exit runs no exit handlers), and the seven-day prune only
+looks inside the directory in use, so on Windows the merged copy of the user's settings (possibly secrets) is NEVER
+removed, contrary to the guard entry's (c). %TEMP% is per-user (%LOCALAPPDATA%\Temp, ACL'd to the user, SYSTEM and
+Administrators), so the copies are not exposed to other users. naude is not affected: it mkdtemps per run and removes
+the directory when its child exits. A portable fix needs a ruling, because each candidate changes behaviour on every
+platform: (a) a per-user location that is private by construction everywhere (under the user's own cache, not the
+shared tmp), or (b) a prune of stale `clode-guard-XXXXXX` siblings this user can remove.
+
+Unmeasured. Derived from the engine's libuv sources and quaude-bootstrap.mjs, not run on Windows: a quaude session
+there with `--settings <file>`, twice, then listing %TEMP%\clode-guard-* (two directories, both still present after
+exit) would measure it; the windows-*-tests CI legs can host that row.
+
 ## Untracked-until-now findings from 2026-08-23/24 (three of them)
 
 These lived only in commit messages. Git preserves that; nobody browses it when
