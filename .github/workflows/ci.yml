@@ -43,6 +43,15 @@ concurrency:
   # default. See BACKLOG.md; if this bites, that entry is where the trade gets re-opened.
   cancel-in-progress: true
 jobs:
+  # PER-JOB timeout-minutes: the BACKSTOP behind test/file-watchdog.cjs's per-file limit. Without it a hang the
+  # watchdog cannot see (a step outside node --test, a runner wedge) burns GitHub's 6-hour default. Each value is about
+  # three times the job's longest duration across the 15 most recent ci.yml runs (measured 2026-11-19, gh api run jobs:
+  # changes and tjs-fast-plan 0 min, tjs-fast-smoke 8, windows-amd64-tests 2, windows-amd64-tui 2,
+  # windows-arm64-tests 3, node-shim-oracle 4, native-builder-oracle 7, node-shim-oracle-darwin 7, linux-x64-pty 31,
+  # test / suite 4), and never under 45 for a job that runs node --test, so the watchdog's 30-minute per-file limit
+  # always fires first and NAMES the file. suite.yml's job runs files with 65-minute overrides: 90. A job that calls
+  # a reusable workflow (tjs, tjs-slow, test) takes its timeouts from that workflow's jobs. test/file-watchdog.test.cjs
+  # refuses a job without one in ANY workflow under .github/workflows.
   # Derives whether this push touched anything but docs, so the heavy `tjs`
   # matrix (and everything that consumes its artifacts) can skip on a
   # docs-only push without losing signal on a real one. concurrency.group
@@ -59,6 +68,7 @@ jobs:
   # of failure that fires before any try/catch in that file could run).
   changes:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
     outputs:
@@ -195,6 +205,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.code != 'false' && !cancelled()
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     outputs:
       legs: ${{ steps.legs.outputs.legs }}
     steps:
@@ -218,6 +229,7 @@ jobs:
       matrix:
         include: ${{ fromJSON(needs.tjs-fast-plan.outputs.legs) }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     defaults:
       run:
         shell: bash
@@ -279,6 +291,7 @@ jobs:
     # must not silently skip this too).
     if: needs.changes.outputs.code != 'false' && !cancelled()
     runs-on: windows-latest
+    timeout-minutes: 45
     defaults:
       run:
         shell: bash
@@ -316,7 +329,7 @@ jobs:
           PROV="$(node scripts/stage-provider.mjs)" || exit 1
           echo "provider: $PROV"
           CLODE_TJS="$PWD/tjs.exe" CLODE_PROVIDER_BIN="$PROV" \
-            node --test --test-concurrency=1 \
+            node --require ./test/file-watchdog-preload.cjs --test --test-concurrency=1 \
               test/node-shim-roundtrip.test.cjs \
               test/node-shim-agentic.test.cjs \
               test/node-shim-fs-stat-identity.test.cjs \
@@ -358,6 +371,7 @@ jobs:
     # must not silently skip this too).
     if: needs.changes.outputs.code != 'false' && !cancelled()
     runs-on: windows-latest
+    timeout-minutes: 45
     defaults:
       run:
         shell: bash
@@ -390,7 +404,7 @@ jobs:
           echo "provider: $PROV"
           chmod +x ./tjs.exe || true
           CLODE_TJS="$PWD/tjs.exe" CLODE_CLAUDE_BIN="$PROV" CLODE_LIVE_RENDER=1 \
-            node --test --test-concurrency=1 test/e2e-tui-tjs.test.cjs
+            node --require ./test/file-watchdog-preload.cjs --test --test-concurrency=1 test/e2e-tui-tjs.test.cjs
       - name: Characterize the node-shim TTY input path under ConPTY (D2)
         run: |
           set -euo pipefail
@@ -401,7 +415,7 @@ jobs:
           # (already installed above) are all it needs. First CI TTY-input coverage
           # on any platform; a failure pinpoints a shim divergence from node.
           CLODE_TJS="$PWD/tjs.exe" \
-            node --test --test-concurrency=1 test/node-shim-tty.test.cjs
+            node --require ./test/file-watchdog-preload.cjs --test --test-concurrency=1 test/node-shim-tty.test.cjs
 
   # Windows shim + sync-primitive coverage on the ARM64 kernel — the same
   # rationale as windows-amd64-tests, exercised against the windows-arm64 leg's
@@ -425,6 +439,7 @@ jobs:
     # must not silently skip this too).
     if: needs.changes.outputs.code != 'false' && !cancelled()
     runs-on: windows-11-arm
+    timeout-minutes: 45
     defaults:
       run:
         shell: bash
@@ -462,7 +477,7 @@ jobs:
           PROV="$(node scripts/stage-provider.mjs)" || exit 1
           echo "provider: $PROV"
           CLODE_TJS="$PWD/tjs.exe" CLODE_PROVIDER_BIN="$PROV" \
-            node --test --test-concurrency=1 \
+            node --require ./test/file-watchdog-preload.cjs --test --test-concurrency=1 \
               test/node-shim-roundtrip.test.cjs \
               test/node-shim-agentic.test.cjs \
               test/node-shim-fs-stat-identity.test.cjs \
@@ -527,6 +542,7 @@ jobs:
     # must not silently skip this too).
     if: needs.changes.outputs.code != 'false' && !cancelled()
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     # LIKE-FOR-LIKE LIBC, ON PURPOSE — the reference node runs under musl because
     # the engine does.
     #
@@ -739,7 +755,7 @@ jobs:
           # without this line it would run on dev boxes only.
           FILES="$FILES test/engine-regexp-reuse.test.cjs"
           mkdir -p "$RUNNER_TEMP/cells"
-          node --test --test-concurrency=1 --test-reporter=spec --test-reporter-destination=stdout \
+          node --require ./test/file-watchdog-preload.cjs --test --test-concurrency=1 --test-reporter=spec --test-reporter-destination=stdout \
             --test-reporter=./test/cell-reporter.mjs --test-reporter-destination="$RUNNER_TEMP/cells/node-shim-oracle.jsonl" \
             $FILES 2>&1 | tee shim-oracle.out
           # A SKIPPED run of either newly-added file must be distinguishable from a
@@ -767,7 +783,7 @@ jobs:
           # curl, not busybox wget: the resolver asks for a byte RANGE, and busybox wget refuses
           # a 206 it did not ask for with its own -c (it dies "server returned error").
           apk add --no-cache curl
-          CLODE_BOOTSTRAP_ONLINE=1 node --test --test-concurrency=1 --test-reporter=spec \
+          CLODE_BOOTSTRAP_ONLINE=1 node --require ./test/file-watchdog-preload.cjs --test --test-concurrency=1 --test-reporter=spec \
             test/bootstrap-engine-online.test.cjs 2>&1 | tee bootstrap-online.out
           grep -qE '^(ℹ|#) skipped 0$' bootstrap-online.out \
             || { echo "ERROR: test/bootstrap-engine-online.test.cjs skipped a row, so it answered nothing" >&2; exit 1; }
@@ -776,7 +792,7 @@ jobs:
       # a test that never ran means the tool x mode cell ran nowhere, and this step names it (observability plan Task 1).
       - name: Cells — every tool x mode cell this job claims, it ran
         if: ${{ !cancelled() }}
-        run: CLODE_CELL_JOB=node-shim-oracle CLODE_CELL_RAN="$RUNNER_TEMP/cells" node --test --test-name-pattern=cells-ran-in-ci-job test/build-gates/tool-coverage-gates.test.cjs
+        run: CLODE_CELL_JOB=node-shim-oracle CLODE_CELL_RAN="$RUNNER_TEMP/cells" node --require ./test/file-watchdog-preload.cjs --test --test-name-pattern=cells-ran-in-ci-job test/build-gates/tool-coverage-gates.test.cjs
 
   # The BUILDER and the PACKAGED TARGETS — on glibc, on purpose.
   #
@@ -805,6 +821,7 @@ jobs:
     # must not silently skip this too).
     if: needs.changes.outputs.code != 'false' && !cancelled()
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     defaults:
       run:
         shell: bash
@@ -898,7 +915,7 @@ jobs:
           # emits the spec form even when piped.
           mkdir -p "$RUNNER_TEMP/cells"
           CLODE_PROVIDER_BIN="$PROV" CLODE_CLAUDE_BIN="$PROV" \
-            node --test --test-timeout=1200000 \
+            node --require ./test/file-watchdog-preload.cjs --test --test-timeout=1200000 \
               --test-reporter=spec --test-reporter-destination=stdout \
               --test-reporter=./test/cell-reporter.mjs --test-reporter-destination="$RUNNER_TEMP/cells/native-builder.jsonl" \
               test/clode-native.test.cjs 2>&1 | tee native.out
@@ -926,7 +943,7 @@ jobs:
           set -euo pipefail
           PROV="$(node scripts/stage-provider.mjs)" || exit 1
           CLODE_PROVIDER_BIN="$PROV" CLODE_CLAUDE_BIN="$PROV" \
-            node --test --test-timeout=1200000 test/oracle-binaries.test.cjs
+            node --require ./test/file-watchdog-preload.cjs --test --test-timeout=1200000 test/oracle-binaries.test.cjs
 
       # THE ORACLE PROPERTY the step above spends: naude is only a control for quaude
       # because it carries the bun-shim and NOT the node-shim. The gate for that reads a
@@ -938,7 +955,7 @@ jobs:
       - name: naude shim boundary — the bytes that make the oracle an oracle
         run: |
           set -euo pipefail
-          node --test test/naude-shim-boundary.test.cjs 2>&1 | tee boundary.out
+          node --require ./test/file-watchdog-preload.cjs --test test/naude-shim-boundary.test.cjs 2>&1 | tee boundary.out
           grep -qE '^(ℹ|#) skipped 0$' boundary.out \
             || { echo "ERROR: the naude shim-boundary gate SKIPPED — it found no built naude to inspect (see its skip message above)" >&2; exit 1; }
 
@@ -947,7 +964,7 @@ jobs:
       # a test that never ran means the tool x mode cell ran nowhere, and this step names it (observability plan Task 1).
       - name: Cells — every tool x mode cell this job claims, it ran
         if: ${{ !cancelled() }}
-        run: CLODE_CELL_JOB=native-builder-oracle CLODE_CELL_RAN="$RUNNER_TEMP/cells" node --test --test-name-pattern=cells-ran-in-ci-job test/build-gates/tool-coverage-gates.test.cjs
+        run: CLODE_CELL_JOB=native-builder-oracle CLODE_CELL_RAN="$RUNNER_TEMP/cells" node --require ./test/file-watchdog-preload.cjs --test --test-name-pattern=cells-ran-in-ci-job test/build-gates/tool-coverage-gates.test.cjs
 
       # REQUIRED-GATE MARKER (BACKLOG item 4 / phase 5 task 10). This job "sat as one red
       # among twenty-two" — it BUILDS THE PRODUCT (node-free, real provider) and is the
@@ -1057,6 +1074,7 @@ jobs:
     # must not silently skip this too).
     if: needs.changes.outputs.code != 'false' && !cancelled()
     runs-on: ubuntu-latest
+    timeout-minutes: 100
     defaults:
       run:
         shell: bash
@@ -1144,7 +1162,7 @@ jobs:
           echo "provider: $PROV"
           mkdir -p "$RUNNER_TEMP/cells"
           CLODE_PROVIDER_BIN="$PROV" CLODE_CLAUDE_BIN="$PROV" \
-            node --test --test-concurrency=1 \
+            node --require ./test/file-watchdog-preload.cjs --test --test-concurrency=1 \
               --test-reporter=spec --test-reporter-destination=stdout \
               --test-reporter=./test/cell-reporter.mjs --test-reporter-destination="$RUNNER_TEMP/cells/pty-build.jsonl" \
               test/quaude-build.test.cjs \
@@ -1169,7 +1187,7 @@ jobs:
       - name: fidelity/update-notify.pty — the auto-update NOTIFY surface
         env:
           CLODE_QUAUDE: ${{ runner.temp }}/quaude-notify/quaude
-        run: node --test --test-concurrency=1 test/fidelity/update-notify.pty.test.cjs
+        run: node --require ./test/file-watchdog-preload.cjs --test --test-concurrency=1 test/fidelity/update-notify.pty.test.cjs
       # THE SESSION GATES (CellSegmenter phase 5): four scripted multi-frame sessions
       # (test/fidelity/sessions.cjs: type-edit, resize, scroll, slash-menu), a frame per step
       # taken once output settles, compared cell for cell. Three `node --test` runs, one file
@@ -1211,7 +1229,7 @@ jobs:
           for f in test/fidelity/session-determinism.test.cjs \
                    test/fidelity/interactive-session-diff.test.cjs \
                    test/fidelity/reset-invisibility.test.cjs; do
-            node --test --test-concurrency=1 "$f" 2>&1 | tee -a session-gates.out
+            node --require ./test/file-watchdog-preload.cjs --test --test-concurrency=1 "$f" 2>&1 | tee -a session-gates.out
           done
           SUMMARIES=$(grep -cE '^[^ ]+ skipped [0-9]+$' session-gates.out || true)
           SKIPPED=$(sed -nE 's/^[^ ]+ skipped ([0-9]+)$/\1/p' session-gates.out | awk '{ n += $1 } END { print n + 0 }')
@@ -1250,7 +1268,7 @@ jobs:
         run: |
           set -euo pipefail
           CLODE_PROVIDER_BIN="$CLODE_NATIVE_ORACLE" \
-            node --test --test-concurrency=1 \
+            node --require ./test/file-watchdog-preload.cjs --test --test-concurrency=1 \
               test/native-oracle.test.cjs \
               test/unicode-data-fresh.test.cjs \
               test/unicode-text.test.cjs \
@@ -1333,7 +1351,7 @@ jobs:
           echo "native: $NATIVE ($V)"
           mkdir -p "$RUNNER_TEMP/cells"
           CLODE_PROVIDER_BIN="$NATIVE" CLODE_CLAUDE_BIN="$NATIVE" \
-            node --test --test-concurrency=1 \
+            node --require ./test/file-watchdog-preload.cjs --test --test-concurrency=1 \
               --test-reporter=spec --test-reporter-destination=stdout \
               --test-reporter=./test/cell-reporter.mjs --test-reporter-destination="$RUNNER_TEMP/cells/pty-rg.jsonl" \
               test/fidelity/rg-differential.test.cjs \
@@ -1362,7 +1380,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/cells"
           PROV="$(node scripts/stage-provider.mjs)" || exit 1
           CLODE_PROVIDER_BIN="$PROV" CLODE_CLAUDE_BIN="$PROV" \
-            node --test --test-concurrency=1 \
+            node --require ./test/file-watchdog-preload.cjs --test --test-concurrency=1 \
               --test-reporter=spec --test-reporter-destination=stdout \
               --test-reporter=./test/cell-reporter.mjs --test-reporter-destination="$RUNNER_TEMP/cells/pty-sandbox.jsonl" \
               test/fidelity/agentic-sandbox-fail-closed.test.cjs 2>&1 | tee sandbox.out
@@ -1373,7 +1391,7 @@ jobs:
       # a test that never ran means the tool x mode cell ran nowhere, and this step names it (observability plan Task 1).
       - name: Cells — every tool x mode cell this job claims, it ran
         if: ${{ !cancelled() }}
-        run: CLODE_CELL_JOB=linux-x64-pty CLODE_CELL_RAN="$RUNNER_TEMP/cells" node --test --test-name-pattern=cells-ran-in-ci-job test/build-gates/tool-coverage-gates.test.cjs
+        run: CLODE_CELL_JOB=linux-x64-pty CLODE_CELL_RAN="$RUNNER_TEMP/cells" node --require ./test/file-watchdog-preload.cjs --test --test-name-pattern=cells-ran-in-ci-job test/build-gates/tool-coverage-gates.test.cjs
 
   # node-shim oracle on DARWIN — the same node-vs-tjs behavioral diff as
   # node-shim-oracle above, but on macOS against a real darwin tjs.
@@ -1400,6 +1418,7 @@ jobs:
     # must not silently skip this too).
     if: needs.changes.outputs.code != 'false' && !cancelled()
     runs-on: macos-latest
+    timeout-minutes: 45
     defaults:
       run:
         shell: bash
@@ -1475,7 +1494,7 @@ jobs:
           # Task 8 made for shim-surface/guard-subcommands-gate.
           FILES="$FILES test/credential-store-attempted.test.cjs"
           mkdir -p "$RUNNER_TEMP/cells"
-          node --test --test-concurrency=1 --test-reporter=spec --test-reporter-destination=stdout \
+          node --require ./test/file-watchdog-preload.cjs --test --test-concurrency=1 --test-reporter=spec --test-reporter-destination=stdout \
             --test-reporter=./test/cell-reporter.mjs --test-reporter-destination="$RUNNER_TEMP/cells/node-shim-oracle-darwin.jsonl" \
             $FILES 2>&1 | tee darwin-oracle.out
           # A SKIPPED run of the newly-added file must be distinguishable from a clean
@@ -1501,7 +1520,7 @@ jobs:
       # a test that never ran means the tool x mode cell ran nowhere, and this step names it (observability plan Task 1).
       - name: Cells — every tool x mode cell this job claims, it ran
         if: ${{ !cancelled() }}
-        run: CLODE_CELL_JOB=node-shim-oracle-darwin CLODE_CELL_RAN="$RUNNER_TEMP/cells" node --test --test-name-pattern=cells-ran-in-ci-job test/build-gates/tool-coverage-gates.test.cjs
+        run: CLODE_CELL_JOB=node-shim-oracle-darwin CLODE_CELL_RAN="$RUNNER_TEMP/cells" node --require ./test/file-watchdog-preload.cjs --test --test-name-pattern=cells-ran-in-ci-job test/build-gates/tool-coverage-gates.test.cjs
 
       # ITEM 5 (BACKLOG / phase 5 task 10): "No CI leg builds against more than one
       # platform's graph. That is why a merger corruption that broke linux shipped green

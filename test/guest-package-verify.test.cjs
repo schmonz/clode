@@ -35,8 +35,9 @@ function runWith(stubs, pkgs, runtimeTools = '') {
   const script = path.join(dir, 'verify.sh');
   fs.writeFileSync(script, `set -e\nPKGS="${pkgs}"\nGUEST_RUNTIME_TOOLS="${runtimeTools}"\n${verifyBlock()}\necho REACHED_THE_BUILD\n`);
   // /usr/bin:/bin for sed/printf only; none of the stubbed tool names live there on a
-  // dev box or runner that matters (and if one did, the stub dir is FIRST).
-  return spawnSync('/bin/sh', [script], { encoding: 'utf8', env: { PATH: `${bin}:/usr/bin:/bin` } });
+  // dev box or runner that matters (and if one did, the stub dir is FIRST). HOME is this throwaway directory: an env
+  // built from nothing with no HOME makes anything that asks for it get the REAL home from the OS (suite-home-hermetic).
+  return spawnSync('/bin/sh', [script], { encoding: 'utf8', env: { PATH: `${bin}:/usr/bin:/bin`, HOME: dir } });
 }
 
 const OK = 'echo "$0 1.0"';

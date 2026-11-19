@@ -42,6 +42,7 @@ jobs:
     # any target whose engine artifact is absent.
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
+    timeout-minutes: 30   # backstop; see ci.yml's PER-JOB timeout-minutes note
     defaults:
       run:
         shell: bash

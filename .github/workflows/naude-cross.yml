@@ -31,6 +31,7 @@ jobs:
   # construction; the `run` job below is what actually proves it boots.
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 45   # backstop; see ci.yml's PER-JOB timeout-minutes note
     defaults:
       run:
         shell: bash
@@ -77,6 +78,7 @@ jobs:
   run:
     needs: build
     runs-on: macos-26
+    timeout-minutes: 45   # backstop; see ci.yml's PER-JOB timeout-minutes note
     defaults:
       run:
         shell: bash
@@ -99,6 +101,7 @@ jobs:
   # rcodesign (signer). Attest-only here; run-x64 boots it on an Intel target.
   build-arm64:
     runs-on: ubuntu-26.04-arm
+    timeout-minutes: 45   # backstop; see ci.yml's PER-JOB timeout-minutes note
     defaults:
       run:
         shell: bash
@@ -144,6 +147,7 @@ jobs:
   run-x64:
     needs: build-arm64
     runs-on: macos-26
+    timeout-minutes: 45   # backstop; see ci.yml's PER-JOB timeout-minutes note
     defaults:
       run:
         shell: bash
@@ -168,6 +172,7 @@ jobs:
   # actual boot proof.
   build-win-x64:
     runs-on: ubuntu-latest
+    timeout-minutes: 45   # backstop; see ci.yml's PER-JOB timeout-minutes note
     defaults:
       run:
         shell: bash
@@ -217,6 +222,7 @@ jobs:
   run-win-x64:
     needs: build-win-x64
     runs-on: windows-latest
+    timeout-minutes: 45   # backstop; see ci.yml's PER-JOB timeout-minutes note
     defaults:
       run:
         shell: bash
@@ -237,6 +243,7 @@ jobs:
   # boots it on a real Windows-on-Arm runner.
   build-win-arm64:
     runs-on: ubuntu-latest
+    timeout-minutes: 45   # backstop; see ci.yml's PER-JOB timeout-minutes note
     defaults:
       run:
         shell: bash
@@ -281,6 +288,7 @@ jobs:
   run-win-arm64:
     needs: build-win-arm64
     runs-on: windows-11-arm
+    timeout-minutes: 45   # backstop; see ci.yml's PER-JOB timeout-minutes note
     defaults:
       run:
         shell: bash

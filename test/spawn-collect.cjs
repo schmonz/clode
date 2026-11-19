@@ -6,7 +6,7 @@
 // output collected by then can be missing its tail. node-shim-oracle (CI 44460009323) failed exactly so: exit code 0
 // from a handler that had printed 'resumed', and the collected stdout held only 'ready\n'. The same shape (collect,
 // then resolve on 'exit') sat in about twenty test files; they all use this now, and
-// test/build-gates/spawn-close-gate.test.cjs refuses the shape anywhere under test/.
+// test/spawn-close-gate.test.cjs refuses the shape anywhere under test/.
 //
 // spawnCollect(cmd, args, spawnOpts, { timeoutMs, onSpawn, spawn }) -> Promise<{ status, signal, stdout, stderr, error,
 // timedOut }>. A spawn failure resolves with `error` (and status null). At `timeoutMs` the child is SIGKILLed; if its

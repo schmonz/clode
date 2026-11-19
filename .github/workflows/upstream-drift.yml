@@ -33,6 +33,7 @@ permissions:
 jobs:
   anchors:
     runs-on: ubuntu-latest
+    timeout-minutes: 15   # backstop; see ci.yml's PER-JOB timeout-minutes note
     defaults:
       run:
         shell: bash
@@ -91,7 +92,7 @@ jobs:
           PROV: ${{ steps.anchors.outputs.provider }}
         run: |
           set -euo pipefail
-          CLODE_PROVIDER_BIN="$PROV" node --test --test-concurrency=1 \
+          CLODE_PROVIDER_BIN="$PROV" node --require ./test/file-watchdog-preload.cjs --test --test-concurrency=1 \
             test/bun-slice-ansi-arity.test.cjs \
             test/build-gates/text-probe-gates.test.cjs
 
@@ -112,7 +113,7 @@ jobs:
           PROV: ${{ steps.anchors.outputs.provider }}
         run: |
           set -euo pipefail
-          CLODE_PROVIDER_BIN="$PROV" node --test --test-concurrency=1 \
+          CLODE_PROVIDER_BIN="$PROV" node --require ./test/file-watchdog-preload.cjs --test --test-concurrency=1 \
             test/build-gates/shadow-writer-gates.test.cjs
 
       # THE rg DIFFERENTIAL'S ARGV MATRIX, against the same `next` bundle (the "grep and glob =
@@ -128,7 +129,7 @@ jobs:
           PROV: ${{ steps.anchors.outputs.provider }}
         run: |
           set -euo pipefail
-          CLODE_PROVIDER_BIN="$PROV" node --test --test-concurrency=1 \
+          CLODE_PROVIDER_BIN="$PROV" node --require ./test/file-watchdog-preload.cjs --test --test-concurrency=1 \
             test/build-gates/rg-probe-gates.test.cjs
 
       # THE CAPTURE-GROUP HEADROOM, against the same `next` bundle. QuickJS refuses a RegExp with
@@ -150,7 +151,7 @@ jobs:
           set -euo pipefail
           npm ci --prefix deps/claude 2>&1 | tail -3
           TJS="$(scripts/bootstrap-engine.sh || true)"
-          CLODE_PROVIDER_BIN="$PROV" CLODE_TJS="$TJS" node --test --test-concurrency=1 \
+          CLODE_PROVIDER_BIN="$PROV" CLODE_TJS="$TJS" node --require ./test/file-watchdog-preload.cjs --test --test-concurrency=1 \
             test/fidelity/regexp-capture-census.test.cjs
 
       # WHEN IT BREAKS, SAY WHAT UPSTREAM SAID. Twice now upstream has broken
