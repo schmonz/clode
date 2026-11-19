@@ -58,9 +58,6 @@ test/shim-differential/table.cjs UNCOVERED.
 - DIFF-WRITESTREAM-THROWS: `fs.createWriteStream` on a directory or a missing parent throws at once; node returns
   the stream and emits 'error'.
 - DIFF-WRITESTREAM-FD: `fs.createWriteStream(p, {fd})` ignores the fd and writes to the path.
-- DIFF-MKDIR-RECURSIVE: `mkdirSync(p, {recursive: true, mode})` ignores the mode (0755 where node makes 0700),
-  returns undefined where node returns the first directory it made, and succeeds on a path that is a regular file
-  where node throws EEXIST.
 - DIFF-ASYNC-ERRORS: errors from tjs's async calls (fs.promises.readFile, link, utimes, lutimes, statfs; the
   callback readFile; a read stream's 'error') carry no errno, syscall or path, and their message lacks node's
   `, read`/`, link 'a' -> 'b'` tail.

@@ -12,7 +12,6 @@ const E = '^r\\.error\\.';   // any field of a thrown error
 const CAUSES = [
   { cause: 'DIFF-WRITESTREAM-THROWS', api: '^fs\\.createWriteStream$', leaf: '^r\\.(end|error\\.)' },
   { cause: 'DIFF-WRITESTREAM-FD', api: '^fs\\.createWriteStream$', id: 'fd:fd:', leaf: '^after\\.' },
-  { cause: 'DIFF-MKDIR-RECURSIVE', api: '^fs(/promises)?\\.(mkdirSync|mkdir)$' },
   { cause: 'DIFF-ASYNC-ERRORS', api: '^fs(/promises)?\\.(readFile|link|utimes|lutimes|statfs)$', leaf: E },
   { cause: 'DIFF-ASYNC-ERRORS', api: '^fs\\.createReadStream$', leaf: '^r\\.end\\.error\\.' },
   { cause: 'DIFF-SCANDIR', api: '^fs(/promises)?\\.(readdirSync|readdir|opendir)$', leaf: '^r\\.error\\.(message|syscall)$' },

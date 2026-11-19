@@ -462,22 +462,39 @@ function writeFileSync(p, data, opts) {
   try { writeAll(fd, bytes, null); } finally { FSS.close(fd); }
 }
 
+// node's mkdir: `{ recursive: true }` makes each missing directory WITH the mode (the kernel applies the
+// umask), returns the first directory it made (undefined when none), and refuses a path that exists as
+// something else (EEXIST) or runs through a file (ENOTDIR). Until 2026-11-19 the recursive form made
+// every directory 0777-minus-umask whatever the caller asked (0755 for a 0o700 ~/.claude subdirectory),
+// returned undefined, and passed silently over a regular file (test/node-shim-differential.test.cjs,
+// DIFF-MKDIR-RECURSIVE).
 function mkdirSync(p, opts) {
-  if (opts?.recursive) {
+  const o = typeof opts === 'number' ? { mode: opts } : (opts || {});
+  const mode = o.mode ?? 0o777;
+  if (o.recursive) {
     const abs = path.resolve(p);
     const isWin = (globalThis.process && process.platform === 'win32');
     const sep = isWin ? '\\' : '/';
-    const segs = abs.split(/[\\/]/);
-    // First segment is the root: '' (posix/rooted) or a drive like 'C:' (win).
-    let cur = segs.shift() || '';
-    for (const part of segs) {
-      if (!part) continue;
-      cur += sep + part;
-      try { FSS.mkdir(cur, 0o777); } catch (e) { if (e.code !== 'EEXIST') throw e; }
+    const segs = abs.split(/[\\/]/).filter(Boolean);
+    // The root: '' (posix/rooted) or a drive like 'C:' (win).
+    let cur = /^[\\/]/.test(abs) ? '' : segs.shift();
+    let first;
+    for (let i = 0; i < segs.length; i++) {
+      cur += sep + segs[i];
+      try {
+        FSS.mkdir(cur, mode);
+        if (first === undefined) first = cur;
+      } catch (e) {
+        if (e.code !== 'EEXIST') throw e;
+        let dir = false;
+        try { dir = typeIs(FSS.stat(cur).mode, 'dir'); } catch { /* a dangling link: not a directory */ }
+        if (!dir) throw sysError(i === segs.length - 1 ? 'EEXIST' : 'ENOTDIR', 'mkdir', p);
+      }
     }
-    return;
+    return first;
   }
-  FSS.mkdir(p, opts?.mode ?? 0o777);
+  FSS.mkdir(p, mode);
+  return undefined;
 }
 
 function readSync(fd, buf, offset, length, position) {
