@@ -902,6 +902,10 @@ jobs:
     # must not silently skip this too).
     if: needs.changes.outputs.code != 'false' && !cancelled()
     runs-on: ubuntu-latest
+    # 45 is NOT above test/clode-native.test.cjs's own limits (its 80-minute watchdog OVERRIDES entry sums two
+    # 30-minute wall ceilings sized for a starved dev box). CI relies on the measured builds instead: this whole job
+    # took 285-472 s over the 10 green ci.yml runs before 2026-11-19 (gh api run jobs), so 45 is about 6x its
+    # longest. Here the job timeout, not the watchdog, is the backstop that fires first, and it names the job.
     timeout-minutes: 45
     defaults:
       run:
