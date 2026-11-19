@@ -33,6 +33,7 @@ permissions:
 jobs:
   anchors:
     runs-on: ubuntu-latest
+    timeout-minutes: 15   # backstop; see ci.yml's PER-JOB timeout-minutes note
     defaults:
       run:
         shell: bash

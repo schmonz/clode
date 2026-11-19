@@ -1,15 +1,27 @@
 'use strict';
-// file-watchdog-sleeper.cjs <pid> <limitMs> <file> — the out-of-process half of test/file-watchdog.cjs.
+// file-watchdog-sleeper.cjs <pid> <limitMs> <file> — the out-of-process half of test/file-watchdog.cjs. It needs the
+// IPC channel test/file-watchdog.cjs's arm() opens: run any other way, it never kills anything.
 //
-// Started by the preload with the test file's pid. It waits. If the file is still alive at the limit, it snapshots the
+// Started by the preload with the test file's pid. It waits. If the file is still there at the limit, it snapshots the
 // file's process tree, writes the named message to the stderr it inherited from the file, and kills the tree. It exits
 // the moment the file does: on 'disconnect' (the IPC channel closes when the file's process ends, however it ends) and,
-// as a second check, when a poll finds the pid gone. It never outlives the file by more than one poll.
+// as a second check, on a poll of process.connected.
 //
-// THE TREE. On POSIX, every descendant the process table shows by parent pid (`ps`), taken BEFORE anything is killed,
-// so a child orphaned by the file's death is still in it. On Windows there is no ps and no process group, and
-// `taskkill /T` is the platform's own tree kill (written reason for the one per-platform branch: a platform fact, not
-// a preference).
+// WHY THE CHANNEL AND NOT THE PID (review, round 6). "Is the file still there?" is asked of the IPC channel, never of
+// the pid: a pid can be reused once its process is gone, and a sleeper that believed a reused pid would kill a
+// stranger. The channel belongs to exactly the file's process and closes with it.
+//
+// THE TREE, one implementation everywhere: the process table as [pid, parent pid] rows, taken BEFORE anything is
+// killed (so a child the file's death orphans is still in it), every transitive descendant of the file, minus this
+// sleeper (it is the file's child too: killing itself first spared the planted grandchild, measured), each killed with
+// process.kill (SIGKILL on POSIX, TerminateProcess on Windows). The sleeper kills itself last, by exiting. Only the
+// SOURCE of the rows differs by platform, a platform fact: `ps` on POSIX; on Windows, which has no ps, the CIM process
+// table through PowerShell. (`taskkill /T` was rejected: it kills the sleeper with the tree, before the sleeper can
+// report what survived.)
+//
+// UNMEASURED ON WINDOWS: the CIM row source, and the kill order on a real Windows tree, have not run there. They are
+// measured when windows-latest runs test/file-watchdog.test.cjs's CONTROL green (the sync hang's grandchild must be
+// gone afterwards). Until then this is a claim, not a result.
 const { spawnSync } = require('node:child_process');
 
 const POLL_MS = 1000;
@@ -29,27 +41,28 @@ function descendants(rows, root) {
   return [...tree];
 }
 
-function psRows() {
-  const r = spawnSync('ps', ['-A', '-o', 'pid=,ppid='], { encoding: 'utf8', timeout: 10000 });
-  if (r.status !== 0 || !r.stdout) return [];
-  return r.stdout.split('\n').map((l) => l.trim().split(/\s+/).map(Number)).filter((x) => x.length === 2 && x.every(Number.isInteger));
+function parseRows(text) {
+  return text.split(/\r?\n/).map((l) => l.trim().split(/\s+/).map(Number)).filter((x) => x.length === 2 && x.every(Number.isInteger));
 }
 
-// Kills root and everything under it; returns the pids still alive after.
-function killTree(root, { platform = process.platform } = {}) {
-  if (platform === 'win32') {
-    spawnSync('taskkill', ['/PID', String(root), '/T', '/F'], { stdio: 'ignore', windowsHide: true, timeout: 30000 });
-    return alive(root) ? [root] : [];
-  }
-  // Not this sleeper: it is the file's child too, and killing itself first would spare the rest (measured: the
-  // planted grandchild survived exactly so).
-  const tree = descendants(psRows(), root).filter((p) => p !== process.pid);
-  for (const pid of [root, ...tree]) { try { process.kill(pid, 'SIGKILL'); } catch { /* gone */ } }
+function processRows({ platform = process.platform, run = spawnSync } = {}) {
+  const r = platform === 'win32'
+    ? run('powershell', ['-NoProfile', '-NonInteractive', '-Command',
+      'Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId) $($_.ParentProcessId)" }'],
+    { encoding: 'utf8', timeout: 30000, windowsHide: true })
+    : run('ps', ['-A', '-o', 'pid=,ppid='], { encoding: 'utf8', timeout: 10000 });
+  return r && r.status === 0 && r.stdout ? parseRows(r.stdout) : [];
+}
+
+// Kills root and everything under it except this sleeper; returns the pids still alive after.
+function killTree(root, { rows = processRows(), self = process.pid, kill = (pid) => process.kill(pid, 'SIGKILL'),
+  isAlive = alive, waitMs = 5000 } = {}) {
+  const tree = [root, ...descendants(rows, root).filter((p) => p !== self)];
+  for (const pid of tree) { try { kill(pid); } catch { /* gone */ } }
   const t0 = Date.now();
-  let left = [root, ...tree];
-  while (left.length && Date.now() - t0 < 5000) {
-    left = left.filter(alive);
-    if (left.length) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+  let left = tree;
+  while ((left = left.filter(isAlive)).length && Date.now() - t0 < waitMs) {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
   }
   return left;
 }
@@ -59,9 +72,9 @@ function main([pidS, msS, file]) {
   const { message } = require('./file-watchdog.cjs');
   const done = () => process.exit(0);
   process.on('disconnect', done);
-  setInterval(() => { if (!alive(pid)) done(); }, POLL_MS);
+  setInterval(() => { if (!process.connected) done(); }, POLL_MS);
   setTimeout(() => {
-    if (!alive(pid)) done();
+    if (!process.connected) done();
     process.stderr.write(message(file, ms, []));
     const survivors = killTree(pid);
     if (survivors.length) process.stderr.write(message(file, ms, survivors));
@@ -70,4 +83,4 @@ function main([pidS, msS, file]) {
 }
 
 if (require.main === module) main(process.argv.slice(2));
-module.exports = { descendants, killTree, alive };
+module.exports = { descendants, killTree, alive, parseRows, processRows };

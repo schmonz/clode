@@ -14,7 +14,7 @@
 // file's pid and its limit. At the limit the sleeper writes the named message to the stderr it inherited from the file
 // (which node --test is reading) and kills the file and every process under it. It exits as soon as the file does:
 // the IPC channel between them closes when the file's process ends, however it ends, and the sleeper also polls the
-// pid. So a normal run leaves no sleeper behind, and a sleeper never outlives its file by more than one poll.
+// channel (never the pid, which can be reused). So a normal run leaves no sleeper behind.
 //
 // HOW IT IS LOADED. test/run.mjs and every CI step run `node --require test/file-watchdog-preload.cjs --test ...`.
 // node --test hands its own --require to each per-file process (measured: the file's execArgv carries it, a process the

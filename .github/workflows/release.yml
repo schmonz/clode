@@ -277,6 +277,7 @@ jobs:
     needs: [leg, darwin-slices]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
+    timeout-minutes: 30   # backstop; see ci.yml's PER-JOB timeout-minutes note
     defaults:
       run:
         shell: bash
@@ -357,6 +358,7 @@ jobs:
     needs: [leg, darwin-slices, darwin-universal, templates-pack, suite, be-bytecode-oracle]
     if: github.ref_type == 'tag' || inputs.release == 'draft'
     runs-on: ubuntu-latest
+    timeout-minutes: 30   # backstop; see ci.yml's PER-JOB timeout-minutes note
     permissions:
       contents: write
     steps:

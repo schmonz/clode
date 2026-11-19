@@ -132,9 +132,11 @@ function scanWorkflows(workflows) {
   }
   return { findings, examined };
 }
-// THE BACKSTOP: every job in ci.yml carries timeout-minutes, or calls a reusable workflow whose every job does
-// (GitHub refuses timeout-minutes on a job that calls one). Jobs are the two-space keys under `jobs:`; a job's own
-// keys are at four spaces.
+// THE BACKSTOP: every job of EVERY workflow under .github/workflows carries timeout-minutes, or calls a reusable
+// workflow in this repo (GitHub refuses timeout-minutes on a job that calls one), whose own jobs this same scan covers
+// because it reads every workflow. Jobs are the two-space keys under `jobs:`; a job's own keys are at four spaces.
+// EXEMPT names a job that truly cannot carry one, with the reason; it is empty, and should stay so.
+const EXEMPT = {};
 function jobsOf(text) {
   const lines = text.split('\n');
   const at = lines.findIndex((l) => /^jobs:/.test(l));
@@ -148,27 +150,29 @@ function jobsOf(text) {
     if (m) { cur = { name: m[1], line: i + 1, timeout: false, uses: null }; jobs.push(cur); continue; }
     if (!cur) continue;
     if (/^    timeout-minutes:\s*\S/.test(l)) cur.timeout = true;
-    const u = /^    uses:\s*\.\/(\.github\/workflows\/[\w.-]+\.ya?ml)/.exec(l);
+    const u = /^    uses:\s*(\S+)/.exec(l);
     if (u) cur.uses = u[1];
   }
   return jobs;
 }
 const CI = '.github/workflows/ci.yml';
-function scanJobTimeouts(workflows) {
-  const byRel = new Map(workflows.map((w) => [w.rel, w.text]));
+function scanJobTimeouts(workflows, exempt = EXEMPT) {
+  const wfs = workflows.filter((w) => w.rel.startsWith('.github/workflows/'));
+  const rels = new Set(wfs.map((w) => w.rel));
   const findings = [];
   let examined = 0;
-  if (!byRel.has(CI)) return { findings: [`${CI} was not read`], examined };
-  for (const job of jobsOf(byRel.get(CI))) {
-    examined++;
-    if (job.uses) {
-      const called = byRel.get(job.uses);
-      if (called === undefined) { findings.push(`${CI}:${job.line}: job ${job.name} calls ${job.uses}, which was not read`); continue; }
-      for (const j of jobsOf(called)) {
-        examined++;
-        if (!j.timeout) findings.push(`${job.uses}:${j.line}: job ${j.name} (called by ci.yml's ${job.name}) has no timeout-minutes`);
-      }
-    } else if (!job.timeout) findings.push(`${CI}:${job.line}: job ${job.name} has no timeout-minutes (GitHub's default is 6 hours)`);
+  if (!rels.has(CI)) findings.push(`${CI} was not read: the workflows were not scanned`);
+  for (const { rel, text } of wfs) {
+    for (const job of jobsOf(text)) {
+      examined++;
+      const key = `${rel}#${job.name}`;
+      if (exempt[key]) continue;
+      if (job.uses) {
+        const local = /^\.\/(\.github\/workflows\/[\w.-]+\.ya?ml)$/.exec(job.uses);
+        if (!local) findings.push(`${rel}:${job.line}: job ${job.name} calls ${job.uses}, outside this repo: its jobs' timeouts cannot be checked`);
+        else if (!rels.has(local[1])) findings.push(`${rel}:${job.line}: job ${job.name} calls ${local[1]}, which was not read`);
+      } else if (!job.timeout) findings.push(`${rel}:${job.line}: job ${job.name} has no timeout-minutes (GitHub's default is 6 hours)`);
+    }
   }
   return { findings, examined };
 }
@@ -232,13 +236,40 @@ test('the workflow rule: exactly --test, after node and its flags; the preload a
   assert.ok(readWorkflows().length > 3, 'the workflows were read');
 });
 
-test('the job rule: timeout-minutes on each ci.yml job, or on every job of the workflow it calls', () => {
+test('the job rule: timeout-minutes on every job of every workflow, or a call to a workflow this scan reads', () => {
   const ci = (body) => ({ rel: CI, text: `on: push\njobs:\n${body}` });
   assert.deepStrictEqual(scanJobTimeouts([ci('  a:\n    runs-on: x\n    timeout-minutes: 45\n    steps: []\n')]).findings, []);
   assert.match(scanJobTimeouts([ci('  a:\n    runs-on: x\n    steps:\n      - run: echo\n        timeout-minutes: 5\n')]).findings[0],
     /job a has no timeout-minutes/, "a STEP timeout is not the job's");
   const called = { rel: '.github/workflows/s.yml', text: 'on: workflow_call\njobs:\n  s:\n    runs-on: x\n' };
-  assert.match(scanJobTimeouts([ci('  t:\n    uses: ./.github/workflows/s.yml\n'), called]).findings[0], /s\.yml:3: job s \(called by ci\.yml's t\)/);
+  assert.match(scanJobTimeouts([ci('  t:\n    uses: ./.github/workflows/s.yml\n'), called]).findings[0], /s\.yml:3: job s has no timeout-minutes/);
+  assert.match(scanJobTimeouts([ci('  t:\n    uses: ./.github/workflows/gone.yml\n')]).findings[0], /calls \.github\/workflows\/gone\.yml, which was not read/);
+  assert.deepStrictEqual(scanJobTimeouts([ci('  a:\n    runs-on: x\n')], { '.github/workflows/ci.yml#a': 'a reason' }).findings, [], 'a named exemption');
+  const other = { rel: '.github/workflows/other.yml', text: 'on: push\njobs:\n  o:\n    runs-on: x\n' };
+  assert.match(scanJobTimeouts([ci('  a:\n    runs-on: x\n    timeout-minutes: 9\n'), other]).findings[0], /other\.yml:3: job o has no timeout-minutes/, 'every workflow, not only ci.yml');
   const ok = { ...called, text: called.text + '    timeout-minutes: 90\n' };
   assert.deepStrictEqual(scanJobTimeouts([ci('  t:\n    uses: ./.github/workflows/s.yml\n'), ok]).findings, []);
+});
+
+test('the sleeper kills the file first, then its descendants, never itself; Windows reads the CIM table', () => {
+  const { killTree, processRows, parseRows } = require('./file-watchdog-sleeper.cjs');
+  const killed = [];
+  const rows = [[10, 1], [20, 10], [21, 20], [30, 10], [99, 5]];
+  const left = killTree(10, { rows, self: 30, kill: (p) => killed.push(p), isAlive: () => false });
+  assert.deepStrictEqual(killed, [10, 20, 21], 'root first, the sleeper (30) spared, a stranger (99) untouched');
+  assert.deepStrictEqual(left, []);
+  assert.deepStrictEqual(killTree(10, { rows, self: 30, kill: () => {}, isAlive: (p) => p === 21, waitMs: 0 }), [21], 'a survivor is reported');
+  let call = null;
+  processRows({ platform: 'win32', run: (cmd, args) => { call = { cmd, args }; return { status: 0, stdout: '10 1\r\n20 10\r\n' }; } });
+  assert.strictEqual(call.cmd, 'powershell');
+  assert.match(call.args.join(' '), /Get-CimInstance Win32_Process/);
+  assert.deepStrictEqual(parseRows('10 1\r\n20 10\r\n'), [[10, 1], [20, 10]]);
+  assert.deepStrictEqual(processRows({ platform: 'darwin', run: () => ({ status: 1, stdout: '' }) }), [], 'no table: only the file itself');
+});
+
+test('the sleeper asks the IPC channel, never the pid, whether its file is still there', () => {
+  const src = fs.readFileSync(require.resolve('./file-watchdog-sleeper.cjs'), 'utf8');
+  const main = src.slice(src.indexOf('function main('), src.indexOf('if (require.main'));
+  assert.match(main, /process\.connected/);
+  assert.doesNotMatch(main, /alive\(pid\)/, 'a reused pid would make the sleeper kill a stranger');
 });

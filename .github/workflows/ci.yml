@@ -51,7 +51,7 @@ jobs:
   # test / suite 4), and never under 45 for a job that runs node --test, so the watchdog's 30-minute per-file limit
   # always fires first and NAMES the file. suite.yml's job runs files with 65-minute overrides: 90. A job that calls
   # a reusable workflow (tjs, tjs-slow, test) takes its timeouts from that workflow's jobs. test/file-watchdog.test.cjs
-  # refuses a ci.yml job, or a job of a workflow it calls, without one.
+  # refuses a job without one in ANY workflow under .github/workflows.
   # Derives whether this push touched anything but docs, so the heavy `tjs`
   # matrix (and everything that consumes its artifacts) can skip on a
   # docs-only push without losing signal on a real one. concurrency.group
