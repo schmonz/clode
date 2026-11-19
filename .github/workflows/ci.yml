@@ -48,8 +48,11 @@ jobs:
   # three times the job's longest duration across the 15 most recent ci.yml runs (measured 2026-11-19, gh api run jobs:
   # changes and tjs-fast-plan 0 min, tjs-fast-smoke 8, windows-amd64-tests 2, windows-amd64-tui 2,
   # windows-arm64-tests 3, node-shim-oracle 4, native-builder-oracle 7, node-shim-oracle-darwin 7, linux-x64-pty 31,
-  # test / suite 4), and never under 45 for a job that runs node --test, so the watchdog's 30-minute per-file limit
-  # always fires first and NAMES the file. suite.yml's job runs files with 65-minute overrides: 90. A job that calls
+  # test / suite 4), and never under 45 for a job that runs node --test, so the watchdog's DEFAULT 30-minute per-file
+  # limit fires first and NAMES the file. A file with a longer OVERRIDES entry can outlast its job: suite.yml's job
+  # runs files with 65-minute overrides and gets 90; native-builder-oracle keeps 45 under clode-native's 80-minute
+  # override and relies on that job's measured 285-472 s instead (see its own comment), so there the JOB timeout fires
+  # first and names the job, not the file. A job that calls
   # a reusable workflow (tjs, tjs-slow, test) takes its timeouts from that workflow's jobs. test/file-watchdog.test.cjs
   # refuses a job without one in ANY workflow under .github/workflows.
   # Derives whether this push touched anything but docs, so the heavy `tjs`
