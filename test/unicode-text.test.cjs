@@ -14,6 +14,7 @@ const path = require('node:path');
 const { graphemeBoundaries, clusterWidth, codePointWidth, escapeLayer, forEachCell, cellSgr, oscLink, textWidth, stringWidth, sliceAnsi,
   wrapAnsi, UNICODE_DATA } = require('../libexec/unicode-text.cjs');
 const { ucdInput } = require('./ucd-input.cjs');
+const { census, rngBias, assertCensus, firstSighting, intRng } = require('./shape-census.cjs');
 const ucd = require('../scripts/lib/ucd.cjs');
 
 async function breakTest(t) {
@@ -1082,24 +1083,59 @@ test('WRAP-LINK: the OSC 8 link in force is closed at each row end and reopened 
 // character-by-character scan for introducers. Seeded, so the same strings every run. (Measured
 // 2026-09-26: a fast path that counted a sequence ended by an ESC alone as 0 wide broke it on
 // 40 of these 40,000 strings, where every unit test above and every text gate stayed green.)
+//
+// THE RNG AND THE CENSUS (observability Task 4). It drew `seed % n` from `seed * 1103515245`, which in JS rounds past
+// 2^53 into a 10,466-state cycle whose low bits cycle besides (rnd(8) picked the options): measured 2026-11-19, its
+// 40,000 draws were 1,647 distinct inputs, and only 6 of the 24 (options, other line) pairs were ever drawn. It draws from test/shape-census.cjs's intRng now, and the census below
+// proves the inputs are distinct and hold every shape the paragraph above names.
+const WRAP_ATOMS = ['a', 'b', 'c', 'x', ' ', ' ', ' ', '  ', '#', '1', 'longword', 'abcdefghij', '\x1b[1m', '\x1b[22m', '\x1b[31m',
+  '\x1b[39m', '\x1b[0m', '\x1b[m', '\x1b[4294967297m', '\x1b[1;31m', '\x1b[38;5;1m', '\x1b]8;;u\x1b\\', '\x1b]8;;\x1b\\',
+  '\x1b]8;id=1;v w\x1b\\', '\x1b ', '\x1b  ', '\x1b', '\x1b\x1b', '\x1b7', '\x1b[1', '\x1b[1 m', '\x1bPq\x1b\\', '\x1b_x',
+  '\x1b]0;t', '\x1b(B'];
+const WRAP_OTHERS = ['\n' + H(0xe9), '\n\x9b', '\r' + H(0x4e2d) + ' x'];
+const WRAP_OPTS = [];
+for (const hard of [false, true]) for (const trim of [true, false]) for (const wordWrap of [true, false]) WRAP_OPTS.push({ hard, trim, wordWrap });
+const WRAP_SEED = 12345, WRAP_N = 40000, WRAP_MAX_ATOMS = 12, WRAP_MAX_COLS = 14;
+function wrapInputs(rnd = intRng(WRAP_SEED)) {
+  const out = [];
+  for (let k = 0; k < WRAP_N; k++) {
+    const atoms = [];
+    for (let j = 1 + rnd(WRAP_MAX_ATOMS); j > 0; j--) atoms.push(rnd(WRAP_ATOMS.length));
+    const cols = 1 + rnd(WRAP_MAX_COLS), o = rnd(WRAP_OPTS.length), other = rnd(WRAP_OTHERS.length);
+    out.push({ atoms, s: atoms.map((i) => WRAP_ATOMS[i]).join(''), cols, o, other });
+  }
+  return out;
+}
 test('wrapAnsi: a line wraps the same whatever the other lines hold (the fast paths are the general one)', () => {
-  let seed = 12345;
-  const rnd = (n) => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed % n; };
-  const atoms = ['a', 'b', 'c', 'x', ' ', ' ', ' ', '  ', '#', '1', 'longword', 'abcdefghij', '\x1b[1m', '\x1b[22m', '\x1b[31m',
-    '\x1b[39m', '\x1b[0m', '\x1b[m', '\x1b[4294967297m', '\x1b[1;31m', '\x1b[38;5;1m', '\x1b]8;;u\x1b\\', '\x1b]8;;\x1b\\',
-    '\x1b]8;id=1;v w\x1b\\', '\x1b ', '\x1b  ', '\x1b', '\x1b\x1b', '\x1b7', '\x1b[1', '\x1b[1 m', '\x1bPq\x1b\\', '\x1b_x',
-    '\x1b]0;t', '\x1b(B'];
-  const others = ['\n' + H(0xe9), '\n\x9b', '\r' + H(0x4e2d) + ' x'];
-  const opts = [];
-  for (const hard of [false, true]) for (const trim of [true, false]) for (const wordWrap of [true, false]) opts.push({ hard, trim, wordWrap });
   let differ = 0, first = '';
-  for (let k = 0; k < 40000; k++) {
-    let s = '';
-    for (let j = 1 + rnd(12); j > 0; j--) s += atoms[rnd(atoms.length)];
-    const cols = 1 + rnd(14), o = opts[rnd(opts.length)], other = others[rnd(others.length)];
+  for (const { s, cols, o: oi, other: ki } of wrapInputs()) {
+    const o = WRAP_OPTS[oi], other = WRAP_OTHERS[ki];
     const together = wrapAnsi(s + other, cols, o);
     const apart = wrapAnsi(s, cols, o) + '\n' + wrapAnsi(other.slice(1), cols, o);
     if (together !== apart && differ++ === 0) first = JSON.stringify([s, cols, o, other, together, apart]);
   }
-  assert.strictEqual(differ, 0, `${differ} of 40000 strings wrap differently beside another line; first: ${first}`);
+  assert.strictEqual(differ, 0, `${differ} of ${WRAP_N} strings wrap differently beside another line; first: ${first}`);
+});
+test('wrapAnsi\'s fast-path property: distinct inputs, every option beside every other line, every escape shape, an unbiased RNG (census)', (t) => {
+  const ESC_ALONE = new Set(['\x1b ', '\x1b  ', '\x1b', '\x1b\x1b'].map((a) => WRAP_ATOMS.indexOf(a)));
+  const has = (x, a) => x.atoms.includes(WRAP_ATOMS.indexOf(a));
+  // Floors measured 2026-11-19 over the 40,000 intRng inputs: 39,467 distinct; each of the 24 (option, other line)
+  // pairs 1,583-1,741 (1,667 expected); ESC alone 20,112, OSC-8 12,186, unterminated CSI 6,692; a long word 7,067.
+  const shapes = [
+    { shape: 'a distinct input', min: 38000, has: firstSighting((x) => `${x.s}\u0000${x.cols}\u0000${x.o}\u0000${x.other}`),
+      why: 'nearly all of 40,000 (39,467 measured); the float-rounded LCG gave 1,647' },
+    ...WRAP_OPTS.flatMap((o, oi) => WRAP_OTHERS.map((_, ki) => ({ shape: `options ${JSON.stringify(o)} beside other line ${ki}`, min: 800,
+      has: (x) => x.o === oi && x.other === ki, why: 'half of the 1,667 each pair expects (the float-rounded LCG drew 6 of the 24 pairs at all)' }))),
+    { shape: 'a sequence ended by an ESC alone', min: 1000, has: (x) => x.atoms.some((i) => ESC_ALONE.has(i)),
+      why: 'the 2026-09-26 defect: such sequences broke 40 of 40,000; a twentieth of the 20,112 measured' },
+    { shape: 'an OSC-8 link', min: 1000, has: (x) => has(x, '\x1b]8;;u\x1b\\') || has(x, '\x1b]8;id=1;v w\x1b\\'), why: 'a twelfth of the 12,186 measured' },
+    { shape: 'an unterminated CSI', min: 500, has: (x) => has(x, '\x1b[1'), why: 'a thirteenth of the 6,692 measured' },
+    { shape: 'a word longer than its column count', min: 5000, has: (x) => (has(x, 'longword') && x.cols < 8) || (has(x, 'abcdefghij') && x.cols < 10),
+      why: 'hard and soft wrapping split it; under three quarters of the 7,067 measured' },
+  ];
+  const inputs = census('wrapAnsi fast-path inputs', shapes, wrapInputs());
+  const moduli = [WRAP_MAX_ATOMS, WRAP_ATOMS.length, WRAP_MAX_COLS, WRAP_OPTS.length, WRAP_OTHERS.length];
+  const bias = rngBias('wrapAnsi fast-path RNG', () => intRng(WRAP_SEED), moduli);
+  for (const r of [inputs, bias]) t.diagnostic(r.summary);
+  assertCensus(assert, inputs, bias);
 });
