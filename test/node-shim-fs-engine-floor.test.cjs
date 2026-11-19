@@ -138,3 +138,24 @@ test('CLODE_ENGINE_FLOOR_LOG records every refusal a program swallowed, and the 
     assert.match(text, /at floorError/, 'each with its stack');
   } finally { fs.rmSync(base, { recursive: true, force: true }); }
 });
+
+// The floor report needs node-shim's writer. An engine with __tjs_fs_sync but no __nodeShim.engineFloorLog used to
+// drop rg-native's report SILENTLY; it now says so once, on stderr, as a finding.
+const NO_WRITER = `${PRELUDE}
+const rg = require(process.argv[2]);
+if (globalThis.__nodeShim) globalThis.__nodeShim = Object.assign({}, globalThis.__nodeShim, { engineFloorLog: undefined });
+const e = Object.assign(new Error('x'), { code: 'ENOENT', errno: -2 });
+console.log(JSON.stringify([rg.osErrorText(e), rg.osErrorText(e)]));
+`;
+test('rg-native names a missing floor-log writer once on stderr, instead of dropping the report', async (t) => {
+  if (skipUnlessTjs(t)) return;
+  const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'shim-floor-nowriter-')));
+  try {
+    const prog = path.join(base, 'prog.cjs');
+    fs.writeFileSync(prog, NO_WRITER);
+    const r = runLoader(prog, [path.join(REPO, 'libexec/rg-native.cjs')], { timeout: 30000 });
+    assert.strictEqual(r.status, 0, `${r.stdout}${r.stderr}`);
+    const said = r.stderr.split('\n').filter((l) => l.startsWith('rg-native: FINDING: engine floor not logged'));
+    assert.strictEqual(said.length, 1, `once, not per call:\n${r.stderr}`);
+  } finally { fs.rmSync(base, { recursive: true, force: true }); }
+});

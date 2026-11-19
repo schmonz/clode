@@ -1057,6 +1057,7 @@ function sysErrorText(n) {
 }
 const errnoTable = () => { const os = require('os'); return (os.constants && os.constants.errno) || {}; };
 const capital = (t) => t[0].toUpperCase() + t.slice(1);
+let floorLogMissingSaid = false;
 function osErrorText(e) {
   const code = e && e.code;
   // An errno libuv has no name for (EOPNOTSUPP on darwin: node says `Unknown system error -102`, tjs
@@ -1072,6 +1073,12 @@ function osErrorText(e) {
     // has one, and node, which has no engine floor, has none.
     const ns = globalThis.__nodeShim;
     if (ns && typeof ns.engineFloorLog === 'function') ns.engineFloorLog(`rg-native: this engine has no __tjs_fs_sync.strerror (txiki-strerror.patch); errno ${n} falls back to libuv's text`);
+    // An engine with no node-shim writer cannot be told about at all; say so ONCE, on stderr, as a finding, rather
+    // than dropping the floor report silently (final review, observability plan).
+    else if (!floorLogMissingSaid) {
+      floorLogMissingSaid = true;
+      try { process.stderr.write('rg-native: FINDING: engine floor not logged: the engine has __tjs_fs_sync but no __nodeShim.engineFloorLog, so its missing __tjs_fs_sync.strerror goes unreported\n'); } catch { /* no stderr */ }
+    }
   }
   const m = /^[A-Z0-9_]+: ([^,]+)/.exec(String((e && e.message) || ''));
   const text = m ? m[1] : n !== undefined ? sysErrorText(n) : null;
