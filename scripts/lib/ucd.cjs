@@ -70,7 +70,8 @@ async function fetchVerified(version, name, { cacheDir, offline = false, readOnl
   if (readOnlyDir && pin.sha256) {
     let seeded = null;
     try { seeded = fs.readFileSync(path.join(readOnlyDir, version, `${name}.txt`), 'utf8'); } catch { /* not there */ }
-    if (seeded !== null && sha256Text(seeded) === pin.sha256) return seeded;
+    // The same verification every returned input passes; a copy that fails it is passed over, never returned.
+    if (seeded !== null) { try { return verifyText(seeded, pin); } catch { /* not the pinned bytes: the cache, then the network */ } }
   }
   const dest = path.join(cacheDir, version, `${name}.txt`);
   let text = null;

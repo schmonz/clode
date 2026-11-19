@@ -131,6 +131,11 @@ test('offline: a cold cache refuses without fetching, and the generator maps it 
     await assert.rejects(main(['--native', path.join(dir, 'no-such-claude'), '--check'], { CLODE_OFFLINE: '1', CLODE_CACHE: dir }),
       (e) => exitCodeFor(e) === 3);
     assert.strictEqual(exitCodeFor(new Error('sha256 mismatch')), 2);
+    // --ucd-readonly: an empty read-only dir changes nothing offline (still the named miss, exit 3); a missing value
+    // is a usage refusal.
+    await assert.rejects(main(['--native', path.join(dir, 'no-such-claude'), '--check', '--ucd-readonly', path.join(dir, 'ro')],
+      { CLODE_OFFLINE: '1', CLODE_CACHE: dir }), (e) => exitCodeFor(e) === 3);
+    await assert.rejects(main(['--native', 'x', '--ucd-readonly'], { CLODE_OFFLINE: '1', CLODE_CACHE: dir }), /--ucd-readonly needs a directory/);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -172,6 +177,8 @@ test('the suite hands the real UCD cache over by name, and the text gates read i
   const o = ucdInputOptions({ CLODE_TEST_UCD_CACHE: '/named/unicode', CLODE_OFFLINE: '1', CLODE_CACHE: '/suite/cache' });
   assert.deepStrictEqual(o, { cacheDir: path.join('/suite/cache', 'unicode'), offline: true, readOnlyDir: '/named/unicode' });
   assert.ok(process.env.CLODE_TEST_UCD_CACHE, 'suite-home.cjs sets CLODE_TEST_UCD_CACHE');
+  // The freshness gate's generator is a product script: it gets the input as an argument, never a test env name.
+  assert.match(fs.readFileSync(path.join(__dirname, 'unicode-data-fresh.test.cjs'), 'utf8'), /'--ucd-readonly', ro/);
   for (const f of ['fidelity/text-differential.test.cjs', 'unicode-text.test.cjs']) {
     const src = fs.readFileSync(path.join(__dirname, f), 'utf8');
     assert.match(src, /ucdInput\(/, `${f} reads its UCD input through test/ucd-input.cjs`);

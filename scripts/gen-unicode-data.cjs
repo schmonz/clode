@@ -11,6 +11,9 @@
 //   node scripts/gen-unicode-data.cjs --pin VERSION                # fill missing sha256 pins (TOFU; review the diff)
 //   node scripts/gen-unicode-data.cjs --native BIN                 # regenerate
 //   node scripts/gen-unicode-data.cjs --native BIN --check         # exit 1 if regeneration would change the file
+//   ... --ucd-readonly DIR   also read pinned inputs from DIR (laid out <version>/<name>.txt), READ ONLY: a copy there
+//                            is used only when it matches its sha256 pin, and nothing is ever written there
+//                            (scripts/lib/ucd.cjs readOnlyDir; the freshness gate hands it the suite's named input)
 //
 // Exit status: 0 written / fresh, 1 --check found the region stale, 2 a refusal (an
 // unverified input, a native that did not answer, a width shape the table cannot encode),
@@ -272,6 +275,7 @@ async function main(argv, env = process.env) {
     if (argv[i] === '--native') o.native = argv[++i];
     else if (argv[i] === '--pin') o.pin = argv[++i];
     else if (argv[i] === '--check') o.check = true;
+    else if (argv[i] === '--ucd-readonly') { o.readOnlyDir = argv[++i]; if (!o.readOnlyDir) throw new Error('--ucd-readonly needs a directory'); }
     else throw new Error(`unknown argument ${argv[i]}`);
   }
   if (o.pin) { await pinVersion(o.pin, o); return 0; }

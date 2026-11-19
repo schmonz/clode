@@ -20,6 +20,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const { defineGuard, guardTests } = require('./guard.cjs');
 const { resolveNativeOracle, nativeVersion } = require('../scripts/lib/native-oracle.cjs');
+const { ucdInputOptions } = require('./ucd-input.cjs');
 
 const REPO = path.resolve(__dirname, '..');
 const GEN = path.join(REPO, 'scripts', 'gen-unicode-data.cjs');
@@ -48,7 +49,10 @@ guardTests(defineGuard({
     if (!bin) return { skip: `no native claude; the table was generated from ${h.nativeClaude} (set CLODE_NATIVE_ORACLE)` };
     const v = nativeVersion(bin);
     if (v !== h.nativeClaude) return { skip: `native is ${JSON.stringify(v)} but the table was generated from ${JSON.stringify(h.nativeClaude)}; set CLODE_NATIVE_ORACLE to that version` };
-    const r = spawnSync(process.execPath, [GEN, '--native', bin, '--check'], { encoding: 'utf8', timeout: 1800000 });
+    // The suite's named read-only UCD input (test/ucd-input.cjs), as an ARGUMENT: the generator is a product script
+    // and reads no test env name. Without it, the generator found only the suite home's empty cache and skipped offline.
+    const ro = ucdInputOptions().readOnlyDir;
+    const r = spawnSync(process.execPath, [GEN, '--native', bin, '--check', ...(ro ? ['--ucd-readonly', ro] : [])], { encoding: 'utf8', timeout: 1800000 });
     const out = (r.stdout || '') + (r.stderr || '');
     // Exit 3 = offline (the suite's default, test/run.mjs) with a pinned UCD input not yet
     // cached: this run could not look, which is a missing precondition, not a stale table.
