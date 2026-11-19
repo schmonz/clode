@@ -40,6 +40,7 @@ const models = require('./oracle-models.cjs');
 const helper = require('./node-shim-helper.cjs');
 const refs = require('./shim-surface/bundle-refs.cjs');
 const collect = require('./shim-surface/collect.cjs');
+const { defineGuard, guardTests } = require('./guard.cjs');
 
 const GOLDEN_PATH = path.join(__dirname, 'shim-surface', 'golden.json');
 
@@ -116,75 +117,106 @@ function measureUncached(cli) {
   return { l1, l2, moduleCount: names.length };
 }
 
-test('shim surface: the two-layer gap inventory matches the golden map', (t) => {
-  const inp = inputs();
-  if (inp.skip) { t.skip(inp.skip); return; }
-
-  const m = measure(inp.cli);
-  const actual = {
+// The four golden lists, as measured.
+function actualOf(m) {
+  return {
     layer1_bun_props_missing: m.l1.propGaps.map((g) => g.api),
     layer1_bun_modules_missing: m.l1.moduleGaps,
     layer1_bun_modules_intercepted_but_unused: m.l1.unusedIntercepts,
     layer2_node_apis_missing: m.l2.gaps.map((g) => g.api),
   };
+}
 
-  if (process.env.UPDATE_GOLDEN === '1') {
-    const prev = fs.existsSync(GOLDEN_PATH)
-      ? JSON.parse(fs.readFileSync(GOLDEN_PATH, 'utf8')) : {};
-    fs.writeFileSync(GOLDEN_PATH, `${JSON.stringify({ ...prev, ...actual }, null, 2)}\n`);
-    t.diagnostic('golden regenerated (UPDATE_GOLDEN=1)');
-    return;
-  }
-
-  assert.ok(fs.existsSync(GOLDEN_PATH),
-    `missing ${GOLDEN_PATH}; regenerate with UPDATE_GOLDEN=1`);
-  const golden = JSON.parse(fs.readFileSync(GOLDEN_PATH, 'utf8'));
-
-  // DEFERRED, not silently: `layer1_bun_props_missing_deferred` (golden.json) names
-  // drift that IS new, IS real, and is explicitly NOT yet reviewed — see its
-  // `_notes` entry and BACKLOG.md's "Bun.zstdDecompress / Bun.zstdDecompressSync are
-  // new golden-map drift, unreviewed". Unlike the main golden lists (which mean
-  // "reviewed and accepted, with a note"), this list means "seen, triaged as
-  // needing MORE review than a quick note, tracked here so it stops blocking every
-  // other drift this gate exists to catch". Anything on it is excluded from the
-  // added/removed diff below; everything else still asserts exactly as before, so a
-  // genuinely NEW, DIFFERENT gap still fails loud.
+// THE GATE, registered as a guard (observability plan Task 5): it was two plain tests,
+// so no registry knew it existed, and the CI job that runs it (node-shim-oracle) could only say
+// that some anonymous count of tests skipped. As a guard it is a NAME every CI job's gate list
+// carries (test/ci-gates.cjs), so a run that skipped it is named, not counted.
+//
+// Two kinds of finding, both read from one measurement:
+//   - DRIFT: a golden list gained or lost an entry. DEFERRED, not silently:
+//     `layer1_bun_props_missing_deferred` (golden.json) names drift that IS new, IS real, and is
+//     explicitly NOT yet reviewed — see its `_notes` entry and BACKLOG.md's "Bun.zstdDecompress /
+//     Bun.zstdDecompressSync are new golden-map drift, unreviewed". Anything on it is excluded from
+//     the diff; everything else asserts exactly as before, so a genuinely NEW, DIFFERENT gap still
+//     fails loud.
+//   - BLIND MODULES: the measurement is only trustworthy if every shim module could actually be
+//     enumerated on both sides. A module that failed to load would otherwise contribute zero gaps
+//     and read exactly like a clean one — the "a skipped oracle is not a pass" failure mode, in
+//     miniature. `unenumerable_allowed` (golden.json) names the measured exceptions.
+// examined = the shim modules measured on both sides. Measured 2026-11-19 on the 2.1.283 carve:
+// 32 shim modules, `intl` the one allowed unenumerable, so 31; fewer means modules vanished from
+// the measurement and the map's silence means nothing.
+const SHIM_SURFACE_FLOOR = 31;
+function scanShimSurface({ actual, golden, unenumerable, moduleCount }) {
+  const findings = [];
   const deferred = new Set(golden.layer1_bun_props_missing_deferred || []);
-
   for (const key of Object.keys(actual)) {
     const exp = golden[key] || [];
     const got = key === 'layer1_bun_props_missing' ? actual[key].filter((x) => !deferred.has(x)) : actual[key];
     const added = got.filter((x) => !exp.includes(x));
     const removed = exp.filter((x) => !got.includes(x));
-    assert.deepStrictEqual({ key, added, removed }, { key, added: [], removed: [] },
-      `${key} drifted.\n`
-      + `  NEW gaps (upstream now reaches for these, we do not provide them): ${JSON.stringify(added)}\n`
-      + `  GONE (we implemented them, or upstream stopped): ${JSON.stringify(removed)}\n`
-      + '  Review, then regenerate with UPDATE_GOLDEN=1 and record WHY in golden.json notes.');
+    if (added.length || removed.length) {
+      findings.push(`${key} drifted. NEW gaps (upstream now reaches for these, we do not provide them): `
+        + `${JSON.stringify(added)}; GONE (we implemented them, or upstream stopped): ${JSON.stringify(removed)}. `
+        + 'Review, then regenerate with UPDATE_GOLDEN=1 and record WHY in golden.json notes.');
+    }
   }
-});
-
-// The measurement is only trustworthy if every shim module could actually be
-// enumerated on both sides. A module that failed to load would otherwise
-// contribute zero gaps and read exactly like a clean one — the "a skipped oracle
-// is not a pass" failure mode, in miniature.
-test('shim surface: every shim module was enumerable on both sides', (t) => {
-  const inp = inputs();
-  if (inp.skip) { t.skip(inp.skip); return; }
-
-  const m = measure(inp.cli);
-  const golden = fs.existsSync(GOLDEN_PATH)
-    ? JSON.parse(fs.readFileSync(GOLDEN_PATH, 'utf8')) : {};
   const allowed = golden.unenumerable_allowed || [];
-  const unexpected = m.l2.unenumerable
-    .map((u) => u.module)
-    .filter((mod) => !allowed.includes(mod));
+  const unexpected = unenumerable.filter((u) => !allowed.includes(u.module));
+  if (unexpected.length) {
+    findings.push(`these shim modules could not be enumerated on both sides, so their gaps are UNKNOWN (not zero): `
+      + `${JSON.stringify(unexpected.map((u) => u.module))}. Full detail: ${JSON.stringify(unexpected)}`);
+  }
+  return { findings, examined: moduleCount - unenumerable.length,
+    note: `${moduleCount} shim module(s), ${unenumerable.length} unenumerable, against test/shim-surface/golden.json` };
+}
 
-  assert.deepStrictEqual(unexpected, [],
-    `these shim modules could not be enumerated on both sides, so their gaps are UNKNOWN`
-    + ` (not zero): ${JSON.stringify(unexpected)}.\n`
-    + `  Full detail: ${JSON.stringify(m.l2.unenumerable, null, 2)}`);
+const shimSurfaceGuard = defineGuard({
+  name: 'shim-surface',
+  floor: SHIM_SURFACE_FLOOR,
+  read() {
+    if (process.env.UPDATE_GOLDEN === '1') return { skip: 'UPDATE_GOLDEN=1: this run regenerates the golden map, it does not judge it' };
+    const inp = inputs();
+    if (inp.skip) return { skip: inp.skip };
+    if (!fs.existsSync(GOLDEN_PATH)) throw new Error(`missing ${GOLDEN_PATH}; regenerate with UPDATE_GOLDEN=1`);
+    const m = measure(inp.cli);
+    return { actual: actualOf(m), golden: JSON.parse(fs.readFileSync(GOLDEN_PATH, 'utf8')),
+      unenumerable: m.l2.unenumerable, moduleCount: m.moduleCount };
+  },
+  scan: scanShimSurface,
+  // The golden as it stands, measured against an inventory that gained one gap nobody reviewed and
+  // lost a module to a failed load: both kinds of finding must fire.
+  control() {
+    const golden = JSON.parse(fs.readFileSync(GOLDEN_PATH, 'utf8'));
+    const actual = {
+      layer1_bun_props_missing: [...golden.layer1_bun_props_missing],
+      layer1_bun_modules_missing: [...golden.layer1_bun_modules_missing],
+      layer1_bun_modules_intercepted_but_unused: [...golden.layer1_bun_modules_intercepted_but_unused],
+      layer2_node_apis_missing: [...golden.layer2_node_apis_missing, 'fs.notARealApi'],
+    };
+    return { actual, golden, unenumerable: [{ module: 'fs', error: 'control: failed to load' }], moduleCount: 32 };
+  },
 });
+guardTests(shimSurfaceGuard);
+
+test('shim surface: the control names both kinds of finding', () => {
+  const r = scanShimSurface(shimSurfaceGuard.control());
+  assert.strictEqual(r.findings.length, 2, r.findings.join('\n'));
+  assert.match(r.findings[0], /layer2_node_apis_missing drifted.*fs\.notARealApi/);
+  assert.match(r.findings[1], /could not be enumerated.*"fs"/);
+});
+
+// UPDATE_GOLDEN regenerates instead of asserting. Declared only when asked for, so a normal run
+// carries no skipped placeholder for it.
+if (process.env.UPDATE_GOLDEN === '1') {
+  test('shim surface: regenerate the golden map (UPDATE_GOLDEN=1)', (t) => {
+    const inp = inputs();
+    if (inp.skip) { t.skip(inp.skip); return; }
+    const prev = fs.existsSync(GOLDEN_PATH) ? JSON.parse(fs.readFileSync(GOLDEN_PATH, 'utf8')) : {};
+    fs.writeFileSync(GOLDEN_PATH, `${JSON.stringify({ ...prev, ...actualOf(measure(inp.cli)) }, null, 2)}\n`);
+    t.diagnostic('golden regenerated (UPDATE_GOLDEN=1)');
+  });
+}
 
 // Guards the scanner itself against silent breakage. If binding resolution ever
 // stops working, every gap list above collapses to empty and the golden test
