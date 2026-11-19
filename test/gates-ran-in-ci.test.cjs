@@ -32,6 +32,21 @@ function workflowTexts(manifest) {
   return out;
 }
 
+// Every caller of tjs-legs.yml, in every workflow, with the legs it builds: computed by scripts/tjs-legs.mjs itself,
+// exactly as tjs-legs.yml's plan step runs it (tier, only), so the overlap check reads the real partition.
+function legCallers() {
+  const { execFileSync } = require('node:child_process');
+  const out = [];
+  const dir = path.join(REPO, '.github', 'workflows');
+  for (const f of fs.readdirSync(dir).filter((n) => /\.ya?ml$/.test(n)).sort()) {
+    for (const c of G.legCallersIn(`.github/workflows/${f}`, fs.readFileSync(path.join(dir, f), 'utf8'))) {
+      const legs = JSON.parse(execFileSync(process.execPath, [path.join(REPO, 'scripts', 'tjs-legs.mjs'), c.tier, c.only], { encoding: 'utf8' }));
+      out.push({ ...c, legs: legs.map((l) => l.leg) });
+    }
+  }
+  return out;
+}
+
 // ---- fixtures: a tiny world the controls and unit tests share ------------------------------------
 const FX_CI = [
   'jobs:',
@@ -39,7 +54,7 @@ const FX_CI = [
   '    steps:',
   '      - run: node --test --test-reporter=./test/cell-reporter.mjs test/a.test.cjs test/node-shim-*.test.cjs',
   '      - uses: actions/upload-artifact@v7.0.2',
-  '        with: { name: gates-ran-oracle }',
+  '        with: { name: gates-ran-oracle, overwrite: true }',
   '  gates-ran-in-ci:',
   '    needs: [test, oracle]',
   '    steps:',
@@ -57,7 +72,7 @@ const FX_SUITE = [
   '      - run: npm test',
   '        env: { CLODE_GATES_REPORT: x }',
   '      - uses: actions/upload-artifact@v7.0.2',
-  '        with: { name: gates-ran-test-${{ matrix.os }} }',
+  '        with: { name: gates-ran-test-${{ matrix.os }}, overwrite: true }',
   '',
 ].join('\n');
 const fxManifest = (over = {}) => ({
@@ -77,6 +92,8 @@ const fxPlacement = (over = {}) => ({
   registry: over.registry || FX_REGISTRY,
   texts: { [G.CI]: FX_CI, 'suite.yml': FX_SUITE, ...(over.texts || {}) },
   files: new Set(['test/a.test.cjs', ...(over.files || [])]),
+  legCallers: over.legCallers || [{ workflow: 'w.yml', job: 'fast', only: 'fast', legs: ['a'] }, { workflow: 'w.yml', job: 'slow', only: 'slow', legs: ['b'] },
+    { workflow: 'r.yml', job: 'all', only: '', legs: ['a', 'b'] }],
 });
 const rec = (name, extra = {}) => ({ type: 'test:pass', file: '/home/runner/work/clode/clode/test/a.test.cjs', name, ...extra });
 const fxRan = (over = {}) => ({
@@ -95,11 +112,13 @@ guardTests(defineGuard({
   // One per declared job, placement, exemption and gate file: measured 2026-11-19, 10 + 47 + 2 + 43 = 102. Fewer
   // means the manifest lost entries without anyone re-measuring what the jobs run.
   floor: 102,
-  read: () => ({ manifest: G.MANIFEST, registry: G.loadRegistry(), texts: workflowTexts(G.MANIFEST), files: trackedFiles() }),
+  read: () => ({ manifest: G.MANIFEST, registry: G.loadRegistry(), texts: workflowTexts(G.MANIFEST), files: trackedFiles(),
+    legCallers: legCallers() }),
   scan: G.checkPlacement,
-  // A placement naming a gate nobody registered, and a job whose text never uploads its list.
+  // A placement naming a gate nobody registered, and a suite row that uploads under the oracle's artifact name
+  // (with overwrite, one list would silently replace the other).
   control: () => fxPlacement({ manifest: { placed: { b: { jobs: ['oracle'], why: 'x' }, gone: { jobs: ['oracle'], why: 'x' } } },
-    texts: { [G.CI]: FX_CI.replace('actions/upload-artifact@v7.0.2', 'actions/cache@v4') } }),
+    texts: { 'suite.yml': FX_SUITE.replace('gates-ran-test-${{ matrix.os }}', 'gates-ran-oracle') } }),
 }));
 
 // ---- the runtime guard ---------------------------------------------------------------------------
@@ -155,6 +174,10 @@ test('ci-gate-placement: each way the manifest can disagree with the tree is nam
     [{ texts: { [G.CI]: FX_CI.replace('needs: [test, oracle]', 'needs: [test]') } }, /the aggregator does not wait for oracle/],
     [{ texts: { [G.CI]: FX_CI.replace('  gates-ran-in-ci:', '  other:') } }, /the aggregator: .* has no job gates-ran-in-ci/],
     [{ texts: { [G.CI]: FX_CI.replace('NEEDS: ${{ toJSON(needs) }}', 'X: y') } }, /the aggregator never passes NEEDS/],
+    [{ texts: { [G.CI]: FX_CI.replace('gates-ran-oracle, overwrite: true', 'gates-ran-oracle') } }, /job oracle uploads gates-ran-oracle without overwrite: true/],
+    [{ texts: { 'suite.yml': FX_SUITE.replace('gates-ran-test-${{ matrix.os }}', 'gates-ran-oracle') } }, /artifact gates-ran-oracle is uploaded by suite.yml:suite and .*:oracle/],
+    [{ legCallers: [{ workflow: 'w.yml', job: 'fast', only: 'fast', legs: ['a', 'b'] }, { workflow: 'w.yml', job: 'slow', only: 'slow', legs: ['b', 'c'] }] },
+      /w.yml: jobs fast \(only: fast\) and slow \(only: slow\) both build b/],
     [{ texts: { [G.CI]: `${FX_CI}  stray:\n    steps:\n      - run: node --test test/a.test.cjs\n` } }, /ci.yml job stray runs gate file\(s\) test\/a.test.cjs but is not in JOBS/],
   ];
   for (const [over, re] of cases) {
@@ -194,7 +217,7 @@ test('gates-ran-in-ci: each way a job can fail to run a gate is named', () => {
   }
 });
 
-test('gates-ran-in-ci: a finding is UNOBSERVED when its job did not succeed, DARK when it did; both stay red', () => {
+test('gates-ran-in-ci: what is ABSENT from a job that did not succeed is UNOBSERVED; a reported skip, or anything from a job that succeeded, is DARK; both stay red', () => {
   const missing = { records: { oracle: null } };
   const skipped = { records: { oracle: [rec('guard gate: b', { skip: 'no engine' })] } };
   const absent = { records: { oracle: [rec('other')] } };
@@ -207,7 +230,10 @@ test('gates-ran-in-ci: a finding is UNOBSERVED when its job did not succeed, DAR
     [missing, null, /^DARK: oracle uploaded no gate list/],
     [skipped, { oracle: { result: 'success' } }, /^DARK: oracle: gate b skipped \(no engine\)/],
     [absent, { oracle: { result: 'success' } }, /^DARK: oracle: gate b never reported/],
-    [skipped, { oracle: { result: 'failure' } }, /^UNOBSERVED \(oracle concluded failure\): oracle: gate b skipped/],
+    [absent, { oracle: { result: 'cancelled' } }, /^UNOBSERVED \(oracle concluded cancelled\): oracle: gate b never reported/],
+    // A recorded skip means the gate was REACHED: DARK whatever the job concluded.
+    [skipped, { oracle: { result: 'failure' } }, /^DARK: oracle: gate b skipped \(no engine\)/],
+    [{ records: { oracle: [rec('guard gate: b', { type: 'test:fail' })] } }, { oracle: { result: 'failure' } }, /^DARK: oracle: gate b failed/],
   ];
   for (const [over, needs, re] of rows) {
     const r = G.checkRan({ ...fxRan(over), needs });

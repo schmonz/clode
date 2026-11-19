@@ -1774,9 +1774,11 @@ runs:
     # THIS LEG'S GATE LIST: gates-ran-<github.job>-<leg>. Only tjs-legs.yml's `leg` job uses this action, so the
     # name is gates-ran-leg-<leg> for every caller. Two callers in one run cannot collide: ci.yml's `tjs`/`tjs-slow`
     # pass only fast/slow and release.yml's `leg`/`darwin-slices` pass only notdarwin/darwin, and scripts/tjs-legs.mjs
-    # cli() builds each pair from one predicate and its negation. No `overwrite`: if a collision ever happens, the
-    # second upload FAILS loudly rather than silently replacing the first leg's list. Uploaded whatever the step above
-    # did: a missing list is a finding in gates-ran-in-ci, never a pass.
+    # cli() builds each pair from one predicate and its negation; test/ci-gates.cjs (ci-gate-placement) computes
+    # both pairs' leg sets and fails if they ever overlap, and fails on any gates-ran-* name two jobs share. So
+    # `overwrite: true` replaces only this leg's OWN list, from an earlier attempt of the same run (a re-run: v4
+    # artifacts are run-scoped and immutable, so without it a re-run collides with itself). Uploaded whatever the step
+    # above did: a missing list is a finding in gates-ran-in-ci, never a pass.
     - name: Upload this leg's gate list (judged by ci.yml's gates-ran-in-ci)
       if: ${{ !cancelled() }}
       uses: actions/upload-artifact@v7.0.2
@@ -1784,6 +1786,7 @@ runs:
         name: gates-ran-${{ github.job }}-${{ inputs.leg }}
         path: ${{ runner.temp }}/gates
         if-no-files-found: warn
+        overwrite: true   # a re-run attempt replaces its own list (artifacts are run-scoped and immutable)
 
     # The static floor gate: pre-10.14 dyld requires the old
     # LC_VERSION_MIN_MACOSX load command and refuses LC_BUILD_VERSION-only

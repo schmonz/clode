@@ -349,6 +349,7 @@ jobs:
           path: |
             ${{ runner.temp }}/gates
           if-no-files-found: warn
+          overwrite: true   # a re-run attempt replaces its own list (artifacts are run-scoped and immutable)
 
   # Windows ConPTY TUI render (windows-tjs-port spec, sub-project D). The FIRST
   # CI PTY harness on any platform: build a real quaude (`clode build`) and drive
@@ -451,6 +452,7 @@ jobs:
           path: |
             ${{ runner.temp }}/gates
           if-no-files-found: warn
+          overwrite: true   # a re-run attempt replaces its own list (artifacts are run-scoped and immutable)
 
   # Windows shim + sync-primitive coverage on the ARM64 kernel — the same
   # rationale as windows-amd64-tests, exercised against the windows-arm64 leg's
@@ -532,6 +534,7 @@ jobs:
           path: |
             ${{ runner.temp }}/gates
           if-no-files-found: warn
+          overwrite: true   # a re-run attempt replaces its own list (artifacts are run-scoped and immutable)
 
   # templates-drift MOVED OUT OF ci.yml (2026-08-24).
   #
@@ -869,6 +872,7 @@ jobs:
             ${{ runner.temp }}/cells
             ${{ runner.temp }}/gates
           if-no-files-found: warn
+          overwrite: true   # a re-run attempt replaces its own list (artifacts are run-scoped and immutable)
 
   # The BUILDER and the PACKAGED TARGETS — on glibc, on purpose.
   #
@@ -1066,6 +1070,7 @@ jobs:
             ${{ runner.temp }}/cells
             ${{ runner.temp }}/gates
           if-no-files-found: warn
+          overwrite: true   # a re-run attempt replaces its own list (artifacts are run-scoped and immutable)
 
       # REQUIRED-GATE MARKER (BACKLOG item 4 / phase 5 task 10). This job "sat as one red
       # among twenty-two" — it BUILDS THE PRODUCT (node-free, real provider) and is the
@@ -1533,6 +1538,7 @@ jobs:
             ${{ runner.temp }}/cells
             ${{ runner.temp }}/gates
           if-no-files-found: warn
+          overwrite: true   # a re-run attempt replaces its own list (artifacts are run-scoped and immutable)
 
   # node-shim oracle on DARWIN — the same node-vs-tjs behavioral diff as
   # node-shim-oracle above, but on macOS against a real darwin tjs.
@@ -1740,6 +1746,7 @@ jobs:
             ${{ runner.temp }}/cells
             ${{ runner.temp }}/gates
           if-no-files-found: warn
+          overwrite: true   # a re-run attempt replaces its own list (artifacts are run-scoped and immutable)
 
   # THE GATE LISTS, JUDGED (observability plan Task 5; user doctrine 2026-10-05: "Job 0 is always to be able to observe
   # our current state more accurately than yesterday"). Every job above that runs a gate uploads what

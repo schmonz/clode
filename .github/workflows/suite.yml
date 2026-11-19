@@ -137,6 +137,7 @@ jobs:
           name: gates-ran-test-${{ matrix.os }}
           path: ${{ runner.temp }}/gates
           if-no-files-found: warn
+          overwrite: true   # a re-run attempt replaces its own list (artifacts are run-scoped and immutable)
       - name: Free space on C and D after the suite (windows)
         if: always() && runner.os == 'Windows'
         continue-on-error: true
