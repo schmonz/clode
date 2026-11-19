@@ -490,13 +490,15 @@ class Dirent {
 // To end of file, as node reads: the fstat size is a HINT. A procfs or sysfs file says 0 and is not
 // empty, so stopping at the size read "" from /proc/version and /proc/self/cgroup, the files the
 // carve's WSL and container checks read (test/node-shim-differential.test.cjs, DIFF-PROCFS-EMPTY).
-// A file at its size costs one more read, which answers 0, as node's does.
+// A file at its size costs one more read, which answers 0, as node's does. The reads are
+// SEQUENTIAL (position -1: read(2), not pread(2)), as node's readFile is: a FIFO, a pipe or a tty
+// cannot pread (ESPIPE), and a descriptor the caller handed over reads from where it stands.
 function readAll(fd) {
   let out = new Uint8Array(Math.max(0, Number(FSS.fstat(fd).size) || 0));
   let got = 0;
   for (;;) {
     const room = out.length - got;
-    const ab = FSS.read(fd, room > 0 ? Math.min(1 << 20, room) : 65536, got);
+    const ab = FSS.read(fd, room > 0 ? Math.min(1 << 20, room) : 65536, -1);
     if (ab.byteLength === 0) break;
     if (got + ab.byteLength > out.length) {
       const bigger = new Uint8Array(Math.max(out.length * 2, got + ab.byteLength));
@@ -519,15 +521,17 @@ function asBuffer(data) {
   return Buffer.from(data.buffer, data.byteOffset, data.byteLength);
 }
 
+// A descriptor is read from where it stands and left open, as node does (readFileSync(0) reads stdin).
 function readFileSync(p, opts) {
   const enc = typeof opts === 'string' ? opts : opts?.encoding;
-  const fd = FSS.open(p, 'r');
+  const own = typeof p !== 'number';
+  const fd = own ? FSS.open(p, 'r') : p;
   try {
     const data = readAll(fd);
     if (enc === 'utf8' || enc === 'utf-8') return td.decode(data);
     if (isLatin1(enc)) return latin1Decode(data);
     return asBuffer(data);
-  } finally { FSS.close(fd); }
+  } finally { if (own) FSS.close(fd); }
 }
 
 function writeFileSync(p, data, opts) {
@@ -583,6 +587,14 @@ function mkdirSync(p, opts) {
         let dir = false;
         try { dir = typeIs(FSS.stat(cur).mode, 'dir'); } catch { /* a dangling link: not a directory */ }
         if (!dir) throw sysError(i === segs.length - 1 ? 'EEXIST' : 'ENOTDIR', 'mkdir', p);
+      }
+    }
+    // node's mkdirp walks the caller's own string by dirname(), so the first directory comes back in
+    // the caller's form ('a' for 'a/b'), not resolved
+    if (first !== undefined) {
+      for (let q = String(p); ; q = path.dirname(q)) {
+        if (path.resolve(q) === first) return q;
+        if (path.dirname(q) === q) break;
       }
     }
     return first;
