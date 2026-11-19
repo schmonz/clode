@@ -148,6 +148,12 @@ const FILES = [
   // ccache-launcher.cjs and ar-determinism.cjs here, and the derived check in
   // test/engine-recipe.test.cjs named it the moment build-tjs.cjs required it.
   'scripts/file-prefix-map.cjs',
+  // ADDED 2026-11-19. scripts/cosmocc-pin.cjs holds the cosmocc toolchain pin (version +
+  // sha256) the cosmo leg compiles with — it moved out of build-tjs.cjs to gain an
+  // ordered mirror list and a derived CI cache key. Re-pin it and the cosmo engine is
+  // built by a different compiler; the derived check named it the moment build-tjs.cjs
+  // required it.
+  'scripts/cosmocc-pin.cjs',
   // The netbsd-sparc in-guest ENGINE bake recipe. It is engine source for that
   // leg in the most literal sense — it IS the compile — yet an edit to it moved
   // nothing, so the tjs cache happily restored an engine built by a DIFFERENT

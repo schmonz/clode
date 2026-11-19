@@ -1,0 +1,116 @@
+'use strict';
+// .github/actions/guest: the post-install check that every requested package's tool is
+// really there. It used to stop at `command -v`, and CI run 44460009323's dragonflybsd
+// leg went straight through it: node and cmake were ON PATH but the dynamic linker could
+// not load them (`Shared object "libcrypto.so.17" not found` — the repo's packages were
+// built against a newer openssl than the image had installed). The leg then died much
+// later as a bare `Command failed: cmake`. This runs the REAL shell block from the action
+// (extracted, not copied) against stub tools, so the check is exercised, not described.
+const test = require('node:test');
+const assert = require('node:assert');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { spawnSync } = require('node:child_process');
+const { defineGuard, guardTests } = require('./guard.cjs');
+
+const ACTION = path.join(__dirname, '..', '.github/actions/guest/action.yml');
+
+function verifyBlock() {
+  const src = fs.readFileSync(ACTION, 'utf8');
+  const start = src.indexOf('        if [ -n "$PKGS" ]; then\n          guest_missing=');
+  const endMark = 'echo "guest: verified on PATH and runnable -> $PKGS"\n        fi\n';
+  const end = src.indexOf(endMark, start);
+  assert.ok(start > 0 && end > start, 'the verify block moved — this extractor is blind');
+  return src.slice(start, end + endMark.length).split('\n').map((l) => l.replace(/^ {8}/, '')).join('\n');
+}
+
+function runWith(stubs, pkgs, runtimeTools = '') {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'guest-verify-'));
+  const bin = path.join(dir, 'bin');
+  fs.mkdirSync(bin);
+  for (const [name, body] of Object.entries(stubs)) {
+    fs.writeFileSync(path.join(bin, name), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+  }
+  const script = path.join(dir, 'verify.sh');
+  fs.writeFileSync(script, `set -e\nPKGS="${pkgs}"\nGUEST_RUNTIME_TOOLS="${runtimeTools}"\n${verifyBlock()}\necho REACHED_THE_BUILD\n`);
+  // /usr/bin:/bin for sed/printf only; none of the stubbed tool names live there on a
+  // dev box or runner that matters (and if one did, the stub dir is FIRST).
+  return spawnSync('/bin/sh', [script], { encoding: 'utf8', env: { PATH: `${bin}:/usr/bin:/bin` } });
+}
+
+const OK = 'echo "$0 1.0"';
+const UNLOADABLE = 'echo \'Shared object "libcrypto.so.17" not found, required by "cmake"\' >&2; exit 1';
+
+test('a tool that is on PATH but cannot run fails the package step, with its own error shown', () => {
+  const r = runWith({ cmake: UNLOADABLE, gmake: OK }, 'cmake gmake');
+  assert.notStrictEqual(r.status, 0, `an unloadable cmake passed the check:\n${r.stdout}${r.stderr}`);
+  assert.ok(!r.stdout.includes('REACHED_THE_BUILD'), 'the build ran after an unloadable tool');
+  assert.match(r.stderr, /guest: cmake --version: Shared object "libcrypto\.so\.17" not found/);
+  assert.match(r.stderr, /on PATH but do NOT RUN.*cmake\(cmake\)/);
+  assert.doesNotMatch(r.stderr, /gmake\(gmake\)/, 'a healthy tool was blamed');
+});
+
+test('runnable tools pass and the build proceeds', () => {
+  const r = runWith({ cmake: OK, gmake: OK, node: OK }, 'cmake gmake node');
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.match(r.stdout, /guest: verified on PATH and runnable -> cmake gmake node/);
+  assert.match(r.stdout, /REACHED_THE_BUILD/);
+});
+
+test('a copyback tool the upgrade broke (rsync) fails the package step by name', () => {
+  const r = runWith({ cmake: OK, rsync: UNLOADABLE.replace('cmake', 'rsync'), sudo: OK }, 'cmake', 'rsync sudo');
+  assert.notStrictEqual(r.status, 0, `an unloadable rsync passed:\n${r.stdout}${r.stderr}`);
+  assert.match(r.stderr, /guest: rsync --version: Shared object/);
+  assert.match(r.stderr, /do NOT RUN.*rsync\(guest-runtime\)/);
+  const ok = runWith({ cmake: OK, rsync: OK, sudo: OK }, 'cmake', 'rsync sudo');
+  assert.strictEqual(ok.status, 0, ok.stderr);
+});
+
+test('a missing tool is still reported as missing (the older half of the check)', () => {
+  const r = runWith({ gmake: OK }, 'cmake gmake');
+  assert.notStrictEqual(r.status, 0);
+  assert.match(r.stderr, /NOT on PATH: cmake\(cmake\)/);
+});
+
+// The cause half: pkg resolves an installed dependency by NAME, so install-only can
+// leave the image's older openssl under packages built against a newer one.
+function branchOf(yml, label, next) {
+  const start = yml.indexOf(`          ${label})\n`);
+  const end = start < 0 ? -1 : yml.indexOf(`          ${next})\n`, start);
+  if (start < 0 || end < 0) return null;
+  return yml.slice(start, end).split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+}
+
+// Ruling (fix round 1): a FULL `pkg upgrade -y` before install, DRAGONFLY ONLY (freebsd
+// was green and is not exposed), and the copyback tools the upgrade rewrites are checked.
+function scanPkgUpgradeOrder({ yml }) {
+  const dfly = branchOf(yml, 'dragonflybsd', 'openbsd');
+  const fbsd = branchOf(yml, 'freebsd', 'dragonflybsd');
+  if (dfly === null || fbsd === null) return { findings: [], examined: 0 };
+  const findings = [];
+  const up = dfly.indexOf('pkg upgrade -y\n');
+  const inst = dfly.indexOf('pkg install -y $PKGS');
+  if (inst < 0) findings.push('dragonflybsd branch no longer installs $PKGS');
+  else if (up < 0 || up > inst) findings.push('dragonflybsd installs $PKGS without a FULL `pkg upgrade -y` first (repo/installed skew: run 44460009323)');
+  if (/pkg upgrade/.test(fbsd)) findings.push('freebsd runs pkg upgrade: the ruling scopes it to dragonflybsd (freebsd was green)');
+  if (!/GUEST_RUNTIME_TOOLS="[^"]*\brsync\b[^"]*"/.test(dfly) || !/GUEST_RUNTIME_TOOLS="[^"]*\bsudo\b[^"]*"/.test(dfly)) {
+    findings.push('dragonflybsd upgrades but does not runnable-check rsync + sudo (the copyback tools)');
+  }
+  return { findings, examined: 4 };
+}
+
+const pkgUpgradeGuard = defineGuard({
+  name: 'guest-pkg-upgrade-before-install',
+  read: () => ({ yml: fs.readFileSync(ACTION, 'utf8') }),
+  scan: scanPkgUpgradeOrder,
+  floor: 4,
+  control: () => ({
+    yml: '          freebsd)\n'
+      + '            sudo env ASSUME_ALWAYS_YES=YES pkg upgrade -y\n'
+      + '          dragonflybsd)\n'
+      + '            [ -z "$PKGS" ] || sudo env ASSUME_ALWAYS_YES=YES pkg install -y $PKGS ;;\n'
+      + '          openbsd)\n',
+  }),
+});
+guardTests(pkgUpgradeGuard);

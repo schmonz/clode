@@ -346,10 +346,10 @@ const pinSha = (component) => pinFields(component)[2];
 // clode-net's downloadFile/sha256Of (the no-curl seam); the extract routes
 // through host-provision's KAT-verified `unzip` (libexec/host-provision.cjs).
 // Cross-build-safe: only the cosmo target reaches here, and only in the build
-// phase. Pin: cosmocc-4.0.2.zip (github.com/jart/cosmopolitan).
-const COSMOCC_VERSION = '4.0.2';
-const COSMOCC_SHA256 = '85b8c37a406d862e656ad4ec14be9f6ce474c1b436b9615e91a55208aced3f44';
-const COSMOCC_URL = `https://cosmo.zip/pub/cosmocc/cosmocc-${COSMOCC_VERSION}.zip`;
+// phase. The pin and its ordered, sha-verified mirror list live in
+// scripts/cosmocc-pin.cjs (also the source of the CI cache key).
+const { COSMOCC_VERSION, COSMOCC_SHA256, COSMOCC_ZIP, COSMOCC_MIRRORS, extractDirName: cosmoccExtractDirName,
+  fetchVerified: fetchCosmoccVerified } = require('./cosmocc-pin.cjs');
 
 // cosmocc ships its OWN ar/ranlib (host ranlib can't index cosmo's fat archives —
 // see scripts/cosmo.toolchain.cmake). The zip may land them non-exec on some
@@ -376,7 +376,10 @@ async function provisionCosmocc() {
   }
 
   const cacheRoot = process.env.CLODE_CACHE || path.join(os.homedir(), '.cache', 'clode');
-  const dir = path.join(cacheRoot, 'cosmocc', COSMOCC_VERSION);
+  // The extracted tree is keyed by the pinned SHA, not the version alone: it is never
+  // re-verified on reuse, so its NAME has to say which verified zip it came from. A re-pin
+  // of the same version lands in a new directory instead of reusing the old bytes.
+  const dir = path.join(cacheRoot, 'cosmocc', cosmoccExtractDirName());
   const binDir = path.join(dir, 'bin');
   if (fs.existsSync(path.join(binDir, 'cosmocc'))) {
     ensureCosmoToolsExec(binDir);
@@ -384,25 +387,30 @@ async function provisionCosmocc() {
     return binDir;
   }
 
-  const zip = path.join(cacheRoot, 'cosmocc', `cosmocc-${COSMOCC_VERSION}.zip`);
+  const zip = path.join(cacheRoot, 'cosmocc', COSMOCC_ZIP);
   fs.mkdirSync(path.dirname(zip), { recursive: true });
   if (!fs.existsSync(zip)) {
-    console.log(`cosmo: downloading ${COSMOCC_URL} (441MB) ...`);
-    const part = `${zip}.part`;
-    await downloadFile(COSMOCC_URL, part);
-    fs.renameSync(part, zip);
+    // 441MB. Each mirror is verified against the pin before the final name exists.
+    await fetchCosmoccVerified({ mirrors: COSMOCC_MIRRORS, sha256: COSMOCC_SHA256, dest: zip, downloadFile, sha256Of });
   }
+  // Re-verified even when it came from a cache: a restored zip is trusted no more than a mirror.
   const got = sha256Of(zip);
   if (got !== COSMOCC_SHA256) {
     fs.rmSync(zip, { force: true });
-    throw new Error(`cosmo: cosmocc-${COSMOCC_VERSION}.zip sha mismatch (expected ${COSMOCC_SHA256}, got ${got}) — refusing to use it`);
+    throw new Error(`cosmo: ${COSMOCC_ZIP} sha mismatch (expected ${COSMOCC_SHA256}, got ${got}) — refusing to use it`);
   }
   const { path: unzipBin } = provision('unzip');
-  fs.mkdirSync(dir, { recursive: true });
-  run(unzipBin, ['-o', '-q', zip, '-d', dir]);
-  if (!fs.existsSync(path.join(binDir, 'cosmocc'))) {
-    throw new Error(`cosmo: extraction of ${zip} did not produce ${binDir}/cosmocc`);
+  // Extract beside, then rename: an interrupted unzip must never leave a dir whose
+  // bin/cosmocc exists (the reuse test above) over a partial tree.
+  const staging = `${dir}.partial`;
+  fs.rmSync(staging, { recursive: true, force: true });
+  fs.mkdirSync(staging, { recursive: true });
+  run(unzipBin, ['-o', '-q', zip, '-d', staging]);
+  if (!fs.existsSync(path.join(staging, 'bin', 'cosmocc'))) {
+    throw new Error(`cosmo: extraction of ${zip} did not produce bin/cosmocc (in ${staging})`);
   }
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.renameSync(staging, dir);
   ensureCosmoToolsExec(binDir);
   console.log(`cosmo: cosmocc ${COSMOCC_VERSION} provisioned at ${binDir}`);
   return binDir;

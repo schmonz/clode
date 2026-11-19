@@ -239,6 +239,37 @@ test('execFileSync: nonzero exit throws with status like node', (t) => {
   assert.strictEqual(r.stdout.trim(), node);
 });
 
+// A FAILING CHILD'S STDERR MUST REACH THE LOG. CI run 44460009323, dragonflybsd leg:
+// build-tjs's runOut('cmake', ['--version']) — execFileSync with no stdio — failed
+// because cmake could not load libcrypto.so.17, and the log said only `Error: Command
+// failed: cmake`. Under node that same call prints the child's stderr on the parent's
+// stderr (execFileSync's documented default when stdio is unspecified) AND puts it in
+// the error message; the shim did neither, so the one line naming the cause was dropped
+// on every leg that runs the build under tjs. Both halves, diffed against node, plus the
+// explicit-stdio case where node does NOT forward (stderr stays in the message only).
+test('execFileSync: a failing child\'s stderr reaches the parent stderr AND the error, like node', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const body = `
+    const cp = require('node:child_process');
+    const rows = {};
+    try { cp.execFileSync('/bin/sh', ['-c', 'echo out; echo CAUSE_DEFAULT 1>&2; exit 3'], { encoding: 'utf8' }); rows.a = 'NO_THROW'; }
+    catch (e) { rows.a = { message: e.message, status: e.status, signal: e.signal, stdout: e.stdout, stderr: e.stderr }; }
+    try { cp.execFileSync('/bin/sh', ['-c', 'echo CAUSE_PIPED 1>&2; exit 4'], { stdio: 'pipe' }); rows.b = 'NO_THROW'; }
+    catch (e) { rows.b = { message: e.message, status: e.status }; }
+    rows.c = cp.execFileSync('/bin/sh', ['-c', 'echo ok; echo WARN_ON_SUCCESS 1>&2'], { encoding: 'utf8' });
+    console.log(JSON.stringify(rows));`;
+  const f = prog(body);
+  const nodeRun = require('node:child_process').spawnSync(process.execPath, [f], { encoding: 'utf8' });
+  const r = runLoader(f);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.deepStrictEqual(JSON.parse(r.stdout.trim()), JSON.parse(nodeRun.stdout.trim()));
+  for (const [marker, forwarded] of [['CAUSE_DEFAULT', true], ['WARN_ON_SUCCESS', true], ['CAUSE_PIPED', false]]) {
+    assert.strictEqual(nodeRun.stderr.includes(marker), forwarded, `oracle drifted on ${marker}: ${nodeRun.stderr}`);
+    assert.strictEqual(r.stderr.includes(marker), forwarded,
+      `${marker}: node ${forwarded ? 'forwards' : 'does not forward'} it to the parent stderr; the shim's stderr was:\n${r.stderr}`);
+  }
+});
+
 test('spawnSync: ENOENT result shape matches node (full object, not just status)', (t) => {
   if (skipUnlessTjs(t)) return;
   // Node returns the launch failure as a RESULT (never throws): pid 0,

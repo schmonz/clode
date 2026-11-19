@@ -637,16 +637,37 @@ runs:
       with:
         arch: ${{ inputs.msvc-arch }}
 
-    # cosmo: cache the provisioned cosmocc toolchain (a 441MB download) so only
-    # the first build on a fresh runner pays for it. build-tjs's provisionCosmocc
-    # sha256-verifies against the pin regardless, so a stale/partial cache can't
-    # poison the build. Keyed on the pinned cosmocc version (bump = new cache).
+    # cosmo: cache the cosmocc toolchain ZIP (a 441MB download) so only the first
+    # build on a fresh runner pays for it. build-tjs's provisionCosmocc sha256-verifies
+    # the zip against the pin on every run, cached or not, so a stale cache can't poison
+    # the build.
+    #
+    # THE KEY IS DERIVED, from scripts/cosmocc-pin.cjs (version + sha prefix). It used
+    # to be the literal `cosmocc-4.0.2`, a second copy of the pin that a bump could leave
+    # behind. WHY RUN 44460009323 MISSED: not the key — no cosmocc entry existed at all.
+    # The only one ever listed (BACKLOG, 2026-09-21) was saved on refs/pull/45/merge,
+    # which main cannot read, and the step only runs on a tjs-cache MISS, so main had
+    # never saved one; the repository sits at the 10 GB cache limit (two ~5 GB VM images),
+    # so an 815 MB entry is the first evicted. Hence the path is now the ZIP only (441 MB,
+    # not zip + 374 MB extracted tree — extraction is seconds) and the mirror list in
+    # cosmocc-pin.cjs is what keeps a miss from being a red leg.
+    - name: cosmocc cache key (derived from the pin)
+      id: cosmocc-pin
+      if: inputs.cosmo == 'true' && steps.tjs-cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        # Assigned first: under bash -e a failing $(...) inside `echo` is swallowed and
+        # would write an EMPTY key; a failing assignment fails the step.
+        KEY="$(node scripts/cosmocc-pin.cjs cache-key)"
+        ZIP="$(node scripts/cosmocc-pin.cjs zip)"
+        echo "key=$KEY" >> "$GITHUB_OUTPUT"
+        echo "zip=$ZIP" >> "$GITHUB_OUTPUT"
     - name: Cache the cosmocc toolchain (cosmo APE leg)
       if: inputs.cosmo == 'true' && steps.tjs-cache.outputs.cache-hit != 'true'
       uses: actions/cache@v6.1.0
       with:
-        path: ~/.cache/clode/cosmocc
-        key: cosmocc-4.0.2
+        path: ~/.cache/clode/cosmocc/${{ steps.cosmocc-pin.outputs.zip }}
+        key: ${{ steps.cosmocc-pin.outputs.key }}
 
     # netbsd-src legs are exec=cross but keep guest-platform 'native' (they run
     # on the ubuntu runner), so they must be excluded here too — else this host

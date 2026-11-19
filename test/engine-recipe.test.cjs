@@ -74,6 +74,9 @@ const EXPECTED_SET = [
   // ccache-launcher.cjs and ar-determinism.cjs, and the derived check below named it the
   // moment build-tjs.cjs required it.
   'scripts/file-prefix-map.cjs',
+  // ADDED 2026-11-19: the cosmocc toolchain pin, split out of build-tjs.cjs (mirror list
+  // + derived cache key). See scripts/engine-recipe.cjs.
+  'scripts/cosmocc-pin.cjs',
   // ADDED 2026-08-29: the netbsd-sparc in-guest bake recipe IS that leg's
   // compile, and editing it used to move nothing — so the cache could restore an
   // engine built by a different recipe. See scripts/engine-recipe.cjs.
@@ -233,6 +236,7 @@ const BASE = {
   'scripts/bundle-inputs-gate.cjs': 'bundleinputs',
   'scripts/provision-bundle-inputs.sh': 'provision',
   'scripts/file-prefix-map.cjs': 'fileprefixmap',
+  'scripts/cosmocc-pin.cjs': 'cosmoccpin',
   'spike/quickjs/qemu/ci-guest-bake.sh': 'bake',
   'scripts/x.toolchain.cmake': 'tc',
   'spike/quickjs/atomic-shim.c': 'shim',
