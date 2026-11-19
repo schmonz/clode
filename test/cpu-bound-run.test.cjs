@@ -56,3 +56,24 @@ test('without ps, the wall ceiling still holds and the result says CPU was not s
   assert.match(r.bound || '', /^WALL ceiling: /);
   assert.strictEqual(r.cpuSampled, false);
 });
+
+// Fake snapshots: the child's own CPU never moves; with `spawning`, one new descendant joins the tree at every poll.
+function fakeTree(spawning) {
+  let n = 0;
+  return (root) => {
+    const rows = [{ pid: root, ppid: 1, ms: 100 }];
+    if (spawning) { n++; for (let k = 1; k <= n; k++) rows.push({ pid: 900000 + k, ppid: root, ms: 0 }); }
+    return rows;
+  };
+}
+test('a new process joining the tree counts as progress, though the tree\'s CPU has not moved', async () => {
+  const [c, a] = node('setTimeout(() => {}, 2500)');
+  const r = await runCpuBounded(c, a, {}, { cpuBudgetMs: 600000, stallMs: 1000, wallMs: 60000, pollMs: 200, snapshot: fakeTree(true) });
+  assert.strictEqual(r.bound, null);
+  assert.strictEqual(r.status, 0);
+});
+test('CONTROL: the same run with no new process is STALLED', async () => {
+  const [c, a] = node('setTimeout(() => {}, 2500)');
+  const r = await runCpuBounded(c, a, {}, { cpuBudgetMs: 600000, stallMs: 1000, wallMs: 60000, pollMs: 200, snapshot: fakeTree(false) });
+  assert.match(r.bound || '', /^STALLED: /);
+});
