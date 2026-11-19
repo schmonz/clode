@@ -600,6 +600,28 @@ const TREE_ALLOW_ENTRIES = [
       return !isInsideCheckout(harnessDir(ROOT));
     },
   },
+  {
+    pattern: '.claude/worktrees',
+    because: 'Other git WORKTREES of this repository: Claude Code agents check their own '
+      + 'branches out here (`git worktree add`), and an agent working there edits its own '
+      + 'checkout while this suite runs. That is another checkout being written by its owner, '
+      + 'not this suite writing into this one; on 2026-11-18 two live agent worktrees here '
+      + 'turned a clean run into exit 2 (tool-coverage-gates.test.cjs and forced-win32 files, '
+      + 'edited on their own branches). git ignores the directory (.git/info/exclude).',
+    // Proves the claim, not the directory: EVERY entry under .claude/worktrees is a worktree
+    // `git worktree list` registers for THIS repository (or the AppleDouble sidecar an NFS
+    // share plants beside it). A stray directory that is not a worktree (something a test
+    // wrote here) makes this false, and the gate then watches the whole directory again.
+    provenBy: () => {
+      const dir = path.join(ROOT, '.claude', 'worktrees');
+      const listed = new Set(require('node:child_process')
+        .execFileSync('git', ['worktree', 'list', '--porcelain'], { cwd: ROOT, encoding: 'utf8' })
+        .split('\n').filter((l) => l.startsWith('worktree ')).map((l) => fs.realpathSync(l.slice(9))));
+      const names = fs.readdirSync(dir);
+      return names.length > 0 && names.every((n) => n.startsWith('._')
+        || listed.has(fs.realpathSync(path.join(dir, n))));
+    },
+  },
   // 'docs' was considered and DELIBERATELY NOT added here (round 1 of this task added
   // it, then reverted it — see BACKLOG.md/task-5-report.md, 2026-09-04). It has the
   // exact build-trace.jsonl shape this task exists to eliminate: no writer under
