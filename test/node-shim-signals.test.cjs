@@ -62,7 +62,7 @@ function spawnLoader(prog, args = []) {
 test('process.kill(self, SIGSTOP) stops the process; SIGCONT resumes and fires the handler', async (t) => {
   if (skipUnlessTjs(t)) return;
   const prog = writeProg('stopcont.cjs', `
-process.on('SIGCONT', () => { console.log('resumed'); process.exit(0); });
+process.on('SIGCONT', () => { process.stdout.write('resumed\\n'); process.exit(0); });
 console.log('ready');
 process.kill(process.pid, 'SIGSTOP');
 setInterval(() => {}, 1000);            // keep the loop alive to dispatch SIGCONT

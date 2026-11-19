@@ -144,6 +144,13 @@ test('on disk: a real `git worktree add` proves; a symlink to the checkout and a
     fs.symlinkSync(root, path.join(wt, 'up'), 'junction');
     assert.deepStrictEqual(proveWorktreesOnDisk(root).findings, ['up: a symlink, not a worktree directory']);
     fs.unlinkSync(path.join(wt, 'up'));
+    // And a real directory SYMLINK too, the other link Windows makes. Not skipped on EPERM: the CI runners are elevated,
+    // so EPERM there would mean the row measured nothing, and that is a failure to report, not a pass.
+    try { fs.symlinkSync(root, path.join(wt, 'up'), 'dir'); } catch (e) {
+      assert.fail(`could not make a 'dir' symlink (${e.code}): this row measures nothing without one`);
+    }
+    assert.deepStrictEqual(proveWorktreesOnDisk(root).findings, ['up: a symlink, not a worktree directory']);
+    fs.unlinkSync(path.join(wt, 'up'));
     // A registered worktree outside the dir whose directory is then deleted: prunable, named, not fatal.
     g('worktree', 'add', '-q', path.join(root, '..', `${path.basename(root)}-gone`));
     fs.rmSync(path.join(root, '..', `${path.basename(root)}-gone`), { recursive: true, force: true });
