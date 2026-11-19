@@ -148,7 +148,7 @@ jobs:
           CLODE_TJS: ${{ runner.temp }}/tjs-be/tjs
         run: |
           set -euo pipefail
-          node --test --test-concurrency=1 \
+          node --require ./test/file-watchdog-preload.cjs --test --test-concurrency=1 \
             test/node-shim-crypto.test.cjs test/url-characterization.test.cjs
 
 

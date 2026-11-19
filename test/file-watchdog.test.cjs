@@ -67,9 +67,28 @@ test('limitFor: the default, or a file named in OVERRIDES', () => {
   assert.strictEqual(W.limitFor(path.join(W.REPO, 'test', 'unicode-data-fresh.test.cjs')), W.OVERRIDES['test/unicode-data-fresh.test.cjs'].ms);
 });
 
-// The wiring, read from source, so a guard: both of run.mjs's node --test passes carry the preload, and every
+// The wiring, read from source, so a guard: both of run.mjs's node --test passes carry the preload; so does EVERY
+// `node ... --test` a workflow or action runs directly (a hang there would burn the job's whole 6h timeout); and every
 // override names a test file that exists, with a reason, above the default (an override below it is a typo).
-function scanWiring({ runMjs, overrides, exists }) {
+// A workflow line is matched as `node`, its flags, then exactly `--test`; comment and echo lines are passed over.
+// BLIND SPOT: an invocation whose `--test` is on a continuation line after a bare `node \\`.
+const CI_PRELOAD = '--require ./test/file-watchdog-preload.cjs';
+const NODE_TEST = /\bnode((?:\s+-[-\w=./]+(?:\s+\.\/[\w./-]+)?)*)\s+--test(?=\s|$)/g;
+function scanWorkflows(workflows) {
+  const findings = [];
+  let examined = 0;
+  for (const { rel, text } of workflows) {
+    text.split('\n').forEach((line, i) => {
+      if (/^\s*#/.test(line) || /\becho\b/.test(line)) return;
+      for (const m of line.matchAll(NODE_TEST)) {
+        examined++;
+        if (!m[1].includes(CI_PRELOAD)) findings.push(`${rel}:${i + 1}: node --test without the file watchdog (${CI_PRELOAD}): ${line.trim().slice(0, 100)}`);
+      }
+    });
+  }
+  return { findings, examined };
+}
+function scanWiring({ runMjs, overrides, exists, workflows = [] }) {
   const findings = [];
   const spawns = runMjs.split(/spawnSync\(process\.execPath, \[/).slice(1).filter((s) => /^\s*(?:'--require', WATCHDOG,\s*)?'--test'/.test(s));
   for (const [i, s] of spawns.entries()) {
@@ -81,7 +100,22 @@ function scanWiring({ runMjs, overrides, exists }) {
     if (!o || typeof o.why !== 'string' || o.why.length < 20) findings.push(`OVERRIDES: ${rel} gives no reason`);
     if (!o || !(o.ms > W.DEFAULT_LIMIT_MS)) findings.push(`OVERRIDES: ${rel} is not above the default`);
   }
-  return { findings, examined: spawns.length + Object.keys(overrides).length };
+  const wf = scanWorkflows(workflows);
+  findings.push(...wf.findings);
+  return { findings, examined: spawns.length + Object.keys(overrides).length + wf.examined };
+}
+const WORKFLOW_DIRS = [path.join(W.REPO, '.github', 'workflows'), path.join(W.REPO, '.github', 'actions')];
+function readWorkflows() {
+  const out = [];
+  const walk = (d) => {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (/\.ya?ml$/.test(e.name) && !e.name.startsWith('.')) out.push({ rel: W.relOf(p), text: fs.readFileSync(p, 'utf8') });
+    }
+  };
+  for (const d of WORKFLOW_DIRS) walk(d);
+  return out;
 }
 guardTests(defineGuard({
   name: 'file-watchdog-wiring',
@@ -90,11 +124,23 @@ guardTests(defineGuard({
     runMjs: fs.readFileSync(path.join(__dirname, 'run.mjs'), 'utf8'),
     overrides: W.OVERRIDES,
     exists: (rel) => fs.existsSync(path.join(W.REPO, rel)),
+    workflows: readWorkflows(),
   }),
   scan: scanWiring,
   control: () => ({
     runMjs: "const WATCHDOG = path.join(HERE, 'file-watchdog-preload.cjs');\nconst res = spawnSync(process.execPath, [\n  '--test',\n  ...files]);",
     overrides: { 'test/gone.test.cjs': { ms: 1, why: '' } },
     exists: () => false,
+    workflows: [{ rel: 'planted.yml', text: '      run: CLODE_X=1 node --test --test-concurrency=1 test/a.test.cjs' }],
   }),
 }));
+
+test('the workflow rule: exactly --test, after node and its flags; the preload anywhere among them', () => {
+  const wf = (text) => scanWorkflows([{ rel: 'w.yml', text }]);
+  assert.strictEqual(wf('run: node --test x.test.cjs').findings.length, 1);
+  assert.strictEqual(wf('run: node --test-name-pattern=x --test x').findings.length, 1);
+  assert.deepStrictEqual(wf('run: node --require ./test/file-watchdog-preload.cjs --test x'), { findings: [], examined: 1 });
+  assert.deepStrictEqual(wf('  # node --test in a comment\n  echo "node --test summaries"'), { findings: [], examined: 0 });
+  assert.deepStrictEqual(wf('run: node scripts/x.cjs --test').examined, 0, 'a script taking its own --test flag is not node --test');
+  assert.ok(readWorkflows().length > 3, 'the workflows were read');
+});

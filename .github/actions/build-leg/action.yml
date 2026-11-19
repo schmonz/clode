@@ -1763,7 +1763,7 @@ runs:
       shell: bash
       env:
         CLODE_DEPSCAN_ENGINE: ${{ steps.bare.outputs.path }}
-      run: node --test test/depscan-guard.test.cjs
+      run: node --require ./test/file-watchdog-preload.cjs --test test/depscan-guard.test.cjs
 
     # The static floor gate: pre-10.14 dyld requires the old
     # LC_VERSION_MIN_MACOSX load command and refuses LC_BUILD_VERSION-only
