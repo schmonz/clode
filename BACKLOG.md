@@ -8,6 +8,26 @@ Concrete clode-under-Node divergences from native Claude Code, to triage and fix
 That page is GENERATED from `scripts/build-graph.cjs` — the one declaration of the build — so it
 cannot drift from it; it is also where the honest answer to "does this need node?" lives.
 
+## release.yml and upstream-drift.yml run gates that no aggregator judges (2026-11-19)
+
+test/ci-gates.cjs and ci.yml's gates-ran-in-ci job judge ci.yml runs only. Two other workflows run gates outside them:
+
+- **release.yml** calls the same suite.yml (its `suite:` job). That job uploads each row's gate list
+  (`gates-ran-test-<os>`), but release.yml has no gates-ran-in-ci job, so nothing judges the list: a gate that skips in
+  a release's suite rows skips silently. Its `be-bytecode-oracle` job also runs test/node-shim-crypto.test.cjs and
+  test/url-characterization.test.cjs on the big-endian engine with no reporter at all.
+- **upstream-drift.yml** (daily, and on dispatch) runs four `node --test` steps against `next`
+  (test/build-gates/text-probe-gates.test.cjs, test/build-gates/shadow-writer-gates.test.cjs,
+  test/build-gates/rg-probe-gates.test.cjs, test/fidelity/regexp-capture-census.test.cjs) under no reporter and uploads
+  no gate list. A probe gate that skips there is invisible.
+
+The fix is the same shape as ci.yml's: a gates-ran-in-ci job in each workflow, with a manifest section per workflow
+(the JOBS rows name a workflow already). For release.yml it is mostly wiring, because suite.yml already uploads.
+
+Measured: `grep -c gates-ran .github/workflows/release.yml .github/workflows/upstream-drift.yml` prints 0 for both;
+release.yml's `suite:` job is `uses: ./.github/workflows/suite.yml`, and upstream-drift.yml holds 4 `node ... --test`
+lines (2026-11-19)
+
 ## vendored-archive-rule-overrides reads a vendor path the build no longer uses, so it has never run in CI (2026-11-19)
 
 The guard in test/ar-determinism.test.cjs reads the txiki.js tree at `spike/quickjs/vendor/txiki.js`. scripts/build-tjs.cjs
