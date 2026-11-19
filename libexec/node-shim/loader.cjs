@@ -932,6 +932,12 @@ if (typeof globalThis.Intl === 'undefined') {
 }
 globalThis.__nodeShim = {
   loadBuiltin, makeRequire, wallProxy, readTextSync, moduleLoad, resolveRequest, requireExt, KNOWN,
+  // CLODE_ENGINE_FLOOR_LOG's writer (internal/engine-floor-log.cjs), for code OUTSIDE node-shim that
+  // runs on an engine below its floor (rg-native's strerror fallback). Handed out here rather than
+  // required by path, so no staging site has to carry a node-shim internal beside bun-shim: where
+  // there is no node-shim (naude, node) there is no engine floor either, and nothing to log.
+  // Lazy: the same evalModule cache fs.cjs's own require of it lands in, loaded only on first use.
+  engineFloorLog: (line) => evalModule(P.join(INTERNAL_DIR, 'engine-floor-log.cjs')).engineFloorLog(line),
   version: 'm2',
 };
 

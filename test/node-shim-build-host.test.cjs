@@ -28,6 +28,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
+const { defineGuard, guardTests } = require('./guard.cjs');
 const { makeStaleHost, refusals, mkdtemp, REPO } = require('./stale-build-host.cjs');
 
 function hermeticEnv(dir, host, extra = {}) {
@@ -111,9 +112,26 @@ test('libexec/graph-meta.js (upstream-drift\'s carve-probe and regexp census) ru
   assert.deepStrictEqual(Object.keys(meta).sort(), ['a.js', 'b.js']);
   const got = refusals(s.host, `${r.stdout}${r.stderr}`);
   assert.ok(!got.any, `${got.wire}${got.seen.join('\n')}`);
-  // And it reaches for nothing the build-host floor exempts: it is a bare tjs program (no
-  // node-shim, so no Stats at all) and never names strerror.
-  const src = fs.readFileSync(path.join(REPO, 'libexec', 'graph-meta.js'), 'utf8');
-  assert.doesNotMatch(src, /__tjs_fs_sync|strerror|require\(/,
-    'graph-meta.js now reaches the sync fs binding or node-shim: re-measure it against the build-host floor');
 });
+
+// What the run above cannot see for an input it never fed: graph-meta.js reaching for something the
+// build-host floor exempts on a path these two modules do not exercise. It is a bare tjs program (no
+// node-shim, so no Stats at all) and never names strerror; this guard keeps that true of its SOURCE.
+// read(): the one file. scan(): pure.
+const GRAPH_META_REACH = /__tjs_fs_sync|strerror|\brequire\(/g;
+function scanGraphMetaReach({ files }) {
+  const findings = [];
+  for (const { rel, src } of files) {
+    for (const m of src.matchAll(GRAPH_META_REACH)) findings.push(`${rel}: names ${m[0]} -- it now reaches the sync fs binding or node-shim; re-measure it against the build-host floor (scripts/engine-api-floor.cjs)`);
+  }
+  return { findings, examined: files.length };
+}
+const graphMetaGuard = defineGuard({
+  name: 'graph-meta-build-host-reach',
+  floor: 1,
+  read: () => ({ files: [{ rel: 'libexec/graph-meta.js', src: fs.readFileSync(path.join(REPO, 'libexec', 'graph-meta.js'), 'utf8') }] }),
+  scan: scanGraphMetaReach,
+  // The realistic regression: graph-meta grows a node-shim require to read a file's mtime.
+  control: () => ({ files: [{ rel: 'synthetic/graph-meta.js', src: "const fs = require('fs'); fs.statSync(p).mtimeMs;\n" }] }),
+});
+guardTests(graphMetaGuard);

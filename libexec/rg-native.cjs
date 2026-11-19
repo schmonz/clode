@@ -1068,9 +1068,10 @@ function osErrorText(e) {
   // An ENGINE (not node) without the binding: below the runtime floor (scripts/engine-api-floor.cjs).
   // The fallback below still answers, so nothing throws; CLODE_ENGINE_FLOOR_LOG is how a gate hears it.
   if (n !== undefined && globalThis.__tjs_fs_sync && !engineStrerror()) {
-    let log = null;
-    try { log = require(__dirname + '/node-shim/internal/engine-floor-log.cjs').engineFloorLog; } catch { /* rg answers regardless */ }
-    if (log) log(`rg-native: this engine has no __tjs_fs_sync.strerror (txiki-strerror.patch); errno ${n} falls back to libuv's text`);
+    // node-shim's own writer (globalThis.__nodeShim, installed by its loader): an engine run always
+    // has one, and node, which has no engine floor, has none.
+    const ns = globalThis.__nodeShim;
+    if (ns && typeof ns.engineFloorLog === 'function') ns.engineFloorLog(`rg-native: this engine has no __tjs_fs_sync.strerror (txiki-strerror.patch); errno ${n} falls back to libuv's text`);
   }
   const m = /^[A-Z0-9_]+: ([^,]+)/.exec(String((e && e.message) || ''));
   const text = m ? m[1] : n !== undefined ? sysErrorText(n) : null;

@@ -236,6 +236,26 @@ function discoverTestFiles(dir) {
 // convention for `skip` reasons, which this mirrors).
 const GUARD_EXCLUSIONS = [
   {
+    file: 'build-host-stale-engine.test.cjs',
+    because: 'a live ACCEPTANCE run, not a scan: it copies libexec into a mkdtemp stale build host '
+      + '(test/stale-build-host.cjs), runs ./build.sh --only engine.source / engine.bytecode / '
+      + 'engine.compile under it on a vendor checkout, and asserts on the exit status, the stdout '
+      + 'and the CLODE_ENGINE_FLOOR_LOG file THAT RUN produced. READS_ARTIFACT fires on the REPO '
+      + 'it hands to build.sh (the subject it runs, not bytes it scans) and PATTERN_MATCHES on '
+      + '`assert.match(out, /source tree ready:/)` against its own child\'s output. There is no '
+      + 'fixed artifact and no violation pattern: the subject is whether the build runs on that engine.',
+  },
+  {
+    file: 'node-shim-fs-engine-floor.test.cjs',
+    because: 'a behavioural test of node-shim\'s fs under a stale-engine stand-in: it writes its own '
+      + 'files in a mkdtemp, runs a program through the real loader, and asserts on the Stats, '
+      + 'stderr and CLODE_ENGINE_FLOOR_LOG lines THAT RUN produced. READS_ARTIFACT fires on reading '
+      + 'test/fixtures/stale-engine-prelude.js, which is not scanned but PREPENDED to the program as '
+      + 'code (the stand-in itself); PATTERN_MATCHES fires on `assert.match(r.stderr, /at _statOrZero/)` '
+      + 'and on the floor log it just caused to be written. Nothing here looks for a violation in bytes '
+      + 'it did not create.',
+  },
+  {
     file: 'provider-store-key.test.cjs',
     because: 'it BUILDS every input it looks at and then asserts on what the product did '
       + 'with them: mkdtemp provider stores, a file:// releases fixture it writes, and '
