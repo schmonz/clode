@@ -9,22 +9,27 @@
 // sentence that word covered. A claim nobody re-ran reads exactly like one somebody did. This gate makes the difference
 // a visible, parseable line that sits in the entry it describes.
 //
-// THE FORMAT (one rule a reader and this gate agree on). An ENTRY is a heading of level 2 to 4 (`##`, `###`, `####`,
-// outside a ``` fence) with its OWN body: the lines up to the next heading of any level. A heading with no body text
-// before its first child heading is a container and is not an entry. Every entry is presumed to state a consequence
-// or a behaviour (the scope is the ENTRY, never an English sentence: parsing sentences for "consequence words" is the
-// heuristic this gate deliberately does not have), so every entry carries at least one MARKER: a paragraph that begins
-// at column 0 with one of
+// THE FORMAT (one rule a reader and this gate agree on). An ENTRY is a heading of ANY level (`#` to `######`, outside a
+// ``` fence) with its OWN body: the lines up to the next heading of any level. Two exceptions: the file's first heading,
+// when it is level 1, is the title (its body is the preamble); and a heading with no body text of its own whose NEXT
+// heading is deeper is a container (it introduces children). A bodiless heading followed by a sibling, a shallower
+// heading or the end of file is NOT a container: it is an entry with no marker, so a bare heading cannot dodge the
+// gate. Every entry is presumed to state a consequence or a behaviour (the scope is the ENTRY, never an English
+// sentence: parsing sentences for "consequence words" is the heuristic this gate deliberately does not have), so every
+// entry carries at least one MARKER: a paragraph that begins at column 0 with one of
 //
 //   Measured: <the command, probe or test id that measured it> (YYYY-MM-DD)
-//       what was run, and the date it was run. The date must be a real date, not after today. A `test/...` file it
-//       names must be a git-tracked file. An entry may hold several, one per claim measured.
+//       what was run, then the date it was run. Text must come before the date. The date must be real, not after
+//       today and not before 2026-01-01. Every repo path it names (test/, scripts/, libexec/, src/, man/, spike/,
+//       .github/; extension or not) must be a git-tracked file or a directory holding one. (deps/ is populated by
+//       the build, not tracked, so it is not checked.) An entry may hold several, one per claim measured.
 //   Unmeasured. <what is not measured, and what would measure it>
 //       the honest answer; the text after the period may not be empty. May sit beside Measured lines (an entry
 //       measured in part).
 //   No open claim: <why>
 //       the entry is closed (RESOLVED, RETRACTED, kept for its reasoning) or is an introduction whose claims live in
-//       the entries under it. It cannot sit beside a Measured or Unmeasured line in the same entry.
+//       the entries under it. It cannot sit beside a Measured or Unmeasured line in the same entry, and it cannot sit
+//       under a heading that says OPEN or STILL (a cheap tripwire for a closed mark on an open entry).
 //
 // A marker is the FIRST line of a paragraph (after a blank line, or the body's first line); it may wrap onto following
 // lines and ends at a blank line. A marker inside a bullet, a quote, a fence or the middle of a paragraph does not
@@ -34,10 +39,11 @@
 // (1) The unit is the entry, not the sentence. One marker satisfies the gate for the whole entry, so a Measured line
 //     that covers one claim leaves that entry's other claims looking covered. Whether a marker covers what the entry
 //     says is the reader's judgement (and the writer's honesty); this gate checks only that the entry SAYS.
-// (2) It cannot tell that a Measured command was really run, or still passes: it checks the date is real and not in
-//     the future, and that a test file it names exists. A stale Measured line stays green until someone re-measures.
-// (3) `No open claim:` is the writer's word. An entry marked so that still holds an open claim passes.
-// (4) Prose under a level-1 heading (the file's own preamble) is not an entry.
+// (2) It cannot tell that a Measured command was really run, or still passes: it checks the date is plausible and
+//     that the paths it names exist. A stale Measured line stays green until someone re-measures.
+// (3) `No open claim:` is the writer's word. Beyond the OPEN/STILL heading tripwire, an entry marked so that still
+//     holds an open claim (in its prose, say "Still to verify") passes.
+// (4) The preamble (the title's own body) is not an entry.
 //
 // THE CONTROL is the real escape: the sandbox entry's heading and first paragraph exactly as they stood at 1031c3a
 // (2026-10-05), which said "measured" in prose and was wrong. It carries no marker, so the gate must name it.
@@ -51,25 +57,46 @@ const { defineGuard, guardTests } = require('./guard.cjs');
 const REPO = path.resolve(__dirname, '..');
 const FILE = 'BACKLOG.md';
 
-const HEADING_RE = /^(#{2,4}) (.*)$/;
+const HEADING_RE = /^(#{1,6}) (.*)$/;
 const FENCE_RE = /^\s*```/;
 const MEASURED_RE = /^Measured: /;
 const UNMEASURED_RE = /^Unmeasured\.(.*)$/;
 const NO_CLAIM_RE = /^No open claim: /;
 const DATE_RE = /\((\d{4})-(\d{2})-(\d{2})\)/g;
-const TEST_PATH_RE = /\btest\/[\w./-]+\.(?:cjs|mjs|js)\b/g;
+// A repo path a Measured line names: under one of the tree's top-level code directories, with or without an extension
+// (man/clode.1, scripts/stage0.mjs, libexec/node-shim/modules/os.cjs:111). A trailing "." or ":" ends the sentence or
+// starts a line number and is not part of the path.
+const REPO_PATH_RE = /(?<![\w./-])(?:test|scripts|libexec|src|man|spike|\.github)\/[\w./-]*[\w-]/g;
+// No measurement in this file predates the project; a date before this is a typo, not a measurement.
+const EARLIEST = '2026-01-01';
+// A heading that still calls itself open cannot hold "No open claim".
+const OPEN_WORD_RE = /\b(?:OPEN|STILL)\b/;
 
-// text -> [{ line, heading, body: [{ n, text, fenced }] }] for every heading of level 2..4 outside a fence.
+// text -> [{ line, level, heading, body: [{ n, text, fenced }], container }] for every heading of ANY level (1..6)
+// outside a fence, except a level-1 heading that is the file's first heading (the title: its body is the preamble).
+// A heading with no body text of its own is a CONTAINER, and not an entry, only when the next heading is deeper (it
+// introduces children). A bodiless heading followed by a sibling, a shallower heading or the end of the file is an
+// entry with nothing in it, and so has no marker.
 function entries(text) {
   const out = [];
   let cur = null;
   let fenced = false;
+  let first = true;
   text.split('\n').forEach((l, i) => {
     if (FENCE_RE.test(l)) { fenced = !fenced; if (cur) cur.body.push({ n: i + 1, text: l, fenced: true }); return; }
     const m = !fenced && HEADING_RE.exec(l);
-    if (m) { cur = { line: i + 1, heading: m[2].trim(), body: [] }; out.push(cur); return; }
-    if (/^# /.test(l) && !fenced) { cur = null; return; }
+    if (m) {
+      const title = first && m[1].length === 1;
+      first = false;
+      cur = title ? null : { line: i + 1, level: m[1].length, heading: m[2].trim(), body: [] };
+      if (cur) out.push(cur);
+      return;
+    }
     if (cur) cur.body.push({ n: i + 1, text: l, fenced });
+  });
+  out.forEach((e, k) => {
+    const next = out[k + 1];
+    e.container = !e.body.some((b) => b.text.trim()) && !!next && next.level > e.level;
   });
   return out;
 }
@@ -95,6 +122,14 @@ function markers(body) {
   return out;
 }
 
+// A path is tracked when it is a tracked file, or a directory holding one.
+function isTracked(tracked, p) {
+  if (tracked.has(p)) return true;
+  const dir = p.endsWith('/') ? p : `${p}/`;
+  for (const t of tracked) if (t.startsWith(dir)) return true;
+  return false;
+}
+
 function realDate(y, m, d) {
   const t = new Date(Date.UTC(+y, +m - 1, +d));
   return t.getUTCFullYear() === +y && t.getUTCMonth() === +m - 1 && t.getUTCDate() === +d;
@@ -106,7 +141,7 @@ function scanBacklog({ file, text, tracked, today }) {
   let examined = 0;
   const tally = { measured: 0, unmeasured: 0, 'no-claim': 0 };
   for (const e of entries(text)) {
-    if (!e.body.some((b) => b.text.trim())) continue; // a container: no text of its own
+    if (e.container) continue; // no text of its own, and a deeper heading follows
     examined++;
     const where = `${file}:${e.line} "${e.heading.slice(0, 100)}"`;
     const ms = markers(e.body);
@@ -117,6 +152,10 @@ function scanBacklog({ file, text, tracked, today }) {
     }
     const kinds = new Set(ms.map((m) => m.kind));
     for (const k of kinds) tally[k]++;
+    if (kinds.has('no-claim') && OPEN_WORD_RE.test(e.heading)) {
+      findings.push(`${where}: its heading says ${OPEN_WORD_RE.exec(e.heading)[0]}, and it is marked "No open claim:"; `
+        + 'retitle it or mark what is open');
+    }
     if (kinds.has('no-claim') && kinds.size > 1) {
       findings.push(`${where}: says "No open claim:" and also carries a Measured/Unmeasured line; it is one or the other`);
     }
@@ -131,13 +170,19 @@ function scanBacklog({ file, text, tracked, today }) {
       if (m.kind !== 'measured') continue;
       const dates = [...m.text.matchAll(DATE_RE)];
       if (!dates.length) findings.push(`${at}: a Measured line needs the date it was run, as (YYYY-MM-DD)`);
+      else if (!m.text.slice('Measured: '.length, dates[0].index).replace(/[\s.,;:]/g, '')) {
+        findings.push(`${at}: a Measured line names what ran before its date; a bare date measured nothing`);
+      }
       for (const [, y, mo, d] of dates) {
         const iso = `${y}-${mo}-${d}`;
         if (!realDate(y, mo, d)) findings.push(`${at}: (${iso}) is not a real date`);
         else if (iso > today) findings.push(`${at}: (${iso}) is after today (${today}); a measurement cannot be dated ahead`);
+        else if (iso < EARLIEST) findings.push(`${at}: (${iso}) is before ${EARLIEST}, older than anything this file measures`);
       }
-      for (const [p] of m.text.matchAll(TEST_PATH_RE)) {
-        if (!tracked.has(p)) findings.push(`${at}: names ${p}, which is not a tracked file; a Measured line names what ran`);
+      for (const [p] of m.text.matchAll(REPO_PATH_RE)) {
+        if (!isTracked(tracked, p)) {
+          findings.push(`${at}: names ${p}, which is not a tracked file or directory; a Measured line names what ran`);
+        }
       }
     }
   }
@@ -223,6 +268,50 @@ test('a Measured line needs a real, past date and names only tracked tests', () 
   assert.match(T('## a\nMeasured: test/gone.test.cjs (2026-11-18)\n').findings[0], /not a tracked file/);
   // A wrapped marker paragraph carries its date on a later line.
   assert.deepStrictEqual(T('## a\nMeasured: a long command\nthat wraps (2026-11-18)\n').findings, []);
+});
+
+// The second control: the dodge a review found in the first version of this gate, which treated EVERY bodiless
+// heading as a container. A bare heading stating a claim, with no body, read as examined 0.
+const BARE_HEADING_DODGE = '## quaude sandbox fails closed\n';
+
+test('a bare heading is an entry, not a container: the dodge is named (control)', () => {
+  const r = T(BARE_HEADING_DODGE);
+  assert.strictEqual(r.examined, 1);
+  assert.strictEqual(r.findings.length, 1);
+  assert.match(r.findings[0], /^B:1 "quaude sandbox fails closed": states a consequence/);
+  // A bodiless heading followed by a SIBLING or a SHALLOWER heading is an entry too; only a deeper next heading
+  // makes it a container.
+  assert.strictEqual(T('## a\n## b\nUnmeasured. x.\n').findings.length, 1);
+  assert.strictEqual(T('### a\n## b\nUnmeasured. x.\n').findings.length, 1);
+  assert.deepStrictEqual(T('## a\n### b\nUnmeasured. x.\n').findings, []);
+});
+
+test('##### headings and text after a mid-file "#" heading are entries of their own', () => {
+  // A level-5 heading is its own entry, not folded into its parent's marker.
+  const five = T('## a\nUnmeasured. x.\n##### deep claim\nprose\n');
+  assert.strictEqual(five.examined, 2);
+  assert.match(five.findings[0], /"deep claim"/);
+  // A level-1 heading after the title is an entry; the text under it is checked.
+  const mid = T('# title\npreamble\n## a\nUnmeasured. x.\n# Part two\nclaim with no marker\n');
+  assert.strictEqual(mid.examined, 2);
+  assert.match(mid.findings[0], /"Part two"/);
+});
+
+test('a heading that says OPEN or STILL cannot be marked No open claim', () => {
+  assert.match(T('## OPEN thing\nNo open claim: done.\n').findings[0], /says OPEN/);
+  assert.match(T('## STILL broken\nNo open claim: done.\n').findings[0], /says STILL/);
+  assert.deepStrictEqual(T('## OPEN thing\nUnmeasured. x.\n').findings, []);
+  assert.deepStrictEqual(T('## reopened, still\nNo open claim: lower-case words are prose.\n').findings, []);
+});
+
+test('a Measured line names what ran before its date, a sane date, and only paths that exist', () => {
+  assert.match(T('## a\nMeasured: (2026-11-18)\n').findings[0], /names what ran before its date/);
+  assert.match(T('## a\nMeasured: x (2019-01-01)\n').findings[0], /before 2026-01-01/);
+  assert.match(T('## a\nMeasured: scripts/gone.mjs (2026-11-18)\n').findings[0], /scripts\/gone\.mjs, which is not/);
+  assert.match(T('## a\nMeasured: man/gone.1 (2026-11-18)\n').findings[0], /man\/gone\.1, which is not/);
+  // A line number and a sentence's full stop are not part of the path; a directory holding a tracked file counts.
+  assert.deepStrictEqual(T('## a\nMeasured: test/x.test.cjs:12 and test/. (2026-11-18)\n').findings, []);
+  assert.deepStrictEqual(T('## a\nMeasured: grep over test/ and test/x.test.cjs. (2026-11-18)\n').findings, []);
 });
 
 test('Unmeasured and No open claim must say why; No open claim stands alone', () => {
