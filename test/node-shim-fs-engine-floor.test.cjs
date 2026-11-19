@@ -100,3 +100,41 @@ test('a stale engine: mode and size are exact, every other Stats field is refuse
     assert.strictEqual(said.length, 1, `the refusal goes to stderr exactly once:\n${r.stderr}`);
   } finally { fs.rmSync(base, { recursive: true, force: true }); }
 });
+
+// CLODE_ENGINE_FLOOR_LOG (libexec/node-shim/internal/engine-floor-log.cjs): what build-leg gates the
+// engine phases on. A refusal the program SWALLOWED is the case the stderr-once line cannot carry to
+// a gate, so the log must hold EVERY refusal, caught or not, each with its stack -- and rg-native's
+// strerror fallback, which throws nothing at all, must land there too.
+const SWALLOW = `${PRELUDE}
+const fsx = require(process.argv[2]);
+const rg = require(process.argv[4]);
+let m = 'unset';
+try { m = fsx.statSync(process.argv[3]).mtimeMs; } catch { /* the wrong branch, taken quietly */ }
+try { m = fsx.statSync(process.argv[3]).ino; } catch { /* and again */ }
+const e = Object.assign(new Error('x'), { code: 'ENOENT', errno: -2 });
+console.log(JSON.stringify({ m, mode: typeof fsx.statSync(process.argv[3]).mode, rgText: rg.osErrorText(e) }));
+`;
+
+test('CLODE_ENGINE_FLOOR_LOG records every refusal a program swallowed, and the strerror fallback', async (t) => {
+  if (skipUnlessTjs(t)) return;
+  const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'shim-floor-log-')));
+  try {
+    const prog = path.join(base, 'prog.cjs');
+    fs.writeFileSync(prog, SWALLOW);
+    const log = path.join(base, 'floor.log');
+    const r = runLoader(prog, [path.join(REPO, 'libexec/node-shim/modules/fs.cjs'), prog, path.join(REPO, 'libexec/rg-native.cjs')],
+      { timeout: 30000, env: { CLODE_ENGINE_FLOOR_LOG: log } });
+    assert.strictEqual(r.status, 0, `${r.stdout}${r.stderr}`);
+    const got = JSON.parse(r.stdout.trim().split('\n').pop());
+    assert.deepStrictEqual({ m: got.m, mode: got.mode }, { m: 'unset', mode: 'number' }, 'the program carried on, as a catch-all does');
+    assert.match(got.rgText, /no such file or directory/i, 'rg still answers, from its fallback');
+    const text = fs.existsSync(log) ? fs.readFileSync(log, 'utf8') : '';
+    const entries = text.split('\n').filter((l) => l.startsWith('node-shim: this engine') || l.startsWith('rg-native:'));
+    assert.deepStrictEqual(entries.map((l) => l.replace(/ \(.*$/, '')), [
+      "node-shim: this engine's sync stat carries no mtimeMs",
+      "node-shim: this engine's sync stat carries no ino",
+      'rg-native: this engine has no __tjs_fs_sync.strerror',
+    ], `EVERY floor event, in order, not just the first:\n${text}`);
+    assert.match(text, /at floorError/, 'each with its stack');
+  } finally { fs.rmSync(base, { recursive: true, force: true }); }
+});

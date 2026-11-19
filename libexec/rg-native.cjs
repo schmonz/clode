@@ -1065,6 +1065,13 @@ function osErrorText(e) {
   if (n === undefined && e && typeof e.errno === 'number' && e.errno !== 0) n = Math.abs(e.errno);
   const libc = n !== undefined && engineStrerror() ? sysErrorText(n) : null;
   if (libc) return `${libc} (os error ${n})`;
+  // An ENGINE (not node) without the binding: below the runtime floor (scripts/engine-api-floor.cjs).
+  // The fallback below still answers, so nothing throws; CLODE_ENGINE_FLOOR_LOG is how a gate hears it.
+  if (n !== undefined && globalThis.__tjs_fs_sync && !engineStrerror()) {
+    let log = null;
+    try { log = require(__dirname + '/node-shim/internal/engine-floor-log.cjs').engineFloorLog; } catch { /* rg answers regardless */ }
+    if (log) log(`rg-native: this engine has no __tjs_fs_sync.strerror (txiki-strerror.patch); errno ${n} falls back to libuv's text`);
+  }
   const m = /^[A-Z0-9_]+: ([^,]+)/.exec(String((e && e.message) || ''));
   const text = m ? m[1] : n !== undefined ? sysErrorText(n) : null;
   return text ? `${capital(text)}${n !== undefined ? ` (os error ${n})` : ''}` : String(code || (e && e.message) || 'unknown error');
@@ -2952,4 +2959,4 @@ function rgExecFileSync(r, opts, file, args) {
 
 module.exports = { isRgExe, rgRefusal, parseRgRefusal, untranslatableReason, runRg, rgSpawnCwd, descriptorRefused, rgSpawn, rgExecFile, rgSpawnSync, rgExecFileSync, RG_MAX_BUFFER,
   UGREP_MIN, parseUgrepVersion, versionAtLeast, ugrepCapabilities, ugrepCapabilitiesAsync, ugrepMatchArgv, chunkFiles, parseUgrepRanges,
-  ugrepMatches, ugrepMatchesAsync, matchFilesAlone, parseRgSearch, UgrepError, rgText, searchStats, FILL_TICK_BYTES };
+  ugrepMatches, ugrepMatchesAsync, matchFilesAlone, parseRgSearch, UgrepError, rgText, searchStats, FILL_TICK_BYTES, osErrorText };

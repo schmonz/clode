@@ -47,19 +47,24 @@
 //              what every generator below produces when no role is named.
 //   'build-host'  an engine that only HOSTS HEAD's build tooling: the one
 //              scripts/bootstrap-engine.sh resolves -- in CI, the LAST release's. What runs
-//              on it, and therefore all this role's floor was measured against: build.sh's
-//              in-process build-runner/build-graph (planning and each step's input/output
-//              checks), build-tjs.cjs's three engine phases (via build-tjs-boot.sh), and
-//              libexec/graph-meta.js (upstream-drift.yml's carve-probe and regexp census). The
-//              root step's blobulate is NOT on it: stage0 runs under node, with the BUILT engine
-//              as its template, and clode build's front door holds that template to 'runtime'
-//              (an engine named by CLODE_TJS becomes the template, so a stale one is refused
-//              there). Anything new that runs on this engine is unmeasured until those tests
-//              cover it. It needs every entry whose `buildHost` is true. An entry
-//              with `buildHost: false` must say why the build never reaches it, MEASURED, in
-//              `notForBuildHost`; test/engine-api-floor.test.cjs refuses one that does not, and
-//              test/node-shim-build-host.test.cjs + test/build-host-stale-engine.test.cjs
-//              re-measure every exemption on each run, on a stand-in for the stale engine.
+//              on it: build.sh's in-process build-runner/build-graph, build-tjs.cjs's three engine
+//              phases (via build-tjs-boot.sh), and libexec/graph-meta.js (upstream-drift.yml's carve-probe
+//              and regexp census). The root step's blobulate is NOT on it: stage0 runs under node, with the
+//              BUILT engine as its template, and clode build's front door holds that template to 'runtime'
+//              (an engine named by CLODE_TJS becomes the template, so a stale one is refused there).
+//              It needs every entry whose `buildHost` is true. An entry with `buildHost: false` must say why
+//              the build never reaches it, MEASURED, in `notForBuildHost`; test/engine-api-floor.test.cjs
+//              refuses one that does not. WHAT IS GATED, and where:
+//                * every leg, on the REAL bootstrap engine: the engine phases that run on the runner
+//                  (source, regen, native and NetBSD-cross compile) -- build-leg fails on a non-empty
+//                  CLODE_ENGINE_FLOOR_LOG (libexec/node-shim/internal/engine-floor-log.cjs);
+//                * every push, on a stand-in: `./build.sh --plan` (resolver acceptance + graph PLANNING
+//                  only, not a step's input/output checks) and graph-meta.js (test/node-shim-build-host);
+//                * where a warm checkout exists, on a stand-in: source and regen, compile opt-in
+//                  (test/build-host-stale-engine);
+//                * measured ONCE by hand (2026-11-18), not gated: the whole ./build.sh root graph,
+//                  including every step's input/output checks, on the stand-in -- nothing refused.
+//              Anything new that runs on this engine is unmeasured until one of those covers it.
 // The split exists because without it the bootstrap's floor was the shipped engine's, and
 // the first engine patch after a release made every leg red with "cut a release" as the
 // remedy -- while release.yml builds its engines through that same refusal (CI run
@@ -88,8 +93,8 @@ const ENGINE_API_FLOOR = [
       + 'reports exactly, and refuses (ERR_CLODE_ENGINE_FLOOR) a read of any other field rather than inventing it. '
       + 'Measured 2026-11-18 on the v0.20260831.1 macos-arm64 slice: --source-only, --regen-only and --build-only '
       + 'read `mode` and no other Stats field (copyFileSync\'s executable bit, rmSync, findTool\'s isExecutableFile); '
-      + 'the whole ./build.sh root graph and libexec/graph-meta.js refuse nothing on a stand-in for that engine. '
-      + 'Re-measured every run: test/node-shim-build-host.test.cjs, test/build-host-stale-engine.test.cjs',
+      + 'libexec/graph-meta.js and the whole ./build.sh root graph (once, by hand) refuse nothing on a stand-in for that '
+      + 'engine. Gated: build-leg\'s CLODE_ENGINE_FLOOR_LOG on the real engine; the stand-in rows listed above',
   },
   {
     // Without it quaude's rg falls back to libuv's error table, whose texts are not the OS's (ELOOP, ENAMETOOLONG,
@@ -101,9 +106,8 @@ const ENGINE_API_FLOOR = [
     why: 'quaude\'s rg error texts: the platform C library\'s strerror(3), as rg prints them (rg-native.cjs osErrorText)',
     buildHost: false,
     notForBuildHost: 'only quaude\'s rg (libexec/rg-native.cjs) calls it, and without it rg falls back to libuv\'s error '
-      + 'table: text, never control flow. Nothing in the build runs rg; the stand-in for the stale engine records '
-      + 'any read of strerror, so test/node-shim-build-host.test.cjs and test/build-host-stale-engine.test.cjs '
-      + 'refuse a build path that reaches for it',
+      + 'table: text, never control flow. Nothing in the build runs rg; that fallback appends to CLODE_ENGINE_FLOOR_LOG, '
+      + 'so the gates listed above refuse a build path that reaches it',
   },
   {
     name: '__tjs_spawn_sync',

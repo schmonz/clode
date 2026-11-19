@@ -7,7 +7,7 @@
 //
 // It is the gate for scripts/engine-api-floor.cjs's build-host exemptions: the build must read
 // no Stats field the stale engine cannot report (it reports mode and size) and call no strerror.
-// ANY refusal fails a row, including one a catch-all swallowed (the tripwire).
+// ANY refusal fails a row, including one a catch-all swallowed (node-shim's CLODE_ENGINE_FLOOR_LOG).
 //
 // PRECONDITIONS, the same as test/build-tjs-no-node.test.cjs's and for its reasons: a POSIX host,
 // an engine, and a WARM vendor checkout to COPY (never the shared one itself, and never a clone

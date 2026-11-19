@@ -500,6 +500,9 @@ runs:
         # cosmo: the source phase applies the two named cosmo patches (they are
         # OUT of the auto-apply globs), so it needs the target token too.
         CLODE_TJS_TARGET: ${{ inputs.cosmo == 'true' && 'cosmo' || '' }}
+        # Every refusal node-shim makes on the bootstrap engine, caught or not, lands here;
+        # "Engine phases refused nothing" below fails the leg on a non-empty file.
+        CLODE_ENGINE_FLOOR_LOG: ${{ runner.temp }}/engine-floor.log
       # FLIPPED ONTO THE BOOTSTRAP RESOLVER, FOR POSIX ONLY — the seventh and last
       # engine-build call site in this file. With this, EVERY engine build in CI runs
       # under tjs; none runs under node on any POSIX machine.
@@ -705,6 +708,7 @@ runs:
         # Windows SDK + ninja on PATH). mingw is retired — kept only as the explicit
         # opt-in for a hypothetical non-msvc Windows leg.
         CLODE_TJS_WIN_MINGW: ${{ runner.os == 'Windows' && inputs.msvc != 'true' && '1' || '' }}
+        CLODE_ENGINE_FLOOR_LOG: ${{ runner.temp }}/engine-floor.log
       # FLIPPED ONTO THE BOOTSTRAP RESOLVER, FOR POSIX ONLY (node-removal-bootstrap-
       # design.md §3 step 4). On ubuntu and macOS this now builds the engine under an
       # engine: build-tjs-boot.sh asks scripts/bootstrap-engine.sh for one (CLODE_TJS, a
@@ -1017,6 +1021,7 @@ runs:
         CLODE_TJS_MIMALLOC: ${{ inputs.mimalloc }}
         CLODE_TJS_FFI: ${{ inputs.ffi }}
         CLODE_TJS_SMOKE: 'off'
+        CLODE_ENGINE_FLOOR_LOG: ${{ runner.temp }}/engine-floor.log
       # FLIPPED ONTO THE BOOTSTRAP RESOLVER (node-removal-bootstrap-design.md §3 step 1,
       # the second of three). The BUILD runs on the ubuntu host — only the compiler it
       # drives is a cross one — so the engine the resolver hands back is for this host,
@@ -1094,6 +1099,7 @@ runs:
       shell: bash
       env:
         CLODE_TJS_VENDOR: ${{ steps.mode.outputs.vendor }}
+        CLODE_ENGINE_FLOOR_LOG: ${{ runner.temp }}/engine-floor.log
       run: |
         set -euo pipefail
         # The patched canonical-LE txiki source (clones txiki + quickjs-ng, applies
@@ -1611,6 +1617,29 @@ runs:
         case "$f" in *"$want"*) ;; *) echo "ERROR: arch marker '$want' not in file output" >&2; exit 1 ;; esac
         case "$f" in *"statically linked"*|*"static-pie linked"*) ;; *) echo "ERROR: not statically linked" >&2; exit 1 ;; esac
         ldd "$TJS" 2>&1 | head -3 || true   # informational: expect "not a dynamic executable"
+
+    # THE BUILD-HOST FLOOR, ON THE REAL BYTES. The engine phases above that run on THIS runner
+    # (source, regen, and the native / NetBSD-cross compile) run on the bootstrap engine -- the
+    # last release's -- which scripts/bootstrap-engine.sh accepts on the BUILD-HOST floor
+    # (scripts/engine-api-floor.cjs). That floor exempts stat identity and strerror because the
+    # build was measured to need neither. This is that measurement, re-taken on every leg: each of
+    # those steps sets CLODE_ENGINE_FLOOR_LOG, node-shim appends EVERY refusal of a field the
+    # engine cannot report (a swallowed one too -- a catch-all would otherwise take the wrong
+    # branch in silence), rg-native appends its strerror fallback, and a non-empty file fails the
+    # leg here, naming each read and its stack. NOT covered: the compiles that run inside a
+    # container or guest (alpine, cross-container, qemu/VM guests), whose filesystem this path is
+    # not on; test/build-host-stale-engine.test.cjs runs those phases on a stand-in instead.
+    - name: Engine phases refused nothing on the bootstrap engine (build-host floor)
+      if: ${{ !cancelled() && steps.tjs-cache.outputs.cache-hit != 'true' }}
+      shell: bash
+      run: |
+        LOG="${{ runner.temp }}/engine-floor.log"
+        if [ -s "$LOG" ]; then
+          echo "::error::the bootstrap engine was asked for something the build-host floor says the build never needs (scripts/engine-api-floor.cjs): re-measure, or keep that binding off the build path"
+          cat "$LOG"
+          exit 1
+        fi
+        echo "engine-floor log: empty (${LOG})"
 
     # Resolves the built tjs path once ahead of the exec=host steps below
     # (.exe on native Windows, plain `tjs` everywhere else). Same shape as

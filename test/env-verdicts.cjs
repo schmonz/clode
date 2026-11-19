@@ -209,6 +209,12 @@ const VERDICTS = [
   { name: 'CLODE_SHIM_HANDLE_DUMP', verdict: 'env-only', because: SHIM_DIAG_BECAUSE },
   { name: 'CLODE_PROBE', verdict: 'env-only', because: SHIM_DIAG_BECAUSE },
   { name: 'CLODE_RG_DEBUG', verdict: 'env-only', because: SHIM_DIAG_BECAUSE },
+  { name: 'CLODE_ENGINE_FLOOR_LOG', verdict: 'env-only',
+    because: 'env-only: a CI/test gate\'s ear, not a user setting. node-shim (and rg-native\'s strerror '
+      + 'fallback) append every time code ran on an engine below the floor it needed, so build-leg can '
+      + 'fail an engine phase on the bootstrap engine even when the program swallowed the refusal '
+      + '(libexec/node-shim/internal/engine-floor-log.cjs). Inherited by every child process, which a '
+      + 'flag could not be.' },
 
   // ---- Host-applet resolution overrides (bun-shim.cjs / target-env.cjs). ----
   { name: 'CLODE_BFS', verdict: 'env-only', because: APPLET_BECAUSE },

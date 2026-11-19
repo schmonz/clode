@@ -64,6 +64,11 @@ function resolve() {
   const env = { ...process.env, CLODE_CACHE: cache };
   delete env.CLODE_TJS;       // the point is the PUBLISHED engine, not this box's
   delete env.CLODE_TJS_OUT;
+  // AND not the one local_engine() finds through a node on PATH (platform-tag's tjsBin, the shared
+  // $TMPDIR/tjs/<tag>/tjs): on a dev box that is a CURRENT engine, and every row below silently
+  // tested it instead of the release (found by the stand-in shape row, 2026-11-18). A CLODE_NODE
+  // that is not executable is the resolver's own way to say "no node here".
+  env.CLODE_NODE = path.join(cache, 'no-node');
   const r = spawnSync('/bin/sh', [SH], { env, encoding: 'utf8' });
   assert.strictEqual(r.status, 0,
     `bootstrap-engine.sh refused (${r.status}):\n${r.stderr}\n`
@@ -74,6 +79,8 @@ function resolve() {
     + 'engine built from this tree to cut that release by hand, then re-pin the bootstrap tag.');
   const tjs = r.stdout.trim();
   assert.ok(fs.existsSync(tjs), `resolver printed a path that does not exist: ${tjs}`);
+  assert.ok(fs.realpathSync(tjs).startsWith(fs.realpathSync(cache) + path.sep),
+    `the resolver handed back ${tjs}, not the slice it fetched into ${cache}: this row would test the wrong engine`);
   return tjs;
 }
 
@@ -127,6 +134,27 @@ console.log(JSON.stringify({ mode: s.mode & 0o777, isFile: s.isFile(), ino }));
   // Either this engine has identity (a release that carries the patch) and reports the real
   // inode, or it refuses. Never 0.
   assert.ok(got.ino === 'ERR_CLODE_ENGINE_FLOOR' || got.ino === String(fs.statSync(exe).ino), `ino: ${got.ino}`);
+});
+
+// The stale STAND-IN the offline build-host gates run on (test/fixtures/stale-engine-prelude.js) is
+// only as good as its likeness to these bytes. Its binding list and stat shape are pinned DATA,
+// so this asserts, on every push, that the real published slice answers exactly that data. When
+// the bootstrap tag is re-pinned to a newer release this goes red, and SHAPE is re-measured.
+test('the stale stand-in\'s pinned shape IS the published slice\'s: bindings and stat keys', (t) => {
+  const skip = why();
+  if (skip) return t.skip(skip);
+  const tjs = resolve();
+  const src = fs.readFileSync(path.join(REPO, 'test', 'fixtures', 'stale-engine-prelude.js'), 'utf8');
+  const m = /^\s*const SHAPE = (\{.*\});$/m.exec(src);
+  assert.ok(m, 'the prelude no longer carries SHAPE as one line of JSON');
+  const SHAPE = JSON.parse(m[1]);
+  const prog = path.join(mkdtemp(), 'shape.js');
+  fs.writeFileSync(prog, 'console.log(JSON.stringify({ bindings: Object.getOwnPropertyNames(globalThis.__tjs_fs_sync), '
+    + 'stat: Object.keys(globalThis.__tjs_fs_sync.stat(".")) }));\n');
+  const r = runTjs(tjs, [prog]);
+  assert.strictEqual(r.status, 0, `${r.stdout}${r.stderr}`);
+  assert.deepStrictEqual(JSON.parse(r.stdout.trim()), SHAPE,
+    'the published bootstrap engine is not the engine the offline gates simulate: re-measure SHAPE');
 });
 
 test("HEAD's build-tjs.cjs loads, top to bottom, under the fetched engine", (t) => {

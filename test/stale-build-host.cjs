@@ -61,11 +61,13 @@ esac
 exec "$REAL" "$@"
 `);
   fs.chmodSync(engine, 0o755);
-  const tripwire = path.join(dir, 'tripwire.log');
-  return { engine, tripwire, env: { CLODE_STALE_ENGINE_TRIPWIRE: tripwire } };
+  // node-shim's own floor log (libexec/node-shim/internal/engine-floor-log.cjs): the same knob
+  // build-leg gates the real engine phases on. Inherited, so every process in the tree writes it.
+  const tripwire = path.join(dir, 'engine-floor.log');
+  return { engine, tripwire, env: { CLODE_ENGINE_FLOOR_LOG: tripwire } };
 }
 
-// Everything a stale build host refused, from the tripwire and the captured output.
+// Everything a stale build host refused: the floor log (caught refusals included) and the output.
 function refusals(host, output) {
   let wire = '';
   try { wire = fs.readFileSync(host.tripwire, 'utf8'); } catch { /* never written: nothing refused */ }

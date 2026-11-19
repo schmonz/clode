@@ -17,7 +17,7 @@
 // the stand-in, ran green with nothing refused.
 //
 // FAILING MEANS ANY REFUSAL, CAUGHT OR NOT. `try { m = statSync(p).mtimeMs } catch {}` would take
-// the wrong branch in silence; the tripwire (test/fixtures/stale-engine-prelude.js) records every
+// the wrong branch in silence; node-shim's CLODE_ENGINE_FLOOR_LOG (the knob build-leg gates the real legs on) records every
 // refusal from every process in the tree, and the control row proves it sees a caught one.
 //
 // Named node-shim-* on purpose: ci.yml's node-shim-oracle jobs glob test/node-shim-*.test.cjs and
@@ -54,7 +54,7 @@ function setup(t, tag) {
   return { dir, host };
 }
 
-test('control: the stale host\'s tripwire catches a refusal the program CAUGHT', (t) => {
+test('control: the floor log catches a refusal the program CAUGHT', (t) => {
   const s = setup(t, 'control');
   if (!s) return;
   const prog = path.join(s.dir, 'swallow.cjs');
@@ -62,20 +62,21 @@ test('control: the stale host\'s tripwire catches a refusal the program CAUGHT',
 let m = 'unset';
 try { m = fs.statSync('.').mtimeMs; } catch { /* the wrong branch, taken quietly */ }
 console.log('mode', fs.statSync('.').mode, 'mtime', m);
-// rg-native's own probe, which has a fallback and so never refuses: the tripwire must still see it.
-console.log('strerror', typeof globalThis.__tjs_fs_sync.strerror);
+// rg-native's strerror fallback, which throws nothing: the floor log must still hear it.
+const rg = require(process.argv[2]);
+console.log('strerror', typeof globalThis.__tjs_fs_sync.strerror, rg.osErrorText(Object.assign(new Error('x'), { code: 'ENOENT', errno: -2 })));
 `);
-  const r = spawnSync(s.host.engine, ['run', path.join(REPO, 'libexec/node-shim/loader.cjs'), prog],
+  const r = spawnSync(s.host.engine, ['run', path.join(REPO, 'libexec/node-shim/loader.cjs'), prog, path.join(REPO, 'libexec', 'rg-native.cjs')],
     { env: hermeticEnv(s.dir, s.host), encoding: 'utf8' });
   assert.strictEqual(r.status, 0, `${r.stdout}${r.stderr}`);
   assert.match(r.stdout, /^mode \d+ mtime unset$/m, 'the program swallowed the refusal and carried on, as a catch-all would');
   const got = refusals(s.host, '');
   assert.match(got.wire, /node-shim: this engine's sync stat carries no mtimeMs/,
-    'the tripwire must record a refusal even when the caller swallowed it -- or every row below is blind');
+    'the floor log must record a refusal even when the caller swallowed it -- or every row below is blind');
   // The loader evaluates modules as `<input>`, so the stack names the frames, not the file.
   assert.match(got.wire, /at floorError[^\n]*\n\s+at get /, 'and with the stack of the read that was refused');
-  assert.match(r.stdout, /^strerror undefined$/m);
-  assert.match(got.wire, /__tjs_fs_sync\.strerror was read/, 'and a read of strerror, which has no refusal to catch');
+  assert.match(r.stdout, /^strerror undefined No such file or directory/m, 'the stand-in has no strerror and rg falls back');
+  assert.match(got.wire, /rg-native: this engine has no __tjs_fs_sync\.strerror/, 'and the fallback, which has no refusal to catch, is logged');
 });
 
 test('./build.sh --plan runs on the stale build host: resolver acceptance + graph planning, nothing refused', (t) => {

@@ -288,6 +288,9 @@ function floorError(field) {
     + 'txiki-sync-stat-identity.patch, and reports only mode and size exactly); rebuild it: ./build.sh --only engine.compile');
   e.code = 'ERR_CLODE_ENGINE_FLOOR';
   if (!_floorSaid) { _floorSaid = true; try { console.error(e.message); } catch { /* best effort */ } }
+  // EVERY refusal, with its stack, for a gate that must hear the ones a caller swallowed
+  // (CLODE_ENGINE_FLOOR_LOG; build-leg fails an engine phase on a non-empty log).
+  require('../internal/engine-floor-log.cjs').engineFloorLog(e.message);
   return e;
 }
 // Writable, as node's fields are: assigning one replaces the refusal with the value assigned.

@@ -3,59 +3,36 @@
 // line 1 of a copy of node-shim's loader by test/stale-build-host.cjs), so it must be plain
 // statements with no require and no module syntax.
 //
-// The shape is MEASURED, not imagined: on the pinned release's macos-arm64 slice,
-// `__tjs_fs_sync.stat("/etc/hosts")` answers exactly
-//   {"size":466,"mode":33188,"uid":0,"gid":0,"mtimeMs":1785163703000,"kind":"file"}
-// -- no dev, ino, nlink, rdev, blksize, blocks, size64 or seconds+nanoseconds times (that engine
-// predates txiki-sync-stat-identity.patch), and `__tjs_fs_sync.strerror` is absent (it predates
-// txiki-strerror.patch). Everything else the floor names (spawn_sync, moduleMeta) it HAS.
+// THE SHAPE IS DATA, MEASURED, AND PINNED: SHAPE, below, is what the pinned release's macos-arm64
+// slice answers for Object.getOwnPropertyNames(__tjs_fs_sync) and for the keys of
+// __tjs_fs_sync.stat(path) -- e.g. {"size":466,"mode":33188,"uid":0,"gid":0,
+// "mtimeMs":1785163703000,"kind":"file"} -- with no dev, ino, nlink, rdev, blksize, blocks, size64
+// or seconds+nanoseconds times (it predates txiki-sync-stat-identity.patch) and no strerror (it
+// predates txiki-strerror.patch). It is NOT derived from the running engine, which grows a binding
+// every time a patch lands. test/bootstrap-engine-online.test.cjs asserts on every push that the
+// REAL published slice still answers exactly SHAPE (it parses that line, so keep it one line of JSON).
 //
-// THE TRIPWIRE. node-shim's refusal of a field this engine cannot report is an exception, and an
-// exception can be CAUGHT: `try { m = fs.statSync(p).mtimeMs } catch {}` takes the wrong branch in
-// silence. node-shim also writes its first refusal to stderr, but stderr can be captured and
-// dropped by a parent. So when CLODE_STALE_ENGINE_TRIPWIRE names a file, every such stderr line is
-// ALSO appended to it, with the stack that produced it -- from every process in the tree, since
-// the variable is inherited. A gate then asserts the file stayed empty.
-//
-// strerror has no refusal of its own to catch: its one caller (libexec/rg-native.cjs) tests for it
-// and falls back. So a READ of it is recorded on the tripwire too -- the build never runs rg, and
-// a build path that reached for strerror is exactly what the build-host floor says cannot happen.
+// What a gate hears is node-shim's own CLODE_ENGINE_FLOOR_LOG (libexec/node-shim/internal/
+// engine-floor-log.cjs): every refusal of a field this engine cannot report, caught or not, and
+// rg-native's strerror fallback. The stand-in adds no reporting of its own.
 (() => {
+  const SHAPE = {"bindings":["open","read","write","close","stat","lstat","fstat","realpath","readlink","readdir","mkdir","rmdir","unlink","rename","access","symlink","chmod"],"stat":["size","mode","uid","gid","mtimeMs","kind"]};
   const real = globalThis.__tjs_fs_sync;
-  const wire = globalThis.tjs && globalThis.tjs.env && globalThis.tjs.env.CLODE_STALE_ENGINE_TRIPWIRE;
-  const record = (line) => {
-    if (!wire) return;
-    try {
-      const fd = real.open(wire, 'a');
-      try { real.write(fd, new TextEncoder().encode(`${line}\n${new Error('tripwire').stack}\n`).buffer, -1); }
-      finally { real.close(fd); }
-    } catch { /* best effort: the node-shim stderr line still says it */ }
-  };
-  const old = (f) => (...a) => {
+  const oldStat = (f) => (...a) => {
     const r = f.apply(real, a);
-    return { size: Number(r.size64 !== undefined ? r.size64 : r.size), mode: r.mode, uid: r.uid, gid: r.gid,
+    const full = { size: Number(r.size64 !== undefined ? r.size64 : r.size), mode: r.mode, uid: r.uid, gid: r.gid,
       mtimeMs: Number(r.mtimeSec) * 1000, kind: r.kind };
+    const o = {};
+    for (const k of SHAPE.stat) o[k] = full[k];
+    return o;
   };
-  // As that engine has it: the same own functions, the three stats in the old shape, and NO
-  // strerror key at all (code that enumerates the binding -- node-shim's nodeErrorsFss -- must
-  // not see one). A direct read of the name is what gets recorded.
-  const target = {};
-  for (const k of Object.getOwnPropertyNames(real)) if (k !== 'strerror') target[k] = real[k];
-  target.stat = old(real.stat);
-  target.lstat = old(real.lstat);
-  target.fstat = old(real.fstat);
-  globalThis.__tjs_fs_sync = new Proxy(target, {
-    get(t, k, r) {
-      if (k === 'strerror') { record('stale engine: __tjs_fs_sync.strerror was read (this engine has none)'); return undefined; }
-      return Reflect.get(t, k, r);
-    },
-  });
-  if (wire && globalThis.console && typeof globalThis.console.error === 'function') {
-    const err = globalThis.console.error.bind(globalThis.console);
-    globalThis.console.error = (...a) => {
-      const line = a.map(String).join(' ');
-      if (line.startsWith('node-shim: this engine')) record(line);
-      return err(...a);
-    };
+  const stale = {};
+  for (const k of SHAPE.bindings) {
+    if (typeof real[k] !== 'function') throw new Error(`stale-engine-prelude: this engine lacks ${k}, which the stale one HAS`);
+    stale[k] = real[k];
   }
+  stale.stat = oldStat(real.stat);
+  stale.lstat = oldStat(real.lstat);
+  stale.fstat = oldStat(real.fstat);
+  globalThis.__tjs_fs_sync = stale;
 })();
