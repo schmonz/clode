@@ -1770,6 +1770,10 @@ jobs:
           path: ${{ runner.temp }}/gates-ran
       - name: Gates — every gate each CI job must run, it ran (test/ci-gates.cjs)
         if: ${{ !cancelled() }}
+        env:
+          # Each judged job's result: a list missing because its job was cancelled, skipped or failed is named
+          # UNOBSERVED (re-run it), one missing or short from a job that succeeded is DARK. Both are red.
+          NEEDS: ${{ toJSON(needs) }}
         run: |
           mkdir -p "$RUNNER_TEMP/gates-ran"
           ls "$RUNNER_TEMP/gates-ran"

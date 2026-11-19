@@ -324,9 +324,13 @@ function checkPlacement({ manifest, registry, texts, files }) {
       if (!block.includes('CLODE_GATES_RAN') || !block.includes('test/gates-ran-in-ci.test.cjs')) {
         findings.push('the aggregator never runs test/gates-ran-in-ci.test.cjs with CLODE_GATES_RAN');
       }
+      if (!/NEEDS:\s*\$\{\{\s*toJSON\(needs\)\s*\}\}/.test(block)) {
+        findings.push('the aggregator never passes NEEDS: ${{ toJSON(needs) }}, so a list missing because its job was '
+          + 'cancelled reads exactly like a job hiding its gates');
+      }
       const needs = (/needs:\s*\[([^\]]*)\]/.exec(block) || [, ''])[1].split(',').map((s) => s.trim());
       for (const j of jobs) {
-        const need = j.suite ? 'test' : j.workflow === aggregator.workflow ? j.job : 'tjs';
+        const need = needKey(j, aggregator);
         if (!needs.includes(need)) findings.push(`the aggregator does not wait for ${need} (job ${j.id}), so it can judge a list before it exists`);
       }
     }
@@ -378,9 +382,22 @@ function checkPlacement({ manifest, registry, texts, files }) {
 // records: Map(job id -> [record] | null); registry: [{ name }] (may be empty: the suite rows'
 // records are the registry as CI loaded it, since test/run.mjs loads every test file).
 // ==========================================================================
-function checkRan({ manifest, records, registry = [] }) {
+// The aggregator's `needs` key for a job: a suite row is ci.yml's `test` (which calls suite.yml), an engine
+// leg is `tjs` (which calls the leg workflow), a ci.yml job is itself.
+function needKey(j, aggregator = AGGREGATOR) {
+  return j.suite ? 'test' : j.workflow === aggregator.workflow ? j.job : 'tjs';
+}
+
+// Every finding is one of two kinds, and both stay red:
+//   UNOBSERVED  the job it concerns did not conclude `success` (cancelled, skipped, failure: needs.<job>.result,
+//               from NEEDS), so what it did not report may never have been reached. Infra (a runner-capacity
+//               cancel, as in run 44572930594) lands here; re-run the job to observe it.
+//   DARK        the job succeeded (or its result is unknown) and still did not pass a gate it must run, or
+//               never uploaded its list: the gate is hidden, which is the failure this guard exists for.
+function checkRan({ manifest, records, registry = [], needs = null }) {
   const { jobs, placed, exempt, files: gateFiles } = manifest;
-  const findings = [];
+  const raw = [];
+  const findings = { push: (msg, j) => raw.push({ msg, j }) };
   const universe = new Set([...registry.map((g) => g.name), ...Object.keys(placed), ...Object.keys(exempt)]);
   for (const rs of records.values()) for (const r of rs || []) { const g = gateOf(r.name); if (g) universe.add(g); }
   const declared = declaredGates(universe, manifest);
@@ -390,7 +407,7 @@ function checkRan({ manifest, records, registry = [] }) {
     const rs = records.get(j.id);
     if (!rs || !rs.length) {
       findings.push(`${j.id} uploaded no gate list (artifact gates-ran-${j.id}): a job that never reported its gates proves `
-        + `none of the ${declared.get(j.id).size} gate(s) it must run ran`);
+        + `none of the ${declared.get(j.id).size} gate(s) it must run ran`, j);
       continue;
     }
     const byGate = new Map();
@@ -405,23 +422,23 @@ function checkRan({ manifest, records, registry = [] }) {
     for (const g of declared.get(j.id)) {
       examined++;
       const o = outcomeOf(byGate.get(g) || []);
-      if (o !== 'passed') findings.push(`${j.id}: gate ${g} ${o}; ${j.id} must run it${placed[g] ? '' : ' (every registered gate runs in the suite unless test/ci-gates.cjs places or exempts it)'}`);
+      if (o !== 'passed') findings.push(`${j.id}: gate ${g} ${o}; ${j.id} must run it${placed[g] ? '' : ' (every registered gate runs in the suite unless test/ci-gates.cjs places or exempts it)'}`, j);
     }
     for (const [file, f] of Object.entries(gateFiles)) {
       if (!(f.jobs || []).includes(j.id)) continue;
       examined++;
       const reps = byFile.get(file) || [];
-      if (!reps.length) { findings.push(`${j.id}: no test of ${file} reported; ${j.id} must run it`); continue; }
+      if (!reps.length) { findings.push(`${j.id}: no test of ${file} reported; ${j.id} must run it`, j); continue; }
       const tests = new Map();
       for (const r of reps) tests.set(r.name, [...(tests.get(r.name) || []), r]);
       for (const [t, trs] of tests) {
         const o = outcomeOf(trs);
         if (o === 'passed') continue;
         if (o.startsWith('skipped') && f.skips && t in f.skips) continue;
-        findings.push(`${j.id}: ${file}: test "${t}" ${o}`);
+        findings.push(`${j.id}: ${file}: test "${t}" ${o}`, j);
       }
       for (const t of Object.keys(f.skips || {})) {
-        if (!tests.has(t)) findings.push(`${j.id}: ${file}: the accepted skip "${t}" was never reported (renamed or gone?): re-measure it`);
+        if (!tests.has(t)) findings.push(`${j.id}: ${file}: the accepted skip "${t}" was never reported (renamed or gone?): re-measure it`, j);
       }
     }
   }
@@ -430,7 +447,16 @@ function checkRan({ manifest, records, registry = [] }) {
     if (passedIn.has(name)) findings.push(`gate ${name} is EXEMPT but passed in ${passedIn.get(name).join(', ')}: place it there instead`);
   }
   const ran = [...passedIn.keys()].length;
-  return { findings, examined, note: `${jobs.length} job(s), ${universe.size} gate(s) in the universe, ${ran} passed in at least one job` };
+  const resultOf = (j) => (needs && needs[needKey(j)] && needs[needKey(j)].result) || null;
+  const out = raw.map(({ msg, j }) => {
+    const r = j && resultOf(j);
+    return r && r !== 'success' ? `UNOBSERVED (${j.id} concluded ${r}): ${msg}` : `DARK: ${msg}`;
+  });
+  const unobserved = out.filter((m) => m.startsWith('UNOBSERVED')).length;
+  return { findings: out, examined, note: `${jobs.length} job(s), ${universe.size} gate(s) in the universe, ${ran} passed in at least one job`
+    + `${needs ? '' : '; NEEDS unset, so no job\'s result is known and every finding counts as DARK'}`
+    + `\n  DARK: ${out.length - unobserved} finding(s) where the job succeeded (or its result is unknown) and a gate it must run did not pass`
+    + `\n  UNOBSERVED: ${unobserved} finding(s) where the job concluded cancelled, skipped or failure, so the gate may never have been reached` };
 }
 
 // Read every job's gate list from `root` (one dir per artifact, gates-ran-<id>, *.jsonl at any
@@ -493,6 +519,7 @@ function loadRegistry({ repo = REPO, env = process.env } = {}) {
 const MANIFEST = Object.freeze({ jobs: JOBS, placed: PLACED, exempt: EXEMPT, files: FILES, aggregator: AGGREGATOR });
 
 module.exports = {
+  needKey,
   MANIFEST, JOBS, PLACED, EXEMPT, FILES, AGGREGATOR, SUITE_ROWS, CI, SUITE, LEG,
   declaredGates, outcomeOf, repoFile, gateOf, names, jobBlocks,
   checkPlacement, checkRan, readRecords, loadRegistry,

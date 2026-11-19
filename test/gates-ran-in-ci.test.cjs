@@ -45,7 +45,8 @@ const FX_CI = [
   '    steps:',
   '      - uses: actions/download-artifact@v8.0.2',
   '        with: { pattern: gates-ran-* }',
-  '      - run: CLODE_GATES_RAN=x node --test test/gates-ran-in-ci.test.cjs',
+  '      - env: { NEEDS: ${{ toJSON(needs) }} }',
+  '        run: CLODE_GATES_RAN=x node --test test/gates-ran-in-ci.test.cjs',
   '',
 ].join('\n');
 const FX_SUITE = [
@@ -108,7 +109,13 @@ function readRan() {
     return { skip: 'not the gates-ran-in-ci job (CLODE_GATES_RAN unset): that job downloads every CI job\'s gate list and runs this' };
   }
   if (!fs.existsSync(root)) throw new Error(`CLODE_GATES_RAN=${root} does not exist: the download found no gate list at all`);
-  return { manifest: G.MANIFEST, records: G.readRecords(root, G.MANIFEST.jobs), registry: G.loadRegistry() };
+  // NEEDS is ci.yml's `${{ toJSON(needs) }}`: each judged job's result, so a list missing because infra cancelled
+  // the job is named UNOBSERVED rather than DARK. Unset (a local run), every finding is DARK.
+  let needs = null;
+  if (process.env.NEEDS) {
+    try { needs = JSON.parse(process.env.NEEDS); } catch (e) { throw new Error(`NEEDS is not JSON (${e.message}): ${process.env.NEEDS.slice(0, 200)}`); }
+  }
+  return { manifest: G.MANIFEST, records: G.readRecords(root, G.MANIFEST.jobs), registry: G.loadRegistry(), needs };
 }
 guardTests(defineGuard({
   name: 'gates-ran-in-ci',
@@ -147,6 +154,7 @@ test('ci-gate-placement: each way the manifest can disagree with the tree is nam
     [{ texts: { 'suite.yml': FX_SUITE.replace('os: ubuntu-latest', 'os: macos-latest') } }, /does not carry "os: ubuntu-latest"/],
     [{ texts: { [G.CI]: FX_CI.replace('needs: [test, oracle]', 'needs: [test]') } }, /the aggregator does not wait for oracle/],
     [{ texts: { [G.CI]: FX_CI.replace('  gates-ran-in-ci:', '  other:') } }, /the aggregator: .* has no job gates-ran-in-ci/],
+    [{ texts: { [G.CI]: FX_CI.replace('NEEDS: ${{ toJSON(needs) }}', 'X: y') } }, /the aggregator never passes NEEDS/],
     [{ texts: { [G.CI]: `${FX_CI}  stray:\n    steps:\n      - run: node --test test/a.test.cjs\n` } }, /ci.yml job stray runs gate file\(s\) test\/a.test.cjs but is not in JOBS/],
   ];
   for (const [over, re] of cases) {
@@ -184,6 +192,32 @@ test('gates-ran-in-ci: each way a job can fail to run a gate is named', () => {
     const r = G.checkRan(fxRan(over));
     assert.ok(r.findings.some((f) => re.test(f)), `${re} not among:\n${r.findings.join('\n')}`);
   }
+});
+
+test('gates-ran-in-ci: a finding is UNOBSERVED when its job did not succeed, DARK when it did; both stay red', () => {
+  const missing = { records: { oracle: null } };
+  const skipped = { records: { oracle: [rec('guard gate: b', { skip: 'no engine' })] } };
+  const absent = { records: { oracle: [rec('other')] } };
+  const rows = [
+    // [case, needs, expected prefix]
+    [missing, { oracle: { result: 'cancelled' } }, /^UNOBSERVED \(oracle concluded cancelled\): oracle uploaded no gate list/],
+    [missing, { oracle: { result: 'skipped' } }, /^UNOBSERVED \(oracle concluded skipped\): oracle uploaded no gate list/],
+    [missing, { oracle: { result: 'failure' } }, /^UNOBSERVED \(oracle concluded failure\): oracle uploaded no gate list/],
+    [missing, { oracle: { result: 'success' } }, /^DARK: oracle uploaded no gate list/],
+    [missing, null, /^DARK: oracle uploaded no gate list/],
+    [skipped, { oracle: { result: 'success' } }, /^DARK: oracle: gate b skipped \(no engine\)/],
+    [absent, { oracle: { result: 'success' } }, /^DARK: oracle: gate b never reported/],
+    [skipped, { oracle: { result: 'failure' } }, /^UNOBSERVED \(oracle concluded failure\): oracle: gate b skipped/],
+  ];
+  for (const [over, needs, re] of rows) {
+    const r = G.checkRan({ ...fxRan(over), needs });
+    assert.ok(r.findings.length > 0, `${re}: no finding, so it would be green`);
+    assert.ok(r.findings.some((f) => re.test(f)), `${re} not among:\n${r.findings.join('\n')}`);
+  }
+  const r = G.checkRan({ ...fxRan({ records: { oracle: null, 'test-ubuntu-latest': [rec('guard gate: a', { skip: 'x' })] } }),
+    needs: { oracle: { result: 'cancelled' }, test: { result: 'success' } } });
+  assert.match(r.note, /\n  DARK: 1 finding\(s\)/);
+  assert.match(r.note, /\n  UNOBSERVED: 1 finding\(s\)/);
 });
 
 test('gates-ran-in-ci: a gate file is accounted test by test, skips only by name', () => {
