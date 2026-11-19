@@ -315,10 +315,16 @@ function runNaude(opts = {}) {
   if (execPath && shouldInjectGuard(childArgv)) {
     const hookCommand = '"' + execPath + '" --clode-update-guard';
     const guardSettings = { hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: hookCommand }] }] } };
-    let procVersion;
-    try { procVersion = fs.readFileSync('/proc/version', 'utf8'); } catch { procVersion = undefined; }
-    const probe = policyProbe({ providerPlatform: process.platform, env, procVersion });
-    const policyMayOverride = probe.always || probe.paths.some((p) => { try { fs.lstatSync(p); return true; } catch { return false; } });
+    // The host the policy probe reads: this one, or (opts.policyHost) one a test names, so its verdict never
+    // depends on the runner's (windows-latest is "always" by policyProbe's rule, and a box with /etc/claude-code
+    // "may": CI 44443821699 saw a 'layers' test take 'merge' there).
+    const host = opts.policyHost || {
+      platform: process.platform,
+      procVersion: () => { try { return fs.readFileSync('/proc/version', 'utf8'); } catch { return undefined; } },
+      exists: (p) => { try { fs.lstatSync(p); return true; } catch { return false; } },
+    };
+    const probe = policyProbe({ providerPlatform: host.platform, env, procVersion: host.procVersion() });
+    const policyMayOverride = probe.always || probe.paths.some((p) => host.exists(p));
     const mode = guardDeliveryMode(childArgv, policyMayOverride);
     if (mode === 'own') {
       childArgv.splice(0, childArgv.length, ...withSettingsArg(childArgv, findSettingsArgs(childArgv), JSON.stringify(guardSettings)));
