@@ -119,9 +119,10 @@ function units(s, sep, argv) {
   if (argv.includes('--json') && s.startsWith('{')) {
     const out = [];
     let cur = null;
+    // a {bytes} path (not UTF-8) has no text: no key, so no time group; it compares as its own unit
     for (const line of records(s, '\n')) {
       const m = JSON.parse(line);
-      if (m.type === 'begin') { cur = { key: m.data.path.text, text: line }; out.push(cur); } else if (cur) cur.text += line;
+      if (m.type === 'begin') { cur = { key: (m.data && m.data.path && m.data.path.text) ?? null, text: line }; out.push(cur); } else if (cur) cur.text += line;
       else out.push({ key: null, text: line });
       if (m.type === 'end') cur = null;
     }
@@ -246,6 +247,14 @@ test('RG-SORT-MODIFIED: equal times keep the walk\'s readdir order, --sortr keep
     assert.ok(L.indexOf(`./sub/deep/${d1}`) + 1 === L.indexOf(`./sub/deep/${d2}`), `${d1} then ${d2}: ${L}`);
   }
   assert.deepStrictEqual(list(['--files', '--sort=modified', 'c.tsx', 'b.ts']), ['c.tsx', 'b.ts']);
+  // The same ties in a count and in a --json search (the output shapes check() now groups): readdir's order there too.
+  const search = (argv) => l1(rgn.runRg(argv, { cwd: root, spawnSync: cp.spawnSync, ugrep: () => null, matchFiles: rgn.matchFilesAlone }).stdout)
+    .split('\n').filter(Boolean);
+  const counts = search(['-c', '--sort=modified', '--hidden', '--no-ignore', 'x', '.']);
+  assert.ok(counts.indexOf(`./sub/deep/${d1}:1`) + 1 === counts.indexOf(`./sub/deep/${d2}:1`), `-c: ${d1} then ${d2}: ${counts}`);
+  const begins = search(['--json', '--sort=modified', 'x', 'sub']).map((l) => JSON.parse(l)).filter((m) => m.type === 'begin')
+    .map((m) => m.data.path.text);
+  assert.deepStrictEqual(begins.filter((p) => p.startsWith('sub/deep/')), [`sub/deep/${d1}`, `sub/deep/${d2}`], `--json: ${begins}`);
 }));
 
 // RULING G12, end to end: files written within ONE second, their times as the filesystem gave them (none set):

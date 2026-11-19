@@ -85,6 +85,19 @@ function spawnEval(js, opts = {}) {
   check('fs stat identity: dev and ino BigInts, ino nonzero', typeof st.dev === 'bigint' && typeof st.ino === 'bigint' && st.ino !== 0n,
     String(st.dev) + ' ' + String(st.ino));
   check('fs stat kind file', st.kind === 'file', st.kind);
+  // End to end through node-shim: fs.statSync(fp).mtimeMs under the loader (the repo's own, from this job's cwd, the
+  // checkout root) is node's ms from the same raw stat, sec * 1e3 + nsec / 1e6.
+  {
+    const probe = dir + '\\shim-stat.cjs';
+    const pfd = __tjs_fs_sync.open(probe, 'w');
+    __tjs_fs_sync.write(pfd, enc.encode("process.stdout.write(String(require('fs').statSync(process.argv[2]).mtimeMs))").buffer, -1);
+    __tjs_fs_sync.close(pfd);
+    const r = globalThis.__tjs_spawn_sync(SELF, ['run', tjs.cwd + '\\libexec\\node-shim\\loader.cjs', probe, fp], {});
+    const want = Number(st.mtimeSec) * 1e3 + Number(st.mtimeNsec) / 1e6;
+    const got = dec.decode(r.stdout);
+    check('shim fs.statSync().mtimeMs is node\'s ms from the raw stat', r.status === 0 && got === String(want),
+      'status ' + r.status + ', got ' + got + ', want ' + want + ', stderr ' + dec.decode(r.stderr).slice(0, 300));
+  }
   const names = __tjs_fs_sync.readdir(dir);
   check('fs readdir sees the file', names.indexOf('rt.bin') >= 0, JSON.stringify(names));
   const rp = __tjs_fs_sync.realpath(fp);
