@@ -1913,6 +1913,12 @@ test('a win32-named carve (B:/~BUN/root/...) reads the same registry and modes a
 // so a reader that misnames win32 chunks is otherwise seen there alone. The pinned carve in hand, spelled the way a
 // win32 carve spells its chunks (WIN32: measured against the real 2.1.283 win32-x64 decode, its urls
 // file:///B:/~BUN/root/x.js and its imports from"B:/~BUN/root/x.js"), must read the same registry and modes.
+// WHAT IT DOES NOT PROVE. The rewrite is textual and blunt: it rewrites EVERY "/$bunfs/root" literal in the carve,
+// not only the chunk headers and import specifiers, so a string that names that path for another reason is rewritten
+// too and no longer reads as a real win32 carve would. It does not model Bun's build-time platform folding either: a
+// win32 carve was built with process.platform/arch constant-folded to win32, so its code differs from this POSIX one
+// in places no spelling change reaches. It checks the chunk-NAME class only; the windows-latest gates, reading a real
+// win32 carve, remain the check for everything else.
 test('the pinned carve spelled the win32 way (B:/~BUN/root/...) reads the same registry and modes', (t) => {
   const c = readInputs();
   if ('skip' in c) { t.skip(c.skip); return; }
