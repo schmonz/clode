@@ -7,7 +7,7 @@
 // nonzero on any test failure or hermeticity violation.
 import { spawnSync, execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -692,6 +692,17 @@ const tapCopy = path.join(os.tmpdir(), `clode-test-run-${process.pid}.tap`);
 // where it arms a timer that names the file and exits 1 at its limit. A file that never finishes is a named red, never
 // a silent wait (the 9h40m hang of 2026-11-19). Both passes below carry it.
 const WATCHDOG = path.join(HERE, 'file-watchdog-preload.cjs');
+// THE GATE LIST (observability plan Task 5): with CLODE_GATES_REPORT=<dir>, a third reporter
+// (test/cell-reporter.mjs) writes one JSON line per finished test to <dir>/suite.jsonl. CI's suite
+// job uploads that dir, and test/gates-ran-in-ci.test.cjs holds the job to the gates
+// test/ci-gates.cjs says it must run: a gate that skipped here is then named, not counted.
+const gatesReport = process.env.CLODE_GATES_REPORT
+  ? (fs.mkdirSync(process.env.CLODE_GATES_REPORT, { recursive: true }),
+  // A file URL, not a path: node imports a custom reporter, and a Windows path (D:\...) is not an
+  // import specifier.
+  ['--test-reporter', pathToFileURL(path.join(HERE, 'cell-reporter.mjs')).href,
+    '--test-reporter-destination', path.join(process.env.CLODE_GATES_REPORT, 'suite.jsonl')])
+  : [];
 const res = spawnSync(process.execPath, [
   '--require', WATCHDOG,
   '--test',
@@ -699,6 +710,7 @@ const res = spawnSync(process.execPath, [
   '--test-reporter-destination', 'stdout',
   '--test-reporter', 'tap',
   '--test-reporter-destination', tapCopy,
+  ...gatesReport,
   ...files,
 ], { stdio: 'inherit' });
 let fails = res.status === 0 ? 0 : 1;

@@ -328,12 +328,27 @@ jobs:
           set -euo pipefail
           PROV="$(node scripts/stage-provider.mjs)" || exit 1
           echo "provider: $PROV"
+          node -e "require('fs').mkdirSync(process.env.RUNNER_TEMP + '/gates', { recursive: true })"
           CLODE_TJS="$PWD/tjs.exe" CLODE_PROVIDER_BIN="$PROV" \
             node --require ./test/file-watchdog-preload.cjs --test --test-concurrency=1 \
+              --test-reporter=spec --test-reporter-destination=stdout \
+              --test-reporter=./test/cell-reporter.mjs --test-reporter-destination="$RUNNER_TEMP/gates/oracles.jsonl" \
               test/node-shim-roundtrip.test.cjs \
               test/node-shim-agentic.test.cjs \
               test/node-shim-fs-stat-identity.test.cjs \
               test/node-shim-os-devnull.test.cjs
+
+      # THIS JOB'S GATE LIST (observability plan Task 5): every record test/cell-reporter.mjs wrote above, for ci.yml's
+      # gates-ran-in-ci job to hold against test/ci-gates.cjs. Uploaded whatever happened above: a red job's list still
+      # says which gates ran, and a job that uploads none is itself a finding there.
+      - name: Upload this job's gate list (judged by gates-ran-in-ci)
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: gates-ran-windows-amd64-tests
+          path: |
+            ${{ runner.temp }}/gates
+          if-no-files-found: warn
 
   # Windows ConPTY TUI render (windows-tjs-port spec, sub-project D). The FIRST
   # CI PTY harness on any platform: build a real quaude (`clode build`) and drive
@@ -403,8 +418,12 @@ jobs:
           PROV="$(node scripts/stage-provider.mjs)" || exit 1
           echo "provider: $PROV"
           chmod +x ./tjs.exe || true
+          node -e "require('fs').mkdirSync(process.env.RUNNER_TEMP + '/gates', { recursive: true })"
           CLODE_TJS="$PWD/tjs.exe" CLODE_CLAUDE_BIN="$PROV" CLODE_LIVE_RENDER=1 \
-            node --require ./test/file-watchdog-preload.cjs --test --test-concurrency=1 test/e2e-tui-tjs.test.cjs
+            node --require ./test/file-watchdog-preload.cjs --test --test-concurrency=1 \
+              --test-reporter=spec --test-reporter-destination=stdout \
+              --test-reporter=./test/cell-reporter.mjs --test-reporter-destination="$RUNNER_TEMP/gates/tui.jsonl" \
+              test/e2e-tui-tjs.test.cjs
       - name: Characterize the node-shim TTY input path under ConPTY (D2)
         run: |
           set -euo pipefail
@@ -414,8 +433,24 @@ jobs:
           # a real ConPTY. No provider/network — CLODE_TJS + the node-pty harness
           # (already installed above) are all it needs. First CI TTY-input coverage
           # on any platform; a failure pinpoints a shim divergence from node.
+          node -e "require('fs').mkdirSync(process.env.RUNNER_TEMP + '/gates', { recursive: true })"
           CLODE_TJS="$PWD/tjs.exe" \
-            node --require ./test/file-watchdog-preload.cjs --test --test-concurrency=1 test/node-shim-tty.test.cjs
+            node --require ./test/file-watchdog-preload.cjs --test --test-concurrency=1 \
+              --test-reporter=spec --test-reporter-destination=stdout \
+              --test-reporter=./test/cell-reporter.mjs --test-reporter-destination="$RUNNER_TEMP/gates/tty.jsonl" \
+              test/node-shim-tty.test.cjs
+
+      # THIS JOB'S GATE LIST (observability plan Task 5): every record test/cell-reporter.mjs wrote above, for ci.yml's
+      # gates-ran-in-ci job to hold against test/ci-gates.cjs. Uploaded whatever happened above: a red job's list still
+      # says which gates ran, and a job that uploads none is itself a finding there.
+      - name: Upload this job's gate list (judged by gates-ran-in-ci)
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: gates-ran-windows-amd64-tui
+          path: |
+            ${{ runner.temp }}/gates
+          if-no-files-found: warn
 
   # Windows shim + sync-primitive coverage on the ARM64 kernel — the same
   # rationale as windows-amd64-tests, exercised against the windows-arm64 leg's
@@ -476,12 +511,27 @@ jobs:
           set -euo pipefail
           PROV="$(node scripts/stage-provider.mjs)" || exit 1
           echo "provider: $PROV"
+          node -e "require('fs').mkdirSync(process.env.RUNNER_TEMP + '/gates', { recursive: true })"
           CLODE_TJS="$PWD/tjs.exe" CLODE_PROVIDER_BIN="$PROV" \
             node --require ./test/file-watchdog-preload.cjs --test --test-concurrency=1 \
+              --test-reporter=spec --test-reporter-destination=stdout \
+              --test-reporter=./test/cell-reporter.mjs --test-reporter-destination="$RUNNER_TEMP/gates/oracles.jsonl" \
               test/node-shim-roundtrip.test.cjs \
               test/node-shim-agentic.test.cjs \
               test/node-shim-fs-stat-identity.test.cjs \
               test/node-shim-os-devnull.test.cjs
+
+      # THIS JOB'S GATE LIST (observability plan Task 5): every record test/cell-reporter.mjs wrote above, for ci.yml's
+      # gates-ran-in-ci job to hold against test/ci-gates.cjs. Uploaded whatever happened above: a red job's list still
+      # says which gates ran, and a job that uploads none is itself a finding there.
+      - name: Upload this job's gate list (judged by gates-ran-in-ci)
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: gates-ran-windows-arm64-tests
+          path: |
+            ${{ runner.temp }}/gates
+          if-no-files-found: warn
 
   # templates-drift MOVED OUT OF ci.yml (2026-08-24).
   #
@@ -800,7 +850,25 @@ jobs:
       # a test that never ran means the tool x mode cell ran nowhere, and this step names it (observability plan Task 1).
       - name: Cells — every tool x mode cell this job claims, it ran
         if: ${{ !cancelled() }}
-        run: CLODE_CELL_JOB=node-shim-oracle CLODE_CELL_RAN="$RUNNER_TEMP/cells" node --require ./test/file-watchdog-preload.cjs --test --test-name-pattern=cells-ran-in-ci-job test/build-gates/tool-coverage-gates.test.cjs
+        run: |
+          node -e "require('fs').mkdirSync(process.env.RUNNER_TEMP + '/gates', { recursive: true })"
+          CLODE_CELL_JOB=node-shim-oracle CLODE_CELL_RAN="$RUNNER_TEMP/cells" node --require ./test/file-watchdog-preload.cjs --test \
+            --test-reporter=spec --test-reporter-destination=stdout \
+            --test-reporter=./test/cell-reporter.mjs --test-reporter-destination="$RUNNER_TEMP/gates/cells-check.jsonl" \
+            --test-name-pattern=cells-ran-in-ci-job test/build-gates/tool-coverage-gates.test.cjs
+
+      # THIS JOB'S GATE LIST (observability plan Task 5): every record test/cell-reporter.mjs wrote above, for ci.yml's
+      # gates-ran-in-ci job to hold against test/ci-gates.cjs. Uploaded whatever happened above: a red job's list still
+      # says which gates ran, and a job that uploads none is itself a finding there.
+      - name: Upload this job's gate list (judged by gates-ran-in-ci)
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: gates-ran-node-shim-oracle
+          path: |
+            ${{ runner.temp }}/cells
+            ${{ runner.temp }}/gates
+          if-no-files-found: warn
 
   # The BUILDER and the PACKAGED TARGETS — on glibc, on purpose.
   #
@@ -950,8 +1018,12 @@ jobs:
         run: |
           set -euo pipefail
           PROV="$(node scripts/stage-provider.mjs)" || exit 1
+          mkdir -p "$RUNNER_TEMP/cells"
           CLODE_PROVIDER_BIN="$PROV" CLODE_CLAUDE_BIN="$PROV" \
-            node --require ./test/file-watchdog-preload.cjs --test --test-timeout=1200000 test/oracle-binaries.test.cjs
+            node --require ./test/file-watchdog-preload.cjs --test --test-timeout=1200000 \
+              --test-reporter=spec --test-reporter-destination=stdout \
+              --test-reporter=./test/cell-reporter.mjs --test-reporter-destination="$RUNNER_TEMP/cells/oracle-binaries.jsonl" \
+              test/oracle-binaries.test.cjs
 
       # THE ORACLE PROPERTY the step above spends: naude is only a control for quaude
       # because it carries the bun-shim and NOT the node-shim. The gate for that reads a
@@ -963,7 +1035,10 @@ jobs:
       - name: naude shim boundary — the bytes that make the oracle an oracle
         run: |
           set -euo pipefail
-          node --require ./test/file-watchdog-preload.cjs --test test/naude-shim-boundary.test.cjs 2>&1 | tee boundary.out
+          mkdir -p "$RUNNER_TEMP/cells"
+          node --require ./test/file-watchdog-preload.cjs --test --test-reporter=spec --test-reporter-destination=stdout \
+            --test-reporter=./test/cell-reporter.mjs --test-reporter-destination="$RUNNER_TEMP/cells/naude-shim-boundary.jsonl" \
+            test/naude-shim-boundary.test.cjs 2>&1 | tee boundary.out
           grep -qE '^(ℹ|#) skipped 0$' boundary.out \
             || { echo "ERROR: the naude shim-boundary gate SKIPPED — it found no built naude to inspect (see its skip message above)" >&2; exit 1; }
 
@@ -972,7 +1047,25 @@ jobs:
       # a test that never ran means the tool x mode cell ran nowhere, and this step names it (observability plan Task 1).
       - name: Cells — every tool x mode cell this job claims, it ran
         if: ${{ !cancelled() }}
-        run: CLODE_CELL_JOB=native-builder-oracle CLODE_CELL_RAN="$RUNNER_TEMP/cells" node --require ./test/file-watchdog-preload.cjs --test --test-name-pattern=cells-ran-in-ci-job test/build-gates/tool-coverage-gates.test.cjs
+        run: |
+          node -e "require('fs').mkdirSync(process.env.RUNNER_TEMP + '/gates', { recursive: true })"
+          CLODE_CELL_JOB=native-builder-oracle CLODE_CELL_RAN="$RUNNER_TEMP/cells" node --require ./test/file-watchdog-preload.cjs --test \
+            --test-reporter=spec --test-reporter-destination=stdout \
+            --test-reporter=./test/cell-reporter.mjs --test-reporter-destination="$RUNNER_TEMP/gates/cells-check.jsonl" \
+            --test-name-pattern=cells-ran-in-ci-job test/build-gates/tool-coverage-gates.test.cjs
+
+      # THIS JOB'S GATE LIST (observability plan Task 5): every record test/cell-reporter.mjs wrote above, for ci.yml's
+      # gates-ran-in-ci job to hold against test/ci-gates.cjs. Uploaded whatever happened above: a red job's list still
+      # says which gates ran, and a job that uploads none is itself a finding there.
+      - name: Upload this job's gate list (judged by gates-ran-in-ci)
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: gates-ran-native-builder-oracle
+          path: |
+            ${{ runner.temp }}/cells
+            ${{ runner.temp }}/gates
+          if-no-files-found: warn
 
       # REQUIRED-GATE MARKER (BACKLOG item 4 / phase 5 task 10). This job "sat as one red
       # among twenty-two" — it BUILDS THE PRODUCT (node-free, real provider) and is the
@@ -1195,7 +1288,12 @@ jobs:
       - name: fidelity/update-notify.pty — the auto-update NOTIFY surface
         env:
           CLODE_QUAUDE: ${{ runner.temp }}/quaude-notify/quaude
-        run: node --require ./test/file-watchdog-preload.cjs --test --test-concurrency=1 test/fidelity/update-notify.pty.test.cjs
+        run: |
+          mkdir -p "$RUNNER_TEMP/cells"
+          node --require ./test/file-watchdog-preload.cjs --test --test-concurrency=1 \
+            --test-reporter=spec --test-reporter-destination=stdout \
+            --test-reporter=./test/cell-reporter.mjs --test-reporter-destination="$RUNNER_TEMP/cells/pty-notify.jsonl" \
+            test/fidelity/update-notify.pty.test.cjs
       # THE SESSION GATES (CellSegmenter phase 5): four scripted multi-frame sessions
       # (test/fidelity/sessions.cjs: type-edit, resize, scroll, slash-menu), a frame per step
       # taken once output settles, compared cell for cell. Three `node --test` runs, one file
@@ -1234,10 +1332,14 @@ jobs:
           echo "provider: $PROV"
           export CLODE_PROVIDER_BIN="$PROV" CLODE_CLAUDE_BIN="$PROV"
           : > session-gates.out
+          mkdir -p "$RUNNER_TEMP/cells"
           for f in test/fidelity/session-determinism.test.cjs \
                    test/fidelity/interactive-session-diff.test.cjs \
                    test/fidelity/reset-invisibility.test.cjs; do
-            node --require ./test/file-watchdog-preload.cjs --test --test-concurrency=1 "$f" 2>&1 | tee -a session-gates.out
+            node --require ./test/file-watchdog-preload.cjs --test --test-concurrency=1 \
+              --test-reporter=spec --test-reporter-destination=stdout \
+              --test-reporter=./test/cell-reporter.mjs --test-reporter-destination="$RUNNER_TEMP/cells/pty-session-$(basename "$f" .test.cjs).jsonl" \
+              "$f" 2>&1 | tee -a session-gates.out
           done
           SUMMARIES=$(grep -cE '^[^ ]+ skipped [0-9]+$' session-gates.out || true)
           SKIPPED=$(sed -nE 's/^[^ ]+ skipped ([0-9]+)$/\1/p' session-gates.out | awk '{ n += $1 } END { print n + 0 }')
@@ -1275,8 +1377,11 @@ jobs:
           CLODE_OFFLINE: '1'
         run: |
           set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/cells"
           CLODE_PROVIDER_BIN="$CLODE_NATIVE_ORACLE" \
             node --require ./test/file-watchdog-preload.cjs --test --test-concurrency=1 \
+              --test-reporter=spec --test-reporter-destination=stdout \
+              --test-reporter=./test/cell-reporter.mjs --test-reporter-destination="$RUNNER_TEMP/cells/pty-text.jsonl" \
               test/native-oracle.test.cjs \
               test/unicode-data-fresh.test.cjs \
               test/unicode-text.test.cjs \
@@ -1409,7 +1514,25 @@ jobs:
       # a test that never ran means the tool x mode cell ran nowhere, and this step names it (observability plan Task 1).
       - name: Cells — every tool x mode cell this job claims, it ran
         if: ${{ !cancelled() }}
-        run: CLODE_CELL_JOB=linux-x64-pty CLODE_CELL_RAN="$RUNNER_TEMP/cells" node --require ./test/file-watchdog-preload.cjs --test --test-name-pattern=cells-ran-in-ci-job test/build-gates/tool-coverage-gates.test.cjs
+        run: |
+          node -e "require('fs').mkdirSync(process.env.RUNNER_TEMP + '/gates', { recursive: true })"
+          CLODE_CELL_JOB=linux-x64-pty CLODE_CELL_RAN="$RUNNER_TEMP/cells" node --require ./test/file-watchdog-preload.cjs --test \
+            --test-reporter=spec --test-reporter-destination=stdout \
+            --test-reporter=./test/cell-reporter.mjs --test-reporter-destination="$RUNNER_TEMP/gates/cells-check.jsonl" \
+            --test-name-pattern=cells-ran-in-ci-job test/build-gates/tool-coverage-gates.test.cjs
+
+      # THIS JOB'S GATE LIST (observability plan Task 5): every record test/cell-reporter.mjs wrote above, for ci.yml's
+      # gates-ran-in-ci job to hold against test/ci-gates.cjs. Uploaded whatever happened above: a red job's list still
+      # says which gates ran, and a job that uploads none is itself a finding there.
+      - name: Upload this job's gate list (judged by gates-ran-in-ci)
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: gates-ran-linux-x64-pty
+          path: |
+            ${{ runner.temp }}/cells
+            ${{ runner.temp }}/gates
+          if-no-files-found: warn
 
   # node-shim oracle on DARWIN — the same node-vs-tjs behavioral diff as
   # node-shim-oracle above, but on macOS against a real darwin tjs.
@@ -1538,7 +1661,12 @@ jobs:
       # a test that never ran means the tool x mode cell ran nowhere, and this step names it (observability plan Task 1).
       - name: Cells — every tool x mode cell this job claims, it ran
         if: ${{ !cancelled() }}
-        run: CLODE_CELL_JOB=node-shim-oracle-darwin CLODE_CELL_RAN="$RUNNER_TEMP/cells" node --require ./test/file-watchdog-preload.cjs --test --test-name-pattern=cells-ran-in-ci-job test/build-gates/tool-coverage-gates.test.cjs
+        run: |
+          node -e "require('fs').mkdirSync(process.env.RUNNER_TEMP + '/gates', { recursive: true })"
+          CLODE_CELL_JOB=node-shim-oracle-darwin CLODE_CELL_RAN="$RUNNER_TEMP/cells" node --require ./test/file-watchdog-preload.cjs --test \
+            --test-reporter=spec --test-reporter-destination=stdout \
+            --test-reporter=./test/cell-reporter.mjs --test-reporter-destination="$RUNNER_TEMP/gates/cells-check.jsonl" \
+            --test-name-pattern=cells-ran-in-ci-job test/build-gates/tool-coverage-gates.test.cjs
 
       # ITEM 5 (BACKLOG / phase 5 task 10): "No CI leg builds against more than one
       # platform's graph. That is why a merger corruption that broke linux shipped green
@@ -1599,3 +1727,51 @@ jobs:
           CLODE_CLAUDE_BIN="$LINUX_PROVIDER" \
             node scripts/stage0.mjs build --target linux-x64 --out "${{ runner.temp }}/quaude-linux-graph-check/quaude"
           test -s "${{ runner.temp }}/quaude-linux-graph-check/quaude"
+
+      # THIS JOB'S GATE LIST (observability plan Task 5): every record test/cell-reporter.mjs wrote above, for ci.yml's
+      # gates-ran-in-ci job to hold against test/ci-gates.cjs. Uploaded whatever happened above: a red job's list still
+      # says which gates ran, and a job that uploads none is itself a finding there.
+      - name: Upload this job's gate list (judged by gates-ran-in-ci)
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: gates-ran-node-shim-oracle-darwin
+          path: |
+            ${{ runner.temp }}/cells
+            ${{ runner.temp }}/gates
+          if-no-files-found: warn
+
+  # THE GATE LISTS, JUDGED (observability plan Task 5; user doctrine 2026-10-05: "Job 0 is always to be able to observe
+  # our current state more accurately than yesterday"). Every job above that runs a gate uploads what
+  # test/cell-reporter.mjs recorded (gates-ran-<job>; the suite rows from test/run.mjs, the engine legs from the
+  # build-leg action). This job downloads them all and holds each job to test/ci-gates.cjs: every gate it must run
+  # PASSED there, by name. A skip, a failure, a gate that never appeared, or a job that uploaded no list at all is a
+  # finding, so a gate that stops running anywhere turns CI red instead of going dark (shim-surface was dark in the
+  # suite since 2.1.243 and passed in node-shim-oracle only as one of an anonymous "skipped 2"). Runs once every job it
+  # judges FINISHES, whatever its conclusion: a red job's list still says what ran, and a missing list is the finding.
+  gates-ran-in-ci:
+    needs: [changes, tjs, test, node-shim-oracle, node-shim-oracle-darwin, native-builder-oracle, linux-x64-pty, windows-amd64-tests, windows-arm64-tests, windows-amd64-tui]
+    if: needs.changes.outputs.code != 'false' && !cancelled()
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          submodules: false
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version-file: .tool-versions
+      - uses: actions/download-artifact@v8.0.2
+        with:
+          pattern: gates-ran-*
+          path: ${{ runner.temp }}/gates-ran
+      - name: Gates — every gate each CI job must run, it ran (test/ci-gates.cjs)
+        if: ${{ !cancelled() }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/gates-ran"
+          ls "$RUNNER_TEMP/gates-ran"
+          CLODE_GATES_RAN="$RUNNER_TEMP/gates-ran" node --require ./test/file-watchdog-preload.cjs --test \
+            --test-name-pattern=gates-ran-in-ci test/gates-ran-in-ci.test.cjs

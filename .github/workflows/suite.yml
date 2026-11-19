@@ -122,8 +122,21 @@ jobs:
         continue-on-error: true
         shell: pwsh
         run: Get-PSDrive C,D | Select-Object Name, Root, Used, Free | Format-Table -AutoSize | Out-String -Width 200
+      # CLODE_GATES_REPORT: test/run.mjs also writes every finished test's record (test/cell-reporter.mjs) there, and
+      # the step after uploads it as this row's gate list. ci.yml's gates-ran-in-ci job holds the row to
+      # test/ci-gates.cjs: every registered gate that test file does not place elsewhere or exempt must PASS here, by
+      # name (observability plan Task 5). A release run uploads the same list, and nothing there judges it.
       - name: Full node:test suite (includes the shim-fidelity gate)
+        env:
+          CLODE_GATES_REPORT: ${{ runner.temp }}/gates
         run: npm test
+      - name: Upload this row's gate list (judged by ci.yml's gates-ran-in-ci)
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: gates-ran-test-${{ matrix.os }}
+          path: ${{ runner.temp }}/gates
+          if-no-files-found: warn
       - name: Free space on C and D after the suite (windows)
         if: always() && runner.os == 'Windows'
         continue-on-error: true

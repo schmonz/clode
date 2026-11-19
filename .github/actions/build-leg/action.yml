@@ -1763,7 +1763,25 @@ runs:
       shell: bash
       env:
         CLODE_DEPSCAN_ENGINE: ${{ steps.bare.outputs.path }}
-      run: node --require ./test/file-watchdog-preload.cjs --test test/depscan-guard.test.cjs
+      # Under test/cell-reporter.mjs too: the leg uploads that record (the step after), and ci.yml's gates-ran-in-ci
+      # job holds the linux-x64-musl leg to engine-hermeticity by name (test/ci-gates.cjs, observability Task 5).
+      run: |
+        node -e "require('fs').mkdirSync(process.env.RUNNER_TEMP + '/gates', { recursive: true })"
+        node --require ./test/file-watchdog-preload.cjs --test --test-reporter=spec --test-reporter-destination=stdout \
+          --test-reporter=./test/cell-reporter.mjs --test-reporter-destination="$RUNNER_TEMP/gates/hermeticity.jsonl" \
+          test/depscan-guard.test.cjs
+
+    # THIS LEG'S GATE LIST: named by the calling job and the leg (gates-ran-leg-linux-x64-musl from tjs-legs.yml's
+    # `leg`; tjs-fast-smoke's are gates-ran-tjs-fast-smoke-<leg>), so no two jobs of one run collide. Uploaded whatever
+    # the step above did: a missing list is a finding in gates-ran-in-ci, never a pass.
+    - name: Upload this leg's gate list (judged by ci.yml's gates-ran-in-ci)
+      if: ${{ !cancelled() }}
+      uses: actions/upload-artifact@v7.0.2
+      with:
+        name: gates-ran-${{ github.job }}-${{ inputs.leg }}
+        path: ${{ runner.temp }}/gates
+        if-no-files-found: warn
+        overwrite: true
 
     # The static floor gate: pre-10.14 dyld requires the old
     # LC_VERSION_MIN_MACOSX load command and refuses LC_BUILD_VERSION-only

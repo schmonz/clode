@@ -8,6 +8,21 @@ Concrete clode-under-Node divergences from native Claude Code, to triage and fix
 That page is GENERATED from `scripts/build-graph.cjs` — the one declaration of the build — so it
 cannot drift from it; it is also where the honest answer to "does this need node?" lives.
 
+## vendored-archive-rule-overrides reads a vendor path the build no longer uses, so it has never run in CI (2026-11-19)
+
+The guard in test/ar-determinism.test.cjs reads the txiki.js tree at `spike/quickjs/vendor/txiki.js`. scripts/build-tjs.cjs
+no longer checks it out there: it clones into `tjsVendorParentDir()` (scripts/platform-tag.cjs: CLODE_TJS_VENDOR,
+CLODE_TJS_LOCAL_ROOT, else ~/.cache/clode/tjs-vendor). So no CI checkout has that path, and the guard skipped in both
+suite rows ("the vendored txiki.js tree is not present"); no other job runs it. On a dev box it reads whatever stale
+checkout is still at the old path (this one: a txiki.js tree last committed 2026-06-22), which is dev-box state hiding
+the gap. Only the engine legs hold the tree, inside the build-leg action. The fix is to read the tree through
+`tjsVendorParentDir()` and run the guard in a leg after the build. Until then test/ci-gates.cjs EXEMPTs it, citing this
+entry.
+
+Measured: CI run 44572930594 (666fb91), jobs 135732626586 and 135732626734, where the guard's gate line reads
+`vendored-archive-rule-overrides # SKIP ... the vendored txiki.js tree is not present`; and here `git log -1` in the
+old-path txiki.js checkout prints 1a230d3, 2026-06-22 (2026-11-19)
+
 ## Six test generators drew from a JS "LCG" that cycles; their inputs were replaced (2026-11-19)
 
 `(seed * 1103515245 + 12345) & 0x7fffffff` rounds past 2^53 into a 10,466-state cycle (419 for the `>>> 0` form). Task 4
@@ -3668,7 +3683,8 @@ survived only because the golden test asserts layer 1 first and died on `Bun.ant
 
 Still open:
 
-1. **These gates still do not run in CI.** `shim-surface` skips without a provider and
+1. **RESOLVED 2026-09-04 (4303848), re-measured 2026-11-19: both run in `node-shim-oracle`** (see "This gate ... is
+   DARK in CI" below). As first written: **These gates still do not run in CI.** `shim-surface` skips without a provider and
    `guard-subcommands-gate` skips with an empty `~/.cache/clode`; the `test` job has
    neither, so neither has actually run in CI since 2.1.243. This is the worse half of the
    original entry and it is untouched. Give the jobs the inputs that make them run.
@@ -3802,7 +3818,18 @@ test, not just this one) installing a provider and exporting `CLODE_PROVIDER_BIN
 `test/run.mjs` would have done locally too, and is why that approach was tried; see the next
 section for why it was reverted rather than merely narrowed.
 
-Unmeasured. A CI-darkness claim; a CI suite log grepped for these gates' skip reasons would re-measure it.
+**Re-measured 2026-11-19 (observability plan Task 5): this entry's CI claim is stale since 4303848.** That commit
+(2026-09-04) put `shim-surface.test.cjs` and `guard-subcommands-gate.test.cjs` in `node-shim-oracle`, which has the
+engine, the staged provider and a seeded pinned carve, and `suite.yml` has installed the pinned provider since. Both
+pass there on every run measured; both still skip in the two suite rows ("no tjs binary", "cache ... holds (nothing
+usable)"), which is where they cannot run. What WAS still dark was the accounting: shim-surface was not a registered
+guard, and node-shim-oracle held it only inside an anonymous "skipped 2". It is now the guard `shim-surface`
+(e7d5400), placed in node-shim-oracle by test/ci-gates.cjs, and ci.yml's gates-ran-in-ci job names it if it ever skips,
+fails or goes missing there.
+
+Measured: `gh api .../actions/jobs/135743101794/logs` (node-shim-oracle, CI run 44572930594 on 666fb91) shows the
+shim-surface golden-map tests passing; 135732626586 (test / suite ubuntu-latest) shows them `# SKIP no tjs binary`
+(2026-11-19)
 
 ### The three-cause failure map from actually pinning it (2026-09-02, reverted — read before re-attempting)
 
@@ -7628,7 +7655,8 @@ stop doing that as a favour and make it a property of the build:
 absent on 2026-08-28/29. They are filed HERE rather than fixed one by one, because fixing each
 in isolation is what produced a codebase full of guards nobody re-checked:
 
-1. **`shim-surface` and `guard-subcommands-gate` do not run in CI at all.** `shim-surface` skips
+1. **RESOLVED 2026-09-04 (4303848): both run in `node-shim-oracle`; since 2026-11-19 test/ci-gates.cjs holds that
+   job to them by name.** As first written: **`shim-surface` and `guard-subcommands-gate` do not run in CI at all.** `shim-surface` skips
    without BOTH a tjs binary and `CLODE_PROVIDER_BIN`; `guard-subcommands-gate` skips on an empty
    `~/.cache/clode`. The `test` job has neither, so neither has run in CI since 2.1.243 — they
    were locally red and remotely absent for months. Note this is a PLACEMENT problem, not a
