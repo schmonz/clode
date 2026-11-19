@@ -6,12 +6,13 @@
 // and the same shape sat in about twenty files under test/. They use test/spawn-collect.cjs (resolves on 'close') now;
 // this gate keeps the shape from coming back.
 //
-// THE RULE, lexical and stated once: a line `<id>.on('exit' | <id>.once('exit'` (any receiver but `process`) whose
-// handler settles a promise on that line (resolve / res / done / reject), where `<id>.stdout.on('data'` or
-// `<id>.stderr.on('data'` appears in the 20 lines before it. BLIND SPOTS: a handler that settles on a later line, a
-// collector more than 20 lines up, or one bound under another name. Programs held in template strings (the node-shim
-// child_process rows test 'exit' itself, under tjs) print rather than settle, so the rule passes them over. A row that
-// tests the gap between 'exit' and 'close' ON PURPOSE says so on the line, `// spawn-close: <reason>`, and is passed over.
+// THE RULE, lexical and stated once: any `<id>.on('exit'` / `<id>.once('exit'` (any receiver but `process`), whatever
+// its handler does and however many lines it spans (settling a promise, or a child PROGRAM printing what it collected:
+// those programs run under real node as the reference too, so they race the same way), where
+// `<id>.stdout.on('data'` or `<id>.stderr.on('data'` appears in the 20 lines before it, within the same test (the
+// look-back stops at a line starting `test(`). A row that relies on 'exit' ON PURPOSE (the exit/close gap is what it
+// tests, or the handler reads no collected output) says so on the line, `// spawn-close: <reason>`, and is passed over.
+// BLIND SPOTS: a collector more than 20 lines up, or the child bound under another name between collector and handler.
 const fs = require('node:fs');
 const path = require('node:path');
 const { defineGuard, guardTests } = require('../guard.cjs');
@@ -39,12 +40,13 @@ function scanSources(files) {
     lines.forEach((line, i) => {
       const m = exitLine.exec(line);
       if (!m || m[1] === 'process' || /\/\/ spawn-close: \S/.test(line)) return;
-      if (!/\b(?:resolve|res|done|reject)\b/.test(m[2])) return;
       const id = m[1].replace(/[$]/g, '\\$');
       const collects = new RegExp(`\\b${id}\\.(?:stdout|stderr)\\.on\\(\\s*'data'`);
-      const before = lines.slice(Math.max(0, i - WINDOW), i + 1).join('\n');
+      let from = Math.max(0, i - WINDOW);
+      for (let j = i; j >= from; j--) if (/^test\(/.test(lines[j])) { from = j; break; }
+      const before = lines.slice(from, i + 1).join('\n');
       if (collects.test(before)) {
-        findings.push(`${rel}:${i + 1}: collects ${m[1]}'s output and settles on 'exit', which can fire before its stdio `
+        findings.push(`${rel}:${i + 1}: collects ${m[1]}'s output and acts on 'exit', which can fire before its stdio `
           + `closes; use test/spawn-collect.cjs (or 'close'): ${line.trim().slice(0, 120)}`);
       }
     });
@@ -79,10 +81,14 @@ test('spawn-close: what the rule passes over', () => {
   const ok = [
     { rel: 'a', text: "c.stdout.on('data', f);\nc.on('close', (s) => resolve(s));" },                 // close
     { rel: 'b', text: "c.stdout.on('data', f);\nprocess.on('exit', () => done());" },                 // process
-    { rel: 'c', text: "c.stdout.on('data', f);\nc.on('exit', (code) => { console.log(code); });" },  // prints (a shim row)
+    { rel: 'c', text: "c.stdout.on('data', f);\ntest('next', () => {\nc.on('exit', () => res());" },       // another test
     { rel: 'd', text: "d.stdout.on('data', f);\nc.on('exit', (s) => resolve(s));" },                 // another child
     { rel: 'f', text: "c.stdout.on('data', f);\nc.on('exit', () => res()); // spawn-close: tests the exit/close gap" },
   ];
   assert.deepStrictEqual(scanSources(ok).findings, []);
   assert.strictEqual(scanSources([{ rel: 'e', text: "c.stderr.on('data', f);\nc.once('exit', (s) => reject(s));" }]).findings.length, 1);
+  // A child program printing what it collected (the node-shim-child-process rows before fix round 2), and a handler
+  // spanning lines: both flagged.
+  assert.strictEqual(scanSources([{ rel: 'g', text: "c.stdout.on('data', (d) => { out += d; });\nc.on('exit', (code) => { console.log(JSON.stringify({ code, out })); });" }]).findings.length, 1);
+  assert.strictEqual(scanSources([{ rel: 'h', text: "c.stdout.on('data', f);\nc.on('exit', (code) => {\n  resolve(code);\n});" }]).findings.length, 1);
 });

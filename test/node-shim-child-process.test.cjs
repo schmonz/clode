@@ -331,9 +331,14 @@ test('spawn: exit event + piped stdout resolve like node', (t) => {
     const c = cp.spawn('/bin/echo', ['streamed']);
     let out = '';
     c.stdout.on('data', (d) => { out += d.toString(); });
-    c.on('exit', (code) => { console.log(JSON.stringify({ code, out: out.trim() })); });`;
+    // The exit event is what this row checks: its code, and that it fires before 'close'. The OUTPUT is read at 'close',
+    // once stdio has drained; read at 'exit' it races, under node as much as under tjs (spawn-close gate).
+    let exitCode;
+    c.on('exit', (code) => { exitCode = code; }); // spawn-close: records the code only; output is read at close
+    c.on('close', (code) => { console.log(JSON.stringify({ code, exitCode, out: out.trim() })); });`;
   const f = prog(body);
   const node = JSON.parse(require('node:child_process').execFileSync(process.execPath, [f], { encoding: 'utf8' }).trim());
+  assert.deepStrictEqual(node, { code: 0, exitCode: 0, out: 'streamed' }, 'the reference: exit fired, before close');
   const r = runLoader(f);
   assert.strictEqual(r.status, 0, r.stderr);
   assert.deepStrictEqual(JSON.parse(r.stdout.trim()), node);
@@ -444,7 +449,7 @@ test('spawn: shell:true runs a pipeline command string like node', (t) => {
     const c = cp.spawn('echo piped | cat', { shell: true });
     let out = '';
     c.stdout.on('data', (d) => { out += d.toString(); });
-    c.on('exit', (code) => { console.log(JSON.stringify({ code, out: out.trim() })); });`;
+    c.on('close', (code) => { console.log(JSON.stringify({ code, out: out.trim() })); });`;
   const f = prog(body);
   const node = JSON.parse(require('node:child_process').execFileSync(process.execPath, [f], { encoding: 'utf8' }).trim());
   const r = runLoader(f);
@@ -529,7 +534,7 @@ test('spawn: child.stdout data is not dropped when the consumer attaches a tick 
     queueMicrotask(() => {
       let out = '';
       c.stdout.on('data', (d) => { out += d.toString(); });
-      c.on('exit', () => console.log(JSON.stringify({ out: out.trim() })));
+      c.on('close', () => console.log(JSON.stringify({ out: out.trim() })));
     });`;
   const f = prog(body);
   const node = JSON.parse(require('node:child_process').execFileSync(process.execPath, [f], { encoding: 'utf8' }).trim());
@@ -679,7 +684,7 @@ test('spawn: env omits undefined-valued keys, stringifies null/0/false/empty (ma
     const c = cp.spawn('/usr/bin/env', [], { env: childEnv });
     let out = '';
     c.stdout.on('data', (d) => { out += d; });
-    c.on('exit', () => { console.log(JSON.stringify(summarize(parseEnvDump(out)))); });`);
+    c.on('close', () => { console.log(JSON.stringify(summarize(parseEnvDump(out)))); });`);
   const f = prog(body);
   const node = JSON.parse(require('node:child_process').execFileSync(process.execPath, [f], { encoding: 'utf8' }).trim());
   const r = runLoader(f);
