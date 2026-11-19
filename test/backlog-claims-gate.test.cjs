@@ -321,3 +321,46 @@ test('Unmeasured and No open claim must say why; No open claim stands alone', ()
   // Measured and Unmeasured together is an entry measured in part, and passes.
   assert.deepStrictEqual(T('## a\nMeasured: x (2026-11-18)\n\nUnmeasured. y needs Haiku.\n').findings, []);
 });
+
+// ---- UNMEASURED in code comments -------------------------------------------------------------------------------------
+// A code comment that says UNMEASURED is a claim the backlog must carry, or it rots where no gate reads it (final review,
+// observability plan). Each such comment cites the entry: BACKLOG "<the start of its heading>", and that heading must
+// exist in BACKLOG.md, so the entry's own Measured/Unmeasured marker (the guard above) holds it.
+const CITE_RE = /BACKLOG "([^"]+)"/;
+function scanCodeUnmeasured({ files, headings }) {
+  const findings = [];
+  let examined = 0;
+  for (const [file, text] of files) {
+    const lines = text.split('\n');
+    lines.forEach((line, i) => {
+      if (!/^\s*(?:\/\/|#|\*)/.test(line) || !/\bUNMEASURED\b/.test(line)) return;
+      examined++;
+      // the citation may wrap onto the comment's next line
+      const m = CITE_RE.exec(line) || CITE_RE.exec(`${line} ${lines[i + 1] || ''}`.replace(/\s*(?:\/\/|#|\*)\s*/g, ' '));
+      if (!m) { findings.push(`${file}:${i + 1}: an UNMEASURED comment cites no BACKLOG entry (BACKLOG "<heading>")`); return; }
+      if (!headings.some((h) => h.startsWith(m[1]))) findings.push(`${file}:${i + 1}: cites BACKLOG "${m[1]}", which no BACKLOG.md heading starts with`);
+    });
+  }
+  return { findings, examined, note: `${examined} UNMEASURED code comment(s) in ${files.length} file(s)` };
+}
+guardTests(defineGuard({
+  name: 'code-unmeasured-cites-backlog',
+  // Measured 2026-11-19: three (libexec/node-shim/internal/priority.cjs, test/file-watchdog-sleeper.cjs,
+  // test/node-shim-os-priority-win32.test.cjs).
+  floor: 3,
+  read: () => {
+    const list = execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard', 'libexec', 'scripts', 'test', '.github'],
+      { cwd: REPO, encoding: 'utf8' }).split('\0').filter((f) => /\.(?:c|m)?js$|\.ya?ml$|\.sh$/.test(f) && f !== 'test/backlog-claims-gate.test.cjs'
+        && fs.existsSync(path.join(REPO, f)));
+    const headings = fs.readFileSync(path.join(REPO, FILE), 'utf8').split('\n').map((l) => (HEADING_RE.exec(l) || [])[2]).filter(Boolean);
+    return { files: list.map((f) => [f, fs.readFileSync(path.join(REPO, f), 'utf8')]), headings };
+  },
+  scan: scanCodeUnmeasured,
+  control: () => ({ files: [['x.cjs', '// UNMEASURED on a real Windows box.\n// UNMEASURED (BACKLOG "gone entry")\n']], headings: ['present'] }),
+}));
+test('code-unmeasured-cites-backlog: a citation wrapped onto the next comment line counts', () => {
+  const r = scanCodeUnmeasured({ files: [['x.cjs', '// a claim, UNMEASURED on a real\n// Windows box: BACKLOG "present heading".\n']], headings: ['present heading, in full'] });
+  assert.deepStrictEqual(r.findings, []);
+  assert.strictEqual(scanCodeUnmeasured(guardControl()).findings.length, 2);
+});
+function guardControl() { return { files: [['x.cjs', '// UNMEASURED on a real Windows box.\n// UNMEASURED (BACKLOG "gone entry")\n']], headings: ['present'] }; }

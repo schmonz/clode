@@ -8,6 +8,21 @@ Concrete clode-under-Node divergences from native Claude Code, to triage and fix
 That page is GENERATED from `scripts/build-graph.cjs` — the one declaration of the build — so it
 cannot drift from it; it is also where the honest answer to "does this need node?" lives.
 
+## Windows process-table and priority claims have not run on a real Windows box (2026-11-19)
+
+Three Windows code paths are judged only off Windows, through fakes, and each code comment that says so cites this
+entry (the backlog gate holds every UNMEASURED code comment to a BACKLOG citation):
+
+- test/proc-tree.cjs's CIM process table (pid, parent, user + kernel CPU, CreationDate) and the reused-pid filter, as
+  test/file-watchdog-sleeper.cjs and test/tui-screen.cjs use it to kill a tree, and test/cpu-bound-run.cjs to sum CPU.
+- libexec/node-shim/internal/priority.cjs's PowerShell answers for a missing or protected process (EINVAL, EPERM),
+  from PowerShell's documented messages. The common path (getPriority/setPriority of the running process) now has a
+  real-kernel row on windows-amd64-tests (test/node-shim-os-priority.test.cjs); the error paths do not.
+
+Unmeasured. A windows-latest run of test/file-watchdog.test.cjs's CONTROL (the sync hang's grandchild gone afterwards)
+measures the first; a real-Windows row that asks for a pid that is no process, and for a protected one, measures the
+second.
+
 ## quaude's rg parses every ugrep record before printing, so a huge answer can hit the Grep tool's 20 s timeout where native ends at maxBuffer (2026-11-19)
 
 The async twin (libexec/rg-native.cjs ugrepMatchesAsync) reads all of ugrep's output, parses EVERY record, and only then

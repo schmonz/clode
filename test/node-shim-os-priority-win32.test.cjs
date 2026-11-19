@@ -8,7 +8,7 @@
 //
 // WHAT IS JUDGED. PowerShell is INJECTED: each row checks the command the shim runs and what it makes of PowerShell's
 // answer, against libuv's Windows mapping (src/win/util.c): IDLE 19, BELOW_NORMAL 10, NORMAL 0, ABOVE_NORMAL -7,
-// HIGH -14, REALTIME -20, and for a set, the band a number falls in. UNMEASURED on a real Windows box: what PowerShell
+// HIGH -14, REALTIME -20, and for a set, the band a number falls in. UNMEASURED on a real Windows box (BACKLOG "Windows process-table and priority claims"): what PowerShell
 // prints for a missing or protected process is from its documented messages, not from a run.
 //
 // This file spawns nothing, so the forced-win32 pass runs it with process.platform really 'win32' (the last row).

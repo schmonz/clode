@@ -15,7 +15,8 @@
 // priority by 5 off Windows (its one call site: `if (platform !== "windows") try { setPriority(0, Math.min(getPriority(0)
 // + 5, 19)) } catch {}`), silently ran at full priority. Found by node-shim-oracle-darwin, whose runner runs at nice -10;
 // judged under a deliberate nice by test/node-shim-os-priority.test.cjs and the differential, and the Windows branch by
-// test/node-shim-os-priority-win32.test.cjs (injected PowerShell; UNMEASURED on a real Windows box).
+// test/node-shim-os-priority-win32.test.cjs (injected PowerShell; UNMEASURED on a real
+// Windows box: BACKLOG "Windows process-table and priority claims").
 //
 // Arguments are validated as node's validateInt32 does; a failure is node's SystemError (ERR_SYSTEM_ERROR, info { errno,
 // code, message, syscall: uv_os_getpriority / uv_os_setpriority }). Without the utility (a PATH that lacks it) the call
