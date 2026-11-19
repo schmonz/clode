@@ -1005,6 +1005,9 @@ Bash tool instead".
     wrong: process.platform is honest ('netbsd'), and only the carve's constant-folded
     branches are linux, which is exactly the gap F1 fell into.
 
+Unmeasured. Not re-run in observability Task 2: the left-open items here need the NetBSD VM (`ssh -p 2230`) and a
+netbsd-arm64 quaude, or the named rg rows (rg-entry, rg-walk, rg-files, rg-native) per platform.
+
 ## 2.1.283 broke every `clode build`, and nothing daily could see it (2026-09-26)
 
 **Found moving UPSTREAM_PIN to 2.1.283, fixed in the same change.** The first full suite at the
@@ -1874,6 +1877,10 @@ leave the stripped text identical. So:
   fatal error rather than causing one — but it turns a clean exit code into a signal, and
   a probe that reads exit status will report the wrong thing about the wrong event.
 
+Unmeasured. Phase 6 (`reordered`, slow-box performance) and Bun.wrapAnsi were not re-run here;
+test/bun-shim-cell-segmenter.test.cjs and the text/paint probe gates measure the shipped phases, the Tiger PPC VM the
+slow box.
+
 ## The SCC merger's mask: four residuals recorded, not fixed (2026-09-22)
 
 Filed out of the review of `0689837..a41df80` and the fix pass that followed it. None is
@@ -1915,6 +1922,9 @@ stated safe direction — so these are the places where the safe direction is no
   rename. The correct rule walks the modifier chain back across the star to a member boundary;
   it needs its own measured pass.
 
+Unmeasured. Four latent merger defects with no live instance; a carve-probe over newer upstream versions
+(scripts/carve-probe.mjs) or a targeted fixture per residual would measure them.
+
 ## The carve gate refused nine platforms it can never be satisfied on (2026-09-21)
 
 The 2026-09-04 carve refusal is right: Bun folds `process.platform` at carve time, and a
@@ -1949,6 +1959,9 @@ first, which is the bug, not the fix. The refusal is unchanged wherever a carve 
 fetched (macos/linux/windows, host or `--target`), and the unavoidable case is NOTED on
 stderr rather than passing silently. `carveVerdict` is now a pure exported function, so all
 four branches are tested directly instead of only reachable through a real build.
+
+Unmeasured. The refusal's four branches are unit-tested by carveVerdict's own tests; the "noted on stderr" behaviour
+on an unobtainable carve was not driven here.
 
 ## ccache never hits because the entries are EVICTED, not mis-keyed (2026-09-21)
 
@@ -2006,6 +2019,9 @@ Options, in decreasing order of how much they reclaim:
    answered this in one run instead of three.
 
 Until (1) or (2) lands, **predict ALL-MISS**, because the budget has no headroom.
+
+Unmeasured. A CI fact (ccache HITS=0 on linux-x64-glibc); the latest ci-ccache line in a linux-x64-glibc run, and
+`actions/cache/usage`, would re-measure it.
 
 ## Thirteen gates that could not fail, and the one rule that outranks a harness (2026-09-20)
 
@@ -2075,6 +2091,8 @@ ratchets) only after that earns its keep.
 **Does NOT solve:** cheap controls are still the weaker half; properties with NO gate are
 counted by nothing; an observation measuring the WRONG config (the WASM-off linux proof)
 stays a human job; the 40 `unproven` legs stay unproven; `-ffile-prefix-map` is separate.
+
+Unmeasured. A shelved design; the thirteen gates it counts were not re-audited here.
 
 ## Getting Node out of the ENGINE build — all three modes PROVEN under tjs (2026-09-19)
 
@@ -2154,6 +2172,9 @@ module top level ABOVE the async continuation opener (build-tjs.cjs:3463 vs :357
 `await` there moves the boundary `test/build-tjs-continuation-scope.test.cjs` guards; and
 `test/run.mjs` forces `CLODE_OFFLINE=1`, so no gate over this may reach the network.
 
+Unmeasured. The node-free engine build was not re-run here; `env -i PATH=/usr/bin:/bin` plus scripts/build-tjs.cjs
+under tjs would.
+
 ## Phase 4 umbrella CLOSED — all eight §11 acceptances met (2026-09-21)
 
 Spec: `docs/superpowers/specs/2026-09-14-phase4-declared-edges-design.md` (untracked).
@@ -2187,6 +2208,8 @@ were found, several by accident, most of them green beforehand:
 
 The durable lesson, now enforced in several places: **a gate that cannot demonstrate its own
 failure is not a gate**, and the way to find out is to run it RED on purpose.
+
+No open claim: CLOSED 2026-09-21 (CI run 35562521239, 49/49); kept for the acceptance table and its lesson.
 
 ## The build graph names one machine and CI names another (2026-09-21)
 
@@ -2235,6 +2258,9 @@ still open.** `engineHomeForLeg`'s comment no longer claims the same rule. It no
 answer different questions, names alpine as the known disagreement with both file:lines, and
 points here. Nothing else changed: there is still no gate pinning the two classifications, and
 a tenth guest OS still drifts silently. That is what remains of this item.
+
+Unmeasured. The two classifications (engineHomeForLeg vs build-leg's exec-mode step) were not re-compared; a table of
+every leg through both would measure the drift.
 
 ## The toolchain directory is named for the interpreter that PLANS (2026-09-21)
 
@@ -2307,6 +2333,9 @@ a running `clode-native`/`quaude` blobulates over ITSELF. It wants its own accep
 of the binary executing while it is rewritten, surviving), not a drive-by copy of the engine
 fix.
 
+Unmeasured. Both literals are latent (no new step has walked past them); `grep` shows runsOnForLegs still exists
+(scripts/build-graph.cjs:351) but its step-id test was not re-read.
+
 ## Gate 3 catches a typo'd step id, not a bypassed graph (2026-09-21) — CLOSED 2026-09-21
 
 CLOSED by `--needs assume` (scripts/build-runner.cjs) plus the widened gate in
@@ -2361,6 +2390,9 @@ platform-tag's default, a path no CI build writes, and the runner's output check
 refused a perfectly good engine. Fixed in the same commit; it had never bitten because no leg
 ran the graph.
 
+No open claim: CLOSED 2026-09-21 by `--needs assume` and the widened gate in test/build-graph-ci.test.cjs; kept
+because its reproduction is that gate's control.
+
 ## Smaller things the build-graph review found and left (2026-09-21)
 
 Recorded so they are not re-found. None is a correctness bug in what ships.
@@ -2395,6 +2427,8 @@ Recorded so they are not re-found. None is a correctness bug in what ships.
   command line contains that string. Wait on a PID. This is a likely source of "waiting forever"
   and false-completion reports in long sessions.
 
+Unmeasured. Small latent items, none re-checked here; each names the file and line that would show it.
+
 ### Added by the review of the runner-step-mode branch (2026-09-21)
 
 - **`IDIOM` in `test/build-tjs-boot.test.cjs` gained an unexercised loosening** (review F7).
@@ -2420,6 +2454,8 @@ Recorded so they are not re-found. None is a correctness bug in what ships.
   (`test/build-graph-ci.test.cjs`), whose control includes exactly that line. That is a real
   dependency between two guards that previously overlapped, and it is fine while gate 3's
   control keeps firing — which is the thing to check before narrowing either one.
+
+Unmeasured. Review findings about two guards' regexes; not re-read here.
 
 ## The recipe does not hash the recipe (2026-09-21)
 
@@ -2504,6 +2540,8 @@ KNOWN set with no backing module, so every property throws through wallProxy).
 "Implement all of Node" is unbounded and has no finish line; "implement the Node our
 corpus uses" is nearly done. That difference is the argument against the split.
 
+Unmeasured. A ranking of seams, measured by its author then; not re-measured.
+
 ## Phase 4c3 (ccache) — spec §11 acceptance 7 MET (2026-09-19)
 
 **Task 1** (`24e4157`) wired `scripts/ccache-launcher.cjs` through `build-tjs.cjs`:
@@ -2582,6 +2620,9 @@ wired unconditionally, `ZERO_AR_DATE` is set, and no compiled source in the patc
 references `__DATE__`/`__TIME__`). **Scope**: host leg only. The 17 cross legs and the two
 Windows hard publishers are not exercised.
 
+Unmeasured. Acceptance 7 was met on the host leg; the 17 cross legs and two Windows publishers it names as unexercised
+still need their own double-build.
+
 ### Open, deliberately not done in the fix wave
 
 * **The opt-in gate is not scheduled anywhere.** Nothing in `.github/` sets
@@ -2643,6 +2684,9 @@ been configured while the launcher was silently on. Guard:
 `ccache-declines-untrusted-compiler`, which also pins the ORDER dependency (the decision must
 stay below the compiler-selection push, or it reads an empty array and trusts it).
 
+No open claim: the false premise is corrected and guarded (`ccache-declines-untrusted-compiler`); what stays open is
+the entry below.
+
 ### Open
 
 * **ccache + MSVC can be ENABLED again once someone proves it.** The bar is the one phase 4c3
@@ -2658,6 +2702,8 @@ stay below the compiler-selection push, or it reads an empty array and trusts it
   chooses and this code cannot name the compiler. Every such leg is gcc/clang today, but a
   future cross toolchain file that selected an MSVC-mode compiler from inside the file would
   not be caught. `compiler=cmake-default` in the log is the string to grep if that changes.
+
+Unmeasured. ccache under MSVC needs a Windows box (cold build, warm rebuild, byte-identical objects).
 
 ## Build reproducibility — measured, per platform (2026-09-19)
 
@@ -2691,6 +2737,8 @@ break it while the build dir is held constant; `-ffile-prefix-map` (supported,
 used nowhere) is future hardening for the stronger "different host, same
 output" tier.
 
+Unmeasured. A per-platform reproducibility table; repro.yml's weekly runs re-measure it, not this task.
+
 ### Open, ranked
 
 1. ~~**NetBSD: entirely UNMEASURED**~~ — MEASURED and FIXED 2026-09-19, see
@@ -2711,6 +2759,9 @@ output" tier.
    perturbing the build path changed 47 of 372 objects and the linked size, and
    two runs differing only in a same-LENGTH tmpdir suffix produced different
    engines. Now a costed item (`-ffile-prefix-map`), not a suspicion. Below.
+
+Unmeasured. The NetBSD engine double-build needs the NetBSD VM (slow under qemu); the ubuntu-22.04 leg and
+`-ffile-prefix-map` items need CI runs.
 
 ## The per-leg reproducibility gate is BUILT, and two of 44 legs are proven (2026-09-20)
 
@@ -2746,6 +2797,9 @@ deliberate edit; movement the good way passes but says to re-cut.
 `559224b931dd9a658b14aee1606f8c0c3a05a6078e4ddb09c1b171082f723877` over 5,464,448 bytes,
 372 objects, two builds 76.2s + 48.6s.
 
+Unmeasured. "Two of 44 legs proven": repro.yml's latest scheduled run, or test/engine-build-harness.cjs on a leg,
+would re-measure it.
+
 ### A NEW measurement, and it demotes an "informal invariant" to a measured fact
 
 The open item "absolute-path stability is an informal invariant (constant build dir), not an
@@ -2763,6 +2817,9 @@ different sha — and `judgeObservation()` says so rather than going red. The st
 "different host, same output" tier needs `-ffile-prefix-map` (supported, used nowhere), and
 it is now a costed item rather than a suspicion.
 
+No open claim: a dated measurement (47 of 372 objects moved with the build path); the costed `-ffile-prefix-map` item
+it produced is tracked in "Open, ranked" above.
+
 ### The cost decision, and its cadence
 
 `.github/workflows/repro.yml`, **Mondays 07:41 UTC**, plus `workflow_dispatch` with a `legs`
@@ -2777,6 +2834,8 @@ Weekly and not per-push because the property changes on the timescale of a toolc
 not a commit: ~2 minutes on three legs of every push to notice within seven days something
 that moves monthly is the wrong trade. The cheap half — manifest shape, coverage of every
 leg, and the ratchet — is four guards in `npm test`, on every push, costing milliseconds.
+
+No open claim: a cost decision and its cadence (repro.yml, Mondays), recorded.
 
 ### What is NOT covered, and what it would cost
 
@@ -2803,6 +2862,9 @@ cadence that is not natively built is a finding).
    cctools archiver that reads `ZERO_AR_DATE`) and are unmeasured for the container reason.
    Expected is not measured.
 
+Unmeasured. The uncovered legs (VM, container, osxcross, qemu-guest) need those hosts; expected-to-pass is stated as
+unmeasured by the entry itself.
+
 ### How the gate was shown RED
 
 Not synthetically alone. Two REAL engine builds on this Mac with the output and build paths
@@ -2812,6 +2874,8 @@ sources produced DIFFERENT bytes`. Plus, always-on: each of the four guards has 
 control through `test/guard.cjs`, the ratchet goes red on a demoted `darwin-arm64` in a copy
 of the real manifest, `matrixForLegs` refuses `netbsd-m68k`/`linux-x64-musl`/`cosmo`, and
 `judgeObservation` THROWS for a leg it has no verdict for rather than reporting OK.
+
+No open claim: how the gate was shown red (two real engine builds); a record, not a claim about today.
 
 ## NetBSD archives were NOT reproducible, and two assumptions said they were (2026-09-19)
 
@@ -2873,6 +2937,9 @@ override — which only fires on the legs whose `ar` rejects `D` anyway. A guard
 `add_subdirectory` closure and goes red if another vendored override appears, or if
 mbedtls's stops being AppleClang-guarded.
 
+Unmeasured. The NetBSD archive-grain fix was measured on the NetBSD 11 guest when it landed; not re-run here (`ssh -p
+2230`, two `ar` runs over the same objects).
+
 ### Open
 
 1. **A real NetBSD ENGINE double-build is still unmeasured.** What was proven on the guest
@@ -2928,6 +2995,9 @@ mbedtls's stops being AppleClang-guarded.
    first real CI run: it exists because "the native branch probes PATH while cmake runs
    CMakeFindBinUtils" was an admitted assumption, and it caught precisely that.
 
+Unmeasured. Each open item names its own measurement (a NetBSD engine double-build, the native-branch PATH probe);
+none was re-run here.
+
 ## A full-suite flake, seen once and not yet named (2026-09-19)
 
 One `npm test` run at `31a0342` reported `# tests 2172 / pass 2134 / fail 1`.
@@ -2945,6 +3015,8 @@ lies, and this repo's standing rule is that CI's job is to tell the truth.
 the suite to `tail` — the summary alone cannot name the test. Re-run the suite
 in a loop redirecting to distinct files until one exits non-zero, then read the
 `not ok` line. Do NOT assume it is in the phase 4c3 files.
+
+Unmeasured. A one-off unnamed flake; only repeated full suites with distinct log files can name it.
 
 ### A SECOND one-off, this one fully named (2026-09-19)
 
@@ -2969,6 +3041,8 @@ differ). It looks like something about the cache-off phase specifically —
 `CLODE_TJS_CCACHE=0`, which is also the phase that runs FIRST over a
 freshly-copied vendor tree. `OBJECTS_EXPECTED_VOLATILE` is deliberately empty
 and must stay empty: do not allowlist this.
+
+Unmeasured. Needs `CLODE_CCACHE_ENGINE_E2E=1` and three real engine builds on darwin-arm64 (minutes); not run here.
 
 ### And a NAMED CANDIDATE for the unnamed flake above (2026-09-19)
 
@@ -3006,6 +3080,8 @@ caches right after a recipe change), then these 4, then `2192 tests / 2154 pass 
 0 fail / 37 skipped / 1 todo` in 341s. Warm-vs-cold is worth a THIRD of the wall
 clock here (1134s cold, 341s warm), which is enough on its own to push the
 slowest tests past their timeouts.
+
+Unmeasured. A candidate mechanism (a torn vendor copy under load); not reproduced here.
 
 ## Phase 4c-2 (bytecode as a build rule) — spec §11 acceptances 2 and 3 MET (2026-09-18)
 
@@ -3211,6 +3287,9 @@ its own host build dir, not attempted here (touches the sparc CI path end to end
 argv shapes are now *gated* equal (`test/bytecode-rule.test.cjs`, fix round 2) so the
 duplication cannot silently diverge while it survives.
 
+Unmeasured. Acceptances 2 and 3 were met when written; the cross-leg items it leaves (sparc guest bake, the duplicated
+argv shapes) need those legs. test/bytecode-rule.test.cjs guards the argv equality.
+
 ### 4c-2b — the esbuild edge cannot be a cmake rule, so `--build-only` proves its premise instead (SHIPPED 2026-09-19)
 
 Phase 4c-2's DEPENDS edge reaches only 2 of 18 bundles (`internal/path`,
@@ -3320,6 +3399,9 @@ LOWER `UNMIGRATED_BASELINE` (currently 82), and the ratchet's own comment requir
 there to be a deliberate re-cut, not silent drift — so this is a "do it and re-cut the
 baseline in the same change," not a drive-by.
 
+Unmeasured. The `--build-only` currency proof shipped; the closing item (lower UNMIGRATED_BASELINE with the re-cut) is
+a to-do, not a measurement. test/guards-population.test.cjs reads the baseline (82).
+
 ### 4c-3 — the declarative graph stops at `src/bundles/js/**` (the esbuild edge is still imperative)
 
 `fixupTjsCmakeBytecodeRules` gives every one of the 18 bundles a real cmake
@@ -3345,6 +3427,9 @@ in that test's header. **The fix is to declare the esbuild edge in cmake too** (
 `src/bundles/js/**` an `OUTPUT` with its `src/js/**` inputs as `DEPENDS`), which is 4c-3
 work: it needs a host-runnable esbuild on the build path, which the cmake rule cannot
 assume the way it can assume a host `tjsc` it just built.
+
+Unmeasured. The esbuild edge is still imperative per the entry; a build where a src/js/** edit reaches tjsc through
+cmake alone would measure it.
 
 ## `checkControl` cannot prove a MULTI-DETECTOR guard per-detector (2026-09-13)
 
@@ -3436,6 +3521,9 @@ Still open:
    upstream no longer emits anywhere — so it is green by construction, which is exactly
    the failure mode the other two just had. It is green, so nothing forced the question;
    ask it anyway.
+
+Unmeasured. The three open items (gates dark in CI, a green-by-construction row) need a CI run with a provider staged;
+not re-run here.
 
 ## `Bun.zstdDecompress` / `Bun.zstdDecompressSync` are new golden-map drift, unreviewed (2026-09-02)
 
@@ -3543,6 +3631,8 @@ test, not just this one) installing a provider and exporting `CLODE_PROVIDER_BIN
 `test/run.mjs` would have done locally too, and is why that approach was tried; see the next
 section for why it was reverted rather than merely narrowed.
 
+Unmeasured. A CI-darkness claim; a CI suite log grepped for these gates' skip reasons would re-measure it.
+
 ### The three-cause failure map from actually pinning it (2026-09-02, reverted — read before re-attempting)
 
 Task 5 round 3 tried centrally setting `process.env.CLODE_PROVIDER_BIN` in `test/run.mjs` to
@@ -3621,6 +3711,8 @@ with its pre-Task-5-round-3 state on this point) specifically so touching it aga
 silently re-wake all 13 at once; the CI-dark gap above should be closed narrowly (per-file or
 per-job), not by flipping this switch back on suite-wide.
 
+No open claim: the record of a reverted experiment (central CLODE_PROVIDER_BIN), kept so it is not re-attempted blind.
+
 ## Staging a code-split provider now REQUIRES a tjs engine (2026-08-29)
 
 The residual-cyclic-require merge moved out of `libexec/quaude-fuse.js` into staging
@@ -3650,6 +3742,8 @@ resolves an engine — in-process when clode IS tjs, else `CLODE_TJS`, else the 
    groups of 99/7/5): ~5s of engine CPU for the metadata pass, ~11s for the merge under node.
    Cached with the rest of the stage and keyed on the merger's file signature, so it is once
    per provider per machine — but every CI job that stages a provider pays it once.
+
+Unmeasured. The staging cost (~5 s engine, ~11 s merge per provider per machine) was not re-timed here.
 
 ## netbsd-sparc's in-guest bake: FIXED here, NOT yet confirmed by CI (2026-08-29)
 
@@ -3682,6 +3776,9 @@ smoke and predate BOTH `62cb4e4` (the cyclic-group merge) and `712a0f1` (the mod
 probe), so they were neither of the two causes above. Their console was never captured and
 never will be. If sparc goes red again with a shape neither explains, that is where to look.
 
+Unmeasured. "Not yet confirmed by CI": the netbsd-sparc leg's latest run would confirm or refute it; not looked up
+here.
+
 ## The Windows-path ratchet is blind on ~1335 lines of real code (2026-08-29) — RESOLVED 2026-09-04
 
 `test/windows-path-ratchet.test.cjs`'s `stripComments()` blanked `/* ... */` with a
@@ -3710,6 +3807,8 @@ lines-examined count (50,892 non-blank lines) so a future regression back to the
 reports BROKEN rather than quietly passing. Full commands and output: see
 `.superpowers/sdd/2026-09-04-phase5-gates-that-can-fail/task-9-report.md`.
 
+No open claim: RESOLVED 2026-09-04 (a lexical comment mask with a lines-examined floor).
+
 ## No CI leg carves a zstd row in a guest any more (2026-08-29)
 
 RESOLVED, and this is the residue. `netbsd-sparc` was red because its guest — our own pinned
@@ -3731,6 +3830,9 @@ change **no CI leg carves a compressed row inside a guest at all**. What that le
    has zstd — but NetBSD base does not, so this is the shape a NetBSD user meets. Whether the
    answer is a bundled decoder, a fetched host applet, or leaving the message as it is has not
    been decided.
+
+Unmeasured. The residue (no zstd in the sparc guest; what a NetBSD user meets) needs the sparc guest image or a NetBSD
+base install.
 
 ## RELEASE GATE for 0.20260827.1 (user, 2026-08-25) — BOTH must hold
 
@@ -3769,6 +3871,8 @@ gate is about, and it regresses nothing — 2.1.245 has the same gap. First item
 So the honest reading is that gate (1) must hold TWICE: once to unblock the merges, and
 again on the merged result that actually ships. Tagging a commit whose CI predates the
 dependency bumps would satisfy the letter of both gates and the spirit of neither.
+
+No open claim: the release gate for 0.20260827.1, which shipped.
 
 ## ★★ CONTINGENCY — what we do if upstream ships `bun build --bytecode` (2026-08-28)
 
@@ -3855,6 +3959,9 @@ reproducible from a tree they hold.
 lift a file out of `$bunfs`, shipped unbundled and Node-importable on purpose. It documents
 container behaviour we reverse-engineered, and its existence says upstream treats extracting
 from `$bunfs` as a legitimate thing to do — useful context if we ever do ask them for sources.
+
+Unmeasured. A contingency for an upstream change (JSC bytecode) that has not happened; the daily carve-probe would
+show it the day it does.
 
 ## ★★ P0 — upstream 2.1.248+ CYCLICALLY require()s graph modules; every tjs leg is red (2026-08-28)
 
@@ -4040,6 +4147,9 @@ losing the verbatim property.
 `--version` passes on a broken graph — it never reaches these modules. `--help` is the cheap
 trigger. NB `build/tjs/tjs` is stale and the shim rightly refuses it; use the per-platform one.
 
+No open claim: the 2.1.248 cyclic-require P0 was absorbed (the SCC merger; UPSTREAM_PIN records 2.1.283 carving,
+merging and compiling); kept for the reproduction.
+
 ### THE GRAPH IS PER-PLATFORM, AND A DARWIN REPRO IS NOT A LINUX REPRO (2026-08-28)
 
 The merger's first shipped build passed its own smoke against the darwin-arm64 provider and
@@ -4061,6 +4171,8 @@ is the fingerprint to match against the CI log:
 Left open: nothing in CI or the local suite builds against more than one platform's graph, so
 this class of divergence is still found by a red leg rather than by us.
 
+Unmeasured. "Nothing builds against more than one platform's graph" was not re-checked against CI.
+
 ### (SUPERSEDED by the codeMask memo below) The merge is ~45% slower than Task 3 measured
 
 `propertyNames` adds a second full scan to `codeMask`, which every `maskedReplace` calls: the
@@ -4069,6 +4181,8 @@ cold. Still inside the 1800s fuse budget on the boxes measured, and unmeasured o
 ones. The three levers are unchanged and are all better than shaving this scan: cache the merge
 under `~/.cache/clode` keyed on the provider, do the string work where it is 31x faster, or stop
 recomputing `codeMask` from scratch inside every `maskedReplace`.
+
+No open claim: SUPERSEDED by the codeMask memo below.
 
 ### CONTEXTUAL KEYWORDS: `of` is not reserved, and neither are the member modifiers (2026-08-28)
 
@@ -4092,6 +4206,9 @@ rule that needs no header parsing: **two identifiers never sit side by side in J
 **Still unguarded, same class, not yet seen in a real graph:** `async x => y` and `async (x) => y`
 (genuinely ambiguous with a call to a function named `async`), and `let`/`static` in the handful
 of positions where they are not reserved.
+
+Unmeasured. The still-unguarded `async` and `let`/`static` positions have no live instance; a fixture group would
+measure them.
 
 ### THE PLATFORM CACHE KEY DOES NOT SURVIVE MINIMISATION — d5da54c is a no-op on every CI leg
 
@@ -4123,6 +4240,9 @@ regex matches nothing returns an equal string. A one-entry memo took the group f
 after it, so the merge is now ~2.5x faster than the code that shipped before any of this.
 The remaining levers are unchanged: cache the merge under `~/.cache/clode` keyed on the provider,
 and do the string work where it is 31x faster than tjs.
+
+No open claim: a dated measurement (5124 codeMask calls; 28.0 s to 5.9 s); the remaining levers are named, not
+claimed.
 
 ## IN-FLIGHT HANDOFF (2026-07-31) — what's being juggled
 
@@ -4255,6 +4375,9 @@ Driver = the at-desk release-readiness plan (`docs/superpowers/plans/2026-07-28-
    green. RESOLVED and off the list: NetBSD/arm64 fullscreen crash (doesn't repro on main); Tiger
    double-Ctrl-C wedge (node-faithful).
 
+Unmeasured. A 2026-07-31 handoff; its items have since moved on (several are recorded as RESOLVED in it). Not
+re-audited here.
+
 ## Cosmo APE fidelity gaps — posix-poll fd-event delivery (2026-07-29)
 
 Full fidelity run of a FRESH cosmo quaude (fused from the committed Phase-E leg) on the dev host
@@ -4370,6 +4493,8 @@ The harness is now APE-aware end-to-end (node-shim-helper `engineSpawn`/`isApeFi
 .com> node --test test/fidelity/agentic-*.test.cjs test/node-shim-agentic.test.cjs` is the standing gate.
 No cosmo-specific divergences remain on the agentic surface.
 
+Unmeasured. Cosmo fidelity needs a cosmo quaude (`CLODE_TJS=<cosmo .com>`); not built here.
+
 ## TRIAGED — Tiger/PPC double-Ctrl-C "wedge" is FAITHFUL, not a bug (2026-07-29)
 
 Filed here so it is NOT re-chased. On slow-DNS boxes (Tiger/PPC VM), the TUI's double-Ctrl-C
@@ -4384,6 +4509,8 @@ for slow-network boxes: `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` (drops the 
 resolves; api.anthropic.com stays). Maintainer decision (2026-07-29): accept faithful + document;
 removed from release blockers. Full method + repro in memory `tiger-ctrlc-teardown-threadpool-join`.
 
+No open claim: TRIAGED 2026-07-29 as faithful (plain Node hangs identically); kept so it is not re-chased.
+
 ## Arch / artifact-name rationalization — release-atomic remainder (2026-07-27)
 
 The canonical-name refactor SHIPPED (single `scripts/canonical-name.cjs` source of truth;
@@ -4396,6 +4523,9 @@ bash asset name now comes from the canonical-name CLI). What's LEFT is release-c
   expects (verify on the release pass).
 - Optional leg-token rename (plan path B) — internal-token uniformity, bigger blast radius;
   follow-up only.
+
+Unmeasured. Release-coupled items (the pin-format change, the optional leg-token rename); the next release pass would
+measure them.
 
 ## Spec sweep 2026-08-01 — the threads that had a spec but no backlog entry
 
@@ -4444,6 +4574,8 @@ their plans deleted — recorded here so nobody re-derives them:
   is recorded above as not reproducing on main. Task 1 (Windows fidelity differential) is
   the only live remainder and already sits in the IN-FLIGHT HANDOFF.
 
+Unmeasured. A 2026-08-01 sweep of docs/superpowers/; its survivors were not re-swept here.
+
 ## Engine-recipe identity — the two deferred halves (2026-08-22)
 
 `scripts/engine-recipe.mjs` (the sha256 of the engine-source set) and
@@ -4476,6 +4608,9 @@ the pack — but it IS ambient red while it lasts, which is the thing
 [[silently-gated-tests-hide-p0s]] warns about. If it is still red weeks from now,
 that is the signal to cut the release, not to soften the job.
 
+Unmeasured. Whether the published manifest carries `recipe` was not re-checked; the latest templates manifest would
+answer it.
+
 ## Release follow-ups 2 + 3 — the unbuilt half of the 2026-07-27 spec
 
 Spec `docs/superpowers/specs/2026-07-27-release-followups-design.md` carries five
@@ -4502,6 +4637,8 @@ follow-ups. Audited 2026-08-01 against the tree, not against memory:
   gate can move. Doing this retires a known-flaky non-gating signal, which is squarely
   [[ci-job-is-to-tell-the-truth]].
 
+Unmeasured. FU2/FU3 status was audited 2026-08-01; not re-audited here.
+
 ## tjs must be BUILT + REQUIRED by the suite, not skipped (2026-07-25)
 
 On netbsd11-arm64, 200 of 240 suite skips are "no tjs binary (CLODE_TJS or
@@ -4514,6 +4651,9 @@ test/run.mjs (mirror the node-pty harness path) and drop skipUnlessTjs's silent-
 favor of a loud requirement. User framing (2026-07-25): "Isn't tjs known to build on every
 platform we target?" — yes; don't skip on a buildable artifact's absence. (Unblocked now
 that the build-dir isolation lands.)
+
+Unmeasured. A netbsd11-arm64 skip count (200 of 240 for "no tjs binary"); a suite run on the NetBSD VM would
+re-measure it.
 
 ## NetBSD 64-bit time_t: write-side utimes truncation in the pkgsrc host node (2026-07-25)
 
@@ -4530,6 +4670,9 @@ txiki.js/deps/libuv); it MUST compile with NetBSD 64-bit-time_t symbols or quaud
 truncate timestamps the same way. Verify (and patch the tjs build if needed) once the
 native tjs build is unblocked. Report the pkgsrc node build bug upstream.
 
+Unmeasured. Needs the NetBSD VM: `fs.utimesSync` with a post-2038 date under the pkgsrc node, and under a NetBSD
+quaude.
+
 ## Native tjs on NetBSD needs CLODE_TJS_WASM=off (WAMR uses Linux mremap) (2026-07-25)
 
 Building native tjs on netbsd11-arm64 fails in WAMR: `deps/wamr/core/shared/platform/
@@ -4541,6 +4684,8 @@ whether NetBSD (and other non-Linux BSDs) should ship WASM at all; if yes, patch
 posix_memmap.c with a non-Linux mremap fallback (munmap+mmap or guard the MREMAP path) and
 upstream it. For now WASM-off is the shipping posture on platforms where WAMR won't build —
 record it in the per-target build config, not as an ad-hoc env flag a human must remember.
+
+Unmeasured. Needs a native tjs build on the NetBSD VM with WASM on.
 
 ## canonical-LE: the regexp wall is REAL, MEASURED, and BENIGN — now gated (2026-08-23)
 
@@ -4581,6 +4726,8 @@ So canonical-LE holds for the synthetic stress corpus (wide strings, doubles, bi
 atoms, branchy labels) and FAILS on real CommonJS files. Whatever differs is present in
 those and absent from the stress source.
 
+No open claim: a dated measurement (release 30730368429, LE vs BE hashes), resolved by the entry below.
+
 ### RESOLVED: it is regexp literals, and the read path is fine
 
 Probed construct by construct on both engines. Ints, doubles, wide strings, typed
@@ -4601,6 +4748,8 @@ re-derived on load, which is a known and benign asymmetry. The 2826 differing by
 loader.cjs are regexp programs (note the 35 runs of exactly 42 bytes, and that 709 of 770
 runs are non-ASCII).
 
+No open claim: RESOLVED, the divergence is regexp literals and the read path is fine.
+
 ### What this does and does not mean
 
 **It is the WRITE side.** Our pipeline serializes bytecode on the BUILD host (LE in
@@ -4612,6 +4761,8 @@ It matters for: a quaude BUILT ON a BE host (the level-2.5 path, currently
 "NOT achieved" under qemu-user), reproducibility of artifacts across build hosts, and
 the plain truth of the canonical-LE claim — which is load-bearing in
 [[canonical-le-bytecode]] and was the justification for the sparc/s390x work.
+
+No open claim: what the measurement above does and does not mean; the open consequence is the gate in the next entry.
 
 ### Why this is the BE gate we should have
 
@@ -4637,6 +4788,8 @@ push; see the correction in the entry above (2026-11-18).
 
 Next step is to narrow WHICH field diverges — dump hex both sides (a `BC_DUMP` variant
 of the oracle) and walk the quickjs writer from offset 1.
+
+No open claim: a reproduction recipe.
 
 ## /heapdump is broken on BOTH targets — and the API-surface gate cannot see it (2026-08-23)
 
@@ -4733,6 +4886,8 @@ request; with a /dev/null stdin: no warning (2026-11-18).
 These lived only in commit messages. Git preserves that; nobody browses it when
 deciding what to do next, which is how they went missing from planning. Recorded
 here so the next session can see them.
+
+No open claim: an introduction; its three findings are the entries below.
 
 ### 1. `net.createServer` is ABSENT — UDS peer messaging is silently off under quaude
 
@@ -4870,6 +5025,8 @@ the transport. With the launch fixed, expect the probe to take ~45s on Windows a
 something genuinely new — possibly another failure. **Nobody has ever seen MCP work or
 fail on Windows.**
 
+Unmeasured. Needs a Windows box (or a Windows CI leg's MCP-SSE probe log); nobody has seen it.
+
 ### 3. One unexplained test flake
 
 `spawn: numeric fd in stdio redirects child output to a file (Bash-tool pattern)` failed
@@ -4879,6 +5036,8 @@ pre-existing, and the changes in flight touched templates/fuse/build — nothing
 child_process uses. Recorded as SEEN AND UNATTRIBUTED rather than dismissed. If it
 recurs, it is load-sensitive (full suite only), which points at the harness rather than
 the assertion.
+
+Unmeasured. A one-off flake; repeated full suites would be the only measurement.
 
 ## RESOLVED 2026-08-27 — haiku-x64 ships again, via a different provider
 
@@ -4907,6 +5066,8 @@ not two, one of them hand-maintained.
 **Fidelity is 0/6, honestly.** The demotion withdrew haiku's RESULTS.md rows and nothing has
 re-driven them on the new backend. The golden ledger says 0, which means "shipping, not yet
 measured" rather than a claim we have not earned.
+
+Unmeasured. haiku-x64 ships; its fidelity rows (0/6) need a Haiku guest to re-drive.
 
 ## (historical) haiku-x64 — the GUEST IMAGE is a superseded release; upstream is tracking it (2026-08-24)
 
@@ -4982,6 +5143,8 @@ Explicitly NOT a retry: 14 consecutive identical failures is not a transient.
 **The fidelity half is FIXED** (c5f6143): a dated withdrawal row makes floorCoverage()
 derive haiku-x64 0/6 automatically, and two new checks keep a `how: 'ci'` claim honest.
 
+No open claim: historical, superseded by the RESOLVED entry above.
+
 ## ★ `spike/quickjs/` is not a spike — separate the components (2026-08-23)
 
 **Noted, not planned.** User: *"spike/quickjs/ smells funny and suggests that QuickJS
@@ -5029,6 +5192,8 @@ exact one that already happened with the cosmo patches.
 **Do not start this without a plan.** It touches the engine recipe, so a careless move
 changes every engine hash and rebuilds every leg. See [[clode-backlog-plan-first]].
 
+Unmeasured. A direction (separate spike/quickjs/ into components), not a behaviour.
+
 ## ★ Move the engine build to cmake — the last hard Node dependency (2026-08-05)
 
 Direction (user, 2026-08-05): "we need to move toward cmake when we move away from node."
@@ -5068,6 +5233,8 @@ bug a real build graph makes unrepresentable.
 cosmo APEs, and Tiger PPC; `scripts/tjs-legs.mjs` stays the single source of truth for leg
 definitions ([[tjs-legs-manifest]]); the build hermeticity check on the shipped binary; and
 the out-of-tree/local-disk build requirement below (this tree is NFS).
+
+Unmeasured. A direction; its measured parts are recorded in the phase-4 entries further down.
 
 ## ★ Build-working-dir isolation — no shared-tree tromping (2026-07-25)
 
@@ -5120,6 +5287,8 @@ peer-to-peer sync per host, no shared-mount xattr-fallback problem at all (each 
 FS). If Syncthing lands, this whole AppleDouble class evaporates and the reset's `._*` sweep becomes
 vestigial. Meanwhile the build is already robust to the turds (the reset sweeps them), so this is an
 infra-hygiene task, not a correctness one.
+
+Unmeasured. A principle plus an infra-hygiene task (AppleDouble on NFS); not re-measured.
 
 ## ★ ACTIVE FRONTIER — the general-purpose cross-build matrix (2026-07-14)
 
@@ -5265,6 +5434,8 @@ well-tested, and reasonably fast** as we can possibly make it."
   3. haiku: find pkgman's actual dry-run flag — its own usage message is in the log.
   4. omnios: why the manager printed nothing at all; check whether `sudo -n` is permitted there.
   5. openbsd: nothing to fix in the probe — its VM failed to boot. Re-run and see.
+
+Unmeasured. A matrix-wide tracker; each leg's state is its latest CI run, not re-read here.
 
 ### Known shipped-artifact bugs
 
@@ -5425,6 +5596,8 @@ well-tested, and reasonably fast** as we can possibly make it."
   drift test bound. Upstream's `--use-system-ca` is the eventual fidelity endgame; treat it as
   a separate, expensive, per-platform project, well after the append knob exists.
 
+Unmeasured. Per-leg shipped-artifact bugs (dragonfly, haiku, the CA bundle...); each needs its leg or guest.
+
 ### Known quaude runtime bugs
 
 - **quaude does not persist config across invocations — CREDS half open (NetBSD/arm64 at
@@ -5548,6 +5721,8 @@ re-run.
 - **MorphOS** (PowerPC AmigaOS-family) — tier-3, needs a libuv port (non-POSIX Amiga exec API,
   no epoll/kqueue). The hardware is already reachable via NetBSD/macppc (PPC) + NetBSD/m68k, so
   the fleet covers the boxes without porting the OS. Revisit only if a libuv backend appears.
+
+Unmeasured. A wishlist of platforms not yet run.
 
 ## Cosmopolitan APE leg — ADDITIVE "one .com everywhere" (spike, 2026-07-28)
 
@@ -5733,6 +5908,8 @@ Design forks for productization: (a) FUSING — APE already uses its tail as a Z
 (b) TLS scope for v1 (defer mbedtls, ship lean no-TLS first?); (c) mac Gatekeeper on APE (assimilate
 or rcodesign ad-hoc); Windows APE runs unsigned. Spike artifacts live in scratchpad (untracked).
 
+Unmeasured. The cosmo leg needs a cosmo quaude; not built here.
+
 ### OPEN — cosmo fidelity has run on 2 of 8 declared run-targets (user, 2026-08-31)
 
 **The user:** "We need to run our cosmo quaude through fidelity on every platform where cosmo can
@@ -5803,6 +5980,8 @@ in the tree — every bare `{ tier: 0 }` in that leg's `fidelity` map is one unr
 `floorCoverage()` derives the tier from RESULTS.md, so a row landing is the only thing that
 changes a tier. Nothing else needs to be invented to track this.
 
+Unmeasured. Cosmo fidelity on 6 more run-targets; each needs that OS running the .com.
+
 ## Phase 3 — still open (render parity + apicheck v1 + upstream-txiki batch)
 
 M1/M2/agentic Bash under tjs SHIPPED; these remain:
@@ -5833,6 +6012,8 @@ miss union + node-vs-tjs divergences (v1/v2 tracked under Phase 3). Load-bearing
 - **Harness caution (still live):** this env carries `CLAUDE_CODE_BRIDGE_SESSION_ID` (child bundle
   auths via the parent bridge) — strip it to test real subscription auth.
 
+Unmeasured. Principles for the API-surface gate; scripts/apicheck.mjs v0 was not re-run.
+
 ## Hermetic test execution — still open (one item)
 
 Curate the live `/doctor` parity allowlist — `e2e-doctor-parity` **test 2 is skipped**. A STRICT
@@ -5843,6 +6024,8 @@ render deps (kill wrapping noise), normalize status glyphs in `doctor-parity.cjs
 extend the allowlist, un-skip. Validation needs live captures (Keychain dialogs each cycle) — batch
 it. (Related: un-skip `test_tui` #60, TUI-fails-loud-on-missing-ws, once its hermetic per-project
 trust-state fixture is rebuilt.)
+
+Unmeasured. e2e-doctor-parity test 2 is live-render gated (CLODE_LIVE_RENDER=1, touches the Keychain); not run here.
 
 ## The test suite requires host Node — can't run on clode's own target platforms (2026-07-24)
 
@@ -5858,6 +6041,9 @@ builtins; running under tjs needs either a `node:test` shim on the tjs side or a
 pure-logic tests to a runtime-neutral harness. Relates to the `tjs-legs.yml` CI leg and the
 node-floor squeeze in `LONG-TERM.md`.
 
+Unmeasured. The suite is node:test under test/run.mjs (true by construction); running it on a target platform without
+node is the open item.
+
 ## Where's `gh auth login` in the bottom status line?
 
 Observed live: the bottom status line doesn't surface the expected `gh auth login` hint. Likely the
@@ -5865,6 +6051,8 @@ same class as the auto-update nudge — status-line content the bundle computes 
 environment (or a shim gap) changes. Investigate: reproduce, compare against native, locate where
 the bundle builds that status-line item — is the hint suppressed, mis-evaluated (a `gh`/auth probe
 behaving differently under the Node host), or rendered and just not where expected?
+
+Unmeasured. Needs a live TUI with gh installed and logged out, against native.
 
 ## Store our versions more parallel to how upstream stores binary versions
 
@@ -5876,6 +6064,8 @@ per-version storage mirror upstream's more directly (a `versions/<ver>` layout w
 pointer), so it's obvious which extracted bundle corresponds to which upstream version, easy to GC
 stale ones, natural to diff side by side. Relates to the extractor-fingerprint re-extract and the
 cache-key logic in `bin/clode` (`cache_key`).
+
+Unmeasured. A storage-layout direction, not a behaviour.
 
 ## Proactively steer the model toward clode's update path (system-prompt nudge) — deferred
 
@@ -5890,6 +6080,8 @@ covered and the nudge is lower-value than when first written. Revisit if the mod
 for upstream update paths despite the guard. Tradeoff: `--append-system-prompt` is last-wins, so a
 user's own value would override clode's (the bundle also concatenates a settings `appendSystemPrompt`
 inside `Kn1`).
+
+Unmeasured. A deferred idea.
 
 ## Windows code-signing / Smart App Control — deferred decision memo (2026-07-04)
 
@@ -5910,6 +6102,8 @@ Signing** (~$10/mo, cloud HSM, CI-native, individuals in US/Canada eligible). `s
 is already structured to add a real `signtool sign` on Windows when creds are present — wiring is a
 small `release.yml` + `sea-sign.cjs` change behind a secret. **OPEN ITEM:** that Windows `signtool`
 wiring, deferred until a user is actually SAC-blocked.
+
+Unmeasured. Needs a Windows 11 box with Smart App Control enforcing.
 
 ## node-shim Linux portability (first surfaced by the s390x BE oracle, 2026-07-09)
 
@@ -6001,6 +6195,8 @@ the user has. Anyone on 2.1.243 fails immediately, on every platform, native AND
 The DOA affects `--target` users only. This is the [[bundle-bumps-add-node-api-reads]]
 pattern again, in its most severe form: upstream can kill quaude with no repo change.
 
+No open claim: the 2.1.243 extractor P0 is RESOLVED (92058a3), recorded in the entries below.
+
 ### RESOLVED 2026-08-25 (92058a3) — clode builds from the code-split bundle
 
     clode: fused /tmp/b245/quaude (60149146 bytes)
@@ -6070,6 +6266,8 @@ So the gate is not "is it latest today" but "can clode build the format upstream
     node libexec/extract-claude-js.cjs "$P" /tmp/out.cjs      # fails
     # same with @2.1.241 -> succeeds
 
+No open claim: RESOLVED 2026-08-25 (92058a3).
+
 ### DIAGNOSED 2026-08-24 (22f197f) — it is Bun CODE SPLITTING, not compression
 
 **The zstd hypothesis below was WRONG, and I put it there.** Both binaries contain
@@ -6134,6 +6332,8 @@ real-provider gate, verified passing on 2.1.241 and failing on 2.1.243. NOTE: `n
 installs no provider, so that gate SKIPS there; it bites only in CI jobs that set
 `CLODE_PROVIDER_BIN`. The durable tripwire is the drift check below.
 
+No open claim: the diagnosis of the P0 above (Bun code splitting), resolved by 92058a3.
+
 ### ★ THE WORSE BUG: the daily ratchet was GREEN through all of this (FIXED 22f197f)
 
 `scripts/upstream-drift-check.mjs` reported `OK — all 5 anchors present` against
@@ -6149,6 +6349,8 @@ Fixed by asserting the one fact every hook depends on: a CJS block named
 green on 2.1.238 and 2.1.241 (darwin AND musl), red on 2.1.243. The general rule, now
 written into that file's header: **prefer checks that fail when the product stops
 working over checks that confirm a string is still present somewhere in 340MB.**
+
+No open claim: FIXED 22f197f.
 
 ### Also found: `patchUpdateHint` has been silently skipping since at least 2.1.210
 
@@ -6204,6 +6406,8 @@ This belongs to the ★★★ overhaul under "what we can DETECT", not just what
 upstream has now broken us twice with no repo change ([[bundle-bumps-add-node-api-reads]]
 was the first, `os.constants.errno` in 2.1.238), and both times we found out by accident.
 
+Unmeasured. A process finding (read upstream's release notes); nothing reads them automatically, not re-checked.
+
 ### Fixed while finding it (both real, both mine)
 
 1. **Three files still had hand-rolled provider lookups** — `.github/actions/build-leg`
@@ -6214,6 +6418,8 @@ was the first, `os.constants.errno` in 2.1.238), and both times we found out by 
 2. **The ratchet had a hole**: `test/find-provider.test.cjs` checked only `ci.yml`. It
    now walks all of `.github` — and that widening is what found the two files I missed.
    A ratchet that covers one file is a ratchet with a hole.
+
+No open claim: both fixed (find-provider at all nine sites; test/find-provider.test.cjs walks all of .github).
 
 ## RESOLVED — the API-surface gate's "25 items to triage" was the instrument (2026-08-25)
 
@@ -6290,6 +6496,9 @@ Small closures favour pinning; large ones favour baking decisively, because imag
 stops mattering once the alternative is fetching that same content on every run. Do not
 pick before the numbers.
 
+Unmeasured. RESOLVED as an instrument defect; its closing pin-vs-bake question ("do not pick before the numbers") is
+open and unmeasured.
+
 ## ★★ Our own package pins — stop betting a release on 13 third-party repos (2026-08-25)
 
 **The user, on the dragonfly hang:** "I wonder if it's a package-repo communication
@@ -6345,6 +6554,8 @@ that matters. Worth stating so the choice is deliberate rather than accidental.
 **A pin store also buys reproducibility**, not just uptime: today two builds of the same
 commit can install different package versions and we would not know. That is a fidelity
 question hiding inside an availability question.
+
+Unmeasured. A direction (our own package mirrors); not a behaviour.
 
 ## dragonflybsd-amd64 hangs, and its 90-minute default timeout hides it (2026-08-25)
 
@@ -6495,6 +6706,8 @@ theory in the original entry was wrong.
 `~` in it will hit the same manual-approval prompt — exactly as they would with upstream
 Claude Code. That is fidelity, and it is the answer this entry was opened to get.
 
+No open claim: ANSWERED 2026-08-26, upstream refuses 8.3 paths too.
+
 ## ENGINE BUG — evalBytecode on a COMPILED module aborts; only a deserialized one is safe (2026-08-25)
 
 Found while building the graph runner. Compile a large ES-module graph in-process and hand
@@ -6517,6 +6730,9 @@ modules compiled in dependency order, evaluate the entry, bisect on N.
 Related and probably the same asymmetry: a directly-compiled, never-evaluated module gets
 NO import.meta at all (not even `url`), while a deserialized one does — see
 test/graph-runner.test.cjs, which pins the runner's own workaround for that.
+
+Unmeasured. The large-graph abort needs the real graph through compile + evalBytecode without the round trip; the
+small case is measured in the evalBytecode entry below.
 
 ## ★★★ NEXT: a clear, clean, well-factored, fully cross build (2026-08-24)
 ### RESOLVED 2026-08-27 — "if we ship it, CI gates it" is now a property, not a list
@@ -6544,6 +6760,9 @@ with `ci: false` now turns the gate red.
 builds in other respects (the 11 published-but-not-CI-gated legs counted on 2026-08-25 are
 now fewer, but the two matrices are still derived separately). This entry closes the
 CI-coverage hole, not the whole divergence.
+
+No open claim: RESOLVED 2026-08-27 for the CI-coverage half; the rest is "Rationalize the push-CI and tag-release
+matrices" below.
 
 
 ### The case for explicit dependencies: naude broke and only CI could tell us (2026-08-25)
@@ -6625,6 +6844,8 @@ only thing that makes the oracle an oracle. The alternative, rewriting ESM into 
 registry, is explicitly argued against there: it can mangle a prompt string and fail
 silently, and a fidelity oracle that quietly differs from its subject is worse than none.
 
+Unmeasured. An argument for explicit dependencies; its incident is history.
+
 
 ### ★★ Extraction cache key lacked the provider's platform (FIXED 2026-08-28)
 
@@ -6660,6 +6881,9 @@ re-tell the carve story as settled without a darwin 2.1.243 graph to compare aga
 **Still worth doing:** a fused target needs a way to answer "which platform was this carved
 for?" that does not depend on `strings`. `providerPlatform` now rides in the graph; carry
 it into the binary's attest/metadata so the question is answerable after fusing.
+
+Unmeasured. FIXED for the cache key; the follow-up (providerPlatform in the binary's attest) was not checked:
+`--clode-attest` output on a built quaude would show it.
 
 
 ### Delete the keychain emulation — upstream already falls back (2026-08-28)
@@ -6720,6 +6944,8 @@ are real. Split-brain by construction.
 unverified divergence. Removing it deletes ~300 lines, one divergence, and a whole bug class,
 per [[match-upstream-by-default]] and [[solve-it-portably-not-per-platform]]. Confirm the
 Tiger persistence story once, then delete.
+
+Unmeasured. DONE 2026-09-02, except "confirm the Tiger persistence story once": needs the Tiger PPC VM.
 
 
 ### ★★★ Make it structurally hard to ship a release without working authentication (user, 2026-08-28)
@@ -6807,6 +7033,9 @@ after the matrix — "how a step fails is part of what the step IS".
 "no credential stored". We cannot patch upstream's swallow, but our own smoke can refuse to
 treat a silent fallback as success.
 
+Unmeasured. A direction (structurally hard to ship without auth); the live acceptance needs real credentials, which
+this task may not use.
+
 
 ### Which supported platforms actually ship a zstd? (open, 2026-08-30)
 
@@ -6822,6 +7051,8 @@ This matters for the README line and the release note, both of which currently i
 the exception. It may be the rule. Answer it per platform against a BASE install, not a CI
 runner, and say so in the docs.
 
+Unmeasured. Per-platform base-install zstd survey; needs each OS's base install.
+
 ### Nothing renders a diagram (open, 2026-08-30)
 
 2.1.250's chart/mermaid/highlight assets were REFERENCED AND UNSERVED in every target ever
@@ -6835,6 +7066,9 @@ The fidelity harness is the right home — it already drives real turns against 
 that asks for a mermaid diagram or a syntax-highlighted block, asserting the rendered output,
 would close the loop the ratchet only half closes. Note this is also the honest answer to
 "have our fidelity tests grown to cover diagrams?": no, they have not.
+
+Unmeasured. No fidelity test renders a diagram; a turn that renders a mermaid/chart asset under quaude vs native would
+measure it.
 
 ### ★★★ Cross-build everything TWICE, from two very different hosts, and diff (user, 2026-08-30)
 
@@ -6879,6 +7113,8 @@ cheap pair; adding a big-endian host is what makes it interesting.
 measurement, and it is the natural gate for the cross-fuse work. It also belongs with
 "nothing gates the gates" above — a differential is the one form of gate that cannot be green by
 construction, because nothing about it is asserted in advance.
+
+Unmeasured. A direction (build twice on two hosts and diff).
 
 ### ★★★ naude and quaude should behave identically, unless there is a written reason (user, 2026-08-30)
 
@@ -6950,6 +7186,8 @@ Two divergences remain, both stated in the output rather than papered over:
 
 The general ask above (parity as the DEFAULT, audit the whole surface) is still open.
 
+No open claim: RESOLVED 2026-08-30 (attestation and provenance); the general ask is the entry above.
+
 ### ★★ One version, one place to edit it (user, 2026-08-30)
 
 **The user:** "The four-file bump sounds like another one for ***. One place ought to suffice."
@@ -7013,6 +7251,8 @@ frame and defeat the guard.
 attempts could from here: which volume has room, how much, and where `spawnSync` stdio capture
 puts its bytes on win32. Until then this guard is dark on Windows — and a skipped oracle reads
 like a clean one, which is the whole reason it says so out loud.
+
+Unmeasured. A Windows-runner disk limit; the windows-latest suite log would show the guard still skipping.
 
 ### ★★★ The quaude build is slow and opaque — name the steps, show how done we are (user, 2026-08-31)
 
@@ -7086,6 +7326,8 @@ noticed. A progress bar bolted onto today's imperative script would be a fourth 
 list of what the build does, going stale the same silent way. Sequence the remaining numerator
 WITH the out-of-tree/CMake item, not before it.
 
+Unmeasured. A direction (name the build steps, show progress); the build graph entries above record what landed.
+
 ### Default artifact names should carry the Claude bundle version (user, 2026-08-31)
 
 **The user:** "Maybe the default built quaude/naude should have the Claude bundle version in
@@ -7123,6 +7365,8 @@ resolved before it (`resolve.cacheKey`, `:457`, is what computes the key). Which
 
 Related: [[Arch / artifact-name rationalization — release-atomic remainder (2026-07-27)]] above,
 which is the same "one name, agreed by every consumer" problem on the publish side.
+
+Unmeasured. A naming direction; `clode build` without --out was not run here to see the default name.
 
 ### ★★★ Nothing gates the gates — make "a guard that cannot fail" structurally impossible (user, 2026-08-29)
 
@@ -7234,6 +7478,9 @@ one level up — a hand-maintained list of which guards were mutation-checked, w
 stale silently. See also [[instruments-lie-check-them-first]], which states the principle; this
 entry is the argument that the principle needs a mechanism.
 
+Unmeasured. A direction; test/guard.cjs and guards-population are the mechanism it asked for (UNMIGRATED_BASELINE 82,
+uncontrolled 28).
+
 
 ### ★★★ Out-of-tree builds must be easy AND the default (user, 2026-08-28)
 
@@ -7281,6 +7528,8 @@ Design notes worth carrying:
 - `git gc` should be made to work (or the `._*` files swept) or the repo degrades on its own.
 - Once builds are out of tree by default, `bin/` holding a built binary stops being a
   contradiction — see the stage0 entry above.
+
+Unmeasured. A direction; the NFS-vs-local timing it cites was not re-taken.
 
 
 ### ★★★ clode is a BINARY WE BUILD, and only that — retire bin/clode as a way to run clode (user, 2026-08-28)
@@ -7348,6 +7597,8 @@ will be broken the first time someone is in a hurry, which is how we got here.
 provider at all today (`bun-graph.cjs` is not in the builder role's member list), which has
 been true since 2.1.243 and was found only by an agent building the real thing.
 
+Unmeasured. A direction (clode is a built binary only); whether bin/clode still exists and is used was not re-audited.
+
 
 ### Write down the doctrine — propose a CLAUDE.md from this project's own history (user, 2026-08-25)
 
@@ -7404,6 +7655,8 @@ it" is a rule that changes behaviour. Every entry carries its incident.
 **Sequenced with the rest of ★★★ deliberately**, because the overhaul is where several of
 these rules get their first real gate — writing the doctrine and building the mechanisms
 that enforce it should be the same pass, or the file is aspirational on the day it lands.
+
+Unmeasured. A proposal (a CLAUDE.md from this project's history).
 
 
 ### No special cases: one path, applied equally (user, 2026-08-25)
@@ -7471,6 +7724,8 @@ at that leg's cadence, which for the emulated legs means hours per attempt and d
 fix. Sharing the path is not just tidiness; it is the difference between a minutes-long
 feedback loop and an hours-long one.
 
+Unmeasured. A principle (one path, applied equally).
+
 ### ★★★ Borrow someone else's test corpus for both shims (user, 2026-08-25)
 
 **The user:** "'Bun-on-Node shim with node's own test corpus behind it' sounds awesome."
@@ -7525,6 +7780,8 @@ than requiring 100% on day one.
 **Sequencing:** it needs the engine-test harness from the feasibility spike, so it lands
 after that. Same doctrine applies — the `common` stub must supply plumbing ONLY; anything
 it supplies that the shim should have is a finding, not a hole to fill.
+
+Unmeasured. A direction (borrow Node's and Bun's test corpora).
 
 ### Revisit the shims: named, organized, parallel, maintainable (user, 2026-08-25)
 
@@ -7589,6 +7846,8 @@ knows what it claims to provide.
 **Related:** the shim tests do not run on the engine (filed separately) — which bites
 node-shim hardest, since it is the layer that only exists there.
 
+Unmeasured. A direction (reorganise the shims).
+
 ### Revisit the CLI and subcommands (user, 2026-08-25)
 
 **The user:** "let's revisit the clode CLI and subcommands, given how we build quaude by
@@ -7642,6 +7901,8 @@ notification). Neither is a peer of `build`; both exist in service of it.
 
 **Sequencing:** after the release. This is a breaking surface change, and it wants to
 happen once, with the vocabulary and the surviving knobs already decided.
+
+Unmeasured. A direction; phase 3 (below) decided the surface.
 
 ### Domain language: stop saying "fuse" (user, 2026-08-25)
 
@@ -7722,6 +7983,9 @@ artifact, and that is the disease: two measurements of the same thing, no single
 that answers it. Whatever the env-var review decides, it should leave ONE count that is
 derived rather than asserted.
 
+Unmeasured. The rename largely landed (a vocabulary gate under test/ guards it); what this entry still claims (one
+derived count) was not re-checked.
+
 ### ★★ Anchors exist TWICE, by hand (2026-08-25)
 
     libexec/extract-claude-js.cjs      17 anchor definitions
@@ -7786,6 +8050,8 @@ depth/breadth options, no getter evaluation, spacing differs. What it now guaran
 that it NEVER THROWS and never returns '{}' for a value with content. Widen it when a
 caller needs more, not speculatively.
 
+Unmeasured. Which shim tests run on the engine today was not counted; a list of test files spawning tjs vs node would.
+
 ### ★★ Finish the engine-test migration (2026-08-25)
 
 The spike above proves the approach; the harness is uncommitted in an agent worktree. What
@@ -7814,6 +8080,8 @@ the shim test go red while a pure-JS control stayed green. Any future harness ch
 should be checked the same way — a harness that stubs enough to pass reproduces the exact
 defect this work removes.
 
+Unmeasured. The engine-test migration's state was not re-audited.
+
 ### ★★ s390x ATTEMPTS the cross-fuse onto big-endian and throws the result away
 
 The `linux-s390x-musl` leg's `verify: qemu-user` does a "level-2.5 full fuse
@@ -7825,6 +8093,8 @@ push.
 Making that assertion real would turn the project's largest untested property into a
 five-minute signal. Related: the matrix note above (published-but-ungated legs) and the
 canonical-LE risk below.
+
+Unmeasured. The s390x leg's level-2.5 attempt needs that leg's log.
 
 ### ★★ canonical-LE is knowingly incomplete, and the code-split path multiplies the risk
 
@@ -7933,6 +8203,9 @@ literals — the exact construct behind the known wall, multiplied by three orde
 magnitude. Whether it bites is unknown: the modules may carry regexps that recompile
 cleanly on read, which is what canonical-LE was for. Nothing green today can see it.
 
+Unmeasured. The cost is measured (~0.2% CPU); its closing risk ("nothing green today can see it") is unmeasured by
+definition: a BE quaude reading code-split bytecode would see it.
+
 ### ★ tjs_evalBytecode over-consumes its argument (SIGABRT at teardown)
 
 `src/mod_engine.c:138` (was :148; the call is at :152) does `JSValue obj = argv[0]` and hands it to `JS_EvalFunction`,
@@ -8013,6 +8286,9 @@ to ci, would turn the project's largest untested property into a 5-minute signal
 also the canonical-LE baseline, which records `differs` for real files (the regexp wall)
 while synthetic corpora match.
 
+Unmeasured. The push-CI vs tag-release matrix divergence; test/tjs-legs.test.cjs's CI_EXEMPT is the measure of the
+closed half.
+
 ### The tests under a CMake/CTest build (design discussion, 2026-08-25 — not decided)
 
 Companion to the "what language is the SECOND half" note below: same decision seen from
@@ -8075,6 +8351,8 @@ node:test file as ONE ctest entry, not one per assertion.
 2. Run the suite under the ENGINE, not node. Highest-value step, independent of language.
 3. Tests migrate by subject as their code does.
 4. Replace the 38 bash steps with `cmake -P` at whatever pace suits.
+
+Unmeasured. A design discussion, not decided.
 
 ### What language is the SECOND half? (design discussion, 2026-08-25 — not decided)
 
@@ -8195,6 +8473,8 @@ the 30s startup number and no breakdown of the rest. If the time is mostly start
 spine buys nearly all of it while the anchors stay cheap to change — and the decision
 makes itself.
 
+Unmeasured. A design discussion, not decided.
+
 ### ★★ Critically review the environment variables (user, 2026-08-25)
 
 **THE QUESTION TO ANSWER (user, sharper than the original framing):**
@@ -8294,6 +8574,8 @@ uses — should its use be announced rather than silent.
 Related: [[isolate-clode-runs-from-user-deps]] (the existing convention of pointing
 CLODE_DEPS/CLODE_CACHE at temp dirs) and [[dev-box-state-hides-bugs]].
 
+Unmeasured. A direction; the env-var population was re-measured 2026-09-13 (an entry below), not here.
+
 ### Hooks under the code-split bundle: 9 of 9 apply (RESOLVED 2026-08-25)
 
 **snapshot_bridge is fixed, and the investigation found a worse problem underneath.**
@@ -8321,6 +8603,8 @@ mirrors SNAPSHOT_GEN verbatim.
 Verified after integration: the hook applies on 2.1.241 (CJS) and on 2.1.243 and 2.1.245
 (split), all 9 hooks apply on both split bundles, and the drift check is green on all
 three.
+
+No open claim: RESOLVED 2026-08-25, 9 of 9 hooks apply.
 
 ### Original entry, kept for the reasoning: 7 of 9 survive untouched; 1 needed a decision
 
@@ -8375,6 +8659,8 @@ applet-skew findings appear only after the first shell command instead of at sta
 Degraded, not broken. The drift check already gates this anchor
 (`snapshot_generator_present`), so it will go red the day .243+ becomes `latest`.
 
+No open claim: the original entry, kept for its reasoning; resolved by the entry above.
+
 ### Rebuilding the code-split bundle: EMBED THE GRAPH (decided 2026-08-25, spike green)
 
 **Decision (user):** "Sounds like time to try embedding the graph as is and see how that
@@ -8416,6 +8702,8 @@ modified to get there.**
 **Retired:** `libexec/esm-relink.cjs` (uncommitted) — the ESM->CJS text rewriter. Kept
 nothing but the lesson: do not lex minified JS by hand. If a future change ever needs
 this again, use the engine's own parser, never a regex.
+
+No open claim: a decision (embed the graph), implemented.
 
 ### Coverage that turns on and off with machine state (root-caused 2026-08-25)
 
@@ -8503,6 +8791,9 @@ number (`floor 6/6`) excludes G2, the only row that involves a real logged-in us
 
 **Do this before further feature work.** The 2026-08-24 release ships first because it
 fixes a confirmed 40-target cross-build DOA; the overhaul starts after.
+
+Unmeasured. The machine-state coverage class; the instance was fixed. A sweep for tests gated on the shared user store
+would measure what is left.
 
 ### POSTSCRIPT (user, 2026-08-31) — what if clode were an orchestrator of small Unix programs?
 
@@ -8627,6 +8918,8 @@ step behind it (the merge), give it an argv contract like `quaude-fuse.js`'s, an
 step list, the timing record, and the CMake edge all fall out of that one change. If they do, the
 rest is the same move applied N times. If they don't, we learned it for the price of one refactor.
 
+Unmeasured. A design postscript (small Unix programs).
+
 ## ★★ SHIPPED ENGINE TEMPLATES PREDATE THE uid/gid FIX — cross-fused Linux quaude is DOA (2026-08-09)
 
 **Every `clode build --target linux-*` produces a binary that cannot run on Linux
@@ -8732,6 +9025,9 @@ cannot boot.
 `clode build --target` will not use it, so a good Linux quaude cannot currently be
 produced from this host without bypassing the template path.
 
+Unmeasured. A 2026-08-09 DOA of cross-built Linux quaudes; whether today's `clode build --target linux-*` boots on
+Linux was not driven (the Linux container on ultimate-hat would).
+
 ## ★ HANDOFF — operational state at 2026-08-22 (read this first)
 
 Written at the end of a long session, for whoever picks this up. The durable
@@ -8795,11 +9091,15 @@ proxy mock that could not accept connections because it shared a process with a
 implementation against the same mock, and prove a test fails before believing it
 passes.
 
+Unmeasured. A 2026-08-22 handoff; not re-audited.
+
 ## Four small truths phase 2 found and did not fix (2026-09-02)
 
 Filed here because they were found in phase 2's whole-branch review and recorded only
 in that phase's working notes, which are gitignored. A deferral nobody else can read
 is a silent loss, so they get a tracked home. Each is small; none blocks anything.
+
+No open claim: an introduction; its four items are the entries below.
 
 ### 1. `MERGER_VERSION` is a hand-written literal, not a derived key
 
@@ -8856,6 +9156,9 @@ jobs broke at once while CI stayed green.
 The fix is a test that mutates the list and asserts the closure check goes red — the
 list is derivable from what the worker actually loads, so the stronger fix is to derive
 it rather than declare it.
+
+Unmeasured. The mutation table (two leaf members blind) was not re-run against the member list, which now lives in
+libexec/quaude-blobulate.js.
 
 ### 3. The trace log's `interpreter` field is a constant on the fused path
 
@@ -9045,6 +9348,9 @@ Read skip reasons with the TAP reporter — the default reporter hides them:
 node --test --test-reporter=tap test/... 2>&1 | grep '# SKIP'
 ```
 
+Unmeasured. The skip inventory was not re-counted; `node --test --test-reporter=tap ... | grep "# SKIP"` over the
+suite would.
+
 ## MCP-over-WebSocket: quaude never connects on native (non-cosmo) darwin-arm64 tjs (2026-09-02)
 
 Undarking the 43 provider-gated skips (above) required routing
@@ -9181,9 +9487,13 @@ The cheap win is unchanged and unaffected: `CLODE_NAUDE_BIN` for the naude test,
 Until then all five state their reason, and the naude one is the model the others
 should copy: it probes three locations, names each, and prints the exact build command.
 
+Unmeasured. Five skips and what each would take; not re-counted.
+
 ## Two defects found while wiring the Linux PTY CI job (2026-09-03)
 
 Both surfaced by making dark tests run. Neither is caused by that work.
+
+No open claim: an introduction; its two defects are the entries below.
 
 ### 1. `clode build --out DIR/name` fails when DIR does not exist (product bug)
 
@@ -9274,10 +9584,14 @@ The test was feeding the minimiser a shim.
 container" rather than a format complaint. Same for any other tool that assumes its
 input is a provider because of where it was found.
 
+No open claim: RETRACTED the same day; kept for how it was wrong.
+
 ## RESOLVED: two full-suite flakes, two different causes (2026-09-03/04)
 
 Both passed in isolation and failed only under a concurrent full-suite run. They looked
 like one problem. They were two, and neither was where the symptom pointed.
+
+No open claim: RESOLVED; the two causes are the entries below.
 
 ### 1. `node-shim-child-process.test.cjs:569` — a race in the TEST's own child program
 
@@ -9309,6 +9623,8 @@ Verified: **8 cold-cache full runs, 8 green.** It had reproduced on run 2, twice
 side nor the content, so two occurrences taught nothing. One occurrence with "which side,
 and the bytes" solved it immediately. When a flake resists, instrument it before guessing
 again — the third guess costs more than the diagnostic would have.
+
+No open claim: fixed (the test's own child program).
 
 ### 2. `agentic-subagent-diff.test.cjs:70` — a real shared-cache race
 
@@ -9344,6 +9660,8 @@ a gate.
 
 **Run all of these on a logged-in machine before tagging.** Each states what it proves,
 because the point is to be able to tell which one failed and what that means.
+
+Unmeasured. The checks only a human with credentials can run; this task may not use credentials.
 
 ### 0. FIRST: items 1 and 2 below are OBSOLETE — retire, do not re-anchor
 
@@ -9390,6 +9708,8 @@ different, much simpler test: run two binaries non-interactively, compare stdout
 Cost of finding this: one PTY capture, ~666 tokens, no Keychain modal. Cost of NOT
 finding it: two tests carried in the release ritual that could never have passed.
 
+Unmeasured. A ruling (retire items 1 and 2); whether they are retired was not checked.
+
 ### 1. Doctor parity vs native — `test/e2e-doctor-parity.test.cjs` (2 tests) — SEE ITEM 0
 
     CLODE_LIVE_RENDER=1 node --test test/e2e-doctor-parity.test.cjs
@@ -9414,6 +9734,8 @@ moved on, this first test will now skip UNCONDITIONALLY on any current native bu
 is the honest state of the world, not a new gap: full retirement (item 0) remains the
 still-open, separate, larger call.
 
+Unmeasured. Live-render gated (CLODE_LIVE_RENDER=1, Keychain); not run here.
+
 ### 2. Stale frames — `test/fidelity/stale-frames.pty.test.cjs` (2 tests)
 
     CLODE_LIVE_RENDER=1 node --test test/fidelity/stale-frames.pty.test.cjs
@@ -9421,6 +9743,8 @@ still-open, separate, larger call.
 RECIPE row F3, a captured rendering bug: open `/doctor`, close it, assert the finished
 frame was actually ERASED rather than lingering under the live prompt. Proves: repaint
 does not leave ghosts — the kind of thing only a human eye or a PTY capture catches.
+
+Unmeasured. Live-render gated; needs a logged-in profile.
 
 ### 3. Live streamed render — `test/fidelity/interactive-live-turn.test.cjs` (2 tests)
 
@@ -9431,6 +9755,8 @@ model response renders in the TUI. This is the standing "live TUI turn is the
 acceptance" gate — `--version`, `--help`, and a mock PONG have each certified a broken
 build before.
 
+Unmeasured. Needs real credentials (CLODE_LIVE_ONLINE=1).
+
 ### 4. Live print round-trip — `test/e2e-print.test.cjs`, `e2e-tools.test.cjs`, `e2e-assets.test.cjs`
 
     CLODE_LIVE_ONLINE=1 node --test test/e2e-print.test.cjs test/e2e-tools.test.cjs test/e2e-assets.test.cjs
@@ -9438,6 +9764,8 @@ build before.
 `-p` reaches a real model; the Bash tool round-trips end to end; the embedded-asset shim
 raises no consumer errors on a real turn. Proves the non-interactive path, which the
 mock cannot fully stand in for.
+
+Unmeasured. Needs real credentials (CLODE_LIVE_ONLINE=1).
 
 ### 5. Real naude build+boot — `test/naude-smoke.test.cjs` (2 tests)
 
@@ -9486,6 +9814,9 @@ the real suite, run the way it is meant to be run, never hits this. Confirmed: w
 fresh `CLODE_STATE_ROOT`. Filed here rather than fixed because the real fix (bump the
 pin, or teach the extractor/oracle helpers to detect+skip an incompatible carve before
 running it) is a separate, larger call this task's brief did not ask for.
+
+Unmeasured. test/naude-smoke.test.cjs (CLODE_NAUDE_SMOKE=1) was not run; a naude built from b4eb2f5 (darwin-arm64,
+2.1.283) did build and pass its PONG and attest smoke (2026-11-18), which is not this test.
 
 ## P1: a quaude built from a foreign-carved provider LIES about its platform (2026-09-04)
 
@@ -9538,12 +9869,16 @@ store, the five linux carves at 2.1.207/210/211/215/243 now sit at `linux-amd64/
 darwin build cannot reach them. Step 3's invariant is covered continuously by
 `test/provider-store-key.test.cjs` (7 tests, all shown red first).
 
+No open claim: CLOSED 2026-09-20; test/provider-store-key.test.cjs holds the invariant.
+
 ## WHERE THE CROSS-BUILD UMBRELLA STANDS (2026-09-04) — read this first
 
 The umbrella spec itself lives at `docs/superpowers/specs/2026-09-01-clean-cross-build-umbrella.md`,
 which is **gitignored by project convention** (superpowers working docs are not part of the
 project). So this section carries the DECISIONS, which are project decisions rather than
 planning scratch. Anyone picking this up on a fresh clone starts here.
+
+No open claim: an introduction to the umbrella's decisions.
 
 ### Phase order (changed from the original, deliberately)
 
@@ -9591,6 +9926,9 @@ check its inputs — and the carve guard shipped 2026-09-04 is the first of them
 **Phase 6** cannot start until phase 4 delivers derived content keys; the umbrella's own
 argument is that those keys ARE the layered differential.
 
+Unmeasured. A phase order and its notes ("PHASE 3 IS NEXT" was written 2026-09-04); later entries record phases 3-4
+landing.
+
 ### Standing conditions
 
 - **Every skip is understood** (invariant 7, user 2026-09-03): the umbrella cannot close
@@ -9598,6 +9936,9 @@ argument is that those keys ARE the layered differential.
 - **The suite tests the PINNED provider** (`UPSTREAM_PIN`), exactly, or says why it cannot.
 - Upstream is pinned at 2.1.251 on purpose; absorbing 2.1.257 is the first test of the
   rejiggered build system, not a fix to rush.
+
+Unmeasured. Standing conditions; "pinned at 2.1.251" is stale (UPSTREAM_PIN names 2.1.283) but was a condition, not a
+measurement.
 
 ### The Windows spawn number — MEASURED 2026-09-04, phase 2's last open acceptance
 
@@ -9637,6 +9978,8 @@ it claims to measure, which was the one failure mode that would have made the ex
 worthless.
 
 **Phase 2 is now COMPLETE on all five acceptance criteria.**
+
+No open claim: MEASURED 2026-09-04 (the Windows spawn number); phase 2 complete.
 
 ## scc-merge.cjs's lexicalCodeMask has the same check-ordering defect just fixed next door, unproven in the wild (2026-09-04)
 
@@ -9690,6 +10033,8 @@ structurally IDENTICAL to a defect just confirmed by execution next door, not a 
 finding — treat it as a live risk in the merger until someone either proves it fires on a
 real SCC group or fixes the ordering preemptively.
 
+No open claim: SUPERSEDED, proven live and FIXED 2026-09-12 (the entry further down).
+
 ## Three gates have now scanned an UNPINNED provider — the condition needs a mechanism (2026-09-04)
 
 The standing condition says: **the suite tests the PINNED provider, exactly, or says why it
@@ -9721,6 +10066,8 @@ something else. Until then, every new gate that reads a carve is a fourth instan
 happen. `test/provider-resolve.cjs`'s `pinnedVersion()` is the existing half; what is missing is
 making it the ONLY door.
 
+Unmeasured. Whether provider-resolve's pinned resolver is now the only door was not re-audited.
+
 ## Item 6's coverage half waits on phase 4's declared edges (2026-09-04)
 
 Phase 5's item 6 (`test/tjs-legs.test.cjs`'s `'every leg that carves inside a guest VM
@@ -9745,6 +10092,8 @@ writing it again the moment phase 4 lands — the one deferral reason this proje
 Phase 4 is where this waits: once declared edges reshape minimisation, re-examine whether a
 guest-carve exercise belongs beside `ZSTD_SOURCE`'s 'minimised' entries, or whether the
 reshaped edges make the question moot a different way.
+
+Unmeasured. Waits on phase 4's declared edges; not re-checked.
 
 ## Item 7's coverage half waits on phase 6's control-free comparison (2026-09-04)
 
@@ -9781,6 +10130,8 @@ reference host to diff against — is an acceptance-test DESIGN problem, and it 
 **phase 6**, whose whole business is comparisons that work without a reference host. Phase 5
 does not own comparison-design; it owns whether a gate can fail, and the answer for this
 gate — now — is yes, honestly.
+
+Unmeasured. Waits on phase 6; interactive-live-turn needs credentials.
 
 ## Guard migration is proven per-FILE; the individual claims inside are not (2026-09-05, final whole-branch review of phase 5)
 
@@ -9820,6 +10171,8 @@ redesign of the sweep's own unit of measure. Either is its own task; recorded he
 gap is legible to whoever reads this phase's numbers next, rather than re-discovered by
 someone assuming "migrated file" already meant "every claim in it is proven".
 
+Unmeasured. Per-claim proof inside migrated guards; not re-audited.
+
 ## The real build-path gates have no floor, no control, and no verdict vocabulary — phase 5's natural successor (2026-09-05, final whole-branch review of phase 5)
 
 Phase 5 built `defineGuard`/`guardTests` and made it structurally hard to add a NEW
@@ -9855,6 +10208,8 @@ means either giving `defineGuard` a harness-agnostic verdict path (usable from b
 specifically. Sized and scoped like its own phase, not a task inside this one; recorded here
 so it is not lost the way the umbrella phase-list (`### Phase order`, above) would otherwise
 make it look like phase 5 already covers "gates that can fail" in full.
+
+Unmeasured. Build-path gates without floor or control; phase 5b (next entry) covered four.
 
 ### Phase 5b CLOSED — and what it measured but did not control (task 5, 2026-09-12)
 
@@ -9961,6 +10316,8 @@ Node-API emulation — fused into quaude, run on the end user's machine, never a
 `clode build` — and its 8 gate-shaped files are all `throw new Error('ENOENT...')`-style
 Node-semantics emulation, one fact about a directory rather than eight about eight files.
 
+Unmeasured. Phase 5b CLOSED; what it measured but did not control is listed, not re-measured.
+
 
 ## "Required gate" does NOT mean branch protection here (user, 2026-09-05)
 
@@ -9985,6 +10342,8 @@ signal the item exists to make loud.
 If a future reader wants a check that genuinely cannot be merged past, that is a different
 request with a real cost (no more push-to-main) and needs asking, not assuming.
 
+No open claim: a ruling (no branch protection; "required" means the job says so).
+
 
 ## Full local cross builds — the umbrella's postscript (user, 2026-09-05)
 
@@ -10004,6 +10363,8 @@ creates: 44,305ms NFS vs 106ms local, 418x) but the suite reads a small working 
 and the client caches it. So a local-materialisation path should NOT be built on the suite's
 account. `clode build` is a different question — it is create-heavy, which is exactly where the
 418x lives — and deserves its own measurement before anyone assumes either way.
+
+Unmeasured. A direction; its cost number (the 418x) is for another operation and `clode build` was not timed.
 
 
 ## SETTLED: cancellation follows the ModernMavericks family rule (2026-09-12)
@@ -10065,6 +10426,8 @@ run's matrix signal in practice. The answer then is not `paths-ignore` but a der
 (the classification would have to be available at run level, which today it is not), or
 accepting the manual re-run as the cost.
 
+No open claim: SETTLED 2026-09-12 (cancellation follows the family rule).
+
 ## `lexicalCodeMask` phantom-comment defect: FIXED (phase 5b, task 1, fix round 1, 2026-09-12)
 
 `libexec/scc-merge.cjs`'s `lexicalCodeMask` — the merger's own lexer, deciding which bytes
@@ -10123,6 +10486,8 @@ corpus is itself visible.
 regression test — not a `todo` marker — and goes red again if the EOF-backoff is ever
 removed or narrowed.
 
+No open claim: FIXED 2026-09-12; test/build-gates/lexical-code-mask.test.cjs holds it.
+
 ## `lexicalCodeMask`'s EOF-backoff is O(m·n) on a pathological input — filed, deliberately NOT fixed (2026-09-12, final whole-branch review of phase 5b)
 
 `libexec/scc-merge.cjs:163` — the `/*` branch's EOF-backoff (added by phase 5b task 1's fix
@@ -10145,6 +10510,9 @@ unterminated. That makes the whole pass linear again and does not change a singl
 The covering regression test (`test/build-gates/lexical-code-mask.test.cjs`) already goes red
 if the backoff is removed or narrowed, so this refactor has its control waiting for it.
 
+Unmeasured. A pathological-input cost, filed and deliberately not fixed; a crafted input timed under node would
+measure it.
+
 ## The production-gate sweep's walk→classify→map→ratchet path is proven only by a one-off demonstration — the successor's first item (2026-09-12, final whole-branch review of phase 5b)
 
 `test/guards-population.cjs`'s production sweep is tested in pieces: `ratchetUncontrolledGates`
@@ -10163,6 +10531,8 @@ temp `libexec/`, run the sweep against THAT root, and assert the ratchet reports
 baseline. No write into the real `libexec/` ever happens, and the demonstration becomes
 permanent. Do it before writing the fifth control, not after: it is the mechanism that says
 whether the fifth one was counted.
+
+Unmeasured. The sweep path proven only by a one-off; not re-run.
 
 
 ## The daily drift job cannot see the thing that is actually broken (2026-09-12)
@@ -10213,12 +10583,16 @@ box; `engine=unknown` in every suite stamp here), and shipping an unverifiable C
 reports a comforting green is precisely the defect being fixed. It wants a runner to develop
 against, which makes it its own piece of work rather than a tail on this one.
 
+Unmeasured. The drift job's blind spot; its latest run was not read.
+
 
 ## PHASE 3 DECIDED — the surface, the vocabulary, and what is out (user, 2026-09-12)
 
 Spec: `docs/superpowers/specs/2026-09-12-phase3-one-entry-point-design.md` (gitignored by
 project convention, so the DECISIONS live here). Phase order is now
 **1 → 2 → 2.5 → 5 → 5b → 3 → 4 → 6**, and this is phase 3.
+
+No open claim: a decision record (phase 3); its parts are the entries below.
 
 ### The surface
 
@@ -10286,6 +10660,8 @@ without updating it and the gate silently becomes UNCONTROLLED, raising
 `quaude-fuse.js` has NO module resolver (its `require` is a loud stub; siblings load via
 `loadLibexecCjs`), so its rename and any new sibling must keep that loading contract.
 
+No open claim: the vocabulary decision and its reasons.
+
 ### Bootstrap is not a product
 
 `clode-main.cjs` already said so: "`--self` fuses the BUILDER, not a Claude Code target … it
@@ -10297,6 +10673,8 @@ clode-builds-clode. So bootstrap is a verb on the CHECKOUT entry point only, the
 binary's table does not carry it, and a shipped clode asked to bootstrap refuses with a
 reason. If phase 6's differential ever wants a builder built BY a builder, that is the line
 to revisit.
+
+No open claim: a decision (bootstrap is not a product).
 
 ### Policy
 
@@ -10311,6 +10689,8 @@ to revisit.
   surface test all read it. Today's 213-line if-chain over `args[0]` with inline flag
   sniffing is how `--target` acquired a second meaning without anyone deciding it should.
 
+No open claim: a policy decision (hard break, one table).
+
 ### Env vars
 
 All 51 `CLODE_*` names read by shipped code get a verdict. **Absorbed** when the value
@@ -10318,6 +10698,8 @@ changes WHAT GETS BUILT (target, product, output path, which ingredient); **env-
 it changes how the build is OBSERVED or PLUMBED (test seams, CI wiring, cache/state roots);
 **dead** when its only caller is a test. Absorbed names land in the table, so there is one
 input surface rather than two. The rest ship with their verdict recorded.
+
+No open claim: a decision (every CLODE_* name gets a verdict); the counts are re-measured in the env-var entry below.
 
 ### MEASURED 2026-09-12, and it settles the built-binary rule
 
@@ -10331,6 +10713,8 @@ amortised across 1955 tests is noise, so the suite can build the product once pe
 exec it, with every exception named. The 343-test swing is its own finding: **a dev box
 without an engine hides a fifth of the suite, and nothing said so.**
 
+No open claim: MEASURED 2026-09-12 (60 s cold engine, 14 s warm self-build).
+
 ### Scope
 
 IN: the rename (first, no behaviour change), the CLI break, the env classification, the
@@ -10340,6 +10724,8 @@ oracle becomes a product, artifact names carry the bundle version).
 
 OUT, each its own piece: the naude/quaude parity audit, and release as a declared step list
 (which wanted to reuse whatever this CLI became, and now can).
+
+No open claim: the phase's scope.
 
 
 ## The unpinned-provider pattern has a MECHANISM now: two resolvers, one pinned (2026-09-13)
@@ -10387,6 +10773,8 @@ Bun-surface map drifted, which reads as "our shim is wrong", when the true state
 measured a different bundle than the one this repo pins". Two agents have now reported it as
 pre-existing-and-unrelated rather than as a defect, which is accurate about blame and wrong
 about ownership.
+
+Unmeasured. The mechanism (two resolvers, one pinned) was not re-audited for a third resolver.
 
 ## Unreviewed golden drift at 2.1.270: `Bun.Image`, `Bun.unsafe` (2026-09-13)
 
@@ -10443,6 +10831,8 @@ Same defect class as two others this project has now hit: the phase-5b `no-fuse`
 the word inside its OWN header, and `test/merge-step.test.cjs` (phase 2) asserting against text
 that matched inside its own file's header comment. A scanner that cannot tell code from prose
 about code will keep finding itself.
+
+Unmeasured. The production-gate classifier reading comments; not re-run against cli-surface.cjs.
 
 
 ## The env-var population is 65, not 51 — and it is not ONE population (measured 2026-09-13)
@@ -10501,6 +10891,8 @@ three trees, matching the env-read shapes above, inverting the index name→file
 `CLODE_*` tokens instead gives 141 and is the wrong number — it includes build-time defines
 that are not environment variables at all.
 
+Unmeasured. 65 names measured 2026-09-13; not re-counted (test/env-verdicts.cjs is the inventory).
+
 
 ## THREE PHASE-3B DECISIONS (user, 2026-09-13)
 
@@ -10517,6 +10909,8 @@ become typed options with defaults and a cache rather than undocumented env vars
 
 Consequence: phase 3b's env work is ~11 genuine absorption candidates, not 51 and not 65.
 
+No open claim: a decision (engine-build knobs become cmake options in phase 4).
+
 ### 2. "The oracle is a product, not a fixture" is RETIRED — the oracle is an INGREDIENT
 
 The umbrella clause was written before phase 3a's vocabulary existed. **The oracle is
@@ -10529,6 +10923,8 @@ the clause is retired with that as its written reason rather than silently ignor
 more of an oracle than claude itself. Less of one, strictly speaking, since Claude's behavior
 is what we're trying to match." naude is the MIDDLE TERM in a three-way differential, not an
 authority.
+
+No open claim: a decision (the oracle is an ingredient).
 
 ### 3. naude stays on EVERY platform we have it — and my narrowing was wrong
 
@@ -10557,6 +10953,8 @@ entry reading "quaude … fixed, proven, and green. naude was not, and nothing n
 clearest isolation credited to the differential is the shim `FileHandle.chmod` gap. The
 instrument's demonstrated yield is thinner than its architecture promises — which is an
 argument for USING it more deliberately, not for having less of it.
+
+No open claim: a decision (naude stays on every platform).
 
 
 ## PHASE 3B SPECCED (2026-09-13)
@@ -10603,6 +11001,8 @@ premises are what a plan silently inherits.
 **Open, deliberately:** whether the built-binary rule holds in the same form on the slowest
 supported box — to be answered with a measurement there, not an opinion.
 
+Unmeasured. Specced; its one open question (the built-binary rule on the slowest box) needs the Tiger PPC VM.
+
 ## CLODE_ALLOW_FOREIGN_CARVE CLOSED: env-only, deliberately awkward, no flag (2026-09-13)
 
 Phase 3b task 2 decided the one entry the spec above left open twice. `CLODE_ALLOW_FOREIGN_CARVE`
@@ -10628,6 +11028,8 @@ provider each run). Deleting it would also require rewriting that message.
 
 Not declared on `bootstrap`: the guard is gated `!naude && !self`, so a `bootstrap` build never
 reaches it (`libexec/clode-build.cjs:1706-1707`).
+
+No open claim: CLOSED 2026-09-13 (env-only, no flag).
 
 
 ## ★ PATTERN: five instruments, one mistake — a loose match where an exact one was meant (2026-09-13)
@@ -10680,6 +11082,8 @@ lines 38, 42, 46, 50, 70 and 82 are bare/unanchored matches of the same shape. N
 superstring sibling among today's absorbed names, so there is no live hole — but that is luck,
 not design, and the next absorbed name could supply the sibling. A sweep wants doing; it is not
 urgent, and it should fix the shape rather than the six lines.
+
+Unmeasured. A pattern across instruments; the e2e-man sweep it asks for (six bare matches) was not done.
 
 ## `NATIVE_ONLY` now holds a transient entry in a list that documents itself as structural
 
@@ -10839,6 +11243,8 @@ the 84 -> 33 inventory found in `inspect.test.cjs`.
 Sequencing: this belongs before the umbrella is closed, since it is one of the
 seven conditions. It does not block phase 4.
 
+Unmeasured. Closure condition 7 (every skip understood) has no mechanism; not re-counted.
+
 ## ★ Phase 4 designed — the engine build splits four ways (2026-09-14)
 
 Full spec: `docs/superpowers/specs/2026-09-14-phase4-declared-edges-design.md`
@@ -10919,6 +11325,8 @@ all seven exist in libexec/node-shim/modules/, but loader.cjs is CommonJS-
 oriented and does NOT intercept an ESM entry at all (`loader.cjs:481` guards its
 transpile with `!isEntry`). The answer was to convert, not to teach the loader
 ESM: `scripts/build-tjs.cjs`.
+
+No open claim: the phase-4 design; its acceptances are recorded as met in the SHIPPED entries.
 
 ## ★ Phase 4 SEQUENCED 4b → 4c → 4a, and 4b is planned (user, 2026-09-17)
 
@@ -11016,6 +11424,8 @@ guard catches it, and only by accident of ordering. One more instrument that
 reported a non-answer as an answer — the class already filed under "five
 instruments, one mistake".
 
+No open claim: a sequencing decision (4b, 4c, 4a); 4b and 4c shipped below.
+
 ## ★ Phase 4b SHIPPED — the hermeticity check stops skipping on 19 of 42 legs (2026-09-17)
 
 `tools/depscan/depscan.c` reads the dynamic-dependency table out of a binary REGARDLESS of
@@ -11045,6 +11455,8 @@ ELF". `test/depscan-legs.test.cjs` ratchets that: 8 static, 19 named formerly-bl
 `otool -L` on that SPARC binary prints "is not an object file" **and exits 0** — one more
 instrument reporting a non-answer as an answer.
 
+No open claim: SHIPPED 2026-09-17; what it left is the OPEN entry below.
+
 ### Four defects found by FUZZING or by running the thing, not by reading it
 
 Each was invisible in review and each is the same class this phase exists to delete —
@@ -11069,6 +11481,8 @@ a gate that reports OK without having checked.
    Fixed at the emitter AND at the parser: `parseDepscan` was reading `slices=N` off the
    format line and discarding it; it now requires `slices.length === N`.
 
+No open claim: four defects found and fixed.
+
 ### The ELF class is NARROWER than what it replaced, deliberately — write it down
 
 On native ELF legs the old check resolved SONAMEs through the host loader, so it could flag
@@ -11080,6 +11494,8 @@ native legs. It also works today only because cmake bakes the build-tree RPATH b
 and the shipped engine is the build-tree binary; a future `-DCMAKE_SKIP_BUILD_RPATH=ON`
 would silently blind the ELF half with no test going red. Recorded in
 `hermeticityFindings`' comment.
+
+No open claim: a written-down narrowing (the ELF class), deliberate.
 
 ### OPEN — filed, not fixed
 
@@ -11100,6 +11516,9 @@ would silently blind the ELF half with no test going red. Recorded in
   `test/source-scan.cjs`'s `stripLineComments`, and a third copy in
   `test/build-gates/lexical-code-mask.test.cjs` justified by a reason this branch made
   false). No map says which to use when.
+
+Unmeasured. Filed items (cache-hit legs need a host C compiler, ...); a CI run of a tjs-cache-hit leg would measure
+the first.
 
 ## ★ Phase 4c1 Task 3 SHIPPED — spec §11.1 acceptance met: the engine build runs with Node ABSENT (2026-09-17)
 
@@ -11159,6 +11578,8 @@ files (`build-tjs`, `tjs-source-reset`, `engine-api-floor`, `build-depscan`) are
 thing is deferred to CI exercising it — this task's proof is darwin-only, by hand and by test,
 on this box.
 
+Unmeasured. Acceptance met on darwin by hand; "deferred to CI exercising it" on other legs, not checked here.
+
 ## ★ Phase 4c-1 SHIPPED — the engine build runs with Node ABSENT (2026-09-17)
 
 Spec §11 acceptance 1, met on darwin and proven by transcript rather than argument:
@@ -11181,6 +11602,8 @@ even on the transpiled path). Red proof: that same loader, handed an ESM entry, 
 `import.meta` for the built product; a new guard pins the count at 18, their position after the
 fixup banner, and per-fixup counts, so an edit cannot silently drop one.
 
+No open claim: SHIPPED 2026-09-17, proven by transcript on darwin.
+
 ### Two defects, and both were gates rather than code
 
 **1. CJS forbids top-level `await`, and there was one nobody had found.** `const cosmoccBin =
@@ -11202,6 +11625,8 @@ a guaranteed ReferenceError. Now there is a test that EXECUTES it and asserts `a
 appears as a STACK FRAME, which a mis-scoped name cannot produce, plus a `defineGuard` that fails
 if any function declared inside the continuation is named above it.
 
+No open claim: two defects, fixed and guarded.
+
 ### Three gate-coverage regressions the branch introduced, found only by the whole-branch pass
 
 None was a behavioural defect. All three were things still TRUE but no longer CHECKED.
@@ -11220,6 +11645,8 @@ None was a behavioural defect. All three were things still TRUE but no longer CH
   Windows — telling developers there to build an engine they already had. Now resolves via
   `tjsPath()`, with an explicit win32 skip naming the POSIX probe as the reason.
 
+No open claim: three coverage regressions, fixed.
+
 ### OPEN — filed, not fixed
 
 - **The cosmo `await` path is never exercised.** `if (cosmoTarget)` is false on every non-cosmo
@@ -11236,6 +11663,8 @@ None was a behavioural defect. All three were things still TRUE but no longer CH
   correct under Node — a Node-vs-tjs divergence with no gate.
 - `docs/dev/windows-dev-setup.md` still names the old file (untracked, but a live how-to for the
   one platform this phase admits is unexercised).
+
+Unmeasured. The cosmo `await` path is never exercised; only CLODE_TJS_TARGET=cosmo reaches it, not built here.
 
 ## ★ Phase 4c-2 SHIPPED — bytecode regeneration is a build rule (2026-09-19)
 
@@ -11260,6 +11689,8 @@ The staleness tripwire is **deleted**, not disabled: `bundleFingerprint`, `bytec
 `assertBytecodeFresh` are gone and nothing compares anything. `fingerprintTrailer` survives as a
 hash-free provenance stamp only, because `ci-guest-bake.sh` greps for the marker.
 
+No open claim: SHIPPED 2026-09-19.
+
 ### The lesson, which cost two review rounds to learn
 
 **Deleting a check is only safe once the thing that makes it unnecessary is itself GUARANTEED.**
@@ -11268,6 +11699,8 @@ verified that premise, so a warm pre-4c-2 vendor tree plus `--build-only` would 
 PRISTINE UPSTREAM BYTECODE at exit 0: the original defect restored, on one path, with the very
 mechanism that used to catch it having just been removed. Closed by `assertBytecodeRulesPresent`,
 demonstrated on the real tree with a before/after.
+
+No open claim: a lesson, closed by assertBytecodeRulesPresent.
 
 ### TO DETECT A TORN COPY, THE EVIDENCE MUST COME FROM ONE READ OF ONE FILE
 
@@ -11290,6 +11723,8 @@ after the bytecode fixup, so it cannot appear without the rules block. One read,
 
 Found only by running three full suites. The wrong fix passed twice.
 
+No open claim: a lesson (one read of one file), fixed.
+
 ### Three unverified claims corrected by measurement
 
 - A backslash in a cmake `-D` is NOT eaten as escapes on cmake 4.3.3. The real hazard is a
@@ -11300,6 +11735,8 @@ Found only by running three full suites. The wrong fix passed twice.
   every occurrence is gated instead.
 - The e2e cost figure was wrong four times before becoming a measured band (~32s standalone n=3,
   45-80s in-suite n=11).
+
+No open claim: three claims corrected by measurement at the time.
 
 ### OPEN — filed, not fixed
 
@@ -11320,3 +11757,5 @@ Found only by running three full suites. The wrong fix passed twice.
 - `test/build-tjs-no-node.test.cjs` shares the copy-from-shared-source exposure but is
   structurally immune (its `--source-only` re-patches the copy unconditionally). Residual: a
   `.git/index.lock` carried into the copy, which fails loudly.
+
+Unmeasured. Filed items (the esbuild edge, the torn-copy residual); not re-run.
