@@ -8,6 +8,27 @@ Concrete clode-under-Node divergences from native Claude Code, to triage and fix
 That page is GENERATED from `scripts/build-graph.cjs` — the one declaration of the build — so it
 cannot drift from it; it is also where the honest answer to "does this need node?" lives.
 
+## quaude writes the config file world-readable: ~/.claude/.claude.json is 0644, native's 0600 (2026-11-18)
+
+Found by observability Task 2. After one `-p` turn the config file (account and project state: the
+first-save writes 73,515 bytes) is `-rw-r--r--` under quaude and `-rw-------` under native, with the
+same umask (022). Any local user can read what native keeps owner-only. The node-shim's own primitives
+honour a mode: `fs.writeFileSync(p, d, {mode: 0o600})`, `fs.openSync(p, 'w', 0o600)`, a write through
+that fd, and `fs.chmodSync(p, 0o600)` each leave 0600 under tjs, as under node. So the 0644 comes from
+the path the bundle's config writer takes that those four do not cover (its atomic temp-and-rename, a
+`fs.promises` call, or Bun.write); which one is not yet measured. Fix it diff-reducing: find the call,
+make it honour the mode node honours, and add a row that runs a turn and asserts 0600.
+
+Measured: `ls -l $CLAUDE_CONFIG_DIR/.claude.json` after one canned-mock Read-tool turn: a quaude built from b4eb2f5 (darwin-arm64, the 2.1.283 carve; throwaway HOME, canned mock):
+`-rw-r--r--`; native 2.1.283, same probe and umask: `-rw-------` (2026-11-18).
+
+Measured: a probe under `tjs run libexec/node-shim/loader.cjs` and under node 24.21.0: writeFileSync with
+{mode: 0o600}, openSync with 0o600, writeFileSync to that fd, and chmodSync to 0o600 each leave 600 on both
+(2026-11-18).
+
+Unmeasured. Which call the bundle's config writer makes; `--debug` with the shim's fs tracing on the
+config path would name it. Other files the bundle writes owner-only (credentials, history) were not checked.
+
 ## Grep, Glob and the Bash tool's `rg` are native's; what the grep-native plan left open (2026-10-05)
 
 The plan closed with its Task 11 (2026-10-05): the Grep and Glob tools answer as native in every mode, end to end
@@ -214,7 +235,8 @@ USER RULING 2026-11-18), Phase B 2026-11-30, Phase C and the runner/relay tools 
 the gate goes red, and each must be driven or re-dated with a new reason.
 
 Measured: test/build-gates/tool-coverage-gates.test.cjs with CLODE_PROVIDER_BIN at the darwin-arm64 2.1.283 carve:
-every-tool-driven OK (2026-11-18).
+every-tool-driven OK, examined 2166 cells: 90 tools (87 in getAllBaseTools, 3 outside it), 2166 cells over
+darwin-arm64, linux-x64-musl and netbsd-arm64, 9 driven, 2157 exempted, 0 neither; 4 CI jobs report cells (2026-11-18).
 
 ## The NetBSD spike found three bugs, all fixed; what it left open (2026-09-26)
 
@@ -1005,6 +1027,14 @@ Bash tool instead".
     wrong: process.platform is honest ('netbsd'), and only the carve's constant-folded
     branches are linux, which is exactly the gap F1 fell into.
 
+Measured: the bfs-without-Oniguruma divergence, through the Bash tool of a quaude built from b4eb2f5 (darwin-arm64,
+the 2.1.283 carve; throwaway HOME, canned mock) on this Mac's pkgsrc bfs 4.1.3: every Bash-tool turn prints the
+session-start line on stderr ("clode: host bfs rejects `-regextype findutils-default` — `find` works without it,
+but a find using -regex, -iregex or -regextype will refuse"), a naude built from b4eb2f5 prints the same, and a turn
+with only a Read call prints nothing; `find . -name a.txt` answers `./a.txt` on both; `find . -regex ".*a[.]txt"`
+refuses with the fix under quaude, where native's embedded bfs answers `./a.txt`. The written divergence holds as
+written (2026-11-18).
+
 Unmeasured. Not re-run in observability Task 2: the left-open items here need the NetBSD VM (`ssh -p 2230`) and a
 netbsd-arm64 quaude, or the named rg rows (rg-entry, rg-walk, rg-files, rg-native) per platform.
 
@@ -1101,13 +1131,27 @@ new pin had 26 failures, from three upstream changes a carve cannot see, and the
   At 2.1.251 the same session settled after the reply with no `until` (CI's linux-x64-pty
   sessions step, green through run 36253515217). The resize and scroll send steps now wait
   `until` their reply is on screen, which is right for a paint gate and blind to the time it
-  took. Not yet measured: where the time goes, and whether it is the `[event-loop-stall]`
-  line above (logged every turn).
+  took. On macOS (observability Task 2, 2026-11-18) a canned-mock `-p` turn takes 8.4-8.9 s under
+  quaude and 0.7-1.1 s under native: about 8x. Not yet measured: where the time goes, and whether it
+  is the `[event-loop-stall]` line above (logged every turn).
 - **Image processing is unavailable under quaude** and now fails through `new Bun.Image(...)`,
   three of whose six call sites have no catch of their own (reviewed in
   test/shim-surface/golden.json's Bun.Image note; callers not verified). Standing since before
   the pin moved (2.1.251 loaded a native processor, then sharp, neither of which loads under
   tjs); now the constructor is what is missing.
+- **Every quaude turn's 1P event export fails: the node-shim has no `zlib.gzipSync`** (found by
+  observability Task 2, 2026-11-18). `zlib.gzipSync` exists as a function and throws `node-shim:
+  zlib.gzipSync not implemented (tjs has no native zlib; the -p mock path sends no compressed
+  bodies)`. The bundle gzips its first-party event batches with it, so every batch fails before
+  it is sent: `[ERROR] 1P event logging: 9 events failed to export (...)`, then 116 more at exit,
+  in one one-tool turn. The turn completes and nothing outside `--debug` says so: a silent
+  divergence from native, whose export runs. A gzip encoder (deflate plus the gzip frame) closes
+  it; the shim's zlib is where it belongs.
+- **`os.totalmem()` and `os.freemem()` answer 0 under the node-shim** (observability Task 2,
+  2026-11-18; node 24 on the same Mac: 17179869184 and a live figure). Any bundle code that sizes
+  a cache or a heap limit from them, or divides by them, sees a machine with no memory. Which
+  call sites read them was not audited. The engine can report both (`sysctl hw.memsize`,
+  `/proc/meminfo`, `uv_get_total_memory`): diff-reducing, one call each.
 - **scripts/probe-run.mjs's default provider path is stale**: it looks for
   `providers/<BUNDLE>/claude` (BUNDLE from golden.json), but the store is now
   `providers/<ver>/<os>-<arch>/claude`, so without CLODE_PROVIDER_BIN it finds nothing.
@@ -1120,8 +1164,16 @@ Measured: under the node-shim on the tjs engine, `path.join(undefined, "x")` is 
 "..")` a cwd-relative path (node throws ERR_INVALID_ARG_TYPE for both); `new TextDecoder().decode(F0 9F C3 9F)` is
 U+FFFD U+FFFD (node U+FFFD U+00DF) and the shim's Buffer toString gives U+FFFD U+FFFD U+00DF (2026-11-18).
 
-Measured: a `-p` turn against a canned mock, a quaude built from b4eb2f5 (darwin-arm64, the 2.1.283 carve; throwaway
-HOME, canned mock): 8.4-8.9 s; native 0.7-1.1 s (macOS, not the linux-x64-pty mirror) (2026-11-18).
+Measured: wall time of a `-p` turn against a canned mock (the slower bullet above), a quaude built from b4eb2f5
+(darwin-arm64, the 2.1.283 carve; throwaway HOME, canned mock): 8.4-8.9 s; native 0.7-1.1 s (2026-11-18).
+
+Measured: `$CLAUDE_CONFIG_DIR/debug/*.txt` after a `--debug` Bash-tool turn of a quaude built from b4eb2f5 (darwin-arm64, the 2.1.283 carve; throwaway HOME, canned mock): `1P event logging: 9 events
+failed to export (node-shim: zlib.gzipSync not implemented ...)` and `116 events failed to export` at exit; the
+probe's `zlib.gzipSync(Buffer.from("hello"))` under `tjs run libexec/node-shim/loader.cjs` throws the same, under
+node returns 25 bytes (2026-11-18).
+
+Measured: `os.totalmem()` and `os.freemem()` under `tjs run libexec/node-shim/loader.cjs`: 0 and 0; under node
+24.21.0 on the same Mac 17179869184 and 169115648 (2026-11-18).
 
 Measured: `grep -n providers/ scripts/probe-run.mjs`: line 107 still builds `providers/<BUNDLE>/claude` (2026-11-18).
 
@@ -4889,7 +4941,7 @@ here so the next session can see them.
 
 No open claim: an introduction; its three findings are the entries below.
 
-### 1. `net.createServer` is ABSENT — UDS peer messaging is silently off under quaude
+### 1. `net.createServer` is a named throwing stub — UDS peer messaging is off under quaude
 
 **AND SANDBOXED BASH NEVER RUNS UNDER QUAUDE; IT FAILED OPEN UNTIL 8b088ef, AND NOW FAILS CLOSED (measured
 2026-10-05, grep-native Task 11 and its fix round 2, macOS arm64 and Linux x64).** With `{"sandbox":{"enabled":true}}`
@@ -5628,33 +5680,29 @@ Unmeasured. Per-leg shipped-artifact bugs (dragonfly, haiku, the CA bundle...); 
   without clearing (cf. M3 render-parity: tjs interactive render ~1.2MB vs node ~8KB/turn).
   Likely a node-shim `tty`/write or ANSI-erase gap. Part of the M3 render-parity frontier.
 
-- **quaude's fullscreen renderer crashes before it can draw a frame (NetBSD/arm64). FIX
-  BEFORE NEXT RELEASE.** PROVEN this session to be NetBSD-SPECIFIC (fullscreen works cleanly on
-  macOS; repro lever `CLAUDE_CODE_NO_FLICKER=1`). Whatever enters the alt-screen path takes
-  quaude down before a fullscreen frame paints. NEXT: capture the crash on NetBSD/arm64
-  (`--debug-to-stderr` / handle+unhandledRejection dump) to get the failing call; suspect a
-  node-shim tty/altscreen gap on that platform. See the at-desk release-readiness plan (Task 2).
-
-- **quaude TUI won't exit on double-Ctrl-C (Tiger/PPC Darwin 8). Likely FIX BEFORE NEXT
-  RELEASE.** The FIRST Ctrl-C shows "Press Ctrl-C again to exit" (input is fine); the SECOND
-  doesn't tear down — the process stays alive, only `kill -TERM` escapes. The fault is the EXIT
-  path, not input. Suspect a blocking SYNC tty op during raw-mode restore / alt-screen leave on
-  Darwin 8 — the same class as the fixed `/quit` O_NONBLOCK wedge. NEXT: trace the second-Ctrl-C
-  shutdown on Tiger (which sync call blocks) and confirm whether the `/quit` O_NONBLOCK fix
-  reaches it. See the at-desk release-readiness plan (Task 3). (Secondary, same box: couldn't
-  copy the printed OAuth URL out of the frozen login screen — a selection/scrollback issue.)
+- CORRECTED (observability Task 2 fix round 1, 2026-11-18): two bullets that stood here are
+  closed by entries elsewhere in this file, and were deleted. "quaude's fullscreen renderer
+  crashes before it can draw a frame (NetBSD/arm64). FIX BEFORE NEXT RELEASE" was RESOLVED
+  2026-07-30: a fresh netbsd-11-arm64 quaude with `CLAUDE_CODE_NO_FLICKER=1` drew the full
+  frame, survived a resize and stayed alive in three terminal configurations (the IN-FLIGHT
+  HANDOFF and the docs/superpowers sweep record it as not reproducing on main). "quaude TUI
+  won't exit on double-Ctrl-C (Tiger/PPC Darwin 8). Likely FIX BEFORE NEXT RELEASE" was TRIAGED
+  2026-07-29 as faithful: it exits RC=0 after a ~65 s libuv threadpool join on a pending
+  getaddrinfo, and plain Node does the same (the TRIAGED entry). Its secondary note, that the
+  printed OAuth URL could not be copied out of the login screen on that box, is not covered by
+  either and stays open, unmeasured.
 
 Measured: a `-p` turn with a quaude built from b4eb2f5 (darwin-arm64, the 2.1.283 carve; throwaway HOME, canned mock)
 persists ~/.claude/.claude.json (73,515 bytes) as native does (both log one first-save "Failed to save config with
-lock: ENOENT" first). NEW: quaude writes it mode 0644 where native writes 0600 (2026-11-18).
+lock: ENOENT" first); its mode is wrong, 0644 against native's 0600, which is its own entry at the top of this
+file (2026-11-18).
 
 Measured: `grep -n detached libexec/node-shim/modules/child_process.cjs`: no hit; spawn still drops `opts.detached`
 (2026-11-18).
 
 Unmeasured. The credentials half (NetBSD), the browser launcher (needs an interactive login), stale frames and the
-NetBSD fullscreen crash were not re-driven. Two items here disagree with this file: the Tiger double-Ctrl-C is TRIAGED
-as faithful above, and the IN-FLIGHT HANDOFF says the NetBSD fullscreen crash does not reproduce on main; neither was
-re-run.
+Tiger OAuth-URL copy were not re-driven; the NetBSD VM, a real login, a PTY capture and the Tiger PPC VM would measure
+them. The two bullets this entry deleted were closed by their own entries, not re-run here.
 
 ### Platform wishlist (reachable-frontier tracker)
 
@@ -6266,7 +6314,9 @@ So the gate is not "is it latest today" but "can clode build the format upstream
     node libexec/extract-claude-js.cjs "$P" /tmp/out.cjs      # fails
     # same with @2.1.241 -> succeeds
 
-No open claim: RESOLVED 2026-08-25 (92058a3).
+Unmeasured. The darwin-arm64 build from the code-split bundle is RESOLVED (92058a3), but this entry's own "Still to
+verify: every platform other than darwin-arm64" is open: a quaude from the code-split bundle has not been run on
+NetBSD, Windows, Solaris or Haiku here. A build and a mock turn on each (the NetBSD VM first) would measure it.
 
 ### DIAGNOSED 2026-08-24 (22f197f) — it is Bun CODE SPLITTING, not compression
 
