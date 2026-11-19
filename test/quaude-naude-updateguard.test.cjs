@@ -174,7 +174,9 @@ function runUpdateGuardAcceptance(t, kind, bin, skipReason) {
       const r = toolResult(m, DENY.id);
       return !!r && r.isError && /clode manages Claude Code/.test(r.text);
     };
-    assertFailsOnMissingOutput(deniedWithReason, DENY);
+    // Its cell (test/build-gates/tool-coverage-gates.test.cjs): every turn here runs under
+    // --dangerously-skip-permissions (see the file header), the bypassPermissions mode.
+    assertFailsOnMissingOutput(deniedWithReason, DENY, 'permission:bypassPermissions');
     // The benign command also ECHOES a marker the shell computes, so the control turn's
     // tool_result is judged on output that only a command that ran can produce. The old
     // row asserted only is_error === false there, which a missing or empty tool_result
@@ -185,7 +187,7 @@ function runUpdateGuardAcceptance(t, kind, bin, skipReason) {
       const r = toolResult(m, ALLOW.id);
       return !!r && !r.isError && r.text.includes('UPDATEGUARD-ALLOWED-42');
     };
-    assertFailsOnMissingOutput(allowedAndRan, ALLOW);
+    assertFailsOnMissingOutput(allowedAndRan, ALLOW, 'permission:bypassPermissions');
 
     const deny = await driveBashTurn(bin, DENY);
     assert.strictEqual(deny.run.status, 0, `${kind} deny-turn run failed:\nstdout:\n${deny.run.stdout}\nstderr:\n${deny.run.stderr}`);

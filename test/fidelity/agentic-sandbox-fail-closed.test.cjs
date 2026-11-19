@@ -40,7 +40,10 @@ const marker = (n) => `fc-marker-${n}`;
 const M1 = { name: 'Bash', input: { command: `echo in > ${marker(1)}; echo x > ../out-1; echo FC-RAN-$((40+1))`, description: 'one' }, id: 'toolu_fc_1' };
 const M2 = { name: 'Bash', input: { command: `echo in > ${marker(2)}; echo x > ../out-2; echo FC-RAN-$((40+2))`, description: 'two' }, id: 'toolu_fc_2' };
 const M3 = { name: 'Bash', input: { command: `echo in > ${marker(3)}; echo x > ../out-3; echo FC-RAN-$((40+3))`, description: 'three' }, id: 'toolu_fc_3' };
-const SCRIPT = [M1, M2, M3];
+// What the mock answers with, in order: one step per tool_use object, scripted from that object (so the cell gate,
+// test/build-gates/tool-coverage-gates.test.cjs, reads each control's object as the one the mock sends).
+const step = (USE) => ({ use: USE, emit: () => cannedToolUseSSE(USE.name, USE.input, USE.id) });
+const SCRIPT = [step(M1), step(M2), step(M3)];
 
 // The checks: refused by the bundle's required branch (an is_error tool_result saying so), or ran (the computed marker).
 const refused1 = (m) => { const r = toolResult(m, M1.id); return !!r && r.isError && REQUIRED.test(r.text); };
@@ -95,8 +98,8 @@ async function runCase(bin, { source = 'off', sourceSettings = ON, args = PRINT,
     }
     const mock = await startMockAnthropic({
       respond: (body) => {
-        const next = script.find((u) => !body.includes(u.id));
-        return next ? cannedToolUseSSE(next.name, next.input, next.id) : cannedSSE('FC-DONE');
+        const next = script.find((s) => !body.includes(s.use.id));
+        return next ? next.emit() : cannedSSE('FC-DONE');
       },
     });
     try {
@@ -168,8 +171,14 @@ const SKIP = process.platform === 'win32' ? 'the Bash tool needs bash; Windows s
 test('sandboxed Bash fails CLOSED under quaude: every call refused, nothing written, from any settings source; off, all run', { skip: SKIP }, async (t) => {
   const q = builtQuaude();
   if (q.skip) { t.skip(q.skip); return; }
-  assertFailsOnMissingOutput(refused1, M1); assertFailsOnMissingOutput(refused2, M2); assertFailsOnMissingOutput(refused3, M3);
-  assertFailsOnMissingOutput(ran1, M1); assertFailsOnMissingOutput(ran2, M2); assertFailsOnMissingOutput(ran3, M3);
+  // The cells (test/build-gates/tool-coverage-gates.test.cjs): the refusals judge Bash with the sandbox enabled; the runs
+  // judge the sandbox-off turn (print, in bash), and, where native would not sandbox, the enabled one too.
+  assertFailsOnMissingOutput(refused1, M1, 'sandbox:on');
+  assertFailsOnMissingOutput(refused2, M2, 'sandbox:on');
+  assertFailsOnMissingOutput(refused3, M3, 'sandbox:on');
+  assertFailsOnMissingOutput(ran1, M1, ['print', 'shell:bash', 'sandbox:on']);
+  assertFailsOnMissingOutput(ran2, M2, ['print', 'shell:bash', 'sandbox:on']);
+  assertFailsOnMissingOutput(ran3, M3, ['print', 'shell:bash', 'sandbox:on']);
   const findings = [];
   const sandboxes = nativeWouldSandbox();
   t.diagnostic(`native would sandbox here: ${sandboxes}`);
@@ -196,13 +205,16 @@ test('sandboxed Bash fails CLOSED under quaude: every call refused, nothing writ
 test('the user\'s --settings is honoured under quaude: env, hooks and permissions apply, the update guard still runs, an unusable value is the bundle\'s own error', { skip: SKIP }, async (t) => {
   const q = builtQuaude();
   if (q.skip) { t.skip(q.skip); return; }
-  assertFailsOnMissingOutput(envHonoured, E); assertFailsOnMissingOutput(updateDenied, U); assertFailsOnMissingOutput(bashDisabled, E);
+  // The cells: E and U run under --dangerously-skip-permissions; bashDisabled is a plain -p turn.
+  assertFailsOnMissingOutput(envHonoured, E, 'permission:bypassPermissions');
+  assertFailsOnMissingOutput(updateDenied, U, 'permission:bypassPermissions');
+  assertFailsOnMissingOutput(bashDisabled, E);
   const findings = [];
 
   // A FILE carrying env and a PreToolUse hook (the sandbox off): both apply, and quaude's update-guard hook runs too.
   const userHook = ({ base }) => ({ env: { FC_USER_ENV: 'honoured' },
     hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: `echo ran >> ${path.join(base, 'user-hook-ran')}` }] }] } });
-  const h = await runCase(q.path, { files: { 'u.json': userHook }, script: [E, U],
+  const h = await runCase(q.path, { files: { 'u.json': userHook }, script: [step(E), step(U)],
     args: ({ base }) => [...PRINT, '--dangerously-skip-permissions', '--settings', path.join(base, 'u.json')] });
   if (!envHonoured(h.mock)) findings.push(`--settings env not applied: ${JSON.stringify(toolResult(h.mock, E.id))} rc ${h.r.status} ${h.r.stderr.slice(0, 300)}`);
   if (!h.files.includes('user-hook-ran')) findings.push('--settings PreToolUse hook did not run');
@@ -210,15 +222,15 @@ test('the user\'s --settings is honoured under quaude: env, hooks and permission
 
   // A schema-invalid --settings file is dropped whole by the bundle (native too); the update guard is not in it, so it
   // still denies (fix round 1, I-1: it rides a session plugin beside a user --settings).
-  const sch = await runCase(q.path, { files: { 'sch.json': { permissions: 5 } }, script: [U],
+  const sch = await runCase(q.path, { files: { 'sch.json': { permissions: 5 } }, script: [step(U)],
     args: ({ base }) => [...PRINT, '--dangerously-skip-permissions', '--settings', path.join(base, 'sch.json')] });
   if (!updateDenied(sch.mock)) findings.push(`a schema-invalid --settings file took the update guard with it: ${JSON.stringify(toolResult(sch.mock, U.id))} rc ${sch.r.status} ${sch.r.stderr.slice(0, 300)}`);
-  const schM = await runCase(q.path, { cfgFiles: MERGE_SEAM, files: { 'sch.json': { permissions: 5 } }, script: [U],
+  const schM = await runCase(q.path, { cfgFiles: MERGE_SEAM, files: { 'sch.json': { permissions: 5 } }, script: [step(U)],
     args: ({ base }) => [...PRINT, '--dangerously-skip-permissions', '--settings', path.join(base, 'sch.json')] });
   if (!updateDenied(schM.mock)) findings.push(`merge mode: a schema-invalid --settings file took the update guard with it: ${JSON.stringify(toolResult(schM.mock, U.id))} rc ${schM.r.status} ${schM.r.stderr.slice(0, 300)}`);
 
   // Inline JSON denying Bash: the tool is gone, as native measured ("No such tool available: Bash").
-  const d = await runCase(q.path, { script: [E], args: [...PRINT, '--settings', JSON.stringify({ permissions: { deny: ['Bash'] } })] });
+  const d = await runCase(q.path, { script: [step(E)], args: [...PRINT, '--settings', JSON.stringify({ permissions: { deny: ['Bash'] } })] });
   if (!bashDisabled(d.mock)) findings.push(`--settings permissions.deny not applied: ${JSON.stringify(toolResult(d.mock, E.id))} rc ${d.r.status} ${d.r.stderr.slice(0, 300)}`);
 
   // Values the bundle cannot use: its own error, rc 1, and no request ever made (nothing ran).

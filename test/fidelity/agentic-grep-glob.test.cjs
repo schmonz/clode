@@ -195,6 +195,7 @@ const verdicts = (m) => [
 ];
 
 // Each control, before any turn: every check must FAIL when its tool's output is missing.
+// (The Bash rows run with SHELL=bash: they declare that cell too, for test/build-gates/tool-coverage-gates.test.cjs.)
 function controls() {
   for (const mode of PATH_MODES) {
     judged = { mode, base: '/nonexistent-e2e-base' };
@@ -222,9 +223,9 @@ function controls() {
     assertFailsOnMissingOutput(glPath, GL_PATH);
     assertFailsOnMissingOutput(glOutside, GL_OUTSIDE);
     assertFailsOnMissingOutput(glNone, GL_NONE);
-    assertFailsOnMissingOutput(bRg, B_RG);
-    assertFailsOnMissingOutput(bRgCount, B_RG_COUNT);
-    assertFailsOnMissingOutput(bRgNone, B_RG_NONE);
+    assertFailsOnMissingOutput(bRg, B_RG, ['print', 'shell:bash']);
+    assertFailsOnMissingOutput(bRgCount, B_RG_COUNT, ['print', 'shell:bash']);
+    assertFailsOnMissingOutput(bRgNone, B_RG_NONE, ['print', 'shell:bash']);
   }
 }
 
