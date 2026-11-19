@@ -331,6 +331,7 @@ if (!fs.existsSync(NAUDE_BUNDLE) || !fs.existsSync(MAIN_BUNDLE)
 // Hermetic guard (pure node; required in-process). Watch the real dirs a test must never touch.
 const guard = require('./hermetic-guard.cjs');
 const tree = require('./tree-guard.cjs');
+const worktreesProof = require('./worktrees-proof.cjs');
 const { resolveAllowList, sourceContainsWrite } = require('./allow-list.cjs');
 // the REAL home's dirs: the suite runs under its own (above), and these are what it must never touch
 const home = realHome().HOME;
@@ -608,18 +609,21 @@ const TREE_ALLOW_ENTRIES = [
       + 'not this suite writing into this one; on 2026-11-18 two live agent worktrees here '
       + 'turned a clean run into exit 2 (tool-coverage-gates.test.cjs and forced-win32 files, '
       + 'edited on their own branches). git ignores the directory (.git/info/exclude).',
-    // Proves the claim, not the directory: EVERY entry under .claude/worktrees is a worktree
-    // `git worktree list` registers for THIS repository (or the AppleDouble sidecar an NFS
-    // share plants beside it). A stray directory that is not a worktree (something a test
-    // wrote here) makes this false, and the gate then watches the whole directory again.
+    // Proves the claim, not the directory (test/worktrees-proof.cjs): EVERY entry under
+    // .claude/worktrees is a real directory (not a symlink) that `git worktree list`
+    // registers for THIS repository, other than the checkout itself (or the AppleDouble
+    // sidecar an NFS share plants beside it). A registered worktree whose directory is gone
+    // (prunable) proves nothing and is named, but does not make the run fatal. The proof is
+    // checked AGAIN after the suite, against the names recorded here (WORKTREES_BEFORE
+    // below): a pattern ignored by both tree walks would otherwise hide anything the suite
+    // itself creates there.
     provenBy: () => {
-      const dir = path.join(ROOT, '.claude', 'worktrees');
-      const listed = new Set(require('node:child_process')
-        .execFileSync('git', ['worktree', 'list', '--porcelain'], { cwd: ROOT, encoding: 'utf8' })
-        .split('\n').filter((l) => l.startsWith('worktree ')).map((l) => fs.realpathSync(l.slice(9))));
-      const names = fs.readdirSync(dir);
-      return names.length > 0 && names.every((n) => n.startsWith('._')
-        || listed.has(fs.realpathSync(path.join(dir, n))));
+      // Absent: the entry is vacuous and dropped (resolveOrDie), with nothing to say here.
+      if (!fs.existsSync(path.join(ROOT, '.claude', 'worktrees'))) return false;
+      const r = worktreesProof.proveWorktreesOnDisk(ROOT);
+      for (const n of r.notes) console.error(`run: .claude/worktrees: ${n}`);
+      for (const f of r.findings) console.error(`run: .claude/worktrees not excluded: ${f}`);
+      return r.proven;
     },
   },
   // 'docs' was considered and DELIBERATELY NOT added here (round 1 of this task added
@@ -636,6 +640,8 @@ const TREE_ALLOW_ENTRIES = [
 ];
 const TREE_ALLOW = resolveOrDie(TREE_ALLOW_ENTRIES, 'TREE_ALLOW', ROOT);
 const treeBefore = tree.walk(ROOT, { ignore: TREE_ALLOW });
+// The worktree exclusion's proof, as it stood before the suite; re-proven after it.
+const WORKTREES_BEFORE = TREE_ALLOW.includes('.claude/worktrees') ? worktreesProof.proveWorktreesOnDisk(ROOT) : null;
 
 // Run the node tests: discover test/**/*.test.cjs (no shell glob) and run under THIS
 // node. Recurses into subdirectories so test/fidelity/ is GATED like everything else —
@@ -806,6 +812,17 @@ if (guard.preflight(REAL_STORE).length) {
 // human glancing at `echo $?` can tell "the checkout got dirty" apart from "a test
 // assertion failed" without re-reading the log.
 const treeChanged = tree.diff(treeBefore, tree.walk(ROOT, { ignore: TREE_ALLOW }));
+// The .claude/worktrees exclusion stands only if its proof still holds AFTER the suite and the
+// entries there are the ones proven before it: a worktree (or anything) the suite created
+// there is the suite writing into the checkout.
+if (WORKTREES_BEFORE) {
+  const wt = worktreesProof.compareRuns(WORKTREES_BEFORE, worktreesProof.proveWorktreesOnDisk(ROOT));
+  if (wt.length) {
+    console.error('run: the suite WROTE INTO THE CHECKOUT under .claude/worktrees (excluded only while proven):');
+    for (const f of wt) console.error(`  ${f}`);
+    process.exitCode = 2;
+  }
+}
 if (treeChanged.length) {
   console.error('run: the suite WROTE INTO THE CHECKOUT — a build/test must not:');
   for (const c of treeChanged.slice(0, 40)) console.error(`  ${c.kind} ${c.path}`);
