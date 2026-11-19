@@ -58,9 +58,20 @@ async function fetchText(url, dest, opts) {
 // The cached copy is trusted only when it hashes to the pin; anything else (absent,
 // truncated, a different release's bytes) is fetched again and then verified, so a
 // mismatch after a fresh download is the refusal, never a silent re-use.
-async function fetchVerified(version, name, { cacheDir, offline = false }) {
-  const pin = (pins()[version] || {})[name];
+//
+// `readOnlyDir` (optional): a cache laid out the same way that is READ, never written. Its copy is used only when it
+// hashes to the pin; anything else there is passed over (the normal cache, then the network, as before). It is how
+// the test suite, which runs under its own throwaway HOME (test/suite-home.cjs), reads the inputs a CI warm-up step or
+// the developer's own runs cached, without ever writing that cache.
+// `pinsTable` (tests only) stands in for scripts/unicode-inputs.json.
+async function fetchVerified(version, name, { cacheDir, offline = false, readOnlyDir = null, pinsTable = null }) {
+  const pin = ((pinsTable || pins())[version] || {})[name];
   if (!pin) throw new Error(`no pin entry for ${version}/${name} in scripts/unicode-inputs.json`);
+  if (readOnlyDir && pin.sha256) {
+    let seeded = null;
+    try { seeded = fs.readFileSync(path.join(readOnlyDir, version, `${name}.txt`), 'utf8'); } catch { /* not there */ }
+    if (seeded !== null && sha256Text(seeded) === pin.sha256) return seeded;
+  }
   const dest = path.join(cacheDir, version, `${name}.txt`);
   let text = null;
   try { text = fs.readFileSync(dest, 'utf8'); } catch { /* not cached */ }

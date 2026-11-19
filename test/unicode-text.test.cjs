@@ -13,7 +13,7 @@ const assert = require('node:assert');
 const path = require('node:path');
 const { graphemeBoundaries, clusterWidth, codePointWidth, escapeLayer, forEachCell, cellSgr, oscLink, textWidth, stringWidth, sliceAnsi,
   wrapAnsi, UNICODE_DATA } = require('../libexec/unicode-text.cjs');
-const { clodeCacheDir } = require('../libexec/clode-paths.cjs');
+const { ucdInput } = require('./ucd-input.cjs');
 const ucd = require('../scripts/lib/ucd.cjs');
 
 async function breakTest(t) {
@@ -23,10 +23,7 @@ async function breakTest(t) {
   assert.strictEqual(ucd.pins()[ver].GraphemeBreakTest.sha256, UNICODE_DATA.header.ucdSha256.GraphemeBreakTest,
     `scripts/unicode-inputs.json pins a different GraphemeBreakTest ${ver} than the generated header names`);
   try {
-    return await ucd.fetchVerified(ver, 'GraphemeBreakTest', {
-      cacheDir: path.join(clodeCacheDir(process.env), 'unicode'),
-      offline: process.env.CLODE_OFFLINE === '1',
-    });
+    return await ucdInput(ver, 'GraphemeBreakTest');
   } catch (e) {
     if (!(e instanceof ucd.UcdOfflineMiss)) throw e;
     t.skip(`GraphemeBreakTest ${ver} not cached and this run is offline — ${e.message}`);

@@ -19,6 +19,11 @@
 //     shim (asdf's resolve through HOME);
 //   - CLODE_TEST_USER_CACHE: the developer's clode cache (<home>/.cache/clode: the carve caches and templates a few
 //     gates read), and CLODE_TJS_VENDOR (unless set) its txiki checkout, which the engine builds share as before;
+//   - CLODE_TEST_UCD_CACHE: the pinned Unicode inputs (<user cache>/unicode, laid out <version>/<name>.txt), READ ONLY
+//     and only a copy that hashes to its scripts/unicode-inputs.json pin (scripts/lib/ucd.cjs readOnlyDir; the
+//     tests read it through test/ucd-input.cjs). CI's warm-up step fills it before the text gates run offline; with
+//     the gates reading the suite home's cache instead, all six text-diff gates SKIPPED on linux-x64-pty (CI
+//     44460009323: "emoji-test 17.0.0 not cached and this run is offline");
 //   - CLODE_TEST_NATIVE_VERSIONS and CLODE_TEST_NATIVE_LAUNCHER: the native install's versions dir and launcher, read
 //     by the tests that compare against it;
 //   - git: a fixed test identity (GIT_AUTHOR_* / GIT_COMMITTER_*), so a commit in a scratch repo never needs (or
@@ -45,6 +50,7 @@ function applySuiteHome(env = process.env) {
   if (!env.CLODE_TEST_PROVIDER_STORE) env.CLODE_TEST_PROVIDER_STORE = path.join(real.HOME, '.local', 'share', 'clode', 'providers');
   if (!env.CLODE_TEST_USER_CACHE) env.CLODE_TEST_USER_CACHE = path.join(env.XDG_CACHE_HOME || path.join(real.HOME, '.cache'), 'clode');
   if (!env.CLODE_TJS_VENDOR && !env.CLODE_TJS_LOCAL_ROOT) env.CLODE_TJS_VENDOR = path.join(env.CLODE_TEST_USER_CACHE, 'tjs-vendor');
+  if (!env.CLODE_TEST_UCD_CACHE) env.CLODE_TEST_UCD_CACHE = path.join(env.CLODE_TEST_USER_CACHE, 'unicode');
   if (!env.CLODE_TEST_NATIVE_VERSIONS) env.CLODE_TEST_NATIVE_VERSIONS = path.join(real.HOME, '.local', 'share', 'claude', 'versions');
   if (!env.CLODE_TEST_NATIVE_LAUNCHER) env.CLODE_TEST_NATIVE_LAUNCHER = path.join(real.HOME, '.local', 'bin', 'claude');
   const n = Number(env.GIT_CONFIG_COUNT) || 0;

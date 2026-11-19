@@ -72,7 +72,7 @@ const { resolveNativeOracle, nativeVersion } = require('../../scripts/lib/native
 const { runNative, runOurs, compareTextResults, BASIC_WRAPS, FULL_WRAPS } = require('../../scripts/lib/text-probe.cjs');
 const C = require('../../scripts/lib/text-corpus.cjs');
 const ucd = require('../../scripts/lib/ucd.cjs');
-const { clodeCacheDir } = require('../../libexec/clode-paths.cjs');
+const { ucdInput } = require('../ucd-input.cjs');
 const { UNICODE_DATA } = require('../../libexec/unicode-text.cjs');
 const { tjsPath } = require('../node-shim-helper.cjs');
 
@@ -134,8 +134,7 @@ before(async () => {
   const ver = UNICODE_DATA.header.unicode;
   let emoji;
   try {
-    emoji = await ucd.fetchVerified(ver, 'emoji-test', {
-      cacheDir: path.join(clodeCacheDir(process.env), 'unicode'), offline: process.env.CLODE_OFFLINE === '1' });
+    emoji = await ucdInput(ver, 'emoji-test');
   } catch (e) {
     if (!(e instanceof ucd.UcdOfflineMiss)) throw e;
     SKIP = `emoji-test ${ver} not cached and this run is offline — ${e.message}`;
