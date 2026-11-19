@@ -42,8 +42,16 @@ function filledPipe(dir, tag) {
   return r;
 }
 
+// Every executor runs under `nice -n DIFF_NICE` (off Windows): a deliberately non-default niceness, so
+// os.getPriority is judged at a value no constant can match by luck. The shim answered a constant 0 for
+// months, and only a CI runner that happened to run at nice -10 (node-shim-oracle-darwin, run 44597568635)
+// showed it. Node and the subject get the same nice; it is added to whatever the host runs at.
+const DIFF_NICE = 7;
+const niced = (argv) => (process.platform === 'win32' ? argv : ['nice', '-n', String(DIFF_NICE), ...argv]);
+
 function runOne(argv, { planFile, outFile, cwd, timeout, pipeFd, base, tag, exec = EXEC }) {
   const filled = filledPipe(base, tag);
+  argv = niced(argv);
   const r = spawnSync(argv[0], [...argv.slice(1), exec, planFile, outFile], {
     cwd, stdio: ['ignore', 'pipe', 'pipe', pipeFd === null ? 'ignore' : pipeFd, filled === null ? 'ignore' : filled], env: { ...process.env },
     encoding: 'utf8', timeout, maxBuffer: 64 * 1024 * 1024,

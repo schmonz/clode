@@ -169,7 +169,8 @@ const DRIVERS = {
   'os.arch': D([]),
   'os.availableParallelism': D([], { post: 'sign' }),
   'os.freemem': D([], { post: 'sign' }),
-  'os.getPriority': D(['int']),
+  // run under a deliberate nice (run.cjs DIFF_NICE), so a constant cannot match; and a pid that is no process
+  'os.getPriority': D(['int'], { extra: [[{ v: 2147483646 }]] }),
   'os.homedir': D([]),
   'os.hostname': D([]),
   'os.loadavg': D([], { post: 'typeof' }),
@@ -232,7 +233,7 @@ const UNCOVERED = {
   'fs.unwatchFile': 'pairs with watchFile; a scenario driver is not written yet',
   'net.connect': 'needs a peer; a scenario driver is not written yet (node-shim-net.test.cjs judges it by hand)',
   'net.createConnection': 'needs a peer; a scenario driver is not written yet (node-shim-net.test.cjs judges it by hand)',
-  'os.setPriority': 'changes the scheduling of the running process',
+  'os.setPriority': 'changes the scheduling of the running process (judged instead by test/node-shim-os-priority.test.cjs, under nice)',
   'process.exit': 'ends the executor',
   'stream.finished': 'needs a stream; a scenario driver is not written yet (node-shim-stream-finished.test.cjs judges it by hand)',
   'stream.PassThrough': 'a class; a scenario driver is not written yet (node-shim-stream.test.cjs judges it by hand)',
