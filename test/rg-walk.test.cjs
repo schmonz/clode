@@ -601,7 +601,21 @@ test('N-2: a walked search never stats a file the walk listed (it reads only its
 // ---- the async twin keeps the loop turning over a large walk (Task 9 review I-2) ----------------------------------
 // The match pass sniffs each walked file's first bytes for a BOM (an open, a 4-byte read, a close); over 18.7k
 // files that held the event loop 915 ms under tjs, 2.6 s under load, in one stretch (Glob, Task 10, walks every
-// file). 30,000 files, two directory levels; the loop must keep turning (Task 7's bound, 600 ms).
+// file). 30,000 files, two directory levels; the loop must keep turning.
+//
+// WHAT IS ASSERTED, AND WHY NOT A WALL-CLOCK BOUND. This held to "the longest gap < 600 ms" (Task 7's bound) until the
+// full suite failed it at 602 ms on 2026-11-19 (d40fd9b) while it passed alone: the gap scales with machine load, the
+// defect's and the fixed walk's alike. Measured on this tree under tjs (darwin arm64, 8 cores; 'defect' = rg-native.cjs
+// with matchPlanGen's every-SNIFF_SLICE `yield` removed, which is the I-2 sync sniff this gate exists to catch):
+//     load                     fixed: maxGap / walk ms           defect: maxGap / walk ms
+//     alone                    112-123 / ~3,200   (0.035-0.038)  1,289-1,408 / ~3,250  (0.40-0.42)
+//     8 CPU hogs (1x cores)    191-295 / ~7,300   (0.026-0.041)  2,730-2,814 / ~6,850  (0.40-0.41)
+//     16+ CPU hogs (2x+)       455-497 / ~14,100  (0.033-0.035)  5,283-5,445 / ~13,050 (0.40-0.42)
+// The absolute gap crosses 600 ms under load with the fix in place (and the defect's alone is only 2.2x that), but the
+// share of the walk spent in its single longest hold does not move with load: <= 0.041 fixed, >= 0.40 defect. The bound
+// is 0.15: 3.7x above the worst fixed share measured, 2.7x below the best defect share. Both are written here so a
+// re-measurement can move it with a stated margin, never by bumping a number.
+const HELD_SHARE_MAX = 0.15;
 test('RG-WALK-*: the async twin keeps the loop turning over a walk of 30,000 files (tjs)', { skip: needUgrep.skip || NO_TJS }, () => {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'rg-walk-gap-')));
   try {
@@ -619,19 +633,21 @@ test('RG-WALK-*: the async twin keeps the loop turning over a walk of 30,000 fil
       const cp = require('child_process');
       const ctx = { spawn: cp.spawn, spawnSync: cp.spawnSync, ugrep: () => ${JSON.stringify(UGREP)} };
       (async () => {
-        let last = Date.now(), maxGap = 0;
+        const t0 = Date.now(); let last = t0, maxGap = 0;
         const iv = setInterval(() => { const n = Date.now(); maxGap = Math.max(maxGap, n - last); last = n; }, 10);
         const a = await new Promise((res) => rgn.rgExecFile(['-l', '--hidden', 'nothing-matches-this', 'w'], { cwd: ${JSON.stringify(dir)}, encoding: 'buffer', timeout: 120000 },
           (e, so) => res({ code: e ? e.code : 0, bytes: so.length }), 'rg', ctx));
         clearInterval(iv);
-        process.stdout.write('PROBE:' + JSON.stringify({ maxGap, ...a }) + '\\n');
+        process.stdout.write('PROBE:' + JSON.stringify({ maxGap, ms: Date.now() - t0, ...a }) + '\\n');
       })();
     `);
     const res = runLoader(prog, [], { timeout: 240000 });
     const got = JSON.parse(((res.stdout || '').split('\n').find((l) => l.startsWith('PROBE:')) || 'PROBE:null').slice(6));
     assert.ok(got, `the tjs probe printed nothing (exit ${res.status}): ${(res.stderr || '').slice(0, 1500)}`);
     assert.deepStrictEqual([got.code, got.bytes], [1, 0], JSON.stringify(got));
-    assert.ok(got.maxGap < 600, `the loop was held ${got.maxGap} ms`);
+    const share = got.maxGap / got.ms;
+    assert.ok(share < HELD_SHARE_MAX, `the loop was held ${got.maxGap} ms in one stretch of a ${got.ms} ms walk (${share.toFixed(3)} of it; `
+      + `the bound is ${HELD_SHARE_MAX}: the fixed walk measured <= 0.041 under any load, the sync sniff >= 0.40)`);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
