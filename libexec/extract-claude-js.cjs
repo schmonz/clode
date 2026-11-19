@@ -1966,8 +1966,25 @@ function providerArchOf(binpath) {
   }
 }
 
+// THE BYTES THOSE TWO READ, for a writer that must carry them (scripts/make-min-provider.cjs
+// prefixes a minimised provider with its source's header so both still answer). The first 64
+// bytes hold Mach-O's and ELF's answers and PE's 'MZ'; PE's Machine sits at e_lfanew + 4, past
+// them (0x7c in upstream's claude.exe), so a 64-byte prefix carried the platform but not the
+// arch: a minimised win32 provider answered null to providerArchOf, and windows-latest's
+// RG-VERSION-SIMD test read 'unknown' for an x64 native (CI 44443821699). For a PE the header
+// runs through the Machine field; e_lfanew past 4KB is not a header we carry.
+function containerHeader(buf) {
+  let n = Math.min(64, buf.length);
+  if (n === 64 && buf[0] === 0x4d && buf[1] === 0x5a) {
+    const off = buf.readUInt32LE(0x3c);
+    if (off <= 4096 && off + 6 <= buf.length) n = Math.max(n, off + 6);
+  }
+  return Buffer.from(buf.subarray(0, n));
+}
+
 module.exports = {
   BUNFS,
+  containerHeader,
   BUNDLE_VERSION,
   moduleWithMeta,
   moduleNameOfMetaUrl,
