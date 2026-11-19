@@ -199,7 +199,7 @@ jobs:
       legs: ${{ steps.legs.outputs.legs }}
     steps:
       - uses: actions/checkout@v7.0.1
-      - uses: actions/setup-node@v7.0.0
+      - uses: actions/setup-node@v7.1.0
         with:
           node-version-file: .tool-versions
       - id: legs
@@ -223,7 +223,7 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v7.0.1
-      - uses: actions/setup-node@v7.0.0
+      - uses: actions/setup-node@v7.1.0
         with:
           node-version-file: .tool-versions
       # Same computation build-leg's own "Name the builder artifact" step
@@ -240,7 +240,7 @@ jobs:
       # ci tier never sets `publish` (legsFor('ci') strips it — see
       # scripts/tjs-legs.mjs), so build-leg's own upload is always the
       # smoke- prefixed name, never the bare release name.
-      - uses: actions/download-artifact@v8.0.1
+      - uses: actions/download-artifact@v8.0.2
         with:
           name: smoke-${{ steps.name.outputs.asset }}
           path: .
@@ -286,10 +286,10 @@ jobs:
       - uses: actions/checkout@v7.0.1
         with:
           submodules: false
-      - uses: actions/setup-node@v7.0.0
+      - uses: actions/setup-node@v7.1.0
         with:
           node-version-file: .tool-versions
-      - uses: actions/download-artifact@v8.0.1
+      - uses: actions/download-artifact@v8.0.2
         with:
           name: tjs-windows-amd64
           path: .
@@ -365,10 +365,10 @@ jobs:
       - uses: actions/checkout@v7.0.1
         with:
           submodules: false
-      - uses: actions/setup-node@v7.0.0
+      - uses: actions/setup-node@v7.1.0
         with:
           node-version-file: .tool-versions
-      - uses: actions/download-artifact@v8.0.1
+      - uses: actions/download-artifact@v8.0.2
         with:
           name: tjs-windows-amd64
           path: .
@@ -432,10 +432,10 @@ jobs:
       - uses: actions/checkout@v7.0.1
         with:
           submodules: false
-      - uses: actions/setup-node@v7.0.0
+      - uses: actions/setup-node@v7.1.0
         with:
           node-version-file: .tool-versions
-      - uses: actions/download-artifact@v8.0.1
+      - uses: actions/download-artifact@v8.0.2
         with:
           name: tjs-windows-arm64
           path: .
@@ -557,7 +557,7 @@ jobs:
     # .tool-versions and asserted below, so a bump to one and not the other is a
     # named failure rather than a silent skew.
     container:
-      image: node:24.21.0-alpine
+      image: node:24.22.0-alpine
     defaults:
       run:
         shell: bash
@@ -623,7 +623,7 @@ jobs:
             }
             console.log("reference node: " + process.version + ", musl-linked (no glibcVersionRuntime)");
           '
-      - uses: actions/download-artifact@v8.0.1
+      - uses: actions/download-artifact@v8.0.2
         with:
           name: tjs-linux-x64-musl   # bare static engine from the CI-tier leg
           path: ${{ runner.temp }}/tjs
@@ -788,10 +788,10 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v7.0.1
-      - uses: actions/setup-node@v7.0.0
+      - uses: actions/setup-node@v7.1.0
         with:
           node-version-file: .tool-versions
-      - uses: actions/download-artifact@v8.0.1
+      - uses: actions/download-artifact@v8.0.2
         with:
           name: tjs-linux-x64-musl   # bare static engine from the CI-tier leg
           path: ${{ runner.temp }}/tjs
@@ -1042,13 +1042,13 @@ jobs:
       - uses: actions/checkout@v7.0.1
         with:
           submodules: false
-      - uses: actions/setup-node@v7.0.0
+      - uses: actions/setup-node@v7.1.0
         with:
           node-version-file: .tool-versions
       # linux-x64-musl is a STATIC musl build (same artifact node-shim-oracle and
       # native-builder-oracle already consume on this same runner OS) — it runs
       # fine on this glibc runner, confirmed the same way those jobs rely on it.
-      - uses: actions/download-artifact@v8.0.1
+      - uses: actions/download-artifact@v8.0.2
         with:
           name: tjs-linux-x64-musl   # bare static engine from the CI-tier leg
           path: ${{ runner.temp }}/tjs
@@ -1378,10 +1378,10 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v7.0.1
-      - uses: actions/setup-node@v7.0.0
+      - uses: actions/setup-node@v7.1.0
         with:
           node-version-file: .tool-versions
-      - uses: actions/download-artifact@v8.0.1
+      - uses: actions/download-artifact@v8.0.2
         with:
           name: tjs-darwin-arm64   # bare arm64 engine from the CI-tier darwin leg
           path: ${{ runner.temp }}/tjs
@@ -1501,7 +1501,7 @@ jobs:
       # test/clode-target-build.test.cjs, test/clode-manifest-fetch.test.cjs et al.) — if
       # phase 3's target-naming work renames it (e.g. to a fully-dashed canonical
       # `linux-amd64`), that is ONE LINE of churn here, not a rewrite.
-      - uses: actions/download-artifact@v8.0.1
+      - uses: actions/download-artifact@v8.0.2
         with:
           name: tjs-linux-x64-musl   # a SECOND platform's engine — bytes only, never executed here
           path: ${{ runner.temp }}/tjs-linux

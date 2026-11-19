@@ -36,7 +36,7 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v7.0.1
-      - uses: actions/setup-node@v7.0.0
+      - uses: actions/setup-node@v7.1.0
         with:
           node-version-file: .tool-versions
       - name: Install runtime deps (the ext-dep closure) for the naude build
@@ -64,7 +64,7 @@ jobs:
           CLODE_CLAUDE_BIN="$PROV" CLODE_PROVIDER_BIN="$PROV" \
             node scripts/stage0.mjs build naude --target macos-arm64 --out "$RUNNER_TEMP/naude-darwin"
       - name: Upload the cross-built darwin naude
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: naude-darwin
           path: ${{ runner.temp }}/naude-darwin
@@ -81,7 +81,7 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/download-artifact@v8.0.1
+      - uses: actions/download-artifact@v8.0.2
         with:
           name: naude-darwin
           path: .
@@ -104,7 +104,7 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v7.0.1
-      - uses: actions/setup-node@v7.0.0
+      - uses: actions/setup-node@v7.1.0
         with:
           node-version-file: .tool-versions
       - name: Install runtime deps (the ext-dep closure) for the naude build
@@ -132,7 +132,7 @@ jobs:
           CLODE_CLAUDE_BIN="$PROV" CLODE_PROVIDER_BIN="$PROV" \
             node scripts/stage0.mjs build naude --target macos-amd64 --out "$RUNNER_TEMP/naude-darwin-x64"
       - name: Upload the arm64-Linux-cross-built darwin-x64 naude
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: naude-darwin-x64
           path: ${{ runner.temp }}/naude-darwin-x64
@@ -148,7 +148,7 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/download-artifact@v8.0.1
+      - uses: actions/download-artifact@v8.0.2
         with:
           name: naude-darwin-x64
           path: .
@@ -173,7 +173,7 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v7.0.1
-      - uses: actions/setup-node@v7.0.0
+      - uses: actions/setup-node@v7.1.0
         with:
           node-version-file: .tool-versions
       - name: Install runtime deps (the ext-dep closure) for the naude build
@@ -201,7 +201,7 @@ jobs:
           CLODE_CLAUDE_BIN="$PROV" CLODE_PROVIDER_BIN="$PROV" \
             node scripts/stage0.mjs build naude --target windows-amd64 --out "$RUNNER_TEMP/naude-win-x64"
       - name: Upload the cross-built win32-x64 naude
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: naude-win-x64
           path: ${{ runner.temp }}/naude-win-x64
@@ -221,7 +221,7 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/download-artifact@v8.0.1
+      - uses: actions/download-artifact@v8.0.2
         with:
           name: naude-win-x64
           path: .
@@ -242,7 +242,7 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v7.0.1
-      - uses: actions/setup-node@v7.0.0
+      - uses: actions/setup-node@v7.1.0
         with:
           node-version-file: .tool-versions
       - name: Install runtime deps (the ext-dep closure) for the naude build
@@ -270,7 +270,7 @@ jobs:
           CLODE_CLAUDE_BIN="$PROV" CLODE_PROVIDER_BIN="$PROV" \
             node scripts/stage0.mjs build naude --target windows-arm64 --out "$RUNNER_TEMP/naude-win-arm64"
       - name: Upload the cross-built win32-arm64 naude
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: naude-win-arm64
           path: ${{ runner.temp }}/naude-win-arm64
@@ -285,7 +285,7 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/download-artifact@v8.0.1
+      - uses: actions/download-artifact@v8.0.2
         with:
           name: naude-win-arm64
           path: .

@@ -341,7 +341,7 @@ runs:
     # are copied into the VM. One step per OS — `uses:` cannot be dynamic.
     - name: Run the guest script (vmactions solaris VM)
       if: inputs.platform == 'solaris'
-      uses: vmactions/solaris-vm@v1.4.0
+      uses: vmactions/solaris-vm@v1.4.2
       with:
         release: ${{ inputs.version }}
         usesh: true
@@ -355,7 +355,7 @@ runs:
 
     - name: Run the guest script (vmactions openindiana VM)
       if: inputs.platform == 'openindiana'
-      uses: vmactions/openindiana-vm@v1.1.6
+      uses: vmactions/openindiana-vm@v1.1.9
       with:
         release: ${{ inputs.version }}
         usesh: true
@@ -500,7 +500,7 @@ runs:
     # an empty expression would silently make the path "/*.log".
     - name: Upload the sparc guest console log (qemu-netbsd-sparc)
       if: always() && inputs.platform == 'qemu-netbsd-sparc'
-      uses: actions/upload-artifact@v7.0.1
+      uses: actions/upload-artifact@v7.0.2
       with:
         name: guest-console-${{ inputs.log-name }}-attempt${{ github.run_attempt }}
         path: ${{ runner.temp }}/qemu-sparc/*.log
