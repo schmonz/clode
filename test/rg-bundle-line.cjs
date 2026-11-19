@@ -26,13 +26,18 @@ function bundleLine(n = 5000000) {
   return Buffer.from(bundleTokens(n).map((i) => T[i]).join('').slice(0, n) + '\n');
 }
 
-// native 2.1.283's --json over that line: [pattern, submatches, sha256(JSON [[start,end]...]) prefix]
+// native 2.1.283's --json over that line: [pattern, submatches, sha256(JSON [[start,end]...]) prefix]. Re-proven
+// against native by `node test/rg-bundle-line.cjs --native BIN --check` and by the rg-bundle-line-fresh guard
+// (test/build-gates/rg-regex-gates.test.cjs), which runs it whenever the pinned provider runs here.
+const NATIVE_BUNDLE_RG = 'ripgrep 14.1.1 (rev 7c1d0ed28a)';
 const NATIVE_BUNDLE_LINE = [
   ['\\w+Error', 64660, '23ef86fe587776a79663'], ['import.*from', 1, '4a958576355f9660d9cf'], ['"[^"]*"', 70013, 'e4349df8f56b6d30a9d2'],
   ['[a-zA-Z_]\\w*\\(', 43715, '245bb4e298716816e51b'], ['\\w+', 711795, '46a3c478b8a8ab6af1aa'], ['x|', 4894633, '6959e2ed75bd3b0b2e9d'],
 ];
 
-// THE CENSUS. Samples: each 8-token run (a window sliding one token at a time). Floors measured 2026-11-19 on the
+// THE CENSUS (a floor written as a fraction of today's count is a regression tripwire on a deterministic count (the
+// seeds are fixed), not a coverage requirement). Samples: each 8-token run (a window sliding one token at a time).
+// Floors measured 2026-11-19 on the
 // intRng line: 1,293,344 runs, every one distinct; Error after a word character 20,672; identifier before ( 10,279.
 const RUN = 8;
 function runs(idx) {
@@ -55,4 +60,50 @@ function bundleCensus() {
   return [census('rg-bundle-line tokens', SHAPES(), runs(idx)), rngBias('rg-bundle-line RNG', () => intRng(SEED), moduli)];
 }
 
-module.exports = { bundleLine, bundleTokens, NATIVE_BUNDLE_LINE, bundleCensus, T, SEED };
+// What native's embedded rg (`bin`) answers over the line, as NATIVE_BUNDLE_LINE's rows.
+function measureNative(bin) {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const crypto = require('node:crypto');
+  const { runNativeRg } = require('../scripts/lib/rg-probe.cjs');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-bundle-line-'));
+  try {
+    fs.writeFileSync(path.join(dir, 'bundle.js'), bundleLine());
+    return NATIVE_BUNDLE_LINE.map(([pattern]) => {
+      const r = runNativeRg(bin, ['--json', '-e', pattern, '--', 'bundle.js'], dir, { env: { HOME: dir, PATH: '/usr/bin:/bin' } });
+      if (r.status !== 0 && r.status !== 1) return [pattern, -1, `native rg exited ${r.status}: ${String(r.stderr).slice(0, 200)}`];
+      const m = [];
+      for (const l of r.stdout.toString('utf8').split('\n')) {
+        if (!l) continue;
+        const j = JSON.parse(l);
+        if (j.type !== 'match') continue;
+        const o = j.data.absolute_offset;
+        for (const x of j.data.submatches) m.push([o + x.start, o + x.end]);
+      }
+      return [pattern, m.length, crypto.createHash('sha256').update(JSON.stringify(m)).digest('hex').slice(0, 20)];
+    });
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+}
+// The rows of `pinned` native now answers otherwise, by name ([] when none).
+function bundleStaleness(pinned, measured) {
+  const out = [];
+  for (let i = 0; i < Math.max(pinned.length, measured.length); i++) {
+    const a = JSON.stringify(pinned[i]), b = JSON.stringify(measured[i]);
+    if (a !== b) out.push(`test/rg-bundle-line.cjs NATIVE_BUNDLE_LINE row ${i}: pinned ${a}, native now ${b}: re-measure (--native BIN --emit)`);
+  }
+  return out;
+}
+
+if (require.main === module) {
+  const argv = process.argv.slice(2);
+  const bin = argv[argv.indexOf('--native') + 1];
+  if (!argv.includes('--native') || !bin) { process.stderr.write('usage: rg-bundle-line.cjs --native BIN [--check | --emit]\n'); process.exit(2); }
+  const measured = measureNative(bin);
+  if (argv.includes('--emit')) { process.stdout.write(`${JSON.stringify(measured)}\n`); process.exit(0); }
+  const stale = bundleStaleness(NATIVE_BUNDLE_LINE, measured);
+  process.stdout.write(stale.length ? `STALE: ${stale.join('; ')}\n` : `fresh (${measured.length} patterns)\n`);
+  process.exit(stale.length ? 1 : 0);
+}
+
+module.exports = { bundleLine, bundleTokens, NATIVE_BUNDLE_LINE, NATIVE_BUNDLE_RG, bundleCensus, measureNative, bundleStaleness, T, SEED };

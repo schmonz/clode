@@ -158,6 +158,28 @@ guardTests(defineGuard({
   },
 }));
 
+// ---- rg-bundle-line-fresh (observability Task 4, review fix round 1) ----------------------------
+// test/rg-bundle-line.cjs's NATIVE_BUNDLE_LINE, hand-pinned from native over the 5 MB minified line, re-measured from
+// the pinned provider's own rg. A native whose rg is not the one the rows were measured from is a finding (re-measure),
+// as above. Control: a planted digest, through the module's own bundleStaleness(), which must name it.
+const bundle = require('../rg-bundle-line.cjs');
+guardTests(defineGuard({
+  name: 'rg-bundle-line-fresh',
+  read: () => {
+    const bin = providerBin(process.env);
+    if (!bin) return { skip: `no native provider (CLODE_PROVIDER_BIN or the pinned version): the rows were measured from ${bundle.NATIVE_BUNDLE_RG}` };
+    const v = nativeRgVersion(bin);
+    if (!v) return { skip: `the provider ${bin} did not answer as rg here` };
+    const moved = versionProblem('test/rg-bundle-line.cjs NATIVE_BUNDLE_LINE', bundle.NATIVE_BUNDLE_RG, v);
+    if (moved) return { problem: moved };
+    return { pinned: bundle.NATIVE_BUNDLE_LINE, measured: bundle.measureNative(bin) };
+  },
+  scan: ({ pinned, measured, problem }) => (problem ? { examined: 1, findings: [problem] }
+    : { examined: measured.length, findings: bundle.bundleStaleness(pinned, measured) }),
+  control: () => ({ pinned: bundle.NATIVE_BUNDLE_LINE,
+    measured: bundle.NATIVE_BUNDLE_LINE.map((r, i) => (i === 0 ? [r[0], r[1], 'planted'] : r)) }),
+}));
+
 test('a missing or garbled generated header is a finding, not a skip', () => {
   assert.match(dataHeader("'use strict';\n").problem, /no generated `const RG_REGEX_DATA/);
   assert.match(dataHeader('const RG_REGEX_DATA = {"header":};\n').problem, /does not parse/);
