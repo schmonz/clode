@@ -51,9 +51,20 @@ function format(fmt, ...args) {
 // something a human can act on. Widen it when a caller needs more, not speculatively.
 const _quote = (s) => "'" + String(s).replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, '\\n') + "'";
 
-function inspect1(v, seen, depth) {
+// util.inspect(value, options): the public entry. It used to BE inspect1, so an options object landed in `seen`
+// and every call with options threw "not a function" (the 2.1.283 carve's device-code response inspects itself with
+// {depth, colors, compact:false, sorted:true}; found when the differential learned to read destructured requires,
+// 2026-11-19). A top-level string is quoted, as node's is; format's %s and bare args keep calling inspect1.
+// Of the options, compact:false and sorted are honoured; colors are not (no colour, ever), nor depth.
+function inspect(v, opts) {
+  const o = opts && typeof opts === 'object' ? opts : {};
+  return typeof v === 'string' ? _quote(v) : inspect1(v, undefined, 0, o);
+}
+
+function inspect1(v, seen, depth, opts) {
   seen = seen || new Set();
   depth = depth || 0;
+  opts = opts || {};
   const t = typeof v;
   if (v === null) return 'null';
   if (t === 'undefined') return 'undefined';
@@ -85,8 +96,13 @@ function inspect1(v, seen, depth) {
   if (depth > 4) return Array.isArray(v) ? '[Array]' : '[Object]';
   seen.add(v);
   try {
-    const rec = (x) => inspect1(x, seen, depth + 1);
-    if (Array.isArray(v)) return '[ ' + v.map(rec).join(', ') + ' ]';
+    const rec = (x) => inspect1(x, seen, depth + 1, opts);
+    // compact:false (node): every entry on its own line, indented two spaces per level
+    const pad = '  '.repeat(depth);
+    const wrap = (open, items, close) => (!items.length ? open.trimEnd() + close
+      : opts.compact === false ? open + '\n' + items.map((i) => pad + '  ' + i).join(',\n') + '\n' + pad + close
+        : open + ' ' + items.join(', ') + ' ' + close);
+    if (Array.isArray(v)) return wrap('[', v.map(rec), ']');
     if (tag === '[object Map]') {
       return 'Map(' + v.size + ') {' + (v.size ? ' ' + [...v].map(([k, val]) => rec(k) + ' => ' + rec(val)).join(', ') + ' ' : '') + '}';
     }
@@ -100,14 +116,16 @@ function inspect1(v, seen, depth) {
     const ctor = v.constructor && v.constructor.name;
     const prefix = ctor && ctor !== 'Object' ? ctor + ' ' : '';
     const parts = [];
-    for (const k of Reflect.ownKeys(v)) {
+    const keys = Reflect.ownKeys(v);
+    if (opts.sorted === true) keys.sort((a, b) => String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0);
+    for (const k of keys) {
       let val;
       try { val = v[k]; } catch (e) { val = '[getter threw]'; }
       const key = typeof k === 'symbol' ? '[' + k.toString() + ']'
         : (/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(k) ? k : _quote(k));
       parts.push(key + ': ' + rec(val));
     }
-    return prefix + '{' + (parts.length ? ' ' + parts.join(', ') + ' ' : '') + '}';
+    return prefix + wrap('{', parts, '}');
   } catch (e) {
     return '[uninspectable: ' + ((e && e.message) || e) + ']';
   } finally {
@@ -364,7 +382,7 @@ function getSystemErrorName(err) {
 }
 
 module.exports = {
-  format, formatWithOptions, promisify, callbackify, inherits, inspect: inspect1, isDeepStrictEqual,
+  format, formatWithOptions, promisify, callbackify, inherits, inspect, isDeepStrictEqual,
   debuglog, debug: debuglog, deprecate, stripVTControlCharacters, getSystemErrorName,
   // util.types. The code-split bundle (2.1.243+) imports `isProxy` from `util/types`.
   // quickjs exposes no way to detect a Proxy from JS — node's own isProxy reads a V8

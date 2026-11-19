@@ -92,6 +92,10 @@ const KEY_SAMPLES = {
   path: { v: '/nonexistent/diff.sock' },
   // stream
   read: { undef: true },
+  // util.inspect (the carve passes depth:1/0 and colors:process.stdout.isTTY). colors:true is not driven: the shim
+  // never colours (libexec/node-shim/modules/util.cjs), and node colours only when asked.
+  depth: { v: 10 },
+  colors: { v: false },
   // zlib
   chunkSize: { v: 16384 },
   maxOutputLength: { v: 1048576 },

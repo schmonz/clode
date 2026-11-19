@@ -8695,33 +8695,6 @@
    ]
   }
  },
- "util.inspect(\"a\")": {
-  "r": {
-   "cause": "DIFF-UTIL-FORMAT",
-   "on": [
-    "darwin",
-    "linux"
-   ]
-  }
- },
- "util.inspect(\"a\", false)": {
-  "r": {
-   "cause": "DIFF-UTIL-FORMAT",
-   "on": [
-    "darwin",
-    "linux"
-   ]
-  }
- },
- "util.inspect(\"a\", undefined)": {
-  "r": {
-   "cause": "DIFF-UTIL-FORMAT",
-   "on": [
-    "darwin",
-    "linux"
-   ]
-  }
- },
  "util.types (value)": {
   "r.keys.isAnyArrayBuffer": {
    "cause": "DIFF-MISSING-MEMBERS",
