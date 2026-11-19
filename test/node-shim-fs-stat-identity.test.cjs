@@ -24,7 +24,7 @@ const os = require('node:os');
 const path = require('node:path');
 const net = require('node:net');
 const { spawnSync } = require('node:child_process');
-const { engineSpawn, skipUnlessTjs, LOADER } = require('./node-shim-helper.cjs');
+const { engineSpawn, skipUnlessTjs, runLoader, LOADER, REPO } = require('./node-shim-helper.cjs');
 
 const PROG = `
 const fs = require('node:fs'), path = require('node:path');
@@ -170,4 +170,75 @@ test('every Stats and BigIntStats field equals host node\'s (stat, lstat, fstat,
     assert.deepStrictEqual(diffs.map((k) => `${k}: node ${before[k]} / quaude ${ours[k]}`), [],
       `${diffs.length} of ${Object.keys(before).length} answers differ; fields: ${fields.join(', ')}`);
   } finally { if (server.listening) server.close(); fs.rmSync(base, { recursive: true, force: true }); }
+});
+
+// THE STATS CONSTRUCTION, FED A WINDOWS uv_stat_t. Off Windows the comparison above never sees one, so here a
+// __tjs_fs_sync whose stat, lstat and fstat answer what libuv's fs__stat_handle (deps/libuv/src/win/fs.c) fills
+// on NTFS, in the raw shape txiki-sync-stat-identity.patch hands JS (BigInt dev/ino/... and <time>Sec/<time>Nsec),
+// and a FRESH node-shim fs module bound to it (as test/node-shim-fs-engine-floor.test.cjs does). The Windows facts
+// in it: dev the volume serial (32 bits), ino the 64-bit FileId whose high 16 bits are a sequence number (past
+// 2^53, and here past 2^63: node's BigInt64Array reads it negative), mode S_IFREG|0666 and uid/gid/rdev 0,
+// blksize 4096 and blocks AllocationSize/512, times from FILETIME (100 ns ticks: every Nsec a multiple of 100),
+// birthtime its CreationTime, one time before the epoch. Expected: node's arithmetic (lib/internal/fs/utils.js:
+// a Float64Array of the fields, ms = sec * 1e3 + nsec / 1e6; BigIntStats from a BigInt64Array, ns = sec * 1e9 + nsec).
+// The windows-* tjs smoke's battery (test/win-sync-battery.js) checks a REAL Windows engine answers this shape.
+const WIN_RAW = {
+  size: 6, mode: 0o100666, uid: 0, gid: 0, kind: 'file',
+  dev: 0xC0FFEE12n, ino: 0x8003000000001A2Bn, nlink: 2n, rdev: 0n, blksize: 4096n, blocks: 8n, size64: 6n,
+  atimeSec: 1763500000n, atimeNsec: 123456700n, mtimeSec: 1763499999n, mtimeNsec: 999999900n,
+  ctimeSec: 1763400000n, ctimeNsec: 0n, birthtimeSec: -86400n, birthtimeNsec: 500000000n,
+};
+test('Stats and BigIntStats from a Windows uv_stat_t: every field as node builds it', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'shim-stat-winraw-')));
+  try {
+    const prog = path.join(base, 'prog.cjs');
+    const rawSrc = `({${Object.entries(WIN_RAW).map(([k, v]) => `${k}: ${typeof v === 'bigint' ? `${v}n` : JSON.stringify(v)}`).join(', ')}})`;
+    fs.writeFileSync(prog, `
+      const real = globalThis.__tjs_fs_sync;
+      const raw = () => ${rawSrc};
+      globalThis.__tjs_fs_sync = Object.create(real, { stat: { value: raw, writable: true }, lstat: { value: raw, writable: true },
+        fstat: { value: raw, writable: true } });
+      const fsx = require(process.argv[2]);
+      const show = (v) => typeof v === 'bigint' ? 'bigint ' + v : v instanceof Date ? 'Date ' + v.getTime() : typeof v + ' ' + v;
+      const out = {};
+      for (const [label, s] of [['', fsx.statSync('C:/x')], [' bigint', fsx.statSync('C:/x', { bigint: true })], [' lstat', fsx.lstatSync('C:/x')]]) {
+        for (const k of Object.keys(s)) out[k + label] = show(s[k]);
+        for (const k of ['atime', 'mtime', 'ctime', 'birthtime']) out[k + label] = show(s[k]);
+        out['isFile' + label] = String(s.isFile());
+      }
+      console.log(JSON.stringify(out));
+    `);
+    const r = runLoader(prog, [path.join(REPO, 'libexec/node-shim/modules/fs.cjs')], { timeout: 30000 });
+    assert.strictEqual(r.status, 0, r.stderr);
+    assert.ok(r.stdout.trim(), `printed nothing: ${r.stderr}`);
+    const got = JSON.parse(r.stdout.trim());
+    const want = {};
+    const INTS = ['dev', 'mode', 'nlink', 'uid', 'gid', 'rdev', 'blksize', 'ino', 'size', 'blocks'];
+    const TIMES = ['atime', 'mtime', 'ctime', 'birthtime'];
+    for (const label of ['', ' lstat']) {
+      // node: a Float64Array holds each field (uint64 -> double, round to nearest), times through msFromTimeSpec.
+      for (const f of INTS) want[f + label] = `number ${Number(f === 'size' ? WIN_RAW.size64 : WIN_RAW[f])}`;
+      for (const k of TIMES) {
+        const ms = Number(WIN_RAW[`${k}Sec`]) * 1e3 + Number(WIN_RAW[`${k}Nsec`]) / 1e6;
+        want[`${k}Ms${label}`] = `number ${ms}`;
+        want[k + label] = `Date ${Math.round(ms)}`;
+      }
+      want['isFile' + label] = 'true';
+    }
+    for (const f of INTS) want[`${f} bigint`] = `bigint ${BigInt.asIntN(64, BigInt(f === 'size' ? WIN_RAW.size64 : WIN_RAW[f]))}`;
+    for (const k of TIMES) {
+      const ns = WIN_RAW[`${k}Sec`] * 1000000000n + WIN_RAW[`${k}Nsec`];
+      want[`${k}Ms bigint`] = `bigint ${ns / 1000000n}`;
+      want[`${k}Ns bigint`] = `bigint ${ns}`;
+      want[`${k} bigint`] = `Date ${Number(ns / 1000000n)}`;
+    }
+    want['isFile bigint'] = 'true';
+    assert.deepStrictEqual(got, want);
+    // The Windows facts the shape carries, read back: an ino past 2^53 rounds as node's double does, and past 2^63
+    // is negative as node's BigInt64Array has it; a pre-epoch birthtime keeps its sign.
+    assert.strictEqual(got.ino, `number ${Number(0x8003000000001A2Bn)}`);
+    assert.strictEqual(got['ino bigint'], `bigint ${0x8003000000001A2Bn - (1n << 64n)}`);
+    assert.strictEqual(got.birthtimeMs, 'number -86399500');
+  } finally { fs.rmSync(base, { recursive: true, force: true }); }
 });

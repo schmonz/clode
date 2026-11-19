@@ -74,7 +74,16 @@ function spawnEval(js, opts = {}) {
   check('fs write+read byte-exact', dec.decode(back) === 'FSDATA', dec.decode(back));
   const st = __tjs_fs_sync.stat(fp);
   check('fs stat size', st.size === 6, String(st.size));
-  check('fs stat mtimeMs present', typeof st.mtimeMs === 'number' && st.mtimeMs > 0, String(st.mtimeMs));
+  // The raw shape since txiki-sync-stat-identity.patch (6d43ee6): no whole-second mtimeMs (node-shim builds
+  // Stats from these, test/node-shim-fs-stat-identity.test.cjs); each time as BigInt seconds and nanoseconds,
+  // dev and ino as BigInts. On Windows libuv fills them from FILETIME (100 ns ticks), the volume serial number
+  // and the FileId. This line asked for mtimeMs until CI 44443821699 said undefined on both Windows legs.
+  check('fs stat mtimeSec/mtimeNsec present', typeof st.mtimeSec === 'bigint' && st.mtimeSec > 0n
+    && typeof st.mtimeNsec === 'bigint' && st.mtimeNsec >= 0n && st.mtimeNsec < 1000000000n && st.mtimeNsec % 100n === 0n,
+    String(st.mtimeSec) + ' ' + String(st.mtimeNsec));
+  check('fs stat no stale mtimeMs', st.mtimeMs === undefined, String(st.mtimeMs));
+  check('fs stat identity: dev and ino BigInts, ino nonzero', typeof st.dev === 'bigint' && typeof st.ino === 'bigint' && st.ino !== 0n,
+    String(st.dev) + ' ' + String(st.ino));
   check('fs stat kind file', st.kind === 'file', st.kind);
   const names = __tjs_fs_sync.readdir(dir);
   check('fs readdir sees the file', names.indexOf('rt.bin') >= 0, JSON.stringify(names));
