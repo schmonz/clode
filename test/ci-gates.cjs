@@ -80,7 +80,7 @@ const TEXT_ORACLE = 'needs the text-oracle native (CLODE_NATIVE_ORACLE) and the 
 const PLACED = {
   // node-shim-oracle: CLODE_TJS + the staged provider + the seeded pinned carve.
   'shim-surface': { jobs: ['node-shim-oracle'], why: `${NO_ENGINE}; it measures the shim under the engine quaude ships` },
-  'node-shim-differential': { jobs: ['node-shim-oracle'], why: NO_ENGINE },
+  'node-shim-differential': { jobs: ['node-shim-oracle', 'node-shim-oracle-darwin'], why: NO_ENGINE },
   'node-shim-wall-tripwires': { jobs: ['node-shim-oracle', 'node-shim-oracle-darwin'], why: NO_STAGE },
   'zstd-gap-carved-walls': { jobs: ['node-shim-oracle'], why: NO_STAGE },
   'regexp-capture-census': { jobs: ['node-shim-oracle'], why: NO_STAGE },
