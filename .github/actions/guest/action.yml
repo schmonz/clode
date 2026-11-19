@@ -214,7 +214,21 @@ runs:
               sudo pkgin -y install $PKGS
             } ;;
           freebsd|dragonflybsd)
-            [ -z "$PKGS" ] || sudo env ASSUME_ALWAYS_YES=YES pkg install -y $PKGS ;;
+            # UPGRADE FIRST. pkg resolves a dependency by NAME, so a dependency the
+            # image already has installed is "satisfied" at whatever version the image
+            # baked — and a package built against a newer one then links against a
+            # library that is not there. Run 44460009323, dragonflybsd 6.4.2: node24 and
+            # cmake-core (both built against openssl-3.5.9,1, libcrypto.so.17) installed
+            # over the image's older openssl, and both died at exec with `Shared object
+            # "libcrypto.so.17" not found` (the Avalon repo even lists two `openssl`
+            # packages, 3.0.22 and 3.5.9,1 — pkg's "duplicate dependency listing:
+            # openssl"). A pkg repository is only consistent with ITSELF; partial
+            # upgrades are unsupported upstream. Same manager on both platforms, so the
+            # same order on both.
+            [ -z "$PKGS" ] || {
+              sudo env ASSUME_ALWAYS_YES=YES pkg upgrade -y
+              sudo env ASSUME_ALWAYS_YES=YES pkg install -y $PKGS
+            } ;;
           openbsd)
             [ -z "$PKGS" ] || sudo pkg_add $PKGS ;;
           midnightbsd)
@@ -304,7 +318,7 @@ runs:
         # on Haiku and `runtime/nodejs` on omnios. Anything unmapped is checked under its
         # own last path component, which is right for cmake/git/bash everywhere.
         if [ -n "$PKGS" ]; then
-          guest_missing=''
+          guest_missing=''; guest_broken=''
           for p in $PKGS; do
             # Normalise the SPELLING first: IPS names are paths (developer/gcc14,
             # ooce/runtime/node-22) and Haiku's are provides (cmd:gcc, cmd:make). Doing
@@ -323,7 +337,17 @@ runs:
               gcc*)                   cmd=gcc ;;
               *)                      cmd=$base ;;
             esac
-            command -v "$cmd" >/dev/null 2>&1 || guest_missing="$guest_missing $cmd($p)"
+            if ! command -v "$cmd" >/dev/null 2>&1; then
+              guest_missing="$guest_missing $cmd($p)"
+            # ON PATH IS NOT RUNNABLE. dragonflybsd 6.4.2 (run 44460009323) passed the
+            # PATH check with a node and a cmake the dynamic linker could not load
+            # (libcrypto.so.17 missing); the leg then died as a bare `Command failed:
+            # cmake`. Every tool this list names answers --version, so EXECUTE it here,
+            # where a load failure is still attributable to the package step.
+            elif ! ver_out=$("$cmd" --version 2>&1); then
+              printf '%s\n' "$ver_out" | sed "s/^/guest: $cmd --version: /" >&2
+              guest_broken="$guest_broken $cmd($p)"
+            fi
           done
           if [ -n "$guest_missing" ]; then
             echo "guest: package step reported success but these are NOT on PATH:$guest_missing" >&2
@@ -331,7 +355,13 @@ runs:
             echo "guest: read the next error as the cause." >&2
             exit 1
           fi
-          echo "guest: verified on PATH -> $PKGS"
+          if [ -n "$guest_broken" ]; then
+            echo "guest: these are on PATH but do NOT RUN (--version failed, output above):$guest_broken" >&2
+            echo "guest: that is a package-repo skew (a library the package was built against is" >&2
+            echo "guest: missing or older), not a build failure." >&2
+            exit 1
+          fi
+          echo "guest: verified on PATH and runnable -> $PKGS"
         fi
         ${{ inputs.script }}
 

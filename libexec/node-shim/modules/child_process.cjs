@@ -600,11 +600,29 @@ function execFile(file, args, opts, cb) {
   return child;
 }
 
+// node's execFileSync, both halves of its stderr contract (lib/child_process.js):
+//   1. stdio UNSPECIFIED -> the child's captured stderr is written to the parent's
+//      stderr, failing or not (`inheritStderr = !options.stdio`);
+//   2. a nonzero exit throws `Command failed: <file> <args...>` + "\n" + the stderr,
+//      carrying status/signal/output/pid/stdout/stderr.
+// The shim did neither until 2026-11-19: CI run 44460009323's dragonflybsd leg died on
+// build-tjs's runOut('cmake', ['--version']) with a bare `Command failed: cmake`, while
+// the line that said WHY (`Shared object "libcrypto.so.17" not found`) was captured into
+// a Buffer and dropped — on every leg that runs the build under tjs.
 function execFileSync(file, args, opts) {
   if (!Array.isArray(args)) { opts = args; args = []; }
-  const r = spawnSync(file, args || [], opts || {});
-  if (r.error) throw r.error;
-  if (r.status !== 0) throw Object.assign(new Error(`Command failed: ${file}`), { status: r.status, stderr: r.stderr });
+  args = args || []; opts = opts || {};
+  const r = spawnSync(file, args, opts);
+  if (!opts.stdio && r.stderr != null && r.stderr.length) {
+    const b = Buffer.isBuffer(r.stderr) ? r.stderr : Buffer.from(String(r.stderr));
+    try { writeSyncFdBytes(2, new Uint8Array(b.buffer, b.byteOffset, b.byteLength)); } catch { /* a closed fd 2 is not this call's failure */ }
+  }
+  if (r.error) throw Object.assign(r.error, r);
+  if (r.status !== 0) {
+    let msg = `Command failed: ${[opts.argv0 || file, ...args].join(' ')}`;
+    if (r.stderr != null && r.stderr.length) msg += `\n${r.stderr.toString()}`;
+    throw Object.assign(new Error(msg), r);
+  }
   return r.stdout;
 }
 
