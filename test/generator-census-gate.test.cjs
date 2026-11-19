@@ -41,14 +41,18 @@ const { stripComments } = require('./strip-comments.cjs');
 
 const REPO = path.resolve(__dirname, '..');
 
-// Spelled in pieces so this file's own source does not draw.
+// Spelled in pieces so this file's own source does not draw. Review (fix round 1) widened it: crypto's random calls
+// bare (destructured: `const { randomInt } = require('node:crypto')`, or webcrypto.getRandomValues), the census
+// helpers under an alias (`const { intRng: r } = require(...)`), the other common LCG multipliers (MINSTD 16807 and
+// 48271, 69069, MSVC's 214013), and fast-check's properties.
 const DRAW_RES = [
   new RegExp(['\\bMath', '\\.random\\s*\\('].join('')),
-  new RegExp(['\\bcrypto', '\\.(?:randomBytes|randomInt|randomFillSync|getRandomValues|randomUUID)\\s*\\('].join('')),
-  new RegExp(['\\b(?:1103', '515245|1664', '525|22695', '477|6364136223', '846793005)\\b'].join('')),
+  new RegExp(['\\b(?:randomBytes|randomInt|randomFillSync|getRandomValues|random', 'UUID)\\s*\\('].join('')),
+  new RegExp(['\\b(?:1103', '515245|1664', '525|22695', '477|6364136223', '846793005|168', '07|482', '71|690', '69|2140', '13)\\b'].join('')),
   new RegExp(['0x6D2B', '79F5'].join(''), 'i'),
   new RegExp(['<<\\s*13\\b[^;\\n]*;[^\\n]{0,60}', '>>>\\s*17\\b'].join('')),
-  new RegExp(['\\b(?:int', 'Rng|mulberry', '32)\\s*\\('].join('')),
+  new RegExp(['\\b(?:int', 'Rng|mulberry', '32)\\s*(?:\\(|:)'].join('')),
+  new RegExp(['\\bfc\\.(?:property|asyncProperty|assert|sample)\\s*\\(|require\\([\'"]fast-', 'check[\'"]\\)'].join('')),
 ];
 const CENSUS_RE = /\bcensus\s*\(/;
 const BIAS_RE = /\brngBias\s*\(/;
@@ -152,7 +156,12 @@ test('the control names the pre-fix shape, and a census plus a bias check clears
 
 test('every random source DRAW_RES names is detected; a comment is not a draw', () => {
   for (const src of ['x = Math.random();', 'crypto.randomBytes(4)', 'crypto.randomInt(3)', 's = s * 1664525 + 1;',
-    'seed = (seed + 0x6d2b79f5) >>> 0;', 'x ^= x << 13; x >>>= 0; x ^= x >>> 17;', 'const r = intRng(5);', 'const f = mulberry32(1);']) {
+    'seed = (seed + 0x6d2b79f5) >>> 0;', 'x ^= x << 13; x >>>= 0; x ^= x >>> 17;', 'const r = intRng(5);', 'const f = mulberry32(1);',
+    // fix round 1: destructured crypto, webcrypto, aliased helpers, other LCG multipliers, fast-check
+    "const { randomInt } = require('node:crypto'); randomInt(3);", 'randomBytes(4)', 'randomFillSync(b)', 'getRandomValues(a)',
+    'crypto.webcrypto.getRandomValues(a)', "const { intRng: r } = require('./shape-census.cjs');", "const { mulberry32: m } = S;",
+    's = (s * 16807) % 2147483647;', 's = (s * 48271) % 2147483647;', 's = s * 69069 + 1;', 's = s * 214013 + 2531011;',
+    'fc.assert(fc.property(fc.string(), f));', "const fc = require('fast-check');"]) {
     assert.strictEqual(S({ 'test/a.test.cjs': src }).length, 1, src);
   }
   assert.deepStrictEqual(S({ 'test/a.test.cjs': '// Math.random() was here\n/* crypto.randomBytes(1) */\n' }), []);
