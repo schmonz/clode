@@ -10,9 +10,6 @@ const BACKLOG_HEADING = 'node-shim against node: what the behaviour differential
 
 const E = '^r\\.error\\.';   // any field of a thrown error
 const CAUSES = [
-  { cause: 'DIFF-OPEN-FLAGS', api: '^fs(/promises)?\\.(openSync|open)$' },
-  { cause: 'DIFF-OPEN-FLAGS', api: '^fs(/promises)?\\.(writeFileSync|writeFile|appendFile)$', id: '\\{.*(flag|mode):' },
-  { cause: 'DIFF-OPEN-FLAGS', api: '^fs\\.createWriteStream$', id: '\\{(?!fd:)', leaf: '^after\\.' },
   { cause: 'DIFF-WRITESTREAM-THROWS', api: '^fs\\.createWriteStream$', leaf: '^r\\.(end|error\\.)' },
   { cause: 'DIFF-WRITESTREAM-FD', api: '^fs\\.createWriteStream$', id: 'fd:fd:', leaf: '^after\\.' },
   { cause: 'DIFF-MKDIR-RECURSIVE', api: '^fs(/promises)?\\.(mkdirSync|mkdir)$' },

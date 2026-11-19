@@ -129,26 +129,21 @@ function chmodBestEffort(p, mode) {
   try { FSS.chmod(p, mode); }
   catch (e) { if (!_isWin) throw e; }
 }
-// THE CREATE MODE. node's writeFileSync/appendFileSync/openSync take a mode and apply it
-// AT CREATION; the engine's FSS.open takes only (path, flags) and always creates 0644
-// (mod_fs_sync.c js_fss_open — no mode parameter at all). So a caller asking for 0755 got
-// a file it could not execute, silently.
-//
-// Not hypothetical, and not new: this is the SIBLING of the cpSync-drops-mode bug found
-// in the field, whose fix landed on copyFileSync and never covered the CREATE path. It
-// reproduced inside our own suite — test/rg-to-ugrep.test.cjs wrote a `#!/bin/sh` fixture
-// with {mode:0o755} (a row retired with the rg->ugrep translation, grep-native Task 10c)
-// and the engine then reported "Permission denied". mkdirSync
-// has honoured its mode all along, so the parameter was known, just not threaded here.
-//
-// chmod-AFTER-create, matching what createWriteStream already does for o.mode below and
-// what the copyFileSync fix does. It is not atomic the way node's open(mode) is: there is
-// a window where the file exists at 0644. For writing scripts and fixtures that is fine,
-// and the alternative is an engine change — worth doing if FSS.open ever grows a mode,
-// but not worth blocking this on.
-function applyCreateMode(p, opts) {
-  const mode = typeof opts === 'object' && opts !== null ? opts.mode : undefined;
-  if (typeof mode === 'number') chmodBestEffort(p, mode);
+// THE CREATE MODE. node's open(2) takes the mode and the kernel applies it minus the umask, at
+// creation only. The engine's FSS.open has no mode (it creates 0666 minus the umask), so openPath()
+// applies a caller's mode right after it CREATED the file: chmod-after-create, the sibling of the
+// cpSync/copyFileSync mode fix (a 0755 script fixture once came out unexecutable). The umask is the
+// kernel's own answer, read off the file it just made (0666 & ~umask), with each class's execute bit
+// taken as masked when its read bit is (umask 022 -> 022, 077 -> 077); process.umask() here is a
+// constant 022, not the process's. Not atomic the way node's open(mode) is: the file exists at the
+// default mode for a moment (BACKLOG: "node-shim's exclusive create and create mode are checked").
+function applyCreateMode(p, mode) {
+  let made;
+  try { made = Number(FSS.stat(p).mode) & 0o777; } catch { return; }
+  let um = ~made & 0o666;
+  um |= (um & 0o444) >> 2;
+  const want = mode & 0o7777 & ~um;
+  if (want !== made) chmodBestEffort(p, want);
 }
 // tjs's rename (__tjs_fs_sync.rename, mod_fs_sync.c) is the C library rename(a,b)
 // with no _WIN32 special-casing. POSIX rename(2) atomically REPLACES an existing
@@ -184,44 +179,86 @@ function renameReplace(a, b) {
 const constants = EC_FS;
 const O = constants;
 
-// Translate an open() flags argument (numeric O_* bitmask OR a node string like
-// 'r'/'w'/'a'/'r+'/'w+') into the string flag FSS.open understands. FSS.open
-// (mod_fs_sync.c) accepts 'r'|'w'|'a'|'r+'|'w+', each optionally suffixed 'n'
-// for O_NONBLOCK; map the numeric bits onto the closest one. O_NOFOLLOW is
-// dropped (best-effort; FSS.open has no NOFOLLOW variant — a documented,
-// benign divergence for the Bash log file). O_NONBLOCK is NOT droppable: the
-// bundle's drainStdin opens /dev/tty O_RDONLY|O_NONBLOCK and readSync()s until
-// EAGAIN — a blocking open/read there parks tjs's only thread in kernel read()
-// and wedges the whole engine (the /quit freeze). The 'n' suffix needs the
-// matching mod_fs_sync.c; an older engine rejects it with a LOUD
-// "fs_sync.open: bad flags" TypeError rather than silently blocking.
-// Characterized by test/node-shim-fs-nonblock.test.cjs.
-// Node's string open flags carry modifiers FSS.open (which accepts only
-// r|w|a|r+|w+, optionally 'n'-suffixed) does not: 'x' (O_EXCL — fail if exists)
-// and 's' (O_SYNC). Collapse them onto the supported set — the SAME lossy mapping
-// flagsToString already applies to NUMERIC flags (O_EXCL/O_SYNC dropped, O_APPEND
-// wins). Node's atomic writers (the config saver, and Edit/Write via a temp file)
-// open the temp with 'wx'/'ax'; passing those through verbatim made FSS.open throw
-// "fs_sync.open: bad flags", so EVERY atomic write silently failed — on Windows the
-// bundle's Edit "did not apply on disk". FSS has no 'a+' (read+append), so a+/ax+/as+
-// collapse to 'a' just as the numeric path collapses O_APPEND to 'a'.
-const NODE_STR_FLAGS = {
-  r: 'r', rs: 'r', sr: 'r', 'r+': 'r+', 'rs+': 'r+', 'sr+': 'r+',
-  w: 'w', wx: 'w', xw: 'w', 'w+': 'w+', 'wx+': 'w+', 'xw+': 'w+',
-  a: 'a', ax: 'a', xa: 'a', as: 'a', 'a+': 'a', 'ax+': 'a', 'xa+': 'a', 'as+': 'a',
-};
-function flagsToString(flags) {
-  if (typeof flags === 'string') return NODE_STR_FLAGS[flags] || flags;
-  if (typeof flags !== 'number') return 'r';
-  const nb = (flags & O.O_NONBLOCK) ? 'n' : '';
-  const rw = flags & 0o3; // low 2 bits: RDONLY(0)/WRONLY(1)/RDWR(2)
-  // FSS.open supports only 'r'|'w'|'a'|'r+'|'w+' (no 'a+') — collapse onto those.
-  if (flags & O.O_APPEND) return 'a' + nb;
-  if (flags & O.O_TRUNC) return ((rw === O.O_RDWR) ? 'w+' : 'w') + nb;
-  if (flags & O.O_CREAT) return ((rw === O.O_RDWR) ? 'w+' : 'w') + nb;
-  if (rw === O.O_RDWR) return 'r+' + nb;
-  if (rw === O.O_WRONLY) return 'w' + nb;
-  return 'r' + nb;
+// OPENING A PATH AS NODE DOES. node turns a string flag into O_* bits (lib/internal/fs/utils.js
+// stringToFlags) and hands the bits and the mode to open(2). The engine's sync open takes only
+// 'r'|'w'|'a'|'r+'|'w+' (optionally 'n'-suffixed for O_NONBLOCK; mod_fs_sync.c js_fss_open), always
+// creates 0666 minus the umask, and knows no O_EXCL, O_DIRECTORY or O_NOFOLLOW. Collapsing node's
+// flags onto those five (what this file did until 2026-11-19) made `openSync(f, "wx")`,
+// `writeFileSync(f, d, {flag: "wx"})` and O_WRONLY|O_CREAT|O_EXCL overwrite an existing file where
+// node throws EEXIST (an exclusive create, a lock, was not one); O_CREAT without O_TRUNC truncated;
+// O_DIRECTORY and O_NOFOLLOW opened a file; a create mode was applied to a file that already existed
+// (node applies it only when it creates) and `fs.promises.open(p, flags, mode)` dropped it -- which
+// is how 2.1.283's config writer, `open(tmp, O_WRONLY|O_CREAT|O_EXCL, 0o600)` then rename, left
+// ~/.claude/.claude.json 0644 (BACKLOG; found by test/node-shim-differential.test.cjs).
+//
+// So openPath() keeps node's bits and answers each one the engine cannot, before or after its open:
+//   O_EXCL with O_CREAT   EEXIST when the path exists (lstat: a dangling link counts, as in open(2))
+//   O_NOFOLLOW            ELOOP when the path is a symlink
+//   O_DIRECTORY           ENOTDIR when what opened is not a directory (closed first)
+//   no O_TRUNC            an existing file opens 'r+', never 'w', so its bytes stay
+//   no O_CREAT            a missing path opens 'r'/'r+', so the engine says ENOENT
+//   a mode, at creation   applied minus the umask, ONLY when this call created the file
+// The checks before the open are not atomic with it, as node's single open(2) is: a racing creator
+// can still lose its file to us. That residual needs the engine's open to take O_* bits and a mode
+// (BACKLOG: "node-shim's exclusive create and create mode are checked"). O_NONBLOCK is passed through ('n'): the bundle's drainStdin opens
+// /dev/tty O_RDONLY|O_NONBLOCK and readSync()s until EAGAIN, and a blocking open there wedged the
+// engine (test/node-shim-fs-nonblock.test.cjs). The engine has no read+append, so a+ opens 'a'.
+const STRING_FLAGS = (() => {
+  const S = O.O_SYNC || 0;
+  const W = O.O_TRUNC | O.O_CREAT | O.O_WRONLY;
+  const WP = O.O_TRUNC | O.O_CREAT | O.O_RDWR;
+  const A = O.O_APPEND | O.O_CREAT | O.O_WRONLY;
+  const AP = O.O_APPEND | O.O_CREAT | O.O_RDWR;
+  const X = O.O_EXCL || 0;
+  return {
+    r: O.O_RDONLY, rs: O.O_RDONLY | S, sr: O.O_RDONLY | S, 'r+': O.O_RDWR, 'rs+': O.O_RDWR | S, 'sr+': O.O_RDWR | S,
+    w: W, wx: W | X, xw: W | X, 'w+': WP, 'wx+': WP | X, 'xw+': WP | X,
+    a: A, ax: A | X, xa: A | X, as: A | S, sa: A | S,
+    'a+': AP, 'ax+': AP | X, 'xa+': AP | X, 'as+': AP | S, 'sa+': AP | S,
+  };
+})();
+function toOflags(flags) {
+  if (typeof flags === 'number') return flags;
+  if (flags === undefined || flags === null) return O.O_RDONLY;
+  if (typeof flags === 'string' && Object.prototype.hasOwnProperty.call(STRING_FLAGS, flags)) return STRING_FLAGS[flags];
+  const e = new TypeError(`The argument 'flags' is invalid. Received ${JSON.stringify(flags)}`);
+  e.code = 'ERR_INVALID_ARG_VALUE';
+  throw e;
+}
+// An errno error as the engine would throw it, reshaped as node's (internal/node-errors.cjs).
+function sysError(code, op, p) {
+  const e = new Error(`${code}, ${op} '${p}'`);
+  e.code = code;
+  e.errno = require('./../internal/engine-constants.cjs').errno[code];
+  e.syscall = op;
+  return require('../internal/node-errors.cjs').asNodeError(e, op, [p]);
+}
+function openPath(p, flags, mode) {
+  const of = toOflags(flags);
+  const has = (b) => !!b && (of & b) === b;
+  const creat = has(O.O_CREAT);
+  const rw = of & 3;
+  let pre = null;
+  try { pre = FSS.lstat(p); } catch { /* absent, or the open below says why */ }
+  const isLink = !!pre && typeIs(pre.mode, 'symlink');
+  if (creat && has(O.O_EXCL) && pre) throw sysError('EEXIST', 'open', p);
+  if (has(O.O_NOFOLLOW) && isLink) throw sysError('ELOOP', 'open', p);
+  let exists = !!pre;
+  if (isLink) { try { FSS.stat(p); } catch { exists = false; } }
+  let base;
+  if (!creat && !exists) base = rw === O.O_RDONLY ? 'r' : 'r+';
+  else if (has(O.O_APPEND)) base = 'a';
+  else if (rw === O.O_RDONLY) base = 'r';
+  else if (has(O.O_TRUNC) || !exists) base = rw === O.O_RDWR ? 'w+' : 'w';
+  else base = 'r+';
+  const fd = FSS.open(p, base + (has(O.O_NONBLOCK) ? 'n' : ''));
+  if (has(O.O_DIRECTORY)) {
+    let dir = false;
+    try { dir = typeIs(FSS.fstat(fd).mode, 'dir'); } catch { /* not a directory we can tell */ }
+    if (!dir) { FSS.close(fd); throw sysError('ENOTDIR', 'open', p); }
+  }
+  if (!exists && creat && typeof mode === 'number') applyCreateMode(p, mode);
+  return fd;
 }
 
 // latin1/binary decode: 1 byte -> 1 code point (0..255). This is the
@@ -420,9 +457,9 @@ function writeFileSync(p, data, opts) {
   // the config to 0 bytes ("config not persisted" / "Unexpected end of JSON input"
   // daily-driver bug). Characterized by node-shim-fs.test.cjs.
   if (typeof p === 'number') { writeAll(p, bytes, null); return; }
-  const fd = FSS.open(p, 'w');
+  const o = typeof opts === 'object' && opts !== null ? opts : {};
+  const fd = openPath(p, o.flag ?? 'w', o.mode);
   try { writeAll(fd, bytes, null); } finally { FSS.close(fd); }
-  applyCreateMode(p, opts);
 }
 
 function mkdirSync(p, opts) {
@@ -496,9 +533,9 @@ function appendFileSync(p, data, opts) {
     : new Uint8Array(data.buffer ?? data, data.byteOffset ?? 0, data.byteLength ?? data.length);
   // fd number given? append via that fd; else open path in append mode.
   if (typeof p === 'number') { writeAll(p, bytes, null); return; }
-  const fd = FSS.open(p, 'a');
+  const o = typeof opts === 'object' && opts !== null ? opts : {};
+  const fd = openPath(p, o.flag ?? 'a', o.mode);
   try { writeAll(fd, bytes, null); } finally { FSS.close(fd); }
-  applyCreateMode(p, opts);
 }
 
 // fs.writeSync(fd, buffer[, offset[, length[, position]]]) OR
@@ -611,8 +648,7 @@ function createReadStream(p, opts) { return new ReadStream(p, opts); }
 function createWriteStream(p, opts) {
   const stream = require('node:stream');
   const o = typeof opts === 'string' ? { encoding: opts } : (opts || {});
-  const fd = FSS.open(p, flagsToString(o.flags || 'w'));
-  if (typeof o.mode === 'number') chmodBestEffort(p, o.mode);
+  const fd = openPath(p, o.flags || 'w', o.mode);
   let pos = typeof o.start === 'number' ? o.start : null;
   const w = new stream.Writable({
     write(chunk, enc, cb) {
@@ -748,12 +784,10 @@ const fsMod = {
   unlinkSync: (p) => FSS.unlink(p),
   renameSync: (a, b) => renameReplace(a, b),
   accessSync: (p, m) => FSS.access(p, m ?? constants.F_OK),
-  // node: openSync(path, flags[, mode]) — mode applies only when the flags CREATE.
+  // node: openSync(path, flags[, mode]) — mode applies only when the call CREATES (openPath).
   openSync: (p, flags, mode) => {
-    const f = flagsToString(flags ?? 'r');
-    const fd = FSS.open(p, f);
+    const fd = openPath(p, flags ?? 'r', mode);
     fdPaths.set(fd, p);
-    if (typeof mode === 'number' && (f[0] === 'w' || f[0] === 'a')) chmodBestEffort(p, mode);
     return fd;
   },
   // fdPaths cleanup MUST run even when FSS.close throws (e.g. a double-close —
@@ -953,7 +987,7 @@ const promises = {
   // non-CLOEXEC (inheritable) fd, which is exactly what that pattern needs.
   // FileHandle carries the fd plus the handful of methods the shape needs
   // (close/read/write/stat/appendFile) routed through the existing sync core.
-  open: async (p, flags, mode) => makeFileHandle(FSS.open(p, flagsToString(flags)), p),
+  open: async (p, flags, mode) => makeFileHandle(openPath(p, flags ?? 'r', mode), p),
   fsync: async () => {},       // best-effort (see fsyncSync note)
   fdatasync: async () => {},
   rm: async (p, opts) => {

@@ -8,26 +8,41 @@ Concrete clode-under-Node divergences from native Claude Code, to triage and fix
 That page is GENERATED from `scripts/build-graph.cjs` — the one declaration of the build — so it
 cannot drift from it; it is also where the honest answer to "does this need node?" lives.
 
-## quaude writes the config file world-readable: ~/.claude/.claude.json is 0644, native's 0600 (2026-11-18)
+## quaude wrote the config file world-readable (~/.claude/.claude.json 0644, native's 0600): FIXED in the shim; the full-turn row is still to write (2026-11-19)
 
-Found by observability Task 2. After one `-p` turn the config file (account and project state: the
-first-save writes 73,515 bytes) is `-rw-r--r--` under quaude and `-rw-------` under native, with the
-same umask (022). Any local user can read what native keeps owner-only. The node-shim's own primitives
-honour a mode: `fs.writeFileSync(p, d, {mode: 0o600})`, `fs.openSync(p, 'w', 0o600)`, a write through
-that fd, and `fs.chmodSync(p, 0o600)` each leave 0600 under tjs, as under node. So the 0644 comes from
-the path the bundle's config writer takes that those four do not cover (its atomic temp-and-rename, a
-`fs.promises` call, or Bun.write); which one is not yet measured. Fix it diff-reducing: find the call,
-make it honour the mode node honours, and add a row that runs a turn and asserts 0600.
+Found by observability Task 2: after one `-p` turn the config file (account and project state) was `-rw-r--r--`
+under quaude and `-rw-------` under native, with the same umask. The call is 2.1.283's atomic writer (the async one
+in the carve's chunk-fsbhbn29.js): `fs.promises.open(tmp, O_WRONLY|O_CREAT|O_EXCL, 0o600)`, `FileHandle.writeFile`,
+`sync`, `close`, then a rename over the target. node-shim's `fs.promises.open` dropped its mode argument, so the
+temp file, and after the rename the config, kept the engine's default 0644. Fixed with every other open flag the
+shim collapsed (libexec/node-shim/modules/fs.cjs openPath: O_EXCL, O_DIRECTORY, O_NOFOLLOW, no truncation without
+O_TRUNC, and a create mode applied only at creation, minus the umask). test/node-shim-differential.test.cjs judges
+that open and 300-odd others against node on every push. A config file an earlier quaude already wrote 0644 stays
+0644: the writer preserves an existing file's mode (`Preserving file permissions`), as native's does.
 
-Measured: `ls -l $CLAUDE_CONFIG_DIR/.claude.json` after one canned-mock Read-tool turn: a quaude built from b4eb2f5 (darwin-arm64, the 2.1.283 carve; throwaway HOME, canned mock):
-`-rw-r--r--`; native 2.1.283, same probe and umask: `-rw-------` (2026-11-18).
+Measured: the writer's exact sequence (open with O_WRONLY|O_CREAT|O_EXCL and 0o600, writeFile, sync, close, rename)
+under `tjs run libexec/node-shim/loader.cjs`: 600 with the fix, 644 without it; node 24.21.0: 600 (2026-11-19).
 
-Measured: a probe under `tjs run libexec/node-shim/loader.cjs` and under node 24.21.0: writeFileSync with
-{mode: 0o600}, openSync with 0o600, writeFileSync to that fd, and chmodSync to 0o600 each leave 600 on both
-(2026-11-18).
+Measured: `ls -l $CLAUDE_CONFIG_DIR/.claude.json` after one canned-mock Read-tool turn: a quaude built from b4eb2f5
+(darwin-arm64, the 2.1.283 carve; throwaway HOME, canned mock): `-rw-r--r--`; native 2.1.283, same probe and umask:
+`-rw-------` (2026-11-18).
 
-Unmeasured. Which call the bundle's config writer makes; `--debug` with the shim's fs tracing on the
-config path would name it. Other files the bundle writes owner-only (credentials, history) were not checked.
+Unmeasured. A turn of a quaude built with the fix, asserting 0600 (the row this entry asked for); other files the
+bundle writes owner-only (credentials, history) were not checked by a turn, though their writes go through the same
+opens the differential now judges.
+
+## node-shim's exclusive create and create mode are checked around the engine's open, not atomic (2026-11-19)
+
+The engine's sync open (spike/quickjs/patches/txiki-sync-fs.patch, js_fss_open) takes only r/w/a/r+/w+ and creates
+0666 minus the umask. node-shim's openPath (libexec/node-shim/modules/fs.cjs) answers node's O_EXCL, O_NOFOLLOW and
+O_DIRECTORY with an lstat before the open or an fstat after it, and a create mode with a chmod after it. node does
+each in one open(2). Two windows are left: a file another process creates between the lstat and the open is
+truncated and taken (a lock two quaudes race for can be held by both), and a file created with a mode exists at the
+default mode until the chmod (an owner-only file is briefly 0644). Closing both needs the engine's open to take
+O_* bits and a mode, with the shim refusing an engine without them (as it does for stat identity).
+
+Unmeasured. Neither window has been raced on purpose; two processes contending for one `wx` path in a loop would
+measure the first, and a watcher stat-ing a new 0600 file would measure the second.
 
 ## node-shim against node: what the behaviour differential names (2026-11-19)
 
@@ -40,13 +55,6 @@ diverging fails it until its line here and in known.cjs go. 35 inventoried APIs 
 note lists them; child_process, streams, events, watchers, the zlib streams), each with its reason in
 test/shim-differential/table.cjs UNCOVERED.
 
-- DIFF-OPEN-FLAGS: the engine's sync open takes only r/w/a/r+/w+ (spike/quickjs/patches/txiki-sync-fs.patch
-  js_fss_open), so node-shim's opens drop O_EXCL (`openSync(f, "wx")`, `writeFileSync(f, d, {flag: "wx"})` and
-  `O_WRONLY|O_CREAT|O_EXCL` overwrite an existing file where node throws EEXIST: an exclusive create, a lock, is
-  not one), O_DIRECTORY and O_NOFOLLOW (a file opens), truncate on `O_WRONLY|O_CREAT` without O_TRUNC, chmod an
-  EXISTING file to a create mode (node applies the mode only when it creates), and `fs.promises.open(p, flags,
-  mode)` ignores the mode. That last one is the config writer's: 2.1.283 writes ~/.claude/.claude.json through
-  `fs.promises.open(tmp, O_WRONLY|O_CREAT|O_EXCL, 0o600)` then renames, so quaude's is 0644 (the entry above).
 - DIFF-WRITESTREAM-THROWS: `fs.createWriteStream` on a directory or a missing parent throws at once; node returns
   the stream and emits 'error'.
 - DIFF-WRITESTREAM-FD: `fs.createWriteStream(p, {fd})` ignores the fd and writes to the path.

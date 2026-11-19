@@ -91,9 +91,8 @@ function judge({ plan, runs, knownCauses, platform = process.platform }) {
     });
     if (unexplained.length) findings.push(`${id}\n      ${unexplained.slice(0, 8).join('\n      ')}${unexplained.length > 8 ? `\n      (+${unexplained.length - 8} more)` : ''}`);
   }
-  for (const k of knownCauses) {
-    if (k.only && !k.only.includes(platform)) continue;
-    if (!used.has(k.cause)) findings.push(`known divergence "${k.cause}" no longer diverges: drop it from test/shim-differential/known.cjs and its BACKLOG.md line`);
+  for (const name of new Set(knownCauses.filter((k) => !k.only || k.only.includes(platform)).map((k) => k.cause))) {
+    if (!used.has(name)) findings.push(`known divergence "${name}" no longer diverges: drop it from test/shim-differential/known.cjs and its BACKLOG.md line`);
   }
   return { findings, examined: c.compared, unjudgeable: c.unjudgeable, divergent: Object.keys(c.divergences).length };
 }
