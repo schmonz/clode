@@ -36,12 +36,11 @@ on macOS, NetBSD and Linux, and CI's linux-x64-pty judges both rg gates against 
   native's glibc rows through musl's words; red then green on a musl engine in an alpine container). Measured
   pieces: a real native with a glibc engine, 212 pass and 1 macOS-only skip; the musl engine, rg-walk 35 pass and
   rg-entry + rg-native 119 pass. The combination with the step itself was not run, so it was not added blind.
-- **every-tool-driven reads the end to end's drivers as FIRM, and the end to end can skip.** tool-coverage-gates
-  counts agentic-grep-glob's Grep and Glob uses as drivers that cannot skip (no skip( after their controls), but the
-  test is declared skipped on win32 and skips when builtQuaude() cannot build (no provider, no engine). So "Grep and
-  Glob are driven" is honest only where that test RUNS: the dev box (the suite) and CI's linux-x64-pty, whose rg step
-  accepts exactly one named skip (`# macOS only`) and so fails if the end to end skips. In the ubuntu and windows
-  suite legs it skips, and the gate cannot tell: it reads a test's source, not where it ran.
+- **CLOSED 2026-11-18 (observability Task 1): every-tool-driven read the end to end's drivers as FIRM, and the end
+  to end could skip.** The gate now counts cells (tool x mode x engine), and a cell is driven only through a CI job in
+  its CELL_JOBS that names the driver's file, records its tests with test/cell-reporter.mjs, and runs the guard
+  `cells-ran-in-ci-job`: a claimed test that skipped or failed in that job fails the job. Where a test merely exists,
+  or skips in a suite leg, drives nothing.
 
 grep-native Task 10c (user ruling 2026-10-04) made the Bash tool's `rg` quaude's own tested rg, run as native runs
 its embedded one (the entry under "The Grep tool in quaude, and the Glob tool" says how). Left open:
@@ -151,7 +150,15 @@ only keeps the obvious ways back closed. A standalone `node --test file` gets th
 launch helpers that require suite-home.cjs (provider-resolve, oracle-models, node-shim-helper, e2e); a test that spawns
 the bundle without any of them, run standalone, runs it under the real home.
 
-## 85 of the 90 tools the carve can register have no driver that can fail (2026-09-28; Grep and Glob driven 2026-10-05)
+## 9 of the 2166 tool x mode x engine cells are driven (cells 2026-11-18; tools 2026-09-28; Grep and Glob driven 2026-10-05)
+
+Since observability Task 1 (2026-11-18) the gate counts CELLS, tool x mode x engine: 90 tools, 722
+tool x mode pairs (permission modes, sandbox, Bash shells, interactive, unlisted, from the carve where
+it says) over darwin-arm64, linux-x64-musl and netbsd-arm64, 2166 cells. 9 are driven, by four CI
+jobs (CELL_JOBS): Bash print (darwin, musl), bypassPermissions, sandbox:on and shell:bash (musl); Edit
+print (darwin, musl); Glob and Grep print (musl). The rest are per-cell exemptions; the 117 undriven
+cells of the five driven tools, and the 18 Phase A tools below, fall due 2026-12-15 (USER RULING
+2026-11-18 moved Phase A there from 2026-10-15). The tool-level account below is as of 2026-09-28.
 
 `every-tool-driven` (test/build-gates/tool-coverage-gates.test.cjs; the grep-native plan's task
 0c) reads the tool registry from the pinned carve and requires each tool to have a live check
@@ -174,8 +181,9 @@ and the table is the to-do list, grouped by what a driver would need:
   driver); 4 behind a default-off GrowthBook flag; 6 MCP (agentic-mcp-ws is DEFERRED); 16
   claude.ai features and 8 remote/bridged-session tools; 9 self-hosted runner operator tools; 4
   device-relay stubs.
-Every entry falls due 2026-12-31: that day the gate goes red, and each must be driven or re-dated
-with a new reason.
+The entries fall due by phase (the every-tool plan): Phase A 2026-12-15 (moved from 2026-10-15 by
+USER RULING 2026-11-18), Phase B 2026-11-30, Phase C and the runner/relay tools 2026-12-31. That day
+the gate goes red, and each must be driven or re-dated with a new reason.
 
 ## The NetBSD spike found three bugs, all fixed; what it left open (2026-09-26)
 
