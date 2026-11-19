@@ -62,6 +62,17 @@ test('examined below the floor is BROKEN, NOT a clean pass', () => {
     'BROKEN must not read like a clean result');
 });
 
+// upstream-drift run 44544547103: regexp-capture-census went BROKEN (examined 0) and its findings, which say WHY it
+// went blind ("the plain turn did not complete under naude: <stderr>"), were not in the message: a blind guard hid
+// the one line that explains its blindness.
+test('a BROKEN verdict carries the findings that explain it', () => {
+  const g = G.defineGuard(makeGuard({ read: () => ({ text: '' }), floor: 3,
+    scan: () => ({ findings: ['the plain turn did not complete: boom'], examined: 0 }) }));
+  const r = G.checkGate(g);
+  assert.strictEqual(r.verdict, G.BROKEN);
+  assert.match(r.message, /the plain turn did not complete: boom/);
+});
+
 test('an explicit floor above 1 is honoured', () => {
   const g = G.defineGuard(makeGuard({ read: () => ({ text: 'abc' }), floor: 100 }));
   assert.strictEqual(G.checkGate(g).verdict, G.BROKEN);

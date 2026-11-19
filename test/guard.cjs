@@ -146,7 +146,9 @@ function checkGate(g) {
     return { verdict: BROKEN, examined: r.examined, findings: r.findings,
       message: withNote(`${g.name}: BROKEN — examined ${r.examined}, floor is ${g.floor}. This is NOT `
         + `a clean result: the guard inspected less than it must for its verdict to mean `
-        + `anything. Something it reads moved, emptied, or changed shape.`, r.note) };
+        + `anything. Something it reads moved, emptied, or changed shape.`
+        // what it did find is often WHY it went blind (a turn that did not complete): say it
+        + (r.findings.length ? `\n${r.findings.map((f) => `    ${f}`).join('\n')}` : ''), r.note) };
   }
   if (r.findings.length > 0) {
     return { verdict: VIOLATION, examined: r.examined, findings: r.findings,
