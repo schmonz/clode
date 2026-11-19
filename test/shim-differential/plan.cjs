@@ -8,7 +8,9 @@
 // cases as its longest list, case j taking candidate j of each list (modulo its length), so every
 // sample appears at least once in every position the carve fills, without a cartesian blow-up. Equal
 // cases (same id) count once. Each API is capped (default CAP), the carve's most frequent shapes
-// first, then the driver's hand-picked `extra` lists.
+// first; the driver's hand-picked `extra` lists come after and are never capped. What the cap leaves
+// out, and every carve shape cut to the driver's argument count, is REPORTED (`capped`, `truncated`),
+// never silent: the gate prints both on every run.
 const T = require('./table.cjs');
 
 const CAP = 60;
@@ -24,6 +26,7 @@ function describe(a) {
   if (a === undefined) return 'undefined';
   if ('path' in a) return `<${a.path}>`;
   if ('abs' in a) return JSON.stringify(a.abs);
+  if ('rel' in a) return `rel:${a.rel}`;
   if ('v' in a) return JSON.stringify(a.v);
   if (a.undef) return 'undefined';
   if ('flags' in a) return a.flags.join('|') || '0';
@@ -80,7 +83,7 @@ function expandShape(lists) {
 
 // inventory: { api: { sites, shapes: [{ args, count }] } }  (call-sites.cjs inventory())
 // values:    { api: { reads, type } }                         (call-sites.cjs valueReads())
-// -> { cases: [...], findings: [...], uncovered: [...] }
+// -> { cases, findings, uncovered, capped: [{api, planned, left}], truncated: [{api, shapes, from, to}] }
 // `platform` is the carve's (the provider is the host's own, as the gate stages it): a table entry
 // with `only` is expected in those carves alone (one upstream version carves differently per
 // platform: the linux carve calls fs.statfsSync, the darwin one does not).
@@ -89,6 +92,8 @@ const expected = (entry, platform) => !(entry && typeof entry === 'object' && en
 function makePlan({ inventory, values, table = T, platform = process.platform }) {
   const cases = [];
   const findings = [];
+  const capped = [];
+  const truncated = [];
   const missingKeys = new Set();
   const seen = new Set();
   const push = (c) => { if (!seen.has(c.id)) { seen.add(c.id); cases.push(c); return true; } return false; };
@@ -104,22 +109,30 @@ function makePlan({ inventory, values, table = T, platform = process.platform })
     const cap = driver.cap || CAP;
     let n = 0;
     const lists = [];
+    const cut = inv.shapes.filter((sh) => sh.args.length > driver.args.length);
+    if (cut.length) truncated.push({ api, shapes: cut.length, from: Math.max(...cut.map((sh) => sh.args.length)), to: driver.args.length });
     for (const shape of inv.shapes) {
       const args = shape.args.slice(0, driver.args.length);
       const per = args.map((a, i) => candidates(a, driver.args[i], driver, api, missingKeys));
       if (per.some((p) => p === null)) continue;
       lists.push(per);
     }
-    for (const extra of driver.extra || []) lists.push(extra.map((a) => [a]));
+    const plan1 = (args) => {
+      const id = `${api}(${args.map(describe).join(', ')})`;
+      // a process's own descriptors are its own: judged by what kind of answer, not which fds
+      const own = args.some((a) => a && typeof a.abs === 'string' && /^\/proc\/self\/fd(info)?(\/|$)/.test(a.abs));
+      return push({ id, api, style, args, post: own ? 'typeof' : driver.post, mutates: !!driver.mutates });
+    };
+    let left = 0;
+    const ids = new Set();
     for (const per of lists) {
       for (const args of expandShape(per)) {
-        if (n >= cap) break;
-        const id = `${api}(${args.map(describe).join(', ')})`;
-        // a process's own descriptors are its own: judged by what kind of answer, not which fds
-        const own = args.some((a) => a && typeof a.abs === 'string' && /^\/proc\/self\/fd(info)?(\/|$)/.test(a.abs));
-        if (push({ id, api, style, args, post: own ? 'typeof' : driver.post, mutates: !!driver.mutates })) n++;
+        if (n >= cap) { const id = `${api}(${args.map(describe).join(', ')})`; if (!seen.has(id) && !ids.has(id)) { ids.add(id); left++; } continue; }
+        if (plan1(args)) n++;
       }
     }
+    if (left) capped.push({ api, planned: n, left });
+    for (const extra of driver.extra || []) if (plan1(extra)) n++;
     if (n === 0) findings.push(`${api}: driven, but no carve shape could be replayed (every one unparsed)`);
   }
   for (const api of Object.keys(table.UNCOVERED)) {
@@ -133,7 +146,7 @@ function makePlan({ inventory, values, table = T, platform = process.platform })
   }
   findings.push(...missingKeys);
   const uncovered = Object.keys(inventory).filter((api) => table.UNCOVERED[api]);
-  return { cases, findings, uncovered };
+  return { cases, findings, uncovered, capped, truncated };
 }
 
 module.exports = { makePlan, describe, expandShape, inferStyle, CAP };

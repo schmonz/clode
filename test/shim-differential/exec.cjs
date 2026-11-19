@@ -75,6 +75,7 @@ function show(v, depth = 3, ctx = {}) {
 }
 
 // What a mutating case left behind: every entry under its tree, with what it is.
+const T0 = Date.now();
 function snapshot(dir) {
   const out = {};
   const walk = (d, rel) => {
@@ -87,6 +88,9 @@ function snapshot(dir) {
       let st;
       try { st = fs.lstatSync(p); } catch (e) { out[r] = errShape(e); continue; }
       const e = { kind: kindsOf(st), mode: (st.mode & 0o7777).toString(8) };
+      // times: a fixture made for this case is 'recent' on both sides; a time a call SET (utimes to
+      // 1000 s) is old, and is judged to the millisecond, so a utimes that does nothing diverges
+      for (const t of ['mtimeMs', 'atimeMs']) e[t] = st[t] < T0 - 3600e3 ? Math.round(st[t]) : 'recent';
       if (st.isFile()) { e.size = st.size; e.data = fs.readFileSync(p).subarray(0, 256).toString('hex'); }
       if (st.isSymbolicLink()) e.link = scrub(fs.readlinkSync(p));
       out[r] = e;
@@ -104,11 +108,13 @@ function decode(a, ctx) {
   if (a.undef) return undefined;
   if ('path' in a) return fixturePath(ctx.root, a.path);
   if ('abs' in a) return a.abs;
+  if ('rel' in a) return a.rel; // relative to the case's tree: runCase chdirs there for the call
   if ('flags' in a) return a.flags.reduce((acc, f) => acc | (fs.constants[f] || 0), 0);
   if ('buf' in a) return Buffer.from(a.buf, 'hex');
   if ('fd' in a) {
     if (a.fd === 'bad') return 987;
     if (a.fd === 'brokenpipe') return 3; // the runner hands fd 3 as a pipe whose reader it closed
+    if (a.fd === 'pipe') return 4; // and fd 4 as a pipe holding "piped\n" whose writer it closed
     const [name, flags] = a.fd.split(':');
     const fd = fs.openSync(fixturePath(ctx.root, name), flags || 'r');
     ctx.fds.push(fd);
@@ -201,7 +207,11 @@ async function runCase(c, idx) {
     } else {
       if (typeof fn !== 'function') throw Object.assign(new TypeError(`${c.api} is ${typeof fn}`), { code: 'DIFF_ABSENT' });
       const args = c.args.map((a) => decode(a, ctx));
+      const rel = c.args.some((a) => a && typeof a === 'object' && 'rel' in a);
+      const home = process.cwd();
+      if (rel) process.chdir(ctx.root);
       let r;
+      try {
       if (c.style === 'sync') r = fn.apply(mod, args);
       else if (c.style === 'new') r = new fn(...args);
       else if (c.style === 'promise') r = await withTimeout(fn.apply(mod, args), c.id);
@@ -210,6 +220,7 @@ async function runCase(c, idx) {
           fn.apply(mod, [...args, (e, ...rs) => (e ? rej(e) : res(rs.length > 1 ? rs : rs[0]))]);
         }), c.id);
       } else throw new Error(`exec.cjs: style ${c.style}`);
+      } finally { if (rel) process.chdir(home); }
       out.r = await withTimeout(post(c.post, r, ctx, args), c.id);
     }
   } catch (e) {

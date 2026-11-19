@@ -67,12 +67,18 @@ open to take O_* bits and a mode. No row exercises the fallback or the O_NOFOLLO
 
 test/node-shim-differential.test.cjs (observability Task 3) replays every call the 2.1.283 carve makes to fs,
 fs/promises, os, path, child_process, net, stream, events, buffer, util, tty, process and zlib, with the arguments
-it passes, under host node and under tjs + node-shim, and judges every field of every answer against node's. Its
-first run judged 1785 calls and found 372 that answer differently. Each cause below is one entry of
-test/shim-differential/known.cjs, by the same name; the gate tolerates exactly these, and a cause that stops
-diverging fails it until its line here and in known.cjs go. 35 inventoried APIs are not driven yet (the gate's
-note lists them; child_process, streams, events, watchers, the zlib streams), each with its reason in
-test/shim-differential/table.cjs UNCOVERED.
+it passes, under host node and under tjs + node-shim, and judges every field of every answer against node's. What
+it tolerates is a list of EXACT (case, field) pairs, test/shim-differential/known-divergences.json, each under one
+of the causes below; any other field of a listed case, or a listed pair that stops diverging, fails it
+(test/shim-differential/freeze.cjs regenerates the list from a measured run, as a reviewed diff). Its first
+version tolerated causes as patterns over APIs, eight of which named no field: 276 of 1785 cases were tolerated
+whatever they answered, among them every `fs.promises.unlink(<path>)`; a no-op unlink now fails the gate (its
+control row).
+
+NOT JUDGED, said on every run and listed here: 35 APIs the carve calls that the table does not drive yet, each
+with its reason in test/shim-differential/table.cjs UNCOVERED: `buffer.SlowBuffer`, `child_process.exec`, `child_process.execFile`, `child_process.execFileSync`, `child_process.execSync`, `child_process.spawn`, `child_process.spawnSync`, `events.once`, `events.setMaxListeners`, `fs.watch`, `fs.watchFile`, `fs.unwatchFile`, `net.connect`, `net.createConnection`, `os.setPriority`, `process.exit`, `stream.finished`, `stream.PassThrough`, `stream.pipeline`, `stream.Readable`, `stream.Transform`, `tty.ReadStream`, `util.debuglog`, `util.deprecate`, `util.inherits`, `util.promisify`, `util.TextDecoder`, `zlib.createBrotliDecompress`, `zlib.createGunzip`, `zlib.createGzip`, `zlib.createInflate`, `zlib.createUnzip`, `zlib.createZstdDecompress`, `zlib.deflate`, `zlib.gzip`. Also printed on every run: the cases the
+per-API cap leaves out (path.join, path.resolve, path.basename, the open and writeFile families) and the carve
+shapes cut to the driver's argument count.
 
 - DIFF-WRITESTREAM-THROWS: `fs.createWriteStream` on a directory or a missing parent throws at once; node returns
   the stream and emits 'error'.
@@ -95,9 +101,10 @@ test/shim-differential/table.cjs UNCOVERED.
 - DIFF-COPYFILE: `fs.promises.copyFile` is a read and a write, so its errors are the read's (EISDIR `read`), never
   node's `copyfile 'a' -> 'b'`, and a directory symlink source says EISDIR where node says ENOTSUP.
 - DIFF-STATFS-CLASS: `fs.promises.statfs` answers a plain object; node a StatFs.
-- DIFF-ARG-VALIDATION: a missing path or data argument (`fs.promises.unlink()`, `writeFileSync(p)`,
-  `path.dirname(undefined)`, `util.formatWithOptions(undefined, ...)`) fails late with the engine's words or not at
-  all; node throws ERR_INVALID_ARG_TYPE.
+- DIFF-ARG-VALIDATION: a missing argument (`fs.promises.unlink()`, `fs.promises.readFile()`, `writeFileSync(p)`
+  with no data, `path.dirname(undefined)`, `path.basename(42)`, `path.join(undefined, "x")`,
+  `path.resolve(undefined, "..")`, `util.formatWithOptions(undefined, ...)`) fails late with the engine's words or
+  not at all; node throws ERR_INVALID_ARG_TYPE. Only calls with an argument truly missing are listed.
 - DIFF-MISSING-MEMBERS: `fs.promises` lacks chown, constants, glob, lchmod, lchown, mkdtempDisposable;
   `fs/promises.constants` is absent; `path.win32`/`path.posix` lack format, matchesGlob, toNamespacedPath,
   _makeLong; `util.types` has 2 of node's predicates.
@@ -115,12 +122,13 @@ test/shim-differential/table.cjs UNCOVERED.
 - DIFF-STATFS-SYNC (Linux): the linux carve calls `fs.statfsSync`, absent from the shim (the gap map's entry).
 
 Measured: `node --test test/node-shim-differential.test.cjs` on darwin-arm64 (the scratch tjs built from this
-tree, node 24.21.0, the 2.1.283 macos-arm64 provider): 1785 calls judged, 372 diverging, every one under a cause
-above (2026-11-19).
+tree, node 24.21.0, the 2.1.283 macos-arm64 provider): at c7d7716, 1785 calls judged, 372 diverging; after
+46bd197, 34431f4 and 435f78c, 301 of 1785; with fix round 1's uncapped hand-picked rows, 305 of 1793 diverging,
+1240 (case, field) pairs listed, every other field node's (2026-11-19).
 
 Measured: the same test in a node:24.22.0-alpine container (linux-x64, musl) with the tjs-linux-x64-musl engine of CI
-run 44460009323 (HEAD 2cca33a) and the 2.1.283 linux-x64-musl provider: 1791 calls judged, every divergence under a
-cause above, and every cause above seen diverging there too (2026-11-19).
+run 44460009323 (HEAD 2cca33a) and the 2.1.283 linux-x64-musl provider: 308 of 1808 calls diverging, 1271 pairs
+listed for linux (1202 shared with darwin), every other field node's (2026-11-19).
 
 Unmeasured. NetBSD and Windows: the gate does not run there (no job has an engine, a provider and a node at once on
 NetBSD; the Windows jobs run named files only); running it on the NetBSD VM would measure it.

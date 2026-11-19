@@ -7,7 +7,7 @@
 // between the two oracle runs, so anything that moved around it moved for node too.
 //
 // fd 3 of every executor is a pipe whose reading end is closed: the `brokenpipe` descriptor, so a
-// write meets EPIPE as `rg | head` does.
+// write meets EPIPE as `rg | head` does. fd 4 is a pipe with bytes and an end: the `pipe` descriptor.
 const { spawnSync, execFileSync } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -28,11 +28,27 @@ function brokenPipe(dir) {
   return w;
 }
 
-function runOne(argv, { planFile, outFile, cwd, timeout, pipeFd }) {
-  const r = spawnSync(argv[0], [...argv.slice(1), EXEC, planFile, outFile], {
-    cwd, stdio: ['ignore', 'pipe', 'pipe', pipeFd === null ? 'ignore' : pipeFd], env: { ...process.env },
+// A pipe holding "piped\n" and then end of file, as a descriptor (fd 4 of one executor run: it is read
+// once, so each run gets its own): a FIFO opened for reading (nonblocking), then for writing, the
+// bytes written and the writing end closed. readFileSync(fd) on it is a read that cannot pread.
+function filledPipe(dir, tag) {
+  if (process.platform === 'win32') return null;
+  const fifo = path.join(dir, `filled-pipe-${tag}`);
+  execFileSync('mkfifo', [fifo]);
+  const r = fs.openSync(fifo, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);
+  const w = fs.openSync(fifo, fs.constants.O_WRONLY);
+  fs.writeSync(w, 'piped\n');
+  fs.closeSync(w);
+  return r;
+}
+
+function runOne(argv, { planFile, outFile, cwd, timeout, pipeFd, base, tag, exec = EXEC }) {
+  const filled = filledPipe(base, tag);
+  const r = spawnSync(argv[0], [...argv.slice(1), exec, planFile, outFile], {
+    cwd, stdio: ['ignore', 'pipe', 'pipe', pipeFd === null ? 'ignore' : pipeFd, filled === null ? 'ignore' : filled], env: { ...process.env },
     encoding: 'utf8', timeout, maxBuffer: 64 * 1024 * 1024,
   });
+  if (filled !== null) fs.closeSync(filled);
   const lines = fs.existsSync(outFile) ? fs.readFileSync(outFile, 'utf8').split('\n').filter(Boolean) : [];
   const results = {};
   let done = false;
@@ -44,7 +60,8 @@ function runOne(argv, { planFile, outFile, cwd, timeout, pipeFd }) {
 }
 
 // node: [execPath]; subject: the engine's argv prefix (helper.engineSpawn(['run', loader])).
-function runDifferential({ cases, subject, node = [process.execPath], timeout = 300000 }) {
+// subjectExec: another executor for the subject alone (a control that breaks one call on purpose).
+function runDifferential({ cases, subject, node = [process.execPath], timeout = 300000, subjectExec = EXEC }) {
   const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'shim-diff-')));
   let pipeFd = null;
   try {
@@ -56,10 +73,10 @@ function runDifferential({ cases, subject, node = [process.execPath], timeout = 
       const planFile = path.join(base, `plan-${tag}.json`);
       // every run sees the same shared tree; its mutating cases each get a fresh tree under its own scratch
       fs.writeFileSync(planFile, JSON.stringify({ shared, scratch, cases }));
-      return { planFile, outFile: path.join(base, `out-${tag}.jsonl`), cwd: shared, timeout, pipeFd };
+      return { planFile, outFile: path.join(base, `out-${tag}.jsonl`), cwd: shared, timeout, pipeFd, base, tag };
     };
     const node1 = runOne(node, mk('node1'));
-    const ours = runOne(subject, mk('ours'));
+    const ours = runOne(subject, { ...mk('ours'), exec: subjectExec });
     const node2 = runOne(node, mk('node2'));
     return { node1, ours, node2, fifo: fs.existsSync(path.join(shared, 'fifo')) };
   } finally {

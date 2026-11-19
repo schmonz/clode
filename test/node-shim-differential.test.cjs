@@ -25,6 +25,13 @@
 //   Coverage is part of the verdict: an inventoried API the table neither drives nor names in
 //   UNCOVERED (with why) is a finding, so a new call upstream makes is judged the day the carve has it.
 //
+// THE ORACLE IS A NODE VERSION. Every answer is judged against the node running the test, so what is
+// "node's" moves with it: node 26 drops buffer.SlowBuffer (the carve still names it; it is UNCOVERED),
+// adds members to fs.promises and util.types, and rewords error messages. The pairs in
+// known-divergences.json were measured under node 24.21.0 (darwin) and 24.22.0 (musl); a job on another
+// node may name new divergences, or stale pairs, that are the oracle's move and not the shim's.
+// Read such a finding against `node --version` first.
+//
 // Runs where an engine and a provider are both present: CI's node-shim-oracle (linux musl, against a
 // musl node) and node-shim-oracle-darwin, and a dev box with CLODE_TJS / CLODE_PROVIDER_BIN. Elsewhere
 // it skips, by name.
@@ -67,8 +74,8 @@ function inventoryOf(cli) {
   return { inventory: callSites.inventory(modules, SHIM_MODULES, exp), values: callSites.valueReads(modules, SHIM_MODULES, exp) };
 }
 
-// PURE: plan findings + the three runs -> findings. `knownCauses` is known.cjs's list.
-function judge({ plan, runs, knownCauses, platform = process.platform }) {
+// PURE: plan findings + the three runs -> findings. `known` is known.cjs (its exact pairs).
+function judge({ plan, runs, known: K = known, platform = process.platform }) {
   const findings = [...plan.findings];
   for (const [tag, r] of Object.entries(runs)) {
     if (tag === 'fifo') continue;
@@ -79,22 +86,26 @@ function judge({ plan, runs, knownCauses, platform = process.platform }) {
   if (runs.fifo === false && process.platform !== 'win32') findings.push('no FIFO fixture (mkfifo failed): isFIFO is not judged');
   const c = compareRuns({ cases: plan.cases, node1: runs.node1.results, ours: runs.ours.results, node2: runs.node2.results });
   findings.push(...c.missing);
-  const byId = new Map(plan.cases.map((k) => [k.id, k]));
-  const used = new Set();
+  const seen = new Set();
+  let tolerated = 0;
   for (const [id, lines] of Object.entries(c.divergences)) {
-    const cs = byId.get(id);
     const unexplained = lines.filter((l) => {
-      const leaf = l.slice(0, l.indexOf(':'));
-      const k = knownCauses.find((kc) => known.matches(kc, cs, leaf));
-      if (k) used.add(k.cause);
+      const leaf = K.leafOf(l);
+      const k = leaf !== null && K.knownPair(id, leaf, platform);
+      if (k) { seen.add(`${id}\u0000${leaf}`); tolerated++; }
       return !k;
     });
     if (unexplained.length) findings.push(`${id}\n      ${unexplained.slice(0, 8).join('\n      ')}${unexplained.length > 8 ? `\n      (+${unexplained.length - 8} more)` : ''}`);
   }
-  for (const name of new Set(knownCauses.filter((k) => !k.only || k.only.includes(platform)).map((k) => k.cause))) {
-    if (!used.has(name)) findings.push(`known divergence "${name}" no longer diverges: drop it from test/shim-differential/known.cjs and its BACKLOG.md line`);
+  // a listed pair that no longer diverges (and that node held still for) is a finding: fixed things
+  // leave known-divergences.json in the commit that fixes them
+  const stale = K.pairsOn(platform).filter((p) => !seen.has(`${p.id}\u0000${p.leaf}`) && !(c.unjudgeable[p.id] || []).includes(p.leaf));
+  const byCause = {};
+  for (const p of stale) (byCause[p.cause] = byCause[p.cause] || []).push(`${p.id} ${p.leaf}`);
+  for (const [cause, ps] of Object.entries(byCause)) {
+    findings.push(`${ps.length} field(s) listed under ${cause} no longer diverge: drop them from test/shim-differential/known-divergences.json (freeze.cjs), and the cause's BACKLOG.md line if none is left: ${ps.slice(0, 6).join('; ')}${ps.length > 6 ? ' ...' : ''}`);
   }
-  return { findings, examined: c.compared, unjudgeable: c.unjudgeable, divergent: Object.keys(c.divergences).length };
+  return { findings, examined: c.compared, unjudgeable: c.unjudgeable, divergent: Object.keys(c.divergences).length, tolerated };
 }
 
 let measured = null;
@@ -113,7 +124,23 @@ function measure() {
   const plan = makePlan({ inventory, values });
   const [cmd, argv] = helper.engineSpawn(['run', helper.LOADER]);
   const runs = runDifferential({ cases: plan.cases, subject: [cmd, ...argv] });
-  return (measured = { plan, runs, inventory });
+  // CLODE_SHIM_DIFF_DUMP=<file>: every divergence of this run, for test/shim-differential/freeze.cjs
+  if (process.env.CLODE_SHIM_DIFF_DUMP) {
+    const c = compareRuns({ cases: plan.cases, node1: runs.node1.results, ours: runs.ours.results, node2: runs.node2.results });
+    fs.writeFileSync(process.env.CLODE_SHIM_DIFF_DUMP, JSON.stringify({ platform: process.platform, divergences: c.divergences,
+      apis: Object.fromEntries(plan.cases.map((k) => [k.id, k.api])) }, null, 1));
+  }
+  return (measured = { plan, runs, inventory, subject: [cmd, ...argv] });
+}
+
+// What a green run leaves unjudged, said on every run (t.diagnostic), not only when it fails.
+function noteOf(plan, r, K) {
+  const capped = (plan.capped || []).map((x) => `${x.api} ${x.planned}+${x.left} left`).join(', ');
+  const cut = (plan.truncated || []).map((x) => `${x.api} ${x.shapes} shape(s) ${x.from}->${x.to} args`).join(', ');
+  return `${r.examined} calls judged against node (${plan.cases.length} planned from the carve, ${r.divergent} diverging, `
+    + `${r.tolerated} fields tolerated as listed pairs under ${K.causesIn().length} causes). `
+    + `NOT JUDGED: ${plan.uncovered.length} inventoried APIs not driven: ${plan.uncovered.join(', ')}. `
+    + `Capped (cases the cap left out): ${capped || 'none'}. Carve arguments cut to the driver's count: ${cut || 'none'}.`;
 }
 
 const guard = defineGuard({
@@ -121,13 +148,11 @@ const guard = defineGuard({
   floor: FLOOR,
   read: () => {
     const m = measure();
-    return m.skip ? { skip: m.skip } : { plan: m.plan, runs: m.runs, knownCauses: known.CAUSES };
+    return m.skip ? { skip: m.skip } : { plan: m.plan, runs: m.runs, known };
   },
-  scan: ({ plan, runs, knownCauses }) => {
-    const r = judge({ plan, runs, knownCauses });
-    return { findings: r.findings, examined: r.examined,
-      note: `${r.examined} calls judged against node (${plan.cases.length} planned from the carve, ${r.divergent} diverging, `
-        + `${knownCauses.length} known causes, ${plan.uncovered.length} inventoried APIs not driven: ${plan.uncovered.join(', ')})` };
+  scan: ({ plan, runs, known: K }) => {
+    const r = judge({ plan, runs, known: K });
+    return { findings: r.findings, examined: r.examined, note: noteOf(plan, r, K) };
   },
   // THE CONTROL is a real escape: fs.statSync on a FIFO as node-shim answered it before eba6c57
   // (2026-10-04): isFIFO() false and ino 0. It is not known, so the guard must name it.
@@ -136,7 +161,7 @@ const guard = defineGuard({
     const node = { id: c.id, r: { Stats: 'Stats', kinds: 'isFIFO', ino: 4242 } };
     const ours = { id: c.id, r: { Stats: 'Stats', kinds: '', ino: 0 } };
     const run = (x) => ({ done: true, results: { [c.id]: x } });
-    return { plan: { cases: [c], findings: [], uncovered: [] }, runs: { node1: run(node), ours: run(ours), node2: run(node), fifo: true }, knownCauses: [] };
+    return { plan: { cases: [c], findings: [], uncovered: [], capped: [], truncated: [] }, runs: { node1: run(node), ours: run(ours), node2: run(node), fifo: true }, known };
   },
 });
 
@@ -148,8 +173,9 @@ test(`guard control: ${guard.name} can fail`, () => {
 test(`guard gate: ${guard.name}`, (t) => {
   const r = checkGate(guard);
   if (r.verdict === SKIP) { t.skip(r.message); return; }
+  t.diagnostic(r.message);
   const m = measure();
-  const unj = Object.entries(judge({ plan: m.plan, runs: m.runs, knownCauses: known.CAUSES }).unjudgeable);
+  const unj = Object.entries(judge({ plan: m.plan, runs: m.runs }).unjudgeable);
   if (unj.length) t.diagnostic(`unjudgeable (node moved between its own runs): ${unj.map(([id, ks]) => `${id}: ${ks.join(',')}`).join('; ').slice(0, 2000)}`);
   assert.strictEqual(r.verdict, OK, r.message);
 });
@@ -159,8 +185,48 @@ test(`guard gate: ${guard.name}`, (t) => {
 test('every known divergence names its BACKLOG.md entry', () => {
   const text = fs.readFileSync(path.join(REPO, 'BACKLOG.md'), 'utf8');
   assert.ok(text.includes(`## ${known.BACKLOG_HEADING}`), `BACKLOG.md has no "## ${known.BACKLOG_HEADING}"`);
-  const missing = known.CAUSES.filter((k) => !text.includes(k.cause)).map((k) => k.cause);
-  assert.deepStrictEqual(missing, [], 'causes known.cjs tolerates that BACKLOG.md does not name');
+  const missing = known.causesIn().filter((c) => !text.includes(c));
+  assert.deepStrictEqual(missing, [], 'causes known-divergences.json tolerates that BACKLOG.md does not name');
+  // and every listed pair is one its cause's pattern claims: nothing hand-slipped into the data
+  const wrong = [];
+  for (const [id, leaves] of Object.entries(known.KNOWN)) {
+    const api = id.slice(0, id.search(/[( ]/));
+    for (const [leaf, k] of Object.entries(leaves)) if (known.classify(api, id, leaf) !== k.cause) wrong.push(`${id} ${leaf} (${k.cause})`);
+  }
+  assert.deepStrictEqual(wrong, [], 'listed pairs their cause does not claim');
+});
+
+// Every API the carve calls that the gate does not drive is named in BACKLOG.md by name, so what a
+// green run leaves unjudged is on the to-do list, not only in a diagnostic.
+test('every inventoried API the table does not drive is named in BACKLOG.md', () => {
+  const text = fs.readFileSync(path.join(REPO, 'BACKLOG.md'), 'utf8');
+  const at = text.indexOf(`## ${known.BACKLOG_HEADING}`);
+  const entry = text.slice(at, text.indexOf('\n## ', at + 4));
+  const T = require('./shim-differential/table.cjs');
+  const missing = Object.keys(T.UNCOVERED).filter((api) => !entry.includes(`\`${api}\``));
+  assert.deepStrictEqual(missing, [], 'UNCOVERED APIs the BACKLOG entry does not list (in backticks)');
+});
+
+// THE CONTROL THE OLD PATTERNS FAILED: a fs/promises.unlink that does nothing. Under the 2026-11-19
+// patterns DIFF-ARG-VALIDATION's id pattern matched every one-path call and tolerated it; with exact
+// pairs the gate must name it. Runs the real engine on the unlink cases alone, with an executor that
+// replaces unlink by a no-op before the harness's own executor starts.
+test('control: a no-op fs/promises.unlink fails the gate', (t) => {
+  const m = measure();
+  if (m.skip) { t.skip(m.skip); return; }
+  const cases = m.plan.cases.filter((c) => c.api === 'fs/promises.unlink');
+  assert.ok(cases.length >= 5, `the carve's unlink shapes are planned (${cases.length})`);
+  const os = require('node:os');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-diff-ctl-'));
+  try {
+    const broken = path.join(dir, 'broken-exec.cjs');
+    fs.writeFileSync(broken, `const fsp = require('fs/promises'); fsp.unlink = async () => {}; require('fs').promises.unlink = fsp.unlink;
+require(${JSON.stringify(require('./shim-differential/run.cjs').EXEC)});\n`);
+    const runs = runDifferential({ cases, subject: m.subject, subjectExec: broken });
+    const r = judge({ plan: { cases, findings: [], uncovered: [] }, runs });
+    const named = r.findings.filter((f) => f.startsWith('fs/promises.unlink('));
+    assert.ok(named.length >= 3, `a no-op unlink is named (${named.length} cases): ${r.findings.join('\n').slice(0, 1500)}`);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
 // The reader the inventory rests on: a minified call in each binding shape, with the argument
