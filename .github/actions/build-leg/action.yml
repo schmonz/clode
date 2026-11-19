@@ -1742,7 +1742,8 @@ runs:
       env:
         CLODE_DEPSCAN_ENGINE: ${{ steps.bare.outputs.path }}
       # Under test/cell-reporter.mjs too: the leg uploads that record (the step after), and ci.yml's gates-ran-in-ci
-      # job holds the linux-x64-musl leg to engine-hermeticity by name (test/ci-gates.cjs, observability Task 5).
+      # (release.yml's gates-ran-in-release) holds EVERY non-soft-fail leg to engine-hermeticity by name
+      # (test/ci-gates.cjs, legs derived from scripts/tjs-legs.mjs).
       run: |
         node -e "require('fs').mkdirSync(process.env.RUNNER_TEMP + '/gates', { recursive: true })"
         node --require ./test/file-watchdog-preload.cjs --test --test-reporter=spec --test-reporter-destination=stdout \
@@ -1757,7 +1758,7 @@ runs:
     # `overwrite: true` replaces only this leg's OWN list, from an earlier attempt of the same run (a re-run: v4
     # artifacts are run-scoped and immutable, so without it a re-run collides with itself). Uploaded whatever the step
     # above did: a missing list is a finding in gates-ran-in-ci, never a pass.
-    - name: Upload this leg's gate list (judged by ci.yml's gates-ran-in-ci)
+    - name: Upload this leg's gate list (judged by ci.yml's gates-ran-in-ci, release.yml's gates-ran-in-release)
       if: ${{ !cancelled() }}
       uses: actions/upload-artifact@v7.0.2
       with:

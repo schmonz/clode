@@ -1778,7 +1778,7 @@ jobs:
   # suite since 2.1.243 and passed in node-shim-oracle only as one of an anonymous "skipped 2"). Runs once every job it
   # judges FINISHES, whatever its conclusion: a red job's list still says what ran, and a missing list is the finding.
   gates-ran-in-ci:
-    needs: [changes, tjs, test, node-shim-oracle, node-shim-oracle-darwin, native-builder-oracle, linux-x64-pty, windows-amd64-tests, windows-arm64-tests, windows-amd64-tui]
+    needs: [changes, tjs, tjs-slow, test, node-shim-oracle, node-shim-oracle-darwin, native-builder-oracle, linux-x64-pty, windows-amd64-tests, windows-arm64-tests, windows-amd64-tui]
     if: needs.changes.outputs.code != 'false' && !cancelled()
     runs-on: ubuntu-latest
     timeout-minutes: 45

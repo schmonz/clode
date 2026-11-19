@@ -25,25 +25,20 @@ phase timestamps in a scratch copy of rg-native.cjs, alone and beside 16 CPU hog
 30.6 MB reached the tjs reader within 0.9 s every run, and 4 of 4 loaded runs hit a 20 s timeout before printing
 (2026-11-19)
 
-## release.yml and upstream-drift.yml run gates that no aggregator judges (2026-11-19)
+## upstream-drift.yml runs gates that no aggregator judges (release.yml: judged since 2026-11-19)
 
-test/ci-gates.cjs and ci.yml's gates-ran-in-ci job judge ci.yml runs only. Two other workflows run gates outside them:
+test/ci-gates.cjs judges ci.yml (gates-ran-in-ci) and, since the observability plan's final fix wave, release.yml
+too: RELEASE_MANIFEST holds release.yml's suite rows, be-bytecode-oracle (now under test/cell-reporter.mjs, uploading
+gates-ran-be-bytecode-oracle) and every non-soft-fail release-tier engine leg, and its gates-ran-in-release job must
+pass before `release` (ci-gate-placement checks that edge). One workflow is still unjudged:
 
-- **release.yml** calls the same suite.yml (its `suite:` job). That job uploads each row's gate list
-  (`gates-ran-test-<os>`), but release.yml has no gates-ran-in-ci job, so nothing judges the list: a gate that skips in
-  a release's suite rows skips silently. Its `be-bytecode-oracle` job also runs test/node-shim-crypto.test.cjs and
-  test/url-characterization.test.cjs on the big-endian engine with no reporter at all.
 - **upstream-drift.yml** (daily, and on dispatch) runs four `node --test` steps against `next`
   (test/build-gates/text-probe-gates.test.cjs, test/build-gates/shadow-writer-gates.test.cjs,
   test/build-gates/rg-probe-gates.test.cjs, test/fidelity/regexp-capture-census.test.cjs) under no reporter and uploads
-  no gate list. A probe gate that skips there is invisible.
+  no gate list. A probe gate that skips there is invisible. Same fix shape: a manifest and an aggregator job.
 
-The fix is the same shape as ci.yml's: a gates-ran-in-ci job in each workflow, with a manifest section per workflow
-(the JOBS rows name a workflow already). For release.yml it is mostly wiring, because suite.yml already uploads.
-
-Measured: `grep -c gates-ran .github/workflows/release.yml .github/workflows/upstream-drift.yml` prints 0 for both;
-release.yml's `suite:` job is `uses: ./.github/workflows/suite.yml`, and upstream-drift.yml holds 4 `node ... --test`
-lines (2026-11-19)
+Measured: `grep -c gates-ran .github/workflows/upstream-drift.yml` prints 0, and the file holds 4 `node ... --test`
+lines; `grep -c gates-ran-in-release .github/workflows/release.yml` prints 4 (2026-11-19)
 
 ## vendored-archive-rule-overrides reads a vendor path the build no longer uses, so it has never run in CI (2026-11-19)
 

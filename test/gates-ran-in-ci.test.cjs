@@ -107,14 +107,31 @@ const fxRan = (over = {}) => ({
 });
 
 // ---- the static guard ----------------------------------------------------------------------------
+// Both manifests, ci.yml's and release.yml's, each against its own workflow; findings carry the manifest's name.
+function scanPlacements(input) {
+  if (!input.manifests) return G.checkPlacement(input);
+  const findings = [];
+  let examined = 0;
+  const notes = [];
+  for (const m of input.manifests) {
+    const r = G.checkPlacement({ ...input, manifest: m, texts: workflowTexts(m) });
+    findings.push(...r.findings.map((f) => `${m.name}: ${f}`));
+    examined += r.examined;
+    notes.push(`${m.name}: ${r.note}`);
+  }
+  return { findings, examined, note: notes.join('\n  ') };
+}
 guardTests(defineGuard({
   name: 'ci-gate-placement',
-  // One per declared job, placement, exemption and gate file: measured 2026-11-19, 10 + 47 + 2 + 43 = 102. Fewer
-  // means the manifest lost entries without anyone re-measuring what the jobs run.
-  floor: 102,
-  read: () => ({ manifest: G.MANIFEST, registry: G.loadRegistry(), texts: workflowTexts(G.MANIFEST), files: trackedFiles(),
-    legCallers: legCallers() }),
-  scan: G.checkPlacement,
+  // One per declared job, placement, exemption and gate file, over both manifests: measured 2026-11-19, ci.yml
+  // 38 + 47 + 2 + 44 = 131 and release.yml 43 + 4 + 45 + 2 = 94, 225 in all. Fewer means a manifest lost entries
+  // without anyone re-measuring what the jobs run.
+  floor: 225,
+  read: () => {
+    const registry = G.loadRegistry();
+    return { manifests: [G.MANIFEST, G.RELEASE_MANIFEST], registry, files: trackedFiles(), legCallers: legCallers() };
+  },
+  scan: scanPlacements,
   // A placement naming a gate nobody registered, and a suite row that uploads under the oracle's artifact name
   // (with overwrite, one list would silently replace the other).
   control: () => fxPlacement({ manifest: { placed: { b: { jobs: ['oracle'], why: 'x' }, gone: { jobs: ['oracle'], why: 'x' } } },
@@ -134,7 +151,11 @@ function readRan() {
   if (process.env.NEEDS) {
     try { needs = JSON.parse(process.env.NEEDS); } catch (e) { throw new Error(`NEEDS is not JSON (${e.message}): ${process.env.NEEDS.slice(0, 200)}`); }
   }
-  return { manifest: G.MANIFEST, records: G.readRecords(root, G.MANIFEST.jobs), registry: G.loadRegistry(), needs };
+  // CLODE_GATES_MANIFEST: which workflow's jobs these lists come from (release.yml's gates-ran-in-release says
+  // `release`); unset, ci.yml's.
+  const manifest = G.MANIFESTS[process.env.CLODE_GATES_MANIFEST || 'ci'];
+  if (!manifest) throw new Error(`CLODE_GATES_MANIFEST=${process.env.CLODE_GATES_MANIFEST} names no manifest (${Object.keys(G.MANIFESTS).join(', ')})`);
+  return { manifest, records: G.readRecords(root, manifest.jobs), registry: G.loadRegistry(), needs };
 }
 guardTests(defineGuard({
   name: 'gates-ran-in-ci',

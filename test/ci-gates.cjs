@@ -41,8 +41,16 @@ const REPO = path.resolve(__dirname, '..');
 // strings that text must hold beyond the upload (a suite row's matrix entry).
 // ==========================================================================
 const CI = '.github/workflows/ci.yml';
+const RELEASE = '.github/workflows/release.yml';
 const SUITE = '.github/workflows/suite.yml';
 const LEG = '.github/actions/build-leg/action.yml';
+// THE ENGINE LEGS, from scripts/tjs-legs.mjs itself (require of an ES module: node >= 22.12). Every leg runs the
+// build-leg action's hermeticity step and uploads gates-ran-leg-<leg>; every one is judged (measured, CI run
+// 44597568635: engine-hermeticity passed in all 29 ci-tier legs). A soft-fail leg is not: it may stop before the
+// step with its job still green, and it ships nothing (ci tier: none; release tier: the engine-only darwin slices).
+const TJS_LEGS = require('../scripts/tjs-legs.mjs');
+const judgedLegs = (tier) => TJS_LEGS.legsFor(tier).filter((l) => !l['soft-fail']).map((l) => l.leg);
+const legJob = (leg) => ({ id: `leg-${leg}`, workflow: LEG, job: null, leg });
 const JOBS = [
   { id: 'test-ubuntu-latest', workflow: SUITE, job: 'suite', carries: ['os: ubuntu-latest'], suite: true },
   { id: 'test-windows-latest', workflow: SUITE, job: 'suite', carries: ['os: windows-latest'], suite: true },
@@ -54,12 +62,15 @@ const JOBS = [
   { id: 'windows-arm64-tests', workflow: CI, job: 'windows-arm64-tests' },
   { id: 'windows-amd64-tui', workflow: CI, job: 'windows-amd64-tui' },
   // The engine legs (tjs-legs.yml's `leg`, which every tier calls) run the suite-side hermeticity
-  // check through the build-leg action; the musl leg is the one held to it by name here, and every
-  // leg uploads its own list (gates-ran-<github.job>-<leg>).
-  { id: 'leg-linux-x64-musl', workflow: LEG, job: null },
+  // check through the build-leg action, and each uploads its own list (gates-ran-<github.job>-<leg>).
+  ...judgedLegs('ci').map(legJob),
 ];
 // The job that judges the others: it downloads every gates-ran-* artifact and runs gates-ran-in-ci.
 const AGGREGATOR = { workflow: CI, job: 'gates-ran-in-ci' };
+// ci.yml's `needs` key for a job: a suite row is `test` (which calls suite.yml); an engine leg is `tjs` or `tjs-slow`,
+// split by scripts/tjs-legs.mjs's own SLOW_CI_LEG exactly as those two jobs' `only: fast|slow` are; a job is itself.
+const CI_LEGS = new Map(TJS_LEGS.legsFor('ci').map((l) => [l.leg, l]));
+const ciNeed = (j) => (j.suite ? 'test' : j.leg ? (TJS_LEGS.SLOW_CI_LEG(CI_LEGS.get(j.leg)) ? 'tjs-slow' : 'tjs') : j.job);
 const SUITE_ROWS = JOBS.filter((j) => j.suite).map((j) => j.id);
 
 // ==========================================================================
@@ -130,7 +141,7 @@ const PLACED = {
   'text-diff-wrapansi': { jobs: ['linux-x64-pty'], why: TEXT_ORACLE },
   'text-diff-wrapansi-cases': { jobs: ['linux-x64-pty'], why: TEXT_ORACLE },
   // The engine legs: the engine this leg just built.
-  'engine-hermeticity': { jobs: ['leg-linux-x64-musl'],
+  'engine-hermeticity': { jobs: JOBS.filter((j) => j.leg).map((j) => j.id),
     why: 'needs a built engine (CLODE_DEPSCAN_ENGINE), which only an engine leg has: "CLODE_DEPSCAN_ENGINE is unset"' },
   // Windows-only skips: the ubuntu row runs them.
   'depscan-agrees-with-native-tool': { jobs: ['test-ubuntu-latest'],
@@ -401,8 +412,14 @@ function checkPlacement({ manifest, registry, texts, files, legCallers = [] }) {
           + 'cancelled reads exactly like a job hiding its gates');
       }
       const needs = (/needs:\s*\[([^\]]*)\]/.exec(block) || [, ''])[1].split(',').map((s) => s.trim());
+      // A judge that gates something (release.yml's `release`): that job must wait for the verdict.
+      if (manifest.gates) {
+        const { block: gated, error: gErr } = blockOf(texts, aggregator.workflow, manifest.gates);
+        const gNeeds = gErr ? [] : (/needs:\s*\[([^\]]*)\]/.exec(gated) || [, ''])[1].split(',').map((s) => s.trim());
+        if (!gNeeds.includes(aggregator.job)) findings.push(`${manifest.gates} does not need ${aggregator.job}, so it can be cut whatever the gate lists say`);
+      }
       for (const j of jobs) {
-        const need = needKey(j, aggregator);
+        const need = needKey(j, manifest);
         if (!needs.includes(need)) findings.push(`the aggregator does not wait for ${need} (job ${j.id}), so it can judge a list before it exists`);
       }
     }
@@ -436,12 +453,13 @@ function checkPlacement({ manifest, registry, texts, files, legCallers = [] }) {
   }
   // Every job in the per-push CI that runs a gate file must be declared, or its gates go unaccounted.
   const gateFileSet = new Set([...known.values(), ...Object.keys(gateFiles)]);
-  const declaredBlocks = new Set(jobs.filter((j) => j.workflow === CI).map((j) => j.job));
-  if (typeof texts[CI] === 'string') {
-    for (const [job, block] of jobBlocks(texts[CI])) {
+  const WF = aggregator.workflow;
+  const declaredBlocks = new Set(jobs.filter((j) => j.workflow === WF).map((j) => j.job));
+  if (typeof texts[WF] === 'string') {
+    for (const [job, block] of jobBlocks(texts[WF])) {
       if (declaredBlocks.has(job) || job === aggregator.job) continue;
       const ran = [...gateFileSet].filter((f) => names(block, f));
-      if (ran.length) findings.push(`ci.yml job ${job} runs gate file(s) ${ran.join(', ')} but is not in JOBS, so nothing holds it to them`);
+      if (ran.length) findings.push(`${path.basename(WF)} job ${job} runs gate file(s) ${ran.join(', ')} but is not in JOBS, so nothing holds it to them`);
     }
   }
   return { findings, examined: jobs.length + Object.keys(placed).length + Object.keys(exempt).length + Object.keys(gateFiles).length,
@@ -456,8 +474,8 @@ function checkPlacement({ manifest, registry, texts, files, legCallers = [] }) {
 // ==========================================================================
 // The aggregator's `needs` key for a job: a suite row is ci.yml's `test` (which calls suite.yml), an engine
 // leg is `tjs` (which calls the leg workflow), a ci.yml job is itself.
-function needKey(j, aggregator = AGGREGATOR) {
-  return j.suite ? 'test' : j.workflow === aggregator.workflow ? j.job : 'tjs';
+function needKey(j, manifest = MANIFEST) {
+  return manifest.need ? manifest.need(j) : j.suite ? 'test' : j.job;
 }
 
 // Every finding is one of two kinds, and both stay red:
@@ -534,7 +552,7 @@ function checkRan({ manifest, records, registry = [], needs = null }) {
     if (passedIn.has(name)) findings.push(`gate ${name} is EXEMPT but passed in ${passedIn.get(name).join(', ')}: place it there instead`);
   }
   const ran = [...passedIn.keys()].length;
-  const resultOf = (j) => (needs && needs[needKey(j)] && needs[needKey(j)].result) || null;
+  const resultOf = (j) => (needs && needs[needKey(j, manifest)] && needs[needKey(j, manifest)].result) || null;
   const out = raw.map(({ msg, j, absent }) => {
     const r = absent && j && resultOf(j);
     return r && r !== 'success' ? `UNOBSERVED (${j.id} concluded ${r}): ${msg}` : `DARK: ${msg}`;
@@ -603,11 +621,47 @@ function loadRegistry({ repo = REPO, env = process.env } = {}) {
   return reg;
 }
 
-const MANIFEST = Object.freeze({ jobs: JOBS, placed: PLACED, exempt: EXEMPT, files: FILES, aggregator: AGGREGATOR });
+const MANIFEST = Object.freeze({ name: 'ci', jobs: JOBS, placed: PLACED, exempt: EXEMPT, files: FILES, aggregator: AGGREGATOR, need: ciNeed });
+
+// ==========================================================================
+// RELEASE.YML, judged the same way before a release is cut (final review, observability plan): its jobs that run
+// tests are the suite rows (release.yml's `suite` calls the same suite.yml), be-bytecode-oracle (the BE-sensitive
+// rows), and every non-soft-fail release-tier engine leg (`leg` and `darwin-slices`). Its aggregator,
+// gates-ran-in-release, must pass before the `release` job. Publish steps run no tests and are not judged.
+// A gate PLACED only in ci.yml jobs has no release job to run it: it is EXEMPT here, naming where CI runs it.
+// ==========================================================================
+const BE_ORACLE = 'be-bytecode-oracle';
+const RELEASE_JOBS = [
+  ...JOBS.filter((j) => j.suite),
+  { id: BE_ORACLE, workflow: RELEASE, job: BE_ORACLE },
+  ...judgedLegs('release').map(legJob),
+];
+const RELEASE_IDS = new Set(RELEASE_JOBS.map((j) => j.id));
+const RELEASE_PLACED = {};
+const RELEASE_EXEMPT = { ...EXEMPT };
+for (const [name, p] of Object.entries(PLACED)) {
+  if (name === 'engine-hermeticity') { RELEASE_PLACED[name] = { ...p, jobs: RELEASE_JOBS.filter((j) => j.leg).map((j) => j.id) }; continue; }
+  const here = p.jobs.filter((id) => RELEASE_IDS.has(id));
+  if (here.length) RELEASE_PLACED[name] = { ...p, jobs: here };
+  else RELEASE_EXEMPT[name] = `placed in ci.yml's ${p.jobs.join(', ')} (${p.why}); release.yml has no such job`;
+}
+const RELEASE_FILES = {
+  'test/node-shim-crypto.test.cjs': { jobs: [BE_ORACLE] },
+  'test/url-characterization.test.cjs': { jobs: [BE_ORACLE] },
+};
+for (const [file, f] of Object.entries(FILES)) {
+  const here = (f.jobs || []).filter((id) => RELEASE_IDS.has(id));
+  if (here.length) RELEASE_FILES[file] = { ...f, jobs: here };
+}
+const RELEASE_AGGREGATOR = { workflow: RELEASE, job: 'gates-ran-in-release' };
+const releaseNeed = (j) => (j.suite ? 'suite' : j.leg ? (TJS_LEGS.DARWIN_SLICES.includes(j.leg) ? 'darwin-slices' : 'leg') : j.job);
+const RELEASE_MANIFEST = Object.freeze({ name: 'release', jobs: RELEASE_JOBS, placed: RELEASE_PLACED, exempt: RELEASE_EXEMPT,
+  files: RELEASE_FILES, aggregator: RELEASE_AGGREGATOR, need: releaseNeed, gates: 'release' });
+const MANIFESTS = { ci: MANIFEST, release: RELEASE_MANIFEST };
 
 module.exports = {
   needKey, gateUploads, legCallersIn,
-  MANIFEST, JOBS, PLACED, EXEMPT, FILES, AGGREGATOR, SUITE_ROWS, CI, SUITE, LEG,
+  MANIFEST, RELEASE_MANIFEST, MANIFESTS, RELEASE, JOBS, PLACED, EXEMPT, FILES, AGGREGATOR, SUITE_ROWS, CI, SUITE, LEG,
   declaredGates, outcomeOf, repoFile, gateOf, names, jobBlocks,
   checkPlacement, checkRan, readRecords, loadRegistry,
 };
