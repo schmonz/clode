@@ -402,13 +402,22 @@ class Dirent {
   isSocket() { return typeIs(this.#mode, 'socket'); }
 }
 
+// To end of file, as node reads: the fstat size is a HINT. A procfs or sysfs file says 0 and is not
+// empty, so stopping at the size read "" from /proc/version and /proc/self/cgroup, the files the
+// carve's WSL and container checks read (test/node-shim-differential.test.cjs, DIFF-PROCFS-EMPTY).
+// A file at its size costs one more read, which answers 0, as node's does.
 function readAll(fd) {
-  const size = FSS.fstat(fd).size;
-  const out = new Uint8Array(size);
+  let out = new Uint8Array(Math.max(0, Number(FSS.fstat(fd).size) || 0));
   let got = 0;
-  while (got < size) {
-    const ab = FSS.read(fd, Math.min(1 << 20, size - got), got);
+  for (;;) {
+    const room = out.length - got;
+    const ab = FSS.read(fd, room > 0 ? Math.min(1 << 20, room) : 65536, got);
     if (ab.byteLength === 0) break;
+    if (got + ab.byteLength > out.length) {
+      const bigger = new Uint8Array(Math.max(out.length * 2, got + ab.byteLength));
+      bigger.set(out.subarray(0, got));
+      out = bigger;
+    }
     out.set(new Uint8Array(ab), got); got += ab.byteLength;
   }
   return out.subarray(0, got);

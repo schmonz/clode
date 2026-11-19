@@ -33,7 +33,6 @@ const CAUSES = [
   { cause: 'DIFF-PATH-DOTDOT', api: '^path\\.(parse|extname)$' },
   { cause: 'DIFF-ISATTY-DEVNULL', api: '^tty\\.isatty$', id: '\\(0\\)' },
   { cause: 'DIFF-UTIL-FORMAT', api: '^util\\.(format|inspect)$' },
-  { cause: 'DIFF-PROCFS-EMPTY', api: '^fs\\.readFileSync$', id: '"/proc/', only: ['linux'] },
   { cause: 'DIFF-STATFS-SYNC', api: '^fs\\.statfsSync$', only: ['linux'] },
 ];
 

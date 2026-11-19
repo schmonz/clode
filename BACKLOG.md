@@ -93,9 +93,6 @@ test/shim-differential/table.cjs UNCOVERED.
 - DIFF-ISATTY-DEVNULL: `tty.isatty(0)` is true when fd 0 is /dev/null.
 - DIFF-UTIL-FORMAT: `util.format("%%")` answers "%" (node "%%" with no arguments); `util.inspect("a")` answers a
   where node answers 'a'.
-- DIFF-PROCFS-EMPTY (Linux): `readFileSync("/proc/version")` and `readFileSync("/proc/self/cgroup")` answer ""
-  under quaude: the shim reads a file's fstat size, and a procfs file says 0. The carve reads both (the WSL and
-  container checks), so on Linux they see an empty kernel string.
 - DIFF-STATFS-SYNC (Linux): the linux carve calls `fs.statfsSync`, absent from the shim (the gap map's entry).
 
 Measured: `node --test test/node-shim-differential.test.cjs` on darwin-arm64 (the scratch tjs built from this
