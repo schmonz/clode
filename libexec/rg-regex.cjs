@@ -692,6 +692,9 @@ function hirEq(a, b) {
     default: return false;
   }
 }
+// How often RG-RE-ALT-LIFT fired: read by the oracle generator's shape census (test/rg-regex.test.cjs), which must
+// prove the property test's patterns exercise the lift (observability Task 4). A counter, nothing reads it here.
+const SHAPE_EVENTS = { lift: 0 };
 function liftCommonPrefix(subs) {
   if (subs.length <= 1) return null;
   const elems = [];
@@ -708,6 +711,7 @@ function liftCommonPrefix(subs) {
     len = k;
     if (!len) return null;
   }
+  SHAPE_EVENTS.lift++;
   const prefix = elems[0].slice(0, len).flatMap((x) => x.nodes);
   const suffixes = elems.map((e) => mkCat(e.slice(len).flatMap((x) => x.nodes)));
   return mkCat([...prefix, mkAlt(suffixes)]);
@@ -1405,4 +1409,11 @@ function translateRgRegex(pattern, opts = {}) {
   }
 }
 
-module.exports = { translateRgRegex, verifyLine, lineVerifier, matchIter, lineStepBudget, REFUSALS, RgRegexRefusal, refusalReason };
+// The parsed pattern before the HIR (groups, repetitions as written), for the shape census only.
+function parseForCensus(pattern, ignoreCase) {
+  const ps = new Parser(`(?:${pattern})`, !!ignoreCase, false);
+  return ps.parseGroupBody();
+}
+
+module.exports = { translateRgRegex, verifyLine, lineVerifier, matchIter, lineStepBudget, REFUSALS, RgRegexRefusal, refusalReason,
+  SHAPE_EVENTS, parseForCensus };

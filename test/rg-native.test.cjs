@@ -18,6 +18,7 @@ const rgn = require('../libexec/rg-native.cjs');
 const { makeRgTree, normalizeRg } = require('../scripts/lib/rg-probe.cjs');
 const { tjsPath, runLoader, engineSpawn, LOADER } = require('./node-shim-helper.cjs');
 const { missingExtDeps } = require('./shim-surface/collect.cjs');
+const { census, rngBias, assertCensus, intRng } = require('./shape-census.cjs');
 // Why a test under tjs cannot run here: no engine, or the shim without its ext-dep closure (quaude
 // always carries it; without it node-shim falls back to buffer-lite, a shim quaude never ships, which
 // lacks Buffer methods rg-native uses: the test would fail on the checkout, not on quaude).
@@ -399,22 +400,8 @@ test('RG-RE-REFUSE-COST: a line past the step budget refuses through ugrepMatche
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
-// A minified bundle's one line, synthesized (seeded code-like tokens; 5,000,000 bytes, then \n):
-// the size of slice where a flat per-line budget refused ordinary patterns (review N1; the pinned
-// carve's own extracted bundle is one 59 MB line).
-function bundleLine(n = 5000000) {
-  const T = ['var ', 'let ', 'const ', 'function ', 'return ', 'import ', ' from ', 'new ', 'TypeError', 'RangeError', 'this.', '=>', '{', '}', '(', ')',
-    '[', ']', ';', ',', '.', '=', '+', '"use strict"', '"a,b"', "'x'", '0', '42', '0x1f', 'foo', 'bar_baz', 'qux9', '$el', 'require', ' ', 'if(', 'else'];
-  let seed = 7, len = 0;
-  const parts = [];
-  while (len < n) { seed = (seed * 1103515245 + 12345) & 0x7fffffff; const t = T[seed % T.length]; parts.push(t); len += t.length; }
-  return Buffer.from(parts.join('').slice(0, n) + '\n');
-}
-// native 2.1.283's --json over that line: [pattern, submatches, sha256(JSON [[start,end]...]) prefix]
-const NATIVE_BUNDLE_LINE = [
-  ['\\w+Error', 65540, 'a50ea27fa90868559c95'], ['import.*from', 1, 'bdd8d8f252488be5494a'], ['"[^"]*"', 64571, '8de2358ecca044105996'],
-  ['[a-zA-Z_]\\w*\\(', 45207, 'bb36da42a7c22f556f00'], ['\\w+', 699136, 'f247023a8e8b3b6572de'], ['x|', 4905778, 'b2e43515fac8075f4eb6'],
-];
+// A minified bundle's one line (5 MB, seeded code-like tokens) and native's answers over it: test/rg-bundle-line.cjs.
+const { bundleLine, NATIVE_BUNDLE_LINE } = require('./rg-bundle-line.cjs');
 test('RG-RE-REFUSE-COST scales with the line: a 5 MB minified line answers ordinary patterns through both twins (native)', needUgrep, async () => {
   const crypto = require('node:crypto');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-native-bundle-'));
@@ -499,26 +486,52 @@ test('RG-RE-LITERAL-RANGES: a plain literal takes ugrep\'s ranges as they are; a
     assert.deepStrictEqual(asObj(rgn.ugrepMatches(['a.txt'], 'needle\\b', { ugrep: says, cwd: dir })), {});
     assert.deepStrictEqual(asObj(rgn.ugrepMatches(['a.txt'], '(?i)needle', { ugrep: says, cwd: dir })), {});
   }));
-test('RG-RE-LITERAL-RANGES: ugrep\'s ranges for a plain literal are the matcher\'s, over a hostile corpus', needUgrep, () => {
-  const R = require('../libexec/rg-regex.cjs');
-  const cpt = (...c) => String.fromCodePoint(...c);
-  // the oracle generator's pieces (scripts/gen-rg-regex-oracle.cjs), 200 seeded lines of them
-  const PIECES = ['a', 'b', 'ab', 'k', 'K', 's', 'S', '_', '1', '9', ' ', '  ', '.', '-', 'x', 'needle', 'foo', 'bar', '\t', '\r',
-    cpt(0xe9), cpt(0x65, 0x301), cpt(0x4e2d), cpt(0x4e2d, 0x6587), cpt(0x1f600), cpt(0x212a), cpt(0x17f), cpt(0xdf), cpt(0x3c3), cpt(0x3c2),
-    cpt(0x661), cpt(0xa0), cpt(0x200d), [0xff], [0x80], [0xe4, 0xb8], [0xc3], [0xed, 0xa0, 0x80], [0xf0, 0x9f]];
-  let seed = 20261003;
-  const rnd = (n) => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed % n; };
+// RG-RE-LITERAL-RANGES' corpus: the oracle generator's pieces (scripts/gen-rg-regex-oracle.cjs), 200 seeded lines of
+// them, then a fixed tail for the literals the pieces cannot make (aa, the doubled e-acute, needleneedle, x+CJK).
+// THE RNG (observability Task 4): it drew `seed % n` from `seed * 1103515245`, which in JS rounds past 2^53 into a
+// 10,466-state cycle and whose low bits cycle besides; it draws from test/shape-census.cjs's intRng now, and the census
+// test below proves every literal is compared against at least one occurrence (a literal the corpus never holds
+// compares [] with [] and cannot fail) and every piece is drawn.
+const cpt = (...c) => String.fromCodePoint(...c);
+const LIT_PIECES = ['a', 'b', 'ab', 'k', 'K', 's', 'S', '_', '1', '9', ' ', '  ', '.', '-', 'x', 'needle', 'foo', 'bar', '\t', '\r',
+  cpt(0xe9), cpt(0x65, 0x301), cpt(0x4e2d), cpt(0x4e2d, 0x6587), cpt(0x1f600), cpt(0x212a), cpt(0x17f), cpt(0xdf), cpt(0x3c3), cpt(0x3c2),
+  cpt(0x661), cpt(0xa0), cpt(0x200d), [0xff], [0x80], [0xe4, 0xb8], [0xc3], [0xed, 0xa0, 0x80], [0xf0, 0x9f]];
+const LITS = ['a', 'b', 'ab', 'aa', 'aba', 'k', 'K', 's', '_', '1', ' ', '  ', '.', '-', 'x', 'needle', 'needleneedle', 'foo', 'bar', '\t', '\r',
+  cpt(0xe9), cpt(0xe9, 0xe9), cpt(0x65, 0x301), cpt(0x4e2d), cpt(0x4e2d, 0x6587), cpt(0x1f600), cpt(0x212a), cpt(0x17f), cpt(0xdf), cpt(0x3c3),
+  cpt(0x661), cpt(0xa0), cpt(0x200d), `x${cpt(0x4e2d)}`];
+const LIT_SEED = 20261003, LIT_LINES = 200, LIT_MAX_PIECES = 9;
+function literalLines(rnd = intRng(LIT_SEED)) {
+  const lines = [];
+  for (let i = 0; i < LIT_LINES; i++) { const l = []; for (let j = rnd(LIT_MAX_PIECES); j > 0; j--) l.push(rnd(LIT_PIECES.length)); lines.push(l); }
+  return lines;
+}
+function literalCorpus() {
   const parts = [];
-  for (let i = 0; i < 200; i++) { for (let j = rnd(9); j > 0; j--) parts.push(Buffer.from(PIECES[rnd(PIECES.length)])); parts.push(Buffer.from('\n')); }
-  const corpus = Buffer.concat([...parts, Buffer.from('aaaa aaa ababab abab\n'),
+  for (const l of literalLines()) { for (const k of l) parts.push(Buffer.from(LIT_PIECES[k])); parts.push(Buffer.from('\n')); }
+  return Buffer.concat([...parts, Buffer.from('aaaa aaa ababab abab\n'),
     Buffer.from([0xe4]), Buffer.from(`${cpt(0xe9)}${cpt(0xe9)}${cpt(0xe9)} x${cpt(0x4e2d)}${cpt(0x4e2d)}\n`), Buffer.from([0xc3, 0xa9, 0xa9, 0x80]),
     Buffer.from('needleneedle\r\n'), Buffer.from([0xf0, 0x9f, 0x98]), Buffer.from(`${cpt(0x1f600)}aa\n`)]);
+}
+const occurrences = (buf, s) => { const b = Buffer.from(s); let k = 0; for (let i = buf.indexOf(b); i >= 0; i = buf.indexOf(b, i + 1)) k++; return k; };
+test('RG-RE-LITERAL-RANGES\' corpus: every literal occurs, every piece is drawn, the RNG is unbiased (census)', (t) => {
+  const corpus = literalCorpus();
+  // Floors measured 2026-11-19: every literal 1 or more (the tail's own literals 1-6, the others 12-93); every piece
+  // 12-32 times over the 200 lines (an expected 4 x 200 / 39 = 20.5 each).
+  const lits = census('RG-RE-LITERAL-RANGES literals', LITS.map((l) => ({ shape: `occurs: ${JSON.stringify(l)}`, min: 1, has: (b) => occurrences(b, l),
+    why: 'a literal the corpus never holds compares [] with [] and cannot fail; one occurrence makes it a comparison' })), [corpus]);
+  const pieces = census('RG-RE-LITERAL-RANGES pieces', LIT_PIECES.map((p, k) => ({ shape: `drawn: piece ${k}`, min: 5, has: (l) => l.filter((x) => x === k).length,
+    why: 'a quarter of the 20.5 draws each piece expects over 200 lines' })), literalLines());
+  const bias = rngBias('RG-RE-LITERAL-RANGES RNG', () => intRng(LIT_SEED), [LIT_MAX_PIECES, LIT_PIECES.length]);
+  for (const r of [lits, pieces, bias]) t.diagnostic(r.summary);
+  assertCensus(assert, lits, pieces, bias);
+});
+test('RG-RE-LITERAL-RANGES: ugrep\'s ranges for a plain literal are the matcher\'s, over a hostile corpus', needUgrep, () => {
+  const R = require('../libexec/rg-regex.cjs');
+  const corpus = literalCorpus();
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-native-lit-'));
   try {
     fs.writeFileSync(path.join(dir, 'c.txt'), corpus);
-    const lits = ['a', 'b', 'ab', 'aa', 'aba', 'k', 'K', 's', '_', '1', ' ', '  ', '.', '-', 'x', 'needle', 'needleneedle', 'foo', 'bar', '\t', '\r',
-      cpt(0xe9), cpt(0xe9, 0xe9), cpt(0x65, 0x301), cpt(0x4e2d), cpt(0x4e2d, 0x6587), cpt(0x1f600), cpt(0x212a), cpt(0x17f), cpt(0xdf), cpt(0x3c3),
-      cpt(0x661), cpt(0xa0), cpt(0x200d), `x${cpt(0x4e2d)}`];
+    const lits = LITS;
     let checked = 0;
     for (const lit of lits) {
       const pattern = lit.replace(/[\\.+*?()|[\]{}^$#&~-]/g, '\\$&');

@@ -36,10 +36,17 @@ function digest(lines) {
   return crypto.createHash('sha256').update(JSON.stringify(lines)).digest('hex').slice(0, 20);
 }
 
-function draw() {
-  let seed = SEED;
-  // the high bits: this LCG's low bits cycle (rnd(2) would merely alternate)
-  const rnd = (n) => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return (seed >>> 12) % n; };
+// THE RNG, an LCG done exactly (observability Task 4). The product of a 31-bit state and this 31-bit multiplier is
+// about 2^61, past a double's 53 bits, so the plain `seed * 1103515245` rounded its low bits away and the "LCG" fell
+// into a cycle of 10,466 states from every seed tried (measured 2026-11-19: seeds 20261003, 12345, 7); Math.imul is the
+// exact product mod 2^32. Then its HIGH bits: an LCG's low bits cycle (rnd(2) would merely alternate). Both flaws are
+// checked by test/rg-regex.test.cjs's rngBias over the moduli draw() uses (RNG_MODULI).
+function makeRnd(seed = SEED) {
+  let s = seed;
+  return (n) => { s = (Math.imul(s, 1103515245) + 12345) & 0x7fffffff; return (s >>> 16) % n; };
+}
+
+function draw(rnd = makeRnd()) {
   const pick = (a) => a[rnd(a.length)];
   const cp = (...c) => String.fromCodePoint(...c);
   const PIECES = ['a', 'b', 'ab', 'k', 'K', 's', 'S', '_', '1', '9', ' ', '  ', '.', '-', 'x', 'needle', 'foo', 'bar', '\t', '\r',
@@ -169,4 +176,4 @@ function main() {
 }
 
 if (require.main === module) main();
-module.exports = { digest, staleness };
+module.exports = { digest, staleness, draw, makeRnd, SEED };

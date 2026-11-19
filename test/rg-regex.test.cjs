@@ -21,6 +21,8 @@ const { spawnSync } = require('node:child_process');
 const R = require('../libexec/rg-regex.cjs');
 const { tjsPath, runLoader } = require('./node-shim-helper.cjs');
 const { defineGuard, guardTests } = require('./guard.cjs');
+const { census, rngBias, assertCensus } = require('./shape-census.cjs');
+const { bundleLine, NATIVE_BUNDLE_LINE, bundleCensus } = require('./rg-bundle-line.cjs');
 
 const cp = (...c) => String.fromCodePoint(...c);
 const B = (...parts) => Buffer.concat(parts.map((p) => (typeof p === 'string' ? Buffer.from(p, 'utf8') : Buffer.from(p))));
@@ -496,6 +498,43 @@ guardTests(defineGuard({
   control: () => ({ cases: ORACLE.cases.map((c, i) => (i === 0 ? [c[0], c[1], 'planted-digest'] : c)) }),
 }));
 
+// THE GENERATOR'S SHAPE CENSUS (observability Task 4; test/shape-census.cjs, test/rg-regex-census.cjs). The property
+// test above is only as wide as the patterns it is handed: the generator that drew them without a shared branch prefix
+// over ~8,000 patterns kept RG-RE-ALT-LIFT unemulated and this test green. So: the fixture is exactly the generator's
+// draw() (no stale or hand-edited cases), every shape the generator claims was drawn at least its floor, and the RNG
+// is unbiased in the bits draw() uses (the moduli are recorded from a real draw, not declared). Red first: the pre-fix
+// generator of 4ce7800^ has 0 shared prefixes, 0 nested counted repetitions, 3 captures and 12 lazy repetitions in its
+// 300 patterns, and a biased rnd(4), rnd(10), rnd(39); the round-4 generator (float-rounded LCG) passes the shapes and
+// fails the RNG (rnd(2), rnd(4), rnd(8), rnd(16), rnd(39) serially correlated).
+const gen = require('../scripts/gen-rg-regex-oracle.cjs');
+const RC = require('./rg-regex-census.cjs');
+function oracleCensus(cases, corpus) {
+  const { rec, moduli } = RC.recordModuli(gen.makeRnd());
+  gen.draw(rec);
+  return [census('rg-regex oracle patterns', RC.PATTERN_SHAPES, cases.map(RC.facts)),
+    census('rg-regex oracle corpus', RC.CORPUS_SHAPES, RC.corpusLines(corpus)),
+    rngBias('rg-regex oracle RNG', () => gen.makeRnd(), [...moduli].sort((a, b) => a - b))];
+}
+test('the oracle generator: the fixture is its draw(), every declared shape is drawn, its RNG is unbiased (census)', (t) => {
+  const drawn = gen.draw();
+  assert.deepStrictEqual(ORACLE.cases.map((c) => [c[0], c[1]]), drawn.cases.map((c) => [c.pattern, c.ignoreCase ? 1 : 0]),
+    'test/fixtures/rg-regex-oracle.json is not scripts/gen-rg-regex-oracle.cjs\'s draw(): regenerate it from native');
+  assert.strictEqual(ORACLE.corpus, drawn.corpus.toString('base64'), 'the fixture\'s corpus is not draw()\'s');
+  const results = oracleCensus(ORACLE.cases, CORPUS);
+  for (const r of results) t.diagnostic(r.summary);
+  assertCensus(assert, ...results);
+});
+test('census control: the grammar draws alone (no lift family) fail the shared-prefix floor', () => {
+  const [patterns] = oracleCensus(ORACLE.cases.slice(0, 300), CORPUS);
+  assert.strictEqual(patterns.counts['shared branch prefix (RG-RE-ALT-LIFT fires)'], 0);
+  assert.match(patterns.findings.join('\n'), /shape "shared branch prefix \(RG-RE-ALT-LIFT fires\)" appeared 0 time/);
+});
+test('the 5 MB bundle line: distinct token runs, the spans its pinned patterns need, an unbiased RNG (census)', (t) => {
+  const results = bundleCensus();
+  for (const r of results) t.diagnostic(r.summary);
+  assertCensus(assert, ...results);
+});
+
 // RG-RE-PREFILTER-SUPERSET (rg-regex-prefilter-superset): ugrep, given the prefilter, proposes
 // every line ours (= native) selects, over the same corpus, on this host's ugrep (and on every
 // ugrep at or above the floor, by the Task 5b runs). Control: a proposer that proposes nothing,
@@ -573,22 +612,7 @@ test('RG-RE-REFUSE-COST: a line past the step budget refuses by name; ordinary p
   }
 });
 
-// A minified bundle's one line, synthesized (seeded code-like tokens; 5,000,000 bytes, then \n):
-// the size of slice where a flat per-line budget refused ordinary patterns (review N1; the pinned
-// carve's own extracted bundle is one 59 MB line).
-function bundleLine(n = 5000000) {
-  const T = ['var ', 'let ', 'const ', 'function ', 'return ', 'import ', ' from ', 'new ', 'TypeError', 'RangeError', 'this.', '=>', '{', '}', '(', ')',
-    '[', ']', ';', ',', '.', '=', '+', '"use strict"', '"a,b"', "'x'", '0', '42', '0x1f', 'foo', 'bar_baz', 'qux9', '$el', 'require', ' ', 'if(', 'else'];
-  let seed = 7, len = 0;
-  const parts = [];
-  while (len < n) { seed = (seed * 1103515245 + 12345) & 0x7fffffff; const t = T[seed % T.length]; parts.push(t); len += t.length; }
-  return Buffer.from(parts.join('').slice(0, n) + '\n');
-}
-// native 2.1.283's --json over that line: [pattern, submatches, sha256(JSON [[start,end]...]) prefix]
-const NATIVE_BUNDLE_LINE = [
-  ['\\w+Error', 65540, 'a50ea27fa90868559c95'], ['import.*from', 1, 'bdd8d8f252488be5494a'], ['"[^"]*"', 64571, '8de2358ecca044105996'],
-  ['[a-zA-Z_]\\w*\\(', 45207, 'bb36da42a7c22f556f00'], ['\\w+', 699136, 'f247023a8e8b3b6572de'], ['x|', 4905778, 'b2e43515fac8075f4eb6'],
-];
+// A minified bundle's one line (5 MB, seeded code-like tokens) and native's answers over it: test/rg-bundle-line.cjs.
 test('RG-RE-REFUSE-COST scales with the line: ordinary patterns on a 5 MB minified line are answered as native (native)', () => {
   const line = bundleLine();
   const end = line.length - 1;
