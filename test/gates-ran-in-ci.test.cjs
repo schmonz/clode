@@ -331,3 +331,20 @@ g.guardTests(define({ name: 'fx-gate', read: () => ({ n: 1 }), scan: ({ n }) => 
     assert.deepStrictEqual(verdict.findings, []);
   } finally { fs.rmSync(base, { recursive: true, force: true }); }
 });
+
+// THE REGISTRY IS WHAT REGISTERED, not what a regex saw: a guard defined through an alias (the live-reporter fixture
+// above does it on purpose) is still a gate the manifest must place.
+test('loadRegistry: a guard registered through an alias of its definer is in the registry', () => {
+  const os = require('node:os');
+  const { execFileSync } = require('node:child_process');
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'gates-registry-'));
+  try {
+    fs.mkdirSync(path.join(base, 'test'));
+    fs.copyFileSync(path.join(REPO, 'test', 'guard.cjs'), path.join(base, 'test', 'guard.cjs'));
+    fs.writeFileSync(path.join(base, 'test', 'alias.test.cjs'), "const g = require('./guard.cjs'); const def = g['define' + 'Guard'];\n"
+      + "g.guardTests(def({ name: 'aliased-gate', read: () => ({}), scan: () => ({ findings: [], examined: 1 }), control: () => ({}) }));\n");
+    execFileSync('git', ['init', '-q'], { cwd: base });
+    const reg = G.loadRegistry({ repo: base });
+    assert.deepStrictEqual(reg, [{ name: 'aliased-gate', file: 'test/alias.test.cjs' }]);
+  } finally { fs.rmSync(base, { recursive: true, force: true }); }
+});

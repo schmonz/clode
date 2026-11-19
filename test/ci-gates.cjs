@@ -596,13 +596,16 @@ function readRecords(root, jobs) {
 // sessionGuard) included. -> [{ name, file }] or throws naming what failed to load.
 function loadRegistry({ repo = REPO, env = process.env } = {}) {
   const { execFileSync } = require('node:child_process');
-  const { CALLS_BARE_DEFINEGUARD } = require('./guards-population.cjs');
   // Tracked AND untracked-but-not-ignored, as test/run.mjs discovers them: a gate in a file not yet
   // committed is still a gate the suite runs.
   const out = execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard', 'test'],
     { cwd: repo, encoding: 'utf8' });
+  // Every test file that loads the guard module at all, not only those that spell a bare defineGuard( call: the
+  // registry is what defineGuard REGISTERED when the file loaded, so a guard defined through an alias (or a helper)
+  // counts. (It used to reuse guards-population's bare-call regex, and a guard registered through an alias was
+  // invisible to both checks.)
   const candidates = out.split('\0').filter((f) => /\.test\.c?js$/.test(f) && f !== 'test/guard.test.cjs')
-    .filter((f) => CALLS_BARE_DEFINEGUARD.test(fs.readFileSync(path.join(repo, f), 'utf8')));
+    .filter((f) => /guard\.cjs['"]/.test(fs.readFileSync(path.join(repo, f), 'utf8')));
   const script = [
     `const { registered } = require(${JSON.stringify(path.join(repo, 'test', 'guard.cjs'))});`,
     'const out = []; const errors = [];',
