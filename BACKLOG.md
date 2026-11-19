@@ -93,6 +93,27 @@ its embedded one (the entry under "The Grep tool in quaude, and the Glob tool" s
   macOS does not); the shell function's fallback is spelled as msys sees it (C:\a -> /c/a), as native's writer
   spells its own; upstream's msys branch reaches rg through ARGV0=rg, which the rule honours.
 
+Measured: `(exec -a rg <quaude> --version)` and `rg -c needle` over 13 files, 10 runs each, with a quaude built from
+b4eb2f5 (darwin-arm64, the 2.1.283 carve; throwaway HOME, canned mock): 90 ms and 121 ms per run, native 8 and 11 ms
+(2026-11-18).
+
+Measured: `rg needle <&-` in a directory holding a match: quaude searches ./ and prints it, rc 0, as native does; `rg
+needle d >&-` rc 0 on both (2026-11-18).
+
+Measured: `yes needle | rg needle | head -1` 0.40 s (native 0.01 s); a 178 MiB file under `| head -1` 0.30 s and 18 MB
+max RSS (native 0.01 s, 6 MB); `rg -c needle` over that whole file, every line a match, 115.5 s (native 0.26 s): the
+full-search item (1) stands, at the same ~1.6 MB/s (2026-11-18).
+
+Measured: with RIPGREP_CONFIG_PATH naming a one-flag config (`--ignore-case`), quaude refuses by name, rc 2 ("cannot
+yet read the config file RIPGREP_CONFIG_PATH names"), and native reads it and matches both cases (2026-11-18).
+
+Measured: `ARGV0=rg quaude --version` in a fresh HOME with TJS_HOME unset leaves an empty $HOME/.tjs; native leaves
+nothing (2026-11-18).
+
+Unmeasured. The `-U` stdin EAGAIN error, a terminal, dev-mode bundles and Windows were not driven here; the first
+needs a non-blocking empty stdin under `rg -U`, the last a Windows box. The Tiger startup cost needs the Tiger PPC VM.
+The CI rg-unit-row claims need a linux-x64-pty run.
+
 ## Ten agentic rows run the developer's own ~/.claude, hooks included (2026-10-04)
 
 Measured during grep-native Task 10b's full suite (RC 1, 10 failures, every one at its cap with empty
@@ -150,6 +171,13 @@ only keeps the obvious ways back closed. A standalone `node --test file` gets th
 launch helpers that require suite-home.cjs (provider-resolve, oracle-models, node-shim-helper, e2e); a test that spawns
 the bundle without any of them, run standalone, runs it under the real home.
 
+Measured: a `-p` turn of a quaude built from b4eb2f5 (darwin-arm64, the 2.1.283 carve; throwaway HOME, canned mock)
+with TJS_HOME unset creates $HOME/.tjs holding localStorage.db only (no cookies.txt in that turn); native creates no
+.tjs (2026-11-18).
+
+Unmeasured. The suite-hermeticity claims (suite home, sentinel HOME byte-untouched, the 18/81 spawn counts) were not
+re-run; test/suite-home-hermetic.test.cjs and a full suite with a sentinel HOME would.
+
 ## 9 of the 2166 tool x mode x engine cells are driven (cells 2026-11-18; tools 2026-09-28; Grep and Glob driven 2026-10-05)
 
 Since observability Task 1 (2026-11-18) the gate counts CELLS, tool x mode x engine: 90 tools, 722
@@ -184,6 +212,9 @@ and the table is the to-do list, grouped by what a driver would need:
 The entries fall due by phase (the every-tool plan): Phase A 2026-12-15 (moved from 2026-10-15 by
 USER RULING 2026-11-18), Phase B 2026-11-30, Phase C and the runner/relay tools 2026-12-31. That day
 the gate goes red, and each must be driven or re-dated with a new reason.
+
+Measured: test/build-gates/tool-coverage-gates.test.cjs with CLODE_PROVIDER_BIN at the darwin-arm64 2.1.283 carve:
+every-tool-driven OK (2026-11-18).
 
 ## The NetBSD spike found three bugs, all fixed; what it left open (2026-09-26)
 
@@ -1078,6 +1109,23 @@ new pin had 26 failures, from three upstream changes a carve cannot see, and the
   `providers/<BUNDLE>/claude` (BUNDLE from golden.json), but the store is now
   `providers/<ver>/<os>-<arch>/claude`, so without CLODE_PROVIDER_BIN it finds nothing.
 
+Measured: `--debug` logs of a `-p` turn and a Bash-tool turn of a quaude built from b4eb2f5 (darwin-arm64, the 2.1.283
+carve; throwaway HOME, canned mock): `[event-loop-stall] process.resourceUsage() failed: not a function` in both, no
+SyntaxError (the correction above) (2026-11-18).
+
+Measured: under the node-shim on the tjs engine, `path.join(undefined, "x")` is "/x" and `path.resolve(undefined,
+"..")` a cwd-relative path (node throws ERR_INVALID_ARG_TYPE for both); `new TextDecoder().decode(F0 9F C3 9F)` is
+U+FFFD U+FFFD (node U+FFFD U+00DF) and the shim's Buffer toString gives U+FFFD U+FFFD U+00DF (2026-11-18).
+
+Measured: a `-p` turn against a canned mock, a quaude built from b4eb2f5 (darwin-arm64, the 2.1.283 carve; throwaway
+HOME, canned mock): 8.4-8.9 s; native 0.7-1.1 s (macOS, not the linux-x64-pty mirror) (2026-11-18).
+
+Measured: `grep -n providers/ scripts/probe-run.mjs`: line 107 still builds `providers/<BUNDLE>/claude` (2026-11-18).
+
+Unmeasured. The asset-reader items (binary woff2 rows, UTF-16LE rows served NUL-interleaved), image processing through
+`new Bun.Image`, and upstream-drift's blind hook row were not re-run; a carve of 2.1.283 read row by row with the
+preload oracle would measure the first two.
+
 ## Four more tests let a global install choose their provider (2026-09-25)
 
 **Context, done:** upstream 2.1.281 moved the Remote Control gate's anchor (its reason helper
@@ -1100,6 +1148,8 @@ subjects, but so is any global install. None is the same one-line fix:
 - `test/graph-unserved-refs.test.cjs`, `test/make-min-provider.test.cjs` `providers()`: also add
   `resolveClaudeBin()` (PATH / `current`) and want both CJS and split shapes on purpose.
 
+Measured: `grep -l find-provider` over the four named tests: all four still use it (2026-11-18).
+
 ## build-clode-main cannot recover from a reaped toolchain in the same run (2026-09-25)
 
 **Pre-existing, found by CellSegmenter phase 3's task-8 suite run; not fixed.** macOS's
@@ -1115,6 +1165,11 @@ on 2026-09-25 that was four suite failures (build-clode-main, and quaude-cross-b
 refusing the stale clode-main bundle it left behind). **Fix:** run the post-install probe in a
 child process (`spawnSync(process.execPath, ['-e', "require('esbuild').transformSync('')"])`),
 proven red then green by taking the toolchain's esbuild away between the two checks.
+
+Measured: `grep -n loadable scripts/build-clode-main.mjs`: the post-install check at line 104 is still the in-process
+`loadable()` (2026-11-18).
+
+Unmeasured. The reap itself was not reproduced; taking the toolchain's esbuild away between the two checks would.
 
 ## Bun.secrets (Windows Credential Manager) — accepted absent, implement later (2026-09-24)
 
@@ -1158,6 +1213,11 @@ likely overruns upstream's 2000 ms per-call timeout (unmeasured).
 **Class fix (follow-up):** have the ubuntu suite also carve and inspect the win32 and darwin
 providers, so Windows-only (and darwin-only) surface shows up on every leg instead of only on
 the one whose provider happens to contain it.
+
+Measured: libexec/inspect-claude-bundle.cjs on the darwin-arm64 2.1.283 carve reports no Bun.secrets; the bun-shim has
+no Bun.secrets (`"secrets" in Bun` false under node) (2026-11-18).
+
+Unmeasured. The win32-carve counts and the credman behaviour need the win32 carve and a Windows box.
 
 ## `Bun.ant.CellSegmenter` — the 2.1.278 TUI's real blocker, and it is NOT small (2026-09-22)
 
@@ -2220,6 +2280,9 @@ resolve the toolchain against the node that will RUN the step rather than the on
 smaller and probably right; it touches `platform-tag.cjs`, which several other things key on,
 so it is a decision and not an edit.
 
+Measured: `grep -n "function toolchainDir" scripts/platform-tag.cjs`: it is still `buildPath('toolchain',
+platformTag())`, keyed by the planning interpreter's platform tag (2026-11-18).
+
 ## Two literals in the build graph that a new step would walk past (2026-09-21)
 
 Both found by the final whole-branch review; both small, both latent, neither fixed.
@@ -2375,6 +2438,9 @@ rebuild attached, and it wants a deliberate decision rather than a drive-by. Not
 self-reference is not circular in practice: the file's bytes are an input to a hash it
 computes, which is exactly what `spike/quickjs/PINS.md` and the patches already are.
 
+Measured: scripts/engine-recipe.cjs's FILES list (lines 69-100) names PINS.md, the patches and six scripts, and not
+engine-recipe.cjs itself: the recipe still does not hash the recipe (2026-11-18).
+
 ## Seams worth naming, even if nothing leaves this repo (2026-09-21)
 
 Asked "what else is in the trenchcoat." Measured, ranked by how close the seam already is.
@@ -2528,6 +2594,11 @@ Windows hard publishers are not exercised.
   other legs should follow, but nobody has watched them. Known suspects for a per-leg gate:
   archivers that ignore `ZERO_AR_DATE` (GNU `ar` wants `-D`), absolute build paths baked in
   (`-ffile-prefix-map`), and the PE `TimeDateStamp` on the two Windows legs (`/Brepro`).
+
+Measured: `grep -rn CLODE_CCACHE_ENGINE_E2E .github`: one hit, a comment in repro.yml saying nothing sets it; the
+opt-in gate is still unscheduled (2026-11-18).
+
+Unmeasured. The per-leg reproducibility suspects (GNU ar, absolute paths, PE TimeDateStamp) need those legs.
 
 ## ccache + MSVC: a false premise, and what was silently running (2026-09-19)
 
@@ -3310,6 +3381,9 @@ was built for. What it cannot catch is a PARTIALLY blind one, and this repo now 
 multi-detector guards (`no-fuse-vocabulary`, `no-retired-spellings`,
 `clode-build-delegates-blobulate`), so the gap is worth closing before there are more.
 
+Measured: test/guard.cjs's checkControl still returns OK on `r.findings.length > 0`: a partially blind multi-detector
+guard still passes its control (2026-11-18).
+
 ## Bundle scanners: FIXED, with three things still open (2026-08-29)
 
 Two of the three failing rows this entry used to describe are retired. That entry, as
@@ -3422,6 +3496,12 @@ stages that provider, measures the two-layer surface, and diffs against `golden.
 diff names exactly these two new `layer1_bun_props_missing` entries. `CLODE_PROVIDER_BIN`
 must be set explicitly by hand — see the next section for why `node test/run.mjs` alone will
 not find it, on this box or on CI.
+
+Measured: test/shim-surface.test.cjs with CLODE_PROVIDER_BIN at the darwin-arm64 2.1.283 carve passes,
+Bun.zstdDecompress and Bun.zstdDecompressSync still in golden.json's deferred list; the bun-shim has neither
+(2026-11-18).
+
+Unmeasured. Whether any tested route reaches the reader with zstd bytes (the reachability question) was not driven.
 
 ### This gate — and every `stageProviderCli`-dependent test — is DARK in CI, not just locally (2026-09-02)
 
@@ -4028,6 +4108,11 @@ fixed only for un-minimised providers. The fix belongs in `make-min-provider.cjs
 source container's platform forward, or record it beside the output and have
 `providerPlatformOf` read it) — not in the cache key, which is right.
 
+Measured: `grep -n providerPlatformOf scripts/make-min-provider.cjs`: the tool now carries the source container's
+platform into the minimised one and exits 1 (SELF-CHECK FAILED) if `providerPlatformOf` reads them differently (lines
+213-222). CORRECTED: "d5da54c is a no-op on every CI leg" no longer holds as written; that a CI leg's minimised
+provider keys by platform was not driven here (2026-11-18).
+
 ### THE MERGE IS NOW FASTER THAN BEFORE ANY OF THIS — the lever was memoising codeMask
 
 `maskedReplace` recomputed `codeMask(src)` from scratch on every call, and `mergeGroup` routes
@@ -4467,6 +4552,10 @@ one sha256 per item. Its own header states the contract: *"On BE hosts the hashe
 EXPECTED to equal the LE baseline after the patch — that is the point."* Nothing in
 `.github/` or `scripts/` ever invokes it.
 
+Measured: `grep -rn bc-le-gate .github`: release.yml (line 137) runs scripts/bc-le-gate.mjs over the s390x and x64
+musl engines; `grep -c differs test/fixtures/bc-le-baseline.json`: 3. CORRECTED: the LE/BE comparison is no longer
+"wired into NOTHING", it gates a release (not a push). A BE engine was not run here (2026-11-18).
+
 ### Measurement
 
 Both engines from the SAME release run (30730368429, v0.20260801.2) so build date and
@@ -4532,6 +4621,9 @@ compares the actual artifact for the actual property, in ~10 seconds, with no pr
 no exclude list, and no libc mismatch. Wiring `bc-le-oracle.mjs` into the s390x leg —
 LE baseline committed, BE run in-leg, diff — would be a real gate. It is currently red,
 which is the strongest argument for having it.
+
+Measured: `grep -rn bc-le-gate .github`: the gate exists (scripts/bc-le-gate.mjs) and runs in release.yml, not on
+push; see the correction in the entry above (2026-11-18).
 
 ### Reproduce
 
@@ -4607,6 +4699,17 @@ load-bearing, not a cosmetic honesty fix. The bundle gates its `argv0`-based
 the `child_process` path instead. Anyone "fixing" it to `true` would silently reroute
 rg through a Bun API we do not implement.
 
+Measured: `-p /heapdump` with a quaude built from b4eb2f5 (darwin-arm64, the 2.1.283 carve; throwaway HOME, canned
+mock): "Failed to create heap dump: not a function"; with a naude built from b4eb2f5 (darwin-arm64, 2.1.283): the
+ArrayBuffer error in the correction above; native 2.1.283 writes ~/Desktop/<id>.heapsnapshot and <id>-diagnostics.json
+(2026-11-18).
+
+Measured: under the node-shim on the tjs engine, `v8.getHeapStatistics`, `process.resourceUsage` and
+`process._getActiveHandles` are undefined (2026-11-18).
+
+Unmeasured. The adjacent findings (bun:* interception require-only, probeShim's environment) were not re-driven;
+`import("bun:ffi")` under quaude would measure the first.
+
 ## Piped-stdin prompts never arrive under quaude (found 2026-11-18, sandbox round 3)
 
 `echo 'say hi' | quaude -p` (and the same with options before `-p`) exits with Claude Code's own `no stdin data
@@ -4619,6 +4722,11 @@ naude reads a piped prompt as native does, so the gap is quaude's own (node-shim
 sandbox round-3 live rows use `-- <prompt>` for that reason. Not investigated: the likely suspects are the
 node-shim's process.stdin readiness for a pipe (the bundle waits for 'readable'/'data' with a 3s timer) and the
 bootstrap's stdin handling. A gate should drive a piped prompt end to end once it is fixed.
+
+Measured: `'say hi' | quaude -p` with a quaude built from b4eb2f5 (darwin-arm64, the 2.1.283 carve; throwaway HOME,
+canned mock): exit 1, "no stdin data received in 3s", 0 requests; native: 1 request, answered; a naude built from
+b4eb2f5 (darwin-arm64, 2.1.283): 1 request, answered; `quaude -p hello` with a piped stdin: the 3 s warning, then 1
+request; with a /dev/null stdin: no warning (2026-11-18).
 
 ## Untracked-until-now findings from 2026-08-23/24 (three of them)
 
@@ -4735,6 +4843,21 @@ warned:** `layer2Gaps` decides by `prop in shim.surface` (collect.cjs:88), so `n
 `test/shim-surface/golden.json`'s missing list (its notes record why). It is still tracked, by
 test/node-shim-net.test.cjs (the throw, by name) and test/bun-shim-ant-gap.test.cjs (nothing listens), but the
 inventory no longer counts it: the wall-aware inventory (see the /heapdump entry) is what would count it again.
+
+Measured: test/fidelity/agentic-sandbox-fail-closed.test.cjs with CLODE_QUAUDE at a quaude built from b4eb2f5,
+darwin-arm64: fail-closed and user --settings rows pass, the D2 row skips by name ("native would sandbox here");
+test/node-shim-net.test.cjs and test/bun-shim-ant-gap.test.cjs pass (2026-11-18).
+
+Measured: `--debug` log of a `-p` turn with a quaude built from b4eb2f5 (darwin-arm64, the 2.1.283 carve; throwaway
+HOME, canned mock): `[uds-messaging] Failed to create server: Error: quaude does not support the sandbox yet:
+net.createServer` (2026-11-18).
+
+Measured: a naude built from b4eb2f5 (darwin-arm64, 2.1.283), sandbox enabled in user settings, two Bash calls each
+writing inside and outside the working directory: both refused `Shell '/bin/bash' not found in PATH`, nothing written
+(2026-11-18).
+
+Unmeasured. The Linux (bwrap/socat, D2) rows, WSL and Windows: the linux-x64-pty CI job runs the Linux rows; WSL and
+Windows need those hosts.
 
 ### 2. Does MCP-over-SSE actually work on Windows? STILL UNKNOWN
 
@@ -5348,6 +5471,18 @@ well-tested, and reasonably fast** as we can possibly make it."
   reaches it. See the at-desk release-readiness plan (Task 3). (Secondary, same box: couldn't
   copy the printed OAuth URL out of the frozen login screen — a selection/scrollback issue.)
 
+Measured: a `-p` turn with a quaude built from b4eb2f5 (darwin-arm64, the 2.1.283 carve; throwaway HOME, canned mock)
+persists ~/.claude/.claude.json (73,515 bytes) as native does (both log one first-save "Failed to save config with
+lock: ENOENT" first). NEW: quaude writes it mode 0644 where native writes 0600 (2026-11-18).
+
+Measured: `grep -n detached libexec/node-shim/modules/child_process.cjs`: no hit; spawn still drops `opts.detached`
+(2026-11-18).
+
+Unmeasured. The credentials half (NetBSD), the browser launcher (needs an interactive login), stale frames and the
+NetBSD fullscreen crash were not re-driven. Two items here disagree with this file: the Tiger double-Ctrl-C is TRIAGED
+as faithful above, and the IN-FLIGHT HANDOFF says the NetBSD fullscreen crash does not reproduce on main; neither was
+re-run.
+
 ### Platform wishlist (reachable-frontier tracker)
 
 - **vmactions platforms we do NOT run (surveyed 2026-08-27).** vmactions publishes 27 VM
@@ -5682,6 +5817,11 @@ M1/M2/agentic Bash under tjs SHIPPED; these remain:
   (formalize when patches/ unfreezes). Minor: `process.resourceUsage` still undefined (add when
   a path needs it).
 
+Measured: under the node-shim on the tjs engine `process.resourceUsage` is undefined (2026-11-18).
+
+Unmeasured. M3 render bytes (~1.2 MB vs ~8 KB a turn) and apicheck v1 were not re-measured; a PTY capture of one turn
+under each would.
+
 ## Endgame — API-surface gate: reference principles (v0 shipped)
 
 `scripts/apicheck.mjs` (v0) runs the seed corpus under node AND tjs and gates on the `[wall]`
@@ -5788,6 +5928,13 @@ but surfaced darwin assumptions the shim bakes in — Linux-portability debt, NO
 Not matrix-blocking (the BE oracle scopes these out); about node-shim FIDELITY on Linux, which the
 shim-fidelity gate should grow to cover once a Linux tjs is a first-class local build target.
 
+Measured: libexec/node-shim/modules/os.cjs:111 takes `signals` from the engine's constants (EC.signals), and
+libexec/bun-shim.cjs:1619 picks the bun:ffi suffix by platform (dll, dylib, so). CORRECTED: the first two bullets are
+fixed; the audit bullet stays open (2026-11-18).
+
+Unmeasured. The broader darwin-assumption audit was not done; the shim tests run under a Linux tjs (linux-x64-pty) are
+its measure.
+
 ## ★ OPEN — MCP over SSE POSTs to `/[object Object]` under quaude (2026-08-06)
 
 **Symptom.** With an `{"type":"sse"}` MCP server, quaude opens the stream fine and
@@ -5828,6 +5975,11 @@ than re-testing the layers above.
 **Severity.** MCP/SSE is unusable under quaude; MCP over stdio (fixed 2383de2) and
 over HTTP (fixed fc54ae9) both work now. Bundle references: http 314, stdio 136,
 sse 94, ws 24 — so SSE is the last common transport still broken. ws is untested.
+
+Measured: `node scripts/mcp-transport-probe.mjs <quaude> --transport=sse` with a quaude built from b4eb2f5
+(darwin-arm64, the 2.1.283 carve; throwaway HOME, canned mock): PASS, `POST /messages?sessionId=probe` on the wire.
+CORRECTED: this entry is FIXED (97f12ea, MessageEvent's init dict), not open; `--transport=ws` with the same quaude:
+nothing arrived, INCONCLUSIVE (see the MCP-over-WebSocket entry) (2026-11-18).
 
 ## ★★ P0 — bundle 2.1.243 BROKE THE EXTRACTOR; `clode build` fails for anyone on it (2026-08-24)
 
@@ -6004,6 +6156,10 @@ working over checks that confirm a string is still present somewhere in 340MB.**
 2.1.243. That anchor is not in the drift-check `ANCHORS` list, so nothing ever noticed.
 Unquantified how long it has been dead or what users lose. Add it to `ANCHORS` — after
 determining what the current upstream text is, so the re-pin is real and not a deletion.
+
+Measured: `grep -n update_hint_anchor_present scripts/upstream-drift-check.mjs` (line 156): the drift check now has an
+update-hint anchor row. CORRECTED: the anchor is no longer missing from the drift check; whether the hint rewrite
+applies on 2.1.283 was not driven (2026-11-18).
 
 ### The upstream release notes explained it, and nothing pointed us at them
 
@@ -6226,6 +6382,10 @@ at minute 7 is not telling the truth promptly.
 NOT LANDED YET, deliberately: changing CI config now would cancel the in-flight
 release-gate run, which is 29/30 green.
 
+Measured: scripts/tjs-legs.mjs's dragonflybsd-amd64 leg declares `timeout: 20` with the 2.8-5.9 minute measurement
+beside it. CORRECTED: "NOT LANDED YET" no longer holds, the timeout landed; the hang itself (the package repo) needs
+the leg (2026-11-18).
+
 ## vm.SourceTextModule / vm.SyntheticModule — JS tool-plugins on quaude (2026-08-26)
 
 **Decision: BUILD IT.** The user, asked whether this should work on quaude or be left to
@@ -6300,6 +6460,11 @@ refusal — a sandbox that is not one, failing silently. A wall is better than t
 Until it lands the wall is honest: a real use throws `node:vm SourceTextModule not
 implemented`. It is no longer reported as an exercised wall on ordinary turns — see the
 probe/wall split in libexec/node-shim/loader.cjs.
+
+Measured: under the node-shim on the tjs engine, merely READING `require("vm").SourceTextModule` throws `node-shim:
+vm.SourceTextModule not implemented` (node 24 without --experimental-vm-modules answers undefined). CORRECTED: the
+wall's text is "node-shim: vm.SourceTextModule not implemented", and a feature probe (`typeof vm.SourceTextModule`)
+throws too, not only "a real use" (2026-11-18).
 
 ## ANSWERED — Windows 8.3 paths: upstream refuses them, and so do we (2026-08-26)
 
@@ -6753,6 +6918,13 @@ other needs a written reason IN THE CODE, next to the divergence — the shared 
 why. Start by auditing the two surfaces against each other; provenance and attestation are the
 two known gaps, and an audit is what says whether they are the only ones.
 
+Measured: three divergences between a naude built from b4eb2f5 (darwin-arm64, 2.1.283) and a quaude built from b4eb2f5
+(darwin-arm64, the 2.1.283 carve; throwaway HOME, canned mock) today: a piped `-p` prompt (naude answers, quaude does
+not), `/heapdump` (different failures), and sandboxed Bash (naude refuses with "Shell '/bin/bash' not found in PATH",
+quaude by failIfUnavailable) (2026-11-18).
+
+Unmeasured. The full surface audit this entry asks for was not done.
+
 #### RESOLVED 2026-08-30 — the first instance (attestation + provenance) is closed
 
 `--clode-attest` is now the SAME flag on both products, and the product-named flag it
@@ -6811,6 +6983,9 @@ whoever does the work, on evidence about how often the lockfile actually gets re
 date-versioning names the day of the tag rather than the day of the draft. A bump script is the
 natural place for that too: it can refuse to write a date that is not today, which is a rule
 currently kept by a human remembering it.
+
+Measured: `cat VERSION; grep version package.json package-lock.json`: 0.20260831.1 in VERSION, package.json and twice
+in package-lock.json, four places still (2026-11-18).
 
 ### The deadlock guard cannot get scratch space on Windows runners (deferred 2026-08-31)
 
@@ -7562,6 +7737,11 @@ One definition, two consumers. Whether that is a shared module or a shared libra
 same question as the second-half language note; the duplication is a defect either way,
 and it is the cleanest single example of the duplicated-truth problem ★★★ exists to fix.
 
+Measured: `grep -n -i "mirror" libexec/inspect-claude-bundle.cjs`: seven anchors there still say they mirror
+extract-claude-js.cjs (SNAPSHOT_GEN, AUTOUPDATER_SPAWN, NATIVE_AUTOUPDATER, LEGACY_AUTOUPDATER,
+MANUAL_UPDATE_DISPATCH, UPDATE_NOTICE_ANCHOR and the update-hint shapes); the Remote Control anchor is now imported,
+not mirrored (2026-11-18).
+
 ### ★★ The shim tests do not run on the engine (2026-08-25)
 
 **PROVEN, and it paid immediately.** A feasibility spike ran the suite on the engine and
@@ -7658,6 +7838,10 @@ canonical-LE risk below.
 Synthetic corpora match byte-for-byte; REAL files diverge from offset 1, because
 libregexp stores compiled regexps in host byte order. Tracked as a ratchet rather than
 failing the release, deliberately.
+
+Measured: `grep -c differs test/fixtures/bc-le-baseline.json`: 3 (2026-11-18).
+
+Unmeasured. Whether a BE engine still differs needs ultimate-hat's s390x run.
 
 ### MEASURED 2026-08-26 — ROUNDING ERROR, leave it. (was: does the BE regexp mitigation cost real time?)
 
@@ -7762,6 +7946,9 @@ Pre-existing, not from the import.meta work — `compile()` + `evalBytecode()` o
 deserialize path exits 0), so this is not urgent; but any stock user of
 `tjs.engine.compile` + `evalBytecode` crashes at exit, and a test harness that checks exit
 codes would see 134 for a run that succeeded.
+
+Measured: `tjs run` of `tjs.engine.evalBytecode(tjs.engine.compile(<globalThis.__D = 42;>))` on the tjs engine the
+suite uses (darwin-arm64): prints D= 42, then exits 134 (SIGABRT) (2026-11-18).
 
 ### ★★ Rationalize the push-CI and tag-release matrices (user, 2026-08-25)
 
@@ -8633,6 +8820,10 @@ every existing cache entry is invalidated the day it lands, and the sequencing o
 belongs with the declared-inputs work, not with a test fix. See the umbrella's phase-4
 scope correction.
 
+Measured: `grep -n MERGER_VERSION libexec scripts`: still a hand-written literal ('15'), and
+scripts/merge-step.mjs:148 still keys its merged-graph cache on it; staging itself is keyed by a file signature that
+includes scc-merge.cjs (libexec/clode-extract.cjs extractorSigOf) (2026-11-18).
+
 ### 2. `test/naude-assembler-closure.test.cjs` guards CLOSURE, not MEMBERSHIP (CORRECTED 2026-09-04)
 
 `libexec/quaude-fuse.js` carries a list of libexec/scripts members that must be
@@ -8689,6 +8880,9 @@ interpreters is the point of keeping the log. Fix: record the real interpreter i
 on the fused path, or record honestly that it is unknown — never a plausible-looking
 constant.
 
+Measured: libexec/node-shim/modules/process.cjs:425 still says `version: 'v24.0.0'`, and libexec/clode-build.cjs:2243
+still records `${process.release.name || "node"} ${process.version}` (2026-11-18).
+
 ### 4. `quaude-fuse.js`'s merge read-back parses unguarded
 
 `libexec/quaude-blobulate.js:358` (was quaude-fuse.js:339; re-read 2026-11-18, still unguarded)
@@ -8701,6 +8895,8 @@ Low severity on purpose: `scripts/merge-step.mjs` writes that file atomically
 and never promotes it — the parent then fails on a MISSING file, which `mustRead` already
 reports by name. The unguarded parse is only reachable if something else corrupts a
 fully-renamed file. Worth a named error the next time that code is touched.
+
+Measured: libexec/quaude-blobulate.js:358 `JSON.parse(dec.decode(mergedRaw))`, no try/catch around it (2026-11-18).
 
 ## 31 unreviewed Bun APIs the shim does not provide (2026-09-02)
 
@@ -8770,6 +8966,11 @@ missing one: it turns a loud failure into a silent wrong answer.
 **Deferred deliberately** (user, 2026-09-02), NOT dropped: the test skips with this
 entry named in its skip reason, and the cross-build umbrella now cannot close until
 every skip in the suite is understood and un-skipped where possible.
+
+Measured: the entry's own command (`inspect-claude-bundle.cjs <carve> --shim libexec/bun-shim.cjs --strict`) on the
+darwin-arm64 2.1.283 carve: exit 1, 45 unreviewed needs: 29 Bun.* "missing" (the list above less Bun.sleepSync), 15
+Bun.* "unrecognized" (Bun.BunRequest, Bun.ModuleGraph, Bun.canReload, Bun.open, Bun.internal and minifier noise such
+as Bun.See), and bun:sqlite. CORRECTED: 31 was the 2.1.252 count; at the pin it is 45 (2026-11-18).
 
 ## Every skip is understood, and as many as possible are not skips (2026-09-02)
 
@@ -8903,6 +9104,15 @@ loudly, naming this entry — not silently reverted to failing, and not weakened
 less. Re-run the exact repro above (naude vs quaude, same mcp.json/mock/argv) once a
 current-`main` tjs engine or `--strace` access is available.
 
+Measured: test/fidelity/agentic-mcp-ws.test.cjs with its DEFERRED skip removed (a scratch copy), NODE_PATH at
+deps/claude/node_modules for the mock server, staged 2.1.283 darwin-arm64 under the suite's tjs: fails, "MCP server
+never got initialize ... seen=[]" (2026-11-18).
+
+Measured: `scripts/mcp-transport-probe.mjs --transport=ws` against a quaude built from b4eb2f5 (darwin-arm64, the
+2.1.283 carve; throwaway HOME, canned mock): nothing arrived (2026-11-18).
+
+Unmeasured. The naude side of the repro was not re-run here.
+
 ## The last 5 skips: what it would take, and why they are not free (2026-09-02)
 
 After 84 -> 33, five skips remain that are neither opt-in-by-nature nor impossible
@@ -8991,6 +9201,12 @@ Fix: create the `--out` parent on the quaude path too, matching build-naude. Sma
 worth a test that runs `--out` into a non-existent directory on BOTH paths, since the
 asymmetry is exactly what nobody noticed.
 
+Measured: `clode build --out <scratch>/newdir/sub/quaude` (stage0.mjs, darwin-arm64, 2.1.283) with the parent absent:
+exit 1, "blobulate worker failed (exit 1)" ending in a bare "Error: ENOENT: no such file or directory" that names no
+path (2026-11-18).
+
+Unmeasured. The naude path was not re-tried.
+
 ### 2. `test/e2e-doctor-parity.test.cjs` HARD-FAILS when its precondition is missing
 
 Confirmed by running it: without a logged-in provider profile it does not skip, it
@@ -9010,6 +9226,12 @@ PTY job and light up the moment a logged-in profile is available.
 `test/fidelity/stale-frames.pty.test.cjs` needs the same profile but already skips
 correctly on its own precondition; it is excluded from the job only for lack of the
 profile, not for bad behaviour.
+
+Measured: `node --test test/e2e-doctor-parity.test.cjs` without CLODE_LIVE_RENDER on darwin: both tests skip, naming
+the live-render opt-in (2026-11-18).
+
+Unmeasured. With the opt-in and no logged-in profile (the case this entry describes) it was not run: it touches the
+Keychain.
 
 ## RETRACTED: "make-min-provider cannot carve a Windows-built provider" (2026-09-03)
 
@@ -9105,6 +9327,9 @@ seen again across 11 subsequent cold runs.
 `clode build`s would race the same way — the suite's half is fixed, the product's is not.
 The fix is extract-to-temp-then-rename, and it belongs with phase 4's input-validation
 work.
+
+Measured: `awk` over libexec/clode-extract.cjs's extractIfNeeded: mkdirSync then writeFileSync straight into the
+shared cache dir, no temp-and-rename; the product-side race is still open (2026-11-18).
 
 ## Release acceptance: the checks only a human with credentials can run (2026-09-04)
 
@@ -10008,6 +10233,9 @@ project convention, so the DECISIONS live here). Phase order is now
 every positional is drawn from exactly one: **products** (what clode builds) and
 **ingredients** (what clode fetches).
 
+Measured: `node scripts/stage0.mjs --help` renders 18 CLODE_* names, the surface the man-page entry below compares
+against (2026-11-18). No other claim in this decision was re-run.
+
 ### The vocabulary, and why each word
 
 - **`ingredient`** replaces the invented `provider`. NOT coined here:
@@ -10176,6 +10404,11 @@ reaches them; it says upstream now references them. `Bun.unsafe` in particular i
 Note the pin is deliberately at 2.1.251 and `clode build` cannot carve 2.1.257+ at all, so
 this is not a to-do for today — it is inventory for whoever absorbs the newer bundle, taken
 while the evidence was free.
+
+Measured: test/shim-surface.test.cjs with CLODE_PROVIDER_BIN at the darwin-arm64 2.1.283 carve passes; golden.json
+carries Bun.Image with a "REVIEWED 2026-09-26" note, and the bun-shim provides Bun.unsafe (`typeof Bun.unsafe` is
+"object" under node). CORRECTED: neither is unreviewed drift any more; Bun.Image is a reviewed, standing divergence
+(no image processing under quaude) (2026-11-18).
 
 
 ## The production-gate classifier reads COMMENTS as code shape (2026-09-13)
@@ -10499,6 +10732,10 @@ pinned bundle is no longer the reason quaude could lack the label. Not re-driven
 (the file is live-render gated and spawns the real bundle's `doctor`): re-run it at the pin, and
 retire the entry if quaude emits the label.
 
+Measured: `grep -o "Organization policy"` over the pinned 2.1.283 darwin-arm64 graph.json: 6 hits; NATIVE_ONLY at
+test/doctor-cli-parity.test.cjs:85 still lists it. The pin has passed the version that introduced the label, the day
+this entry predicted; whether `quaude doctor` now emits it was not run (live-render gated) (2026-11-18).
+
 ## THE BUILT TARGET DOCUMENTS NO ENV VAR IT READS (found 2026-09-13, phase-3b fix wave)
 
 `CLODE_TTY_MOUSE` and `CLODE_TTY_FOCUS` are **end-user opt-ins** — the only way
@@ -10523,6 +10760,10 @@ would document them in the wrong binary.
 
 Filed rather than fixed: it is a new surface for the built product, which is
 larger than an env-inventory fix wave.
+
+Measured: `<quaude> --help` with a quaude built from b4eb2f5 (darwin-arm64, the 2.1.283 carve; throwaway HOME, canned
+mock) names no CLODE_* variable, and libexec/node-shim/modules/tty.cjs:80 still documents CLODE_TTY_MOUSE /
+CLODE_TTY_FOCUS only in a comment (2026-11-18).
 
 ## `man/clode.1`'s ENVIRONMENT section trails `--help` by 13 names
 
@@ -10556,6 +10797,9 @@ instruments, one mistake" for `test/e2e-man.test.cjs`'s six remaining
 bare/unanchored matches (lines 38, 42, 46, 50, 70, 82). Both are the same file,
 both are about the man page's relationship to the surface table, and doing them
 together means reading that file's matching rules once instead of twice.
+
+Measured: the CLODE_* names in libexec/cli-surface.cjs (18) against the tokens in man/clode.1's ENVIRONMENT section
+(16): 11 shared, 7 missing, 5 extra (the correction above) (2026-11-18).
 
 ## Closure condition 7 has no mechanism, and phase 3b moved the number without anything noticing
 
