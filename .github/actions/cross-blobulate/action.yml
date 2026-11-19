@@ -24,6 +24,9 @@ runs:
         CLODE_TJS_WASM: 'off'
         CLODE_TJS_MIMALLOC: 'off'
         CLODE_TJS_FFI: 'off'
+        # The bootstrap engine runs all three engine phases here. Same file the caller's
+        # "Engine phases refused nothing" step reads (build-leg/action.yml).
+        CLODE_ENGINE_FLOOR_LOG: ${{ runner.temp }}/engine-floor.log
       run: |
         set -euo pipefail
         # A STEP ID, WITH THE DEFAULT `--needs` (runner-step-mode, 2026-09-21): this is

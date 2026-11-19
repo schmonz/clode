@@ -84,6 +84,14 @@ function resolve() {
   return tjs;
 }
 
+// The stale stand-in's pinned shape (test/fixtures/stale-engine-prelude.js), as data.
+function staleShape() {
+  const src = fs.readFileSync(path.join(REPO, 'test', 'fixtures', 'stale-engine-prelude.js'), 'utf8');
+  const m = /^\s*const SHAPE = (\{.*\});$/m.exec(src);
+  assert.ok(m, 'the prelude no longer carries SHAPE as one line of JSON');
+  return JSON.parse(m[1]);
+}
+
 const runTjs = (tjs, args) => spawnSync(tjs, ['run', ...args], { cwd: REPO, encoding: 'utf8' });
 
 test('the last release still bootstraps HEAD: the pinned slice fetches and passes the build-host floor', (t) => {
@@ -131,9 +139,11 @@ console.log(JSON.stringify({ mode: s.mode & 0o777, isFile: s.isFile(), ino }));
   assert.strictEqual(fs.statSync(path.join(d, 'copy.sh')).mode & 0o777, 0o755);
   assert.strictEqual(got.mode, 0o755);
   assert.strictEqual(got.isFile, true);
-  // Either this engine has identity (a release that carries the patch) and reports the real
-  // inode, or it refuses. Never 0.
-  assert.ok(got.ino === 'ERR_CLODE_ENGINE_FLOOR' || got.ino === String(fs.statSync(exe).ino), `ino: ${got.ino}`);
+  // Which answer is right is DATA, not either-or: the pinned shape (asserted equal to this very
+  // slice by the row below) says whether its stat carries ino. Without it, the only right answer
+  // is the refusal; with it, the real inode. Never 0, and never whichever happened to come back.
+  const want = staleShape().stat.includes('ino') ? String(fs.statSync(exe).ino) : 'ERR_CLODE_ENGINE_FLOOR';
+  assert.strictEqual(got.ino, want, `ino under the published engine`);
 });
 
 // The stale STAND-IN the offline build-host gates run on (test/fixtures/stale-engine-prelude.js) is
@@ -144,10 +154,7 @@ test('the stale stand-in\'s pinned shape IS the published slice\'s: bindings and
   const skip = why();
   if (skip) return t.skip(skip);
   const tjs = resolve();
-  const src = fs.readFileSync(path.join(REPO, 'test', 'fixtures', 'stale-engine-prelude.js'), 'utf8');
-  const m = /^\s*const SHAPE = (\{.*\});$/m.exec(src);
-  assert.ok(m, 'the prelude no longer carries SHAPE as one line of JSON');
-  const SHAPE = JSON.parse(m[1]);
+  const SHAPE = staleShape();
   const prog = path.join(mkdtemp(), 'shape.js');
   fs.writeFileSync(prog, 'console.log(JSON.stringify({ bindings: Object.getOwnPropertyNames(globalThis.__tjs_fs_sync), '
     + 'stat: Object.keys(globalThis.__tjs_fs_sync.stat(".")) }));\n');
