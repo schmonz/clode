@@ -44,9 +44,24 @@ outputs:
 runs:
   using: composite
   steps:
-    # Cache the whole toolchain+sysroot on (machine, src-rev): a hit skips the
-    # entire build.sh run. The paths live under RUNNER_TEMP (stable across the
-    # job) so the cache restore lands where the toolchain file expects them.
+    # The HOST compiler is an input to `build.sh tools` exactly as much as src-rev is:
+    # the tools are compiled BY it. Run 44460009323 is what leaving it out costs —
+    # ubuntu-latest moved to 26.04 (gcc 15, default -std=gnu23) and the NetBSD-10 tools
+    # build broke in external/gpl2/gmake/dist/ar.c, but only on the first leg that
+    # happened to miss this cache; a restored toolchain built by gcc 13 said nothing.
+    # So the identity goes into the key (a runner image bump is a new entry, built and
+    # proven by the new compiler), and the version is printed so the log names it.
+    - name: Host compiler identity (build.sh tools are compiled by it)
+      id: hostcc
+      shell: bash
+      run: |
+        set -euo pipefail
+        V="$(cc --version | head -1)"
+        echo "build.sh host compiler: $V"
+        echo "id=$(printf '%s' "$V" | sha256sum | cut -c1-12)" >> "$GITHUB_OUTPUT"
+    # Cache the whole toolchain+sysroot on (machine, src-rev, host compiler): a hit
+    # skips the entire build.sh run. The paths live under RUNNER_TEMP (stable across
+    # the job) so the cache restore lands where the toolchain file expects them.
     - name: Restore the build.sh toolchain + sysroot
       id: nbcache
       uses: actions/cache@v6.1.0
@@ -55,9 +70,9 @@ runs:
           ${{ runner.temp }}/nbsd-tool
           ${{ runner.temp }}/nbsd-dest
         # A light sysroot is a different artifact than a full one, so it must not
-        # share a cache entry. Full keeps the historical key unchanged (the 8
-        # green legs' caches stay valid); light gets its own suffix.
-        key: netbsd-crossbuild-${{ inputs.machine }}-${{ inputs.arch }}-${{ inputs.src-rev }}${{ inputs.sysroot-mode == 'light' && '-light' || '' }}-v1
+        # share a cache entry; light gets its own suffix. The hostcc segment is the
+        # host compiler identity (step above); -v2 marks the key that carries it.
+        key: netbsd-crossbuild-${{ inputs.machine }}-${{ inputs.arch }}-${{ inputs.src-rev }}-hostcc${{ steps.hostcc.outputs.id }}${{ inputs.sysroot-mode == 'light' && '-light' || '' }}-v2
     - id: b
       shell: bash
       run: |
@@ -114,7 +129,21 @@ runs:
         # Multi-arch ports (evbarm/sbmips/evbsh3) have no default MACHINE_ARCH and
         # abort without -a; single-arch ports pick their own, so pass -a only when set.
         ARCHOPT=(); [ -n "${{ inputs.arch }}" ] && ARCHOPT=(-a "${{ inputs.arch }}")
-        ./build.sh -m "${{ inputs.machine }}" "${ARCHOPT[@]}" -U -T "$TOOL" -D "$DEST" -j "$J" tools
+        # HOST tools only: compile them as C17, the language NetBSD-10's tools are
+        # written in. gcc 15 (ubuntu-26.04) defaults to -std=gnu23, where an empty
+        # parameter list `()` MEANS `(void)`; external/gpl2/gmake/dist/ar.c declares
+        # ar_scan's callback as K&R `long int (*function) ()` and passes it fully
+        # prototyped functions, which C23 makes -Wincompatible-pointer-types — an
+        # ERROR by default since gcc 14. This is a language-version mismatch, not a
+        # warning to silence: -std=gnu17 restores the meaning the source was written
+        # for (and covers C23's other breaks — bool/true/false as keywords — in the
+        # same tools tree), where -Wno-error=incompatible-pointer-types would compile
+        # the same code under the wrong language. HOST_CFLAGS reaches only the host
+        # compile (build.sh's nbmake bootstrap and tools/Makefile.gnuhost's configure);
+        # the TARGET cross-gcc and the sysroot are untouched. `-O` is build.sh's own
+        # default for HOST_CFLAGS, kept. -V, so the nbmake wrapper carries it too.
+        HOSTCFLAGS=(-V "HOST_CFLAGS=-O -std=gnu17")
+        ./build.sh -m "${{ inputs.machine }}" "${ARCHOPT[@]}" "${HOSTCFLAGS[@]}" -U -T "$TOOL" -D "$DEST" -j "$J" tools
         if [ "${{ inputs.sysroot-mode }}" = light ]; then
           # LIGHT sysroot: there is no blessed build.sh "sysroot only" operation,
           # so compose one from make targets one level down via the nbmake wrapper
@@ -131,7 +160,7 @@ runs:
           # usr.sbin/crash "unknown type name 'bool'" at netbsd-10) never fire.
           # The lib list is the EMPIRICAL part: if tjs later fails to link on a
           # missing symbol, add the owning lib subdir here.
-          ./build.sh -m "${{ inputs.machine }}" "${ARCHOPT[@]}" -U -T "$TOOL" -D "$DEST" -j "$J" makewrapper
+          ./build.sh -m "${{ inputs.machine }}" "${ARCHOPT[@]}" "${HOSTCFLAGS[@]}" -U -T "$TOOL" -D "$DEST" -j "$J" makewrapper
           NBMAKE=$(ls "$TOOL"/bin/nbmake-* 2>/dev/null | head -1)
           [ -x "$NBMAKE" ] || { echo "build.sh: no nbmake-* wrapper under $TOOL/bin" >&2; ls "$TOOL/bin" | head; exit 1; }
           "$NBMAKE" -C "$SRC/etc" distrib-dirs
@@ -146,7 +175,7 @@ runs:
           done
           test -e "$DEST"/usr/lib/libc.* || { echo "light sysroot: no libc under $DEST/usr/lib" >&2; ls "$DEST/usr/lib" 2>/dev/null | head; exit 1; }
         else
-          ./build.sh -m "${{ inputs.machine }}" "${ARCHOPT[@]}" -U -T "$TOOL" -D "$DEST" -j "$J" distribution
+          ./build.sh -m "${{ inputs.machine }}" "${ARCHOPT[@]}" "${HOSTCFLAGS[@]}" -U -T "$TOOL" -D "$DEST" -j "$J" distribution
         fi
         ls "$TOOL"/bin/*--netbsd*-gcc >/dev/null 2>&1 || { echo "build.sh: no *--netbsd*-gcc under $TOOL/bin" >&2; ls "$TOOL/bin" | head; exit 1; }
         test -d "$DEST/usr/include" || { echo "build.sh: no sysroot headers under $DEST/usr/include" >&2; exit 1; }
