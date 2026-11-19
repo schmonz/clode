@@ -3,7 +3,7 @@
 // absolute path there as a URL, so on Windows `D:\...` has the scheme `d:` and throws ERR_UNSUPPORTED_ESM_URL_SCHEME
 // (CI run 44626089671, windows-latest: test/gates-ran-in-ci.test.cjs's live-reporter row). It works on POSIX, so only a
 // Windows runner ever saw it. The fix is test/esm-href.cjs's esmHref (pathToFileURL(...).href); this guard reads the
-// source for the shape that caused it: a path built in place (path.join / path.resolve / a template) handed straight to
+// source for the shape that caused it: a path built in place (path.join / path.resolve / require.resolve / a template) handed straight to
 // one of those, or an import() of a bare identifier that names a path. A relative specifier ('../scripts/x.mjs') and
 // a URL (pathToFileURL, esmHref, a variable named *href / *url) are fine.
 const test = require('node:test');
@@ -17,7 +17,7 @@ const { esmHref } = require('./esm-href.cjs');
 const REPO = path.resolve(__dirname, '..');
 const SELF = new Set(['test/esm-href.test.cjs']);
 // a path built in place, as the argument of import() or the value of an ESM-loading flag
-const BUILT = String.raw`(?:path\.(?:join|resolve)\(|\$\{\s*path\.(?:join|resolve)\()`;
+const BUILT = String.raw`(?:path\.(?:join|resolve)\(|require\.resolve\(|\$\{\s*(?:path\.(?:join|resolve)|require\.resolve)\()`;
 const SHAPES = [
   { what: 'import() of a path built in place', re: new RegExp(String.raw`\bimport\(\s*` + BUILT) },
   { what: '--test-reporter/--import/--loader given a path built in place',
@@ -39,8 +39,8 @@ function scanEsmSpecifiers({ files }) {
 
 guardTests(defineGuard({
   name: 'esm-specifier-is-a-url',
-  // test/, scripts/, libexec/ and the workflows held 654 such files on 2026-11-19
-  floor: 500,
+  // test/, scripts/, libexec/ and the workflows held 653 such files on 2026-11-19, besides this one
+  floor: 653,
   read: () => {
     const list = execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard', 'test', 'scripts', 'libexec', '.github'], { cwd: REPO, encoding: 'utf8' })
       .split('\n').filter((f) => /\.(?:c|m)?js$|\.ya?ml$/.test(f) && !SELF.has(f) && !/node_modules|\/fixtures?\//.test(f) && fs.existsSync(path.join(REPO, f)));
@@ -59,6 +59,8 @@ test('esm-specifier-is-a-url: every shape is named, and the URL forms are clean'
     "['--import', path.join(HERE, 'r.mjs')]",
     '`--loader=${path.join(HERE, "l.mjs")}`',
     'await import(modPath)',
+    "await import(require.resolve('string-width'))",
+    "`--test-reporter=${require.resolve('./r.mjs')}`",
   ];
   for (const l of bad) assert.strictEqual(scanEsmSpecifiers({ files: [['f.js', l]] }).findings.length, 1, l);
   const good = [
