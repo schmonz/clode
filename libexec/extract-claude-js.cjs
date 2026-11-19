@@ -1698,6 +1698,20 @@ function moduleWithMeta(name, src) {
     + '\n' + src;
 }
 
+// The inverse of moduleWithMeta's url: the module NAME a generated header's import.meta.url was
+// derived from, which is the spelling every other module's `from"..."` uses for it. A POSIX carve
+// names its modules /$bunfs/root/x.js (url file:///$bunfs/root/x.js); a win32 carve names them
+// B:/~BUN/root/x.js, and the url gains a '/' before the drive (file:///B:/~BUN/root/x.js), which a
+// reader that only strips "file://" keeps -- so its /B:/... matched no import and every cross-chunk
+// resolution in a win32 carve came up empty (CI 44443821699: rg-resolution-accounted and
+// every-tool-driven BROKEN on windows-latest only). Readers of a decoded carve use this, not
+// their own strip. null for anything that is not a file:// url.
+function moduleNameOfMetaUrl(url) {
+  if (typeof url !== 'string' || !url.startsWith('file://')) return null;
+  const body = url.slice('file://'.length);
+  return /^\/[A-Za-z]:/.test(body) ? body.slice(1) : body;
+}
+
 function graphRunnerSource(doc) {
   // JSON.stringify twice = a valid JS string literal. U+2028/2029 are legal in JS
   // strings since ES2019 but not in every engine this output may meet, so escape them.
@@ -1956,6 +1970,7 @@ module.exports = {
   BUNFS,
   BUNDLE_VERSION,
   moduleWithMeta,
+  moduleNameOfMetaUrl,
   pickEntry,
   describeBundleFormat,
   patchDoctorWarnings,

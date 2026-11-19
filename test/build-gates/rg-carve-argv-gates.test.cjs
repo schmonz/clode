@@ -33,6 +33,7 @@ const P = require('../../scripts/lib/rg-probe.cjs');
 const rgn = require('../../libexec/rg-native.cjs');
 const { providerBin } = require('../provider-resolve.cjs');
 const { decodeGraphRunner } = require('../../libexec/inspect-claude-bundle.cjs');
+const { moduleWithMeta } = require('../../libexec/extract-claude-js.cjs');
 
 const REPO = path.resolve(__dirname, '..', '..');
 const EXTRACT = path.join(REPO, 'libexec', 'extract-claude-js.cjs');
@@ -229,4 +230,11 @@ test('runner calls are scoped to the runner\'s chunk and the chunks importing it
     + `${mark('c')}function oX(h){return yRt(h.path)}let w=oX(v)`;
   const calls = P.rgRunnerCalls(t);
   assert.deepStrictEqual(calls.map((c) => [c.local, c.kind]), [['bD', 'forward (oX hands its argv on)'], ['Lq', 'shape'], ['Lq', null]]);
+  // A win32 carve names its chunks B:/~BUN/root/x.js, and its url is file:///B:/~BUN/root/x.js (the extractor's
+  // own header): the chunk's name is read back from that url, or no import matches it and the importing chunk's
+  // calls are never seen (CI 44443821699: windows-latest examined 23 of the pinned carve's 30).
+  const w = [`\n${moduleWithMeta('B:/~BUN/root/chunk-a.js', '')}`, `\n${moduleWithMeta('B:/~BUN/root/chunk-b.js', '')}`, `\n${moduleWithMeta('B:/~BUN/root/chunk-c.js', '')}`];
+  const tw = t.replace(mark('a'), w[0]).replace(mark('b'), w[1]).replace(mark('c'), w[2]).replace('from"/$bunfs/root/chunk-a.js"', 'from"B:/~BUN/root/chunk-a.js"');
+  assert.ok(tw.includes('import.meta.url = "file:///B:/~BUN/root/chunk-b.js"') && tw.includes('from"B:/~BUN/root/chunk-a.js"'));
+  assert.deepStrictEqual(P.rgRunnerCalls(tw).map((c) => [c.local, c.kind]), calls.map((c) => [c.local, c.kind]));
 });

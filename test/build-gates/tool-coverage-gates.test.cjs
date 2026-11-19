@@ -151,6 +151,7 @@ const { spawnSync } = require('node:child_process');
 const { defineGuard, guardTests, checkGate, BROKEN, VIOLATION, OK } = require('../guard.cjs');
 const { lexicalCodeMask } = require('../../libexec/scc-merge.cjs');
 const { decodeGraphRunner } = require('../../libexec/inspect-claude-bundle.cjs');
+const { moduleNameOfMetaUrl } = require('../../libexec/extract-claude-js.cjs');
 const { discoverFilesByExt } = require('../source-scan.cjs');
 
 const REPO = path.resolve(__dirname, '..', '..');
@@ -228,11 +229,13 @@ const KEY_RE = (key) => new RegExp(`^(?:async\\s+)?(?:get\\s+)?${esc(key)}\\s*([
 // into its modules there. Each chunk has its own minified namespace (`bwe` is the MCP template in
 // one chunk and an error predicate in another), so a name is only ever resolved inside its module
 // or through that module's own import/export clauses.
-const MODULE_HEADER = /import\.meta\.require = globalThis\.__quaudeRequire; import\.meta\.url = "file:\/\/([^"]+)";/g;
+// The module's NAME (the spelling its importers' `from"..."` use) is read back from the url by the
+// extractor's own inverse: a win32 carve's url is file:///B:/~BUN/..., its name B:/~BUN/....
+const MODULE_HEADER = /import\.meta\.require = globalThis\.__quaudeRequire; import\.meta\.url = ("file:\/\/[^"]+");/g;
 function splitModules(text) {
   const hits = [...text.matchAll(MODULE_HEADER)];
   const out = new Map();
-  hits.forEach((h, k) => out.set(h[1], text.slice(h.index, k + 1 < hits.length ? hits[k + 1].index : text.length)));
+  hits.forEach((h, k) => out.set(moduleNameOfMetaUrl(JSON.parse(h[1])), text.slice(h.index, k + 1 < hits.length ? hits[k + 1].index : text.length)));
   return out;
 }
 function parseModule(src) {
@@ -1607,7 +1610,10 @@ function readJobRun() {
 // FIXTURES
 // ==========================================================================
 const lines = (...ls) => ls.join('\n');
-const HDR = (name) => `import.meta.require = globalThis.__quaudeRequire; import.meta.url = "file://${name}";`;
+// A chunk's header as the extractor writes it (its own first line, url and directory included), so a
+// fixture never spells a url the extractor would not: a win32 name B:/~BUN/root/x.js gets file:///B:/....
+const { moduleWithMeta } = require('../../libexec/extract-claude-js.cjs');
+const HDR = (name) => moduleWithMeta(name, '').replace(/\n$/, '');
 const NOOP_RESULT = 'mapToolResultToToolResultBlockParam(e,n){return{tool_use_id:n,content:e}}';
 
 // A code-split carve in the shapes the 2.1.283 carve spells its registry with: tool objects built
@@ -1882,6 +1888,23 @@ test('extractRegistry names an element it cannot read, and does not count it', (
   assert.strictEqual(r.findings.length, 1, r.findings.join('\n'));
   assert.match(r.findings[0], /getAllBaseTools element `\.\.\.Unk\.flatMap\(\(e\)=>e\)` does not resolve/);
   assert.deepStrictEqual([...r.tools.keys()].sort(), MINI_TOOLS);
+});
+
+// A win32 carve names its chunks B:/~BUN/root/x.js, and the extractor's url for one is
+// file:///B:/~BUN/root/x.js. Reading the chunk's name off that url by stripping "file://" kept the
+// extra '/', no import matched, and the windows-latest gate examined 4 tools of the pinned carve
+// (CI 44443821699): the same carve spelled the win32 way reads the same registry and modes.
+// The win32 spelling of the fixture, as the extractor writes it (moduleWithMeta: the url gains a '/' before
+// the drive; the import specifiers and the directory do not).
+const WIN32 = (t) => t.replaceAll('file:///$bunfs/root/', 'file:///B:/~BUN/root/').replaceAll('/$bunfs/root', 'B:/~BUN/root');
+test('a win32-named carve (B:/~BUN/root/...) reads the same registry and modes as a POSIX one', () => {
+  const w = WIN32(miniCarve());
+  assert.ok(w.includes('import.meta.url = "file:///B:/~BUN/root/chunk-names.js"'), 'the fixture carries the win32 url the extractor writes');
+  const r = extractRegistry(w), p = extractRegistry(miniCarve());
+  assert.deepStrictEqual(r.findings, []);
+  assert.deepStrictEqual([...r.tools.keys()].sort(), MINI_TOOLS);
+  assert.deepStrictEqual([...r.tools.entries()].map(([k, v]) => [k, v.source, v.aliases]), [...p.tools.entries()].map(([k, v]) => [k, v.source, v.aliases]));
+  assert.deepStrictEqual(extractModes(w), extractModes(miniCarve()));
 });
 
 // ==========================================================================
