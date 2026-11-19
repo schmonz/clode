@@ -24,7 +24,7 @@
 // THE LIMIT. DEFAULT_LIMIT_MS, 30 minutes. Measured on CI (run 44460009323, suite ubuntu-latest): the WHOLE suite's
 // node --test took 108s, and its slowest single test 10.2s, so no CI file comes near it. Locally, with a tjs and a
 // provider present, the heaviest files run real builds and agentic turns; the longest timeout any of them gives a
-// single step is 10 minutes (clode-native's runNative), so 30 minutes admits three such steps back to back. A file whose
+// single step is 10 minutes, so 30 minutes admits three such steps back to back. A file whose
 // own spawn is allowed longer than that is named in OVERRIDES with its reason. There is no global knob, on purpose:
 // a limit raised for everything is a hang hidden for everything.
 const path = require('node:path');
@@ -40,6 +40,10 @@ const OVERRIDES = {
     why: 'builds a tjs from source with no node on PATH; its spawnSync allows 60 minutes (cold vendor build)' },
   'test/build-host-stale-engine.test.cjs': { ms: 65 * 60 * 1000,
     why: 'rebuilds a stale host engine; its spawnSync allows 60 minutes (cold vendor build)' },
+  'test/clode-native.test.cjs': { ms: 80 * 60 * 1000,
+    why: 'its two native builds are bounded by CPU work and stalls, each with a 30-minute wall ceiling for a starved box '
+      + '(measured 869 s under 16 CPU hogs); with its 5-minute bootstrap, 5-minute node fetch and short rows, its own '
+      + 'limits sum to about 76 minutes' },
   'test/unicode-data-fresh.test.cjs': { ms: 35 * 60 * 1000,
     why: 'regenerates the Unicode tables against the native binary; its spawnSync allows 30 minutes (cold UCD fetch)' },
 };

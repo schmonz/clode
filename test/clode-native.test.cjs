@@ -24,6 +24,7 @@
 // bundle live at different keys/locations).
 const { test, before, after } = require('node:test');
 const { spawnCollect } = require('./spawn-collect.cjs');
+const { runCpuBounded } = require('./cpu-bound-run.cjs');
 const { throwawayHome } = require('./throwaway-home.cjs');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -155,6 +156,34 @@ function runNative(bin, args, env, timeoutMs = 600000) {
   return spawnCollect(bin, args, { cwd: DIR, env }, { timeoutMs });
 }
 
+// THE BOUND ON A NATIVE BUILD (acceptance 2 and 4): the WORK it does, not the wall clock (test/cpu-bound-run.cjs).
+//
+// MEASURED 2026-11-19 on this M1 (4 performance + 4 efficiency cores), acceptance 2's build with CLODE_VERBOSE:
+//   alone           234 s wall, 216 s CPU. No network. 164 s of it is extracting and SCC-merging the 2.1.283 carve
+//                   under tjs (group 1, 51 modules, alone is ~100 s), then template sign 14 s, blobulate 5 s, smoke 4 s.
+//   16 CPU hogs     869 s wall (3.7x), 303 s CPU (1.4x: the build is pushed onto the slower efficiency cores).
+//   + IO loop
+//   E-cores only    (taskpolicy -b) 151 s CPU to the first merge, which alone reaches in at most 62 s: ~2.5x the
+//                   CPU for the same work, so a whole build on efficiency cores projects to ~560 s CPU.
+//   full suites     245-460 s over 17 runs; one suite ran every test 2.5-3x slower and this row hit 600 s with no
+//                   output. Wall time is CPU time over the core share the box gives it, so a wall bound judged the box.
+// Acceptance 4 shares DIR/cache with acceptance 2, so its own build is ~35 s WARM; when acceptance 2 dies before it
+// has extracted (that suite), acceptance 4 extracts COLD under tjs and is acceptance 2's work again: it hit 600 s in
+// the same run. So both rows get the one bound, which covers the cold case.
+//   cpuBudgetMs  900 s: 1.6x the all-E-core projection, 4.2x alone. It catches a build doing several times its work
+//                (a runaway loop), which the wall clock could only tell from a slow box by guessing.
+//   stallMs      120 s with no CPU advance in the whole tree. The longest healthy phase without CPU in the build's own
+//                tree is seconds (codesign and the mock smoke both run in it); a box that starves a runnable process
+//                for two minutes is not one a row can judge.
+//   wallMs       1800 s, about 2x the 16-hog wall, so a starved box ends in a named WALL failure, not the watchdog
+//                (test/file-watchdog.cjs's OVERRIDES entry for this file is sized from it).
+const BUILD_BOUND = { cpuBudgetMs: 900 * 1000, stallMs: 120 * 1000, wallMs: 1800 * 1000, pollMs: 5000 };
+async function runBuild(args, env) {
+  const r = await runCpuBounded(NATIVE, args, { cwd: DIR, env }, BUILD_BOUND);
+  r.why = `${r.bound ? `BOUND: ${r.bound}\n` : ''}wall ${Math.round(r.wallMs / 1000)} s, CPU ${Math.round(r.cpuMs / 1000)} s${r.cpuSampled ? '' : ' (not sampled)'}`;
+  return r;
+}
+
 test('clode bootstrap blobulates a native builder and its internal smokes pass', (t) => {
   if (SKIP) { t.skip(SKIP); return; }
   assert.strictEqual(BUILD.status, 0, `clode bootstrap failed:\n${BUILD.stdout}\n${BUILD.stderr}`);
@@ -251,8 +280,8 @@ test('acceptance 2: the native builder BUILDS THE PRODUCT (quaude blobulate + PO
     CLODE_CACHE: path.join(DIR, 'cache'),     // extraction cache stays in the sandbox
     CLODE_ZSTD: HOST_ZSTD,                    // reachable by name, not by widening PATH
   };
-  const r = await runNative(NATIVE, ['build', '--out', QUAUDE], env);
-  assert.strictEqual(r.status, 0, `native build failed:\nstdout:\n${r.stdout}\nstderr:\n${r.stderr}`);
+  const r = await runBuild(['build', '--out', QUAUDE], env);
+  assert.strictEqual(r.status, 0, `native build failed (${r.why}):\nstdout:\n${r.stdout}\nstderr:\n${r.stderr}`);
   assert.match(r.stdout, /clode: blobulated .*quaude-from-native/);
   assert.match(r.stdout, /PONG round-trip ok, attest ok/);   // the mandatory smoke
   assert.ok(fs.statSync(QUAUDE).size > 30 * 1024 * 1024, 'blobulated quaude implausibly small');
@@ -319,8 +348,8 @@ test('acceptance 4: the native builder BUILDS A NAUDE (fetch node + assemble + P
     CLODE_ZSTD: HOST_ZSTD,                    // reachable by name, not by widening PATH
     CLODE_NODES: NODES,
   };
-  const r = await runNative(NATIVE, ['build', 'naude', '--out', NAUDE], env);
-  assert.strictEqual(r.status, 0, `native naude build failed:\nstdout:\n${r.stdout}\nstderr:\n${r.stderr}`);
+  const r = await runBuild(['build', 'naude', '--out', NAUDE], env);
+  assert.strictEqual(r.status, 0, `native naude build failed (${r.why}):\nstdout:\n${r.stdout}\nstderr:\n${r.stderr}`);
   assert.match(r.stdout, /built naude/);
   assert.match(r.stdout, /PONG round-trip ok/);   // the mandatory smoke ran on the built naude
   assert.ok(fs.statSync(NAUDE).size > 30 * 1024 * 1024, 'built naude implausibly small');
