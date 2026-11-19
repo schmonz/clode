@@ -732,7 +732,10 @@ jobs:
           # It needs CLODE_TJS and nothing else, and the suite job has no engine, so
           # without this line it would run on dev boxes only.
           FILES="$FILES test/engine-regexp-reuse.test.cjs"
-          node --test --test-concurrency=1 $FILES 2>&1 | tee shim-oracle.out
+          mkdir -p "$RUNNER_TEMP/cells"
+          node --test --test-concurrency=1 --test-reporter=spec --test-reporter-destination=stdout \
+            --test-reporter=./test/cell-reporter.mjs --test-reporter-destination="$RUNNER_TEMP/cells/node-shim-oracle.jsonl" \
+            $FILES 2>&1 | tee shim-oracle.out
           # A SKIPPED run of either newly-added file must be distinguishable from a
           # clean one — never a silent pass (phase-5 doctrine: a red that cannot
           # tell "broken" from "not given what I need" carries no information, and
@@ -745,6 +748,13 @@ jobs:
           # finale) — neither newly-added file may add to it.
           grep -qE '^(ℹ|#) skipped 2$' shim-oracle.out \
             || { echo "ERROR: expected exactly 2 skips (pre-existing darwin-only + live-roundtrip-opt-in rows). A different count means shim-surface, guard-subcommands-gate, or engine-regexp-reuse skipped again (task-8 regressed), or an unrelated new skip appeared — see above." >&2; grep -E 'skipped' shim-oracle.out >&2; exit 1; }
+      # THE CELLS this job drives (test/build-gates/tool-coverage-gates.test.cjs, CELL_JOBS): every test that runs a
+      # claimed driver's control PASSED above, on this engine, as test/cell-reporter.mjs recorded it. A skip, a failure or
+      # a test that never ran means the tool x mode cell ran nowhere, and this step names it (observability plan Task 1).
+      # Claimed here: test/node-shim-agentic.test.cjs (its Bash and Edit rows), one of the FILES glob above.
+      - name: Cells — every tool x mode cell this job claims, it ran
+        if: ${{ !cancelled() }}
+        run: CLODE_CELL_JOB=node-shim-oracle CLODE_CELL_RAN="$RUNNER_TEMP/cells" node --test --test-name-pattern=cells-ran-in-ci-job test/build-gates/tool-coverage-gates.test.cjs
 
   # The BUILDER and the PACKAGED TARGETS — on glibc, on purpose.
   #
@@ -864,8 +874,12 @@ jobs:
           # (spec reporter) or "# skipped N" (tap), and pinning the wrong one
           # would make this guard fire always or never. Verified locally: node 24
           # emits the spec form even when piped.
+          mkdir -p "$RUNNER_TEMP/cells"
           CLODE_PROVIDER_BIN="$PROV" CLODE_CLAUDE_BIN="$PROV" \
-            node --test --test-timeout=1200000 test/clode-native.test.cjs 2>&1 | tee native.out
+            node --test --test-timeout=1200000 \
+              --test-reporter=spec --test-reporter-destination=stdout \
+              --test-reporter=./test/cell-reporter.mjs --test-reporter-destination="$RUNNER_TEMP/cells/native-builder.jsonl" \
+              test/clode-native.test.cjs 2>&1 | tee native.out
           grep -qE '^(ℹ|#) skipped 0$' native.out \
             || { echo "ERROR: a clode-native acceptance SKIPPED (or the summary format changed) — the node-free builder went unproven" >&2; exit 1; }
 
@@ -906,6 +920,13 @@ jobs:
           grep -qE '^(ℹ|#) skipped 0$' boundary.out \
             || { echo "ERROR: the naude shim-boundary gate SKIPPED — it found no built naude to inspect (see its skip message above)" >&2; exit 1; }
 
+      # THE CELLS this job drives (test/build-gates/tool-coverage-gates.test.cjs, CELL_JOBS): every test that runs a
+      # claimed driver's control PASSED above, on this engine, as test/cell-reporter.mjs recorded it. A skip, a failure or
+      # a test that never ran means the tool x mode cell ran nowhere, and this step names it (observability plan Task 1).
+      - name: Cells — every tool x mode cell this job claims, it ran
+        if: ${{ !cancelled() }}
+        run: CLODE_CELL_JOB=native-builder-oracle CLODE_CELL_RAN="$RUNNER_TEMP/cells" node --test --test-name-pattern=cells-ran-in-ci-job test/build-gates/tool-coverage-gates.test.cjs
+
       # REQUIRED-GATE MARKER (BACKLOG item 4 / phase 5 task 10). This job "sat as one red
       # among twenty-two" — it BUILDS THE PRODUCT (node-free, real provider) and is the
       # closest thing we have to a gate on the thing users actually get; it would have
@@ -937,7 +958,7 @@ jobs:
       - name: if something ELSE in this job failed, say THAT plainly (no claim about the artifact)
         if: failure() && steps.build.outcome != 'failure' && steps.oracle.outcome != 'failure'
         run: |
-          MSG='native-builder-oracle failed, but NOT at the build or the full-binary oracle step (checkout, an artifact download, a provider/dep install, the cache action, or the shim-boundary step) -- so this job could not verify the shipped artifact this run, which is a DIFFERENT condition from proving it broken. Could be a real regression in this job'"'"'s own plumbing, or infrastructure flake (a registry timeout, a transient fetch failure). Look at which step actually failed above before assuming either.'
+          MSG='native-builder-oracle failed, but NOT at the build or the full-binary oracle step (checkout, an artifact download, a provider/dep install, the cache action, the shim-boundary step, or the cells check) -- so this job could not verify the shipped artifact this run, which is a DIFFERENT condition from proving it broken. Could be a real regression in this job'"'"'s own plumbing, or infrastructure flake (a registry timeout, a transient fetch failure). Look at which step actually failed above before assuming either.'
           echo "::warning title=native-builder-oracle: could not verify the shipped artifact::$MSG"
           { echo '### :warning: native-builder-oracle: could not verify the shipped artifact'; echo "$MSG"; } >> "$GITHUB_STEP_SUMMARY"
 
@@ -1099,8 +1120,11 @@ jobs:
           set -euo pipefail
           PROV="$(node scripts/stage-provider.mjs)" || exit 1
           echo "provider: $PROV"
+          mkdir -p "$RUNNER_TEMP/cells"
           CLODE_PROVIDER_BIN="$PROV" CLODE_CLAUDE_BIN="$PROV" \
             node --test --test-concurrency=1 \
+              --test-reporter=spec --test-reporter-destination=stdout \
+              --test-reporter=./test/cell-reporter.mjs --test-reporter-destination="$RUNNER_TEMP/cells/pty-build.jsonl" \
               test/quaude-build.test.cjs \
               test/e2e-tui-tjs.test.cjs \
               test/e2e-ctrlz-tui.test.cjs \
@@ -1285,8 +1309,11 @@ jobs:
           NATIVE="$RUNNER_TEMP/rg-oracle/node_modules/@anthropic-ai/claude-code-linux-x64/claude"
           test -x "$NATIVE" || { echo "ERROR: no native claude at $NATIVE after installing $V" >&2; exit 1; }
           echo "native: $NATIVE ($V)"
+          mkdir -p "$RUNNER_TEMP/cells"
           CLODE_PROVIDER_BIN="$NATIVE" CLODE_CLAUDE_BIN="$NATIVE" \
             node --test --test-concurrency=1 \
+              --test-reporter=spec --test-reporter-destination=stdout \
+              --test-reporter=./test/cell-reporter.mjs --test-reporter-destination="$RUNNER_TEMP/cells/pty-rg.jsonl" \
               test/fidelity/rg-differential.test.cjs \
               test/fidelity/agentic-grep-glob.test.cjs 2>&1 | tee rg-gates.out
           SKIPPED=$(sed -nE 's/^(ℹ|#) skipped ([0-9]+)$/\2/p' rg-gates.out | tail -1)
@@ -1294,6 +1321,32 @@ jobs:
           echo "skipped: ${SKIPPED:-?}; accepted by name (macOS only): $NAMED"
           [ "${SKIPPED:-x}" = 1 ] && [ "$NAMED" = 1 ] \
             || { echo "ERROR: an rg gate SKIPPED beyond the one macOS-only row (see its reason above) — it judged nothing, so this is not a pass" >&2; grep -E 'skipped|# SKIP|﹣' rg-gates.out >&2; exit 1; }
+      # SANDBOXED BASH FAILS CLOSED (8b088ef): until then an enabled sandbox let every Bash call after the first run
+      # UNSANDBOXED under quaude, and no job ran Bash with the sandbox on. This is the Bash x sandbox:on cell
+      # (test/build-gates/tool-coverage-gates.test.cjs) on this engine: a built quaude, one turn per settings source.
+      # Where native would not sandbox (a Linux runner without bubblewrap or socat) quaude must do as native does, warn
+      # and run every call (USER ruling D2), and the test judges that instead. No skip is accepted.
+      - name: sandboxed Bash fails closed — agentic-sandbox-fail-closed against a built quaude
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          CLODE_TJS: ${{ runner.temp }}/tjs/tjs
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/cells"
+          PROV="$(node scripts/stage-provider.mjs)" || exit 1
+          CLODE_PROVIDER_BIN="$PROV" CLODE_CLAUDE_BIN="$PROV" \
+            node --test --test-concurrency=1 \
+              --test-reporter=spec --test-reporter-destination=stdout \
+              --test-reporter=./test/cell-reporter.mjs --test-reporter-destination="$RUNNER_TEMP/cells/pty-sandbox.jsonl" \
+              test/fidelity/agentic-sandbox-fail-closed.test.cjs 2>&1 | tee sandbox.out
+          grep -qE '^(ℹ|#) skipped 0$' sandbox.out \
+            || { echo "ERROR: agentic-sandbox-fail-closed SKIPPED (no built quaude?): it judged nothing, so this is not a pass" >&2; exit 1; }
+      # THE CELLS this job drives (test/build-gates/tool-coverage-gates.test.cjs, CELL_JOBS): every test that runs a
+      # claimed driver's control PASSED above, on this engine, as test/cell-reporter.mjs recorded it. A skip, a failure or
+      # a test that never ran means the tool x mode cell ran nowhere, and this step names it (observability plan Task 1).
+      - name: Cells — every tool x mode cell this job claims, it ran
+        if: ${{ !cancelled() }}
+        run: CLODE_CELL_JOB=linux-x64-pty CLODE_CELL_RAN="$RUNNER_TEMP/cells" node --test --test-name-pattern=cells-ran-in-ci-job test/build-gates/tool-coverage-gates.test.cjs
 
   # node-shim oracle on DARWIN — the same node-vs-tjs behavioral diff as
   # node-shim-oracle above, but on macOS against a real darwin tjs.
@@ -1388,7 +1441,10 @@ jobs:
           # git, a staged provider — so it needs nothing further, the same placement fix
           # Task 8 made for shim-surface/guard-subcommands-gate.
           FILES="$FILES test/credential-store-attempted.test.cjs"
-          node --test --test-concurrency=1 $FILES 2>&1 | tee darwin-oracle.out
+          mkdir -p "$RUNNER_TEMP/cells"
+          node --test --test-concurrency=1 --test-reporter=spec --test-reporter-destination=stdout \
+            --test-reporter=./test/cell-reporter.mjs --test-reporter-destination="$RUNNER_TEMP/cells/node-shim-oracle-darwin.jsonl" \
+            $FILES 2>&1 | tee darwin-oracle.out
           # A SKIPPED run of the newly-added file must be distinguishable from a clean
           # one — never a silent pass (same phase-5 doctrine as the linux oracle's own
           # skip-count assertion below it in this file). `2` is this job's PRE-EXISTING,
@@ -1407,6 +1463,13 @@ jobs:
           # nowhere.
           grep -qE '^(ℹ|#) skipped 2$' darwin-oracle.out \
             || { echo "ERROR: expected exactly 2 skips (the darwin-branch row needing CLODE_DARWIN_PROVIDER_BIN, and the live-roundtrip opt-in finale). A different count means credential-store-attempted skipped (the P0 guard is back to running nowhere), or an unrelated new skip appeared — see above." >&2; grep -E 'skipped' darwin-oracle.out >&2; exit 1; }
+      # THE CELLS this job drives (test/build-gates/tool-coverage-gates.test.cjs, CELL_JOBS): every test that runs a
+      # claimed driver's control PASSED above, on this engine, as test/cell-reporter.mjs recorded it. A skip, a failure or
+      # a test that never ran means the tool x mode cell ran nowhere, and this step names it (observability plan Task 1).
+      # Claimed here: test/node-shim-agentic.test.cjs (its Bash and Edit rows), one of the FILES glob above.
+      - name: Cells — every tool x mode cell this job claims, it ran
+        if: ${{ !cancelled() }}
+        run: CLODE_CELL_JOB=node-shim-oracle-darwin CLODE_CELL_RAN="$RUNNER_TEMP/cells" node --test --test-name-pattern=cells-ran-in-ci-job test/build-gates/tool-coverage-gates.test.cjs
 
       # ITEM 5 (BACKLOG / phase 5 task 10): "No CI leg builds against more than one
       # platform's graph. That is why a merger corruption that broke linux shipped green
