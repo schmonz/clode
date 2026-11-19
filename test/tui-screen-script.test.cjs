@@ -21,7 +21,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { parseArgs, parseScript, settleVerdict, SCRIPT_DEFAULTS, stopChild } = require('./tui-screen.cjs');
+const { parseArgs, parseScript, settleVerdict, SCRIPT_DEFAULTS, stopChild, snapshotTree } = require('./tui-screen.cjs');
 const { captureSession } = require('./e2e-pty.cjs');
 const { sandbox } = require('./e2e.cjs');
 const { frameShows } = require('./frame-diff.cjs');
@@ -157,26 +157,30 @@ function fakeChild({ signals }) {
   };
   return c;
 }
-// groups: false is Windows (a negative pid is refused: ESRCH); the group then counts as gone.
+// groups: false is Windows: a negative pid is refused (ESRCH), so no group is ever alive there, and the grandchildren
+// are found only by the snapshot (node-pty's console process list). `tree` is that snapshot; `dies` maps a pid to the
+// poll after which it is gone.
 function stopWith(c, { diesAfterPolls = 1, exitEventAfterPolls = diesAfterPolls, groupDiesAfterPolls = diesAfterPolls,
-  deadlineMs = 15000, groups = true } = {}) {
+  deadlineMs = 15000, groups = true, tree = [c.pid], dies = {} } = {}) {
   let t = 0; let polls = 0;
   return stopChild(c, {
     exited: () => polls >= exitEventAfterPolls,
-    alive: (pid) => (pid < 0 ? groups && polls < groupDiesAfterPolls : polls < diesAfterPolls),
+    alive: (pid) => (pid < 0 ? groups && polls < groupDiesAfterPolls : polls < (pid in dies ? dies[pid] : diesAfterPolls)),
     killGroup: (pid) => { if (!groups) throw Object.assign(new Error('kill ESRCH'), { code: 'ESRCH' }); c.kills.push(`group ${pid}`); },
+    killPid: (pid) => { c.kills.push(`pid ${pid}`); },
+    snapshot: async () => tree,
     deadlineMs, pollMs: 50, now: () => t, sleep: async (ms) => { t += ms; polls += 1; },
   });
 }
 test('stopChild: a terminal that takes no signal names (node-pty on Windows) still gets killed', async () => {
   const c = fakeChild({ signals: false });
-  assert.deepStrictEqual(await stopWith(c, { groups: false }), { gone: true, ms: 50 });
-  assert.deepStrictEqual(c.kills, ['kill()']);
+  assert.deepStrictEqual(await stopWith(c, { groups: false }), { gone: true, ms: 50, tree: [4242] });
+  assert.deepStrictEqual(c.kills, ['kill()', 'pid 4242']);
 });
-test('stopChild: a POSIX pty: SIGKILL to its process group (the grandchildren), then to it', async () => {
+test('stopChild: a POSIX pty: SIGKILL to its process group, to it, then to every snapshotted descendant', async () => {
   const c = fakeChild({ signals: true });
-  assert.strictEqual((await stopWith(c)).gone, true);
-  assert.deepStrictEqual(c.kills, ['group 4242', 'SIGKILL']);
+  assert.strictEqual((await stopWith(c, { tree: [4242, 5000] })).gone, true);
+  assert.deepStrictEqual(c.kills, ['group 4242', 'SIGKILL', 'pid 4242', 'pid 5000']);
 });
 test('stopChild: the child gone is not enough while its process group lives on', async () => {
   const c = fakeChild({ signals: true });
@@ -184,16 +188,31 @@ test('stopChild: the child gone is not enough while its process group lives on',
   assert.strictEqual(r.gone, false);
   assert.match(r.why, /had exited, but its process group had not/);
 });
+test('stopChild, Windows-shaped: no groups, so a grandchild from the console list is waited on until it is gone', async () => {
+  const c = fakeChild({ signals: false });
+  const r = await stopWith(c, { groups: false, tree: [4242, 6000], dies: { 4242: 1, 6000: 5 } });
+  assert.deepStrictEqual(r, { gone: true, ms: 250, tree: [4242, 6000] }, 'the grandchild, not the child, set the wait');
+  assert.deepStrictEqual(c.kills, ['kill()', 'pid 4242', 'pid 6000']);
+  const stuck = await stopWith(fakeChild({ signals: false }), { groups: false, tree: [4242, 6000], dies: { 4242: 1, 6000: Infinity }, deadlineMs: 500 });
+  assert.strictEqual(stuck.gone, false);
+  assert.match(stuck.why, /had exited, but its descendant\(s\) 6000 had not/);
+});
 test('stopChild: the exit event alone is not "gone" (Windows fires it when node-pty closes its own end)', async () => {
   const c = fakeChild({ signals: false });
   const r = await stopWith(c, { exitEventAfterPolls: 0, diesAfterPolls: 4 });
-  assert.deepStrictEqual(r, { gone: true, ms: 200 }, 'waited for the pid, not the event');
+  assert.deepStrictEqual(r, { gone: true, ms: 200, tree: [4242] }, 'waited for the pid, not the event');
 });
 test('stopChild: a child still alive at the deadline is reported by pid, never waited on forever', async () => {
   const c = fakeChild({ signals: false });
   const r = await stopWith(c, { diesAfterPolls: Infinity, deadlineMs: 500 });
   assert.strictEqual(r.gone, false);
   assert.match(r.why, /pid 4242\) was still running 500ms after it was killed/);
+});
+test('snapshotTree: the console list and the process table\'s descendants, transitively; nothing else', async () => {
+  const child = { pid: 10 };
+  const table = () => [[10, 1], [11, 10], [12, 11], [13, 99], [14, 13], [20, 1]];
+  assert.deepStrictEqual((await snapshotTree(child, { listConsole: async () => [13], table })).sort((a, b) => a - b), [10, 11, 12, 13, 14]);
+  assert.deepStrictEqual(await snapshotTree(child, { listConsole: async () => [], table: () => [] }), [10], 'no ps, no console: the child');
 });
 
 test('settleVerdict: a wait step expects no output, so earlier quiet counts', () => {

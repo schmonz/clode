@@ -394,41 +394,72 @@ function finish(text, stopped = { gone: true }) {
 // asynchronous lookup, which an immediate exit cut short.
 //
 // One implementation, the TREE and not just the child:
-//  1. SIGKILL the child's process group. A pty child is a session leader, so its group is its pid, and every
-//     grandchild that did not leave the group goes with it (one that ignores SIGHUP survived the old kill: measured,
-//     `sh -c 'trap "" HUP; sleep 30'` left the sleep running). Where there are no process groups (Windows: a negative
-//     pid is refused) this throws and step 2 does the work.
-//  2. Ask the pty for SIGKILL; a terminal that takes no signal names takes the plain kill() (on Windows: the whole
-//     console process list, the child and every grandchild attached to that console, then the pseudoconsole closed).
-//  3. Wait for node-pty's exit event AND for the pid and its group to be gone (signal 0: ESRCH). Not the event alone:
-//     on Windows it also fires when node-pty closes its own end of the pty, which can precede the process's end; on
-//     POSIX the pid stays a zombie until node-pty reaps it.
-// A tree not gone by the deadline is reported, never waited on forever.
+//  0. SNAPSHOT the tree before anything is killed: the child, every process attached to its console (node-pty's own
+//     console process list, ConPTY: on Windows that is how grandchildren are found, as there are no process groups),
+//     and every descendant the process table shows by parent pid (`ps`, where there is one). A grandchild that left
+//     the child's process group is still in the snapshot.
+//  1. SIGKILL the child's process group. A pty child is a session leader, so its group is its pid (one that ignores
+//     SIGHUP survived the old kill: measured, `sh -c 'trap "" HUP; sleep 30'` left the sleep running). Where there are
+//     no process groups (Windows: a negative pid is refused) this throws, and steps 2 and 3 do the work.
+//  2. Ask the pty for SIGKILL; a terminal that takes no signal names takes the plain kill() (on Windows: the console
+//     process list, then the pseudoconsole closed).
+//  3. Kill every pid in the snapshot (on Windows, TerminateProcess).
+//  4. Wait for node-pty's exit event AND for every snapshotted pid and the group to be gone (signal 0: ESRCH). Not the
+//     event alone: on Windows it also fires when node-pty closes its own end of the pty, which can precede the
+//     process's end; on POSIX the pid stays a zombie until node-pty reaps it.
+// A tree not gone by the deadline is reported, by pid, never waited on forever.
 function pidAlive(pid) {
   try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
 }
+// [[pid, ppid], ...] from `ps`, or [] where there is no ps (Windows) or it fails.
+function psTable() {
+  try {
+    const r = require('node:child_process').spawnSync('ps', ['-A', '-o', 'pid=,ppid='], { encoding: 'utf8', timeout: 5000 });
+    if (r.status !== 0 || !r.stdout) return [];
+    return r.stdout.split('\n').map((l) => l.trim().split(/\s+/).map(Number)).filter((x) => x.length === 2 && x.every(Number.isInteger));
+  } catch { return []; }
+}
+async function consoleList(child) {
+  const agent = child && child._agent;
+  if (!agent || typeof agent._getConsoleProcessList !== 'function') return [];
+  try { return (await agent._getConsoleProcessList()) || []; } catch { return []; }
+}
+async function snapshotTree(child, { listConsole = consoleList, table = psTable } = {}) {
+  const pids = new Set([child.pid]);
+  for (const p of await listConsole(child)) if (Number.isInteger(p) && p > 0) pids.add(p);
+  const rows = table();
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const [p, pp] of rows) if (pids.has(pp) && !pids.has(p)) { pids.add(p); grew = true; }
+  }
+  return [...pids];
+}
 async function stopChild(child, { exited, alive = pidAlive, killGroup = (pid) => process.kill(-pid, 'SIGKILL'),
+  killPid = (pid) => process.kill(pid, 'SIGKILL'), snapshot = snapshotTree,
   deadlineMs = 15000, pollMs = 50, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), now = Date.now } = {}) {
-  try { killGroup(child.pid); } catch { /* no process groups here, or none left: step 2 */ }
+  const tree = await snapshot(child);
+  try { killGroup(child.pid); } catch { /* no process groups here, or none left: steps 2 and 3 */ }
   try { child.kill('SIGKILL'); } catch {
     try { child.kill(); } catch { /* already gone: the wait below says so */ }
   }
+  for (const pid of tree) { try { killPid(pid); } catch { /* gone, or never ours to kill */ } }
   const t0 = now();
   for (;;) {
     const exitedNow = exited();
-    const childAlive = alive(child.pid);
+    const living = tree.filter((pid) => alive(pid));
     const groupAlive = alive(-child.pid);
-    if (exitedNow && !childAlive && !groupAlive) return { gone: true, ms: now() - t0 };
+    if (exitedNow && living.length === 0 && !groupAlive) return { gone: true, ms: now() - t0, tree };
     if (now() - t0 > deadlineMs) {
-      const what = childAlive ? 'was still running' : groupAlive ? 'had exited, but its process group had not'
-        : 'was gone but never reported its exit';
-      return { gone: false, ms: now() - t0,
+      const what = living.includes(child.pid) ? 'was still running'
+        : living.length ? `had exited, but its descendant(s) ${living.join(', ')} had not`
+          : groupAlive ? 'had exited, but its process group had not' : 'was gone but never reported its exit';
+      return { gone: false, ms: now() - t0, tree,
         why: `the child (pid ${child.pid}) ${what} ${deadlineMs}ms after it was killed: it would outlive this driver` };
     }
     await sleep(pollMs);
   }
 }
-module.exports = { hexPayload, parseArgs, parseScript, settleVerdict, SCRIPT_DEFAULTS, stopChild };
+module.exports = { hexPayload, parseArgs, parseScript, settleVerdict, SCRIPT_DEFAULTS, stopChild, snapshotTree };
 
 // Honor the "Exit 0 always" contract even if pty.spawn/setup throws: fail loud
 // with a nonzero exit rather than crashing on an unhandled rejection.

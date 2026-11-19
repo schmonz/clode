@@ -91,3 +91,15 @@ test('parseSession: anything but a whole frame sequence throws, carrying the dri
   const ok = { format: 'clode-frames-v1', exit: null, frames: [{ label: 'boot', settled: true, ms: 5, frame: { format: 'clode-frame-v1' } }] };
   assert.deepStrictEqual(parseSession(r(JSON.stringify(ok))), ok);
 });
+
+// Exit 4 (tui-screen.cjs stopChild: the driven TUI outlived its stop) fails every shared capture, so each PTY gate
+// inherits the check (fix round 1 of CI 44460009323).
+test('a driver that reports a leaked TUI (exit 4) fails capture, frame and session parsing alike', () => {
+  const { refuseLeak } = require('./e2e-pty.cjs');
+  const leaked = { status: 4, signal: null, stdout: '{"format":"clode-frames-v1","frames":[]}',
+    stderr: 'tui-screen: the child (pid 7) was still running 15000ms after it was killed' };
+  assert.throws(() => refuseLeak(leaked), /outlived the driver \(exit 4\): .*pid 7\) was still running/);
+  assert.throws(() => parseSession(leaked), /outlived the driver/);
+  assert.strictEqual(refuseLeak({ ...leaked, status: 0 }).status, 0, 'a clean stop passes through');
+  assert.deepStrictEqual(parseSession({ ...leaked, status: 0 }).frames, []);
+});

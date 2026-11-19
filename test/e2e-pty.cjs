@@ -106,7 +106,17 @@ function driveAsync(sbx, opts) {
     c.on('close', (status, signal) => resolve({ stdout, stderr, status, signal, error }));
   });
 }
-function capture(sbx, opts) { return drive(sbx, opts).stdout; }
+// Exit 4 is the driver saying the TUI it drove OUTLIVED its stop (tui-screen.cjs stopChild): a leaked process, which on
+// Windows holds the binary and its directory (windows-amd64-tui, CI 44460009323). Every capture below throws on it, so
+// every PTY gate inherits the check; the screen it took is real, so it is in the message.
+const DRIVER_LEAKED = 4;
+function refuseLeak(r) {
+  if (r.status === DRIVER_LEAKED) {
+    throw new Error(`tui-screen: the driven process outlived the driver (exit 4): ${r.stderr.trim().slice(-600)}`);
+  }
+  return r;
+}
+function capture(sbx, opts) { return refuseLeak(drive(sbx, opts)).stdout; }
 
 // Same drive, but stdout is a cell-level frame (see tui-screen.cjs dumpCells).
 // Returns the parsed frame, or throws with the driver's output when the driver
@@ -124,6 +134,7 @@ async function captureFrameAsync(sbx, opts) {
   return parseFrame(await driveAsync(sbx, { ...opts, cells: true }));
 }
 function parseFrame(r) {
+  refuseLeak(r);
   const out = r.stdout;
   let frame;
   try { frame = JSON.parse(out); } catch (e) {
@@ -154,6 +165,7 @@ async function captureSession(sbx, opts) {
 // The session form of parseFrame: a driver result that is not a whole frame sequence
 // throws, with the driver's stderr and exit status, rather than reading as a session.
 function parseSession(r) {
+  refuseLeak(r);
   const out = r.stdout;
   let s;
   try { s = JSON.parse(out); } catch (e) {
@@ -168,4 +180,4 @@ function parseSession(r) {
 }
 
 module.exports = { seedClaudeProfile, capture, captureFrame, captureFrameAsync, captureSession, parseSession,
-  drive, driveArgs, apeCmd, TUI_SCREEN };
+  drive, driveArgs, apeCmd, refuseLeak, TUI_SCREEN };
