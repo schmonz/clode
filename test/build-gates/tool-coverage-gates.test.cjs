@@ -1258,7 +1258,10 @@ const SHIPPING_ENGINES = ['darwin-arm64', 'linux-x64-musl', 'netbsd-arm64'];
 // Each gate below is read from the tool's registry element or its isEnabled() in that carve.
 // THE DEADLINES are the every-tool plan's phases (.superpowers/sdd/2026-09-28-every-tool-driven,
 // design "Phases and deadlines"; its ledger's ruling E1 set Phase A's), carried here as set, never
-// re-dated by this file: Phase A (the 18 local tools, before the release) 2026-10-15, Phase B
+// re-dated by this file except by the user's ruling: Phase A (the 18 local tools, before the
+// release) 2026-10-15, MOVED to 2026-12-15 by USER RULING 2026-11-18 (it lapsed unmet; the ruling
+// also gives the 117 cells that were neither driven nor exempted when this gate first counted cells
+// a Phase A exemption to the same date, PHASE_A_CELLS below: every-tool Phase A drives them), Phase B
 // (24 tools with their own needs; 23 are listed by name there, and they are these) 2026-11-30,
 // Phase C (claude.ai, remote, MCP, and WebSearch) 2026-12-31. The 13 tools the plan puts in no
 // phase (9 runner operators, 4 relay stubs) keep the quarterly re-decision UNTIL_REVIEW they had.
@@ -1266,7 +1269,7 @@ const SHIPPING_ENGINES = ['darwin-arm64', 'linux-x64-musl', 'netbsd-arm64'];
 // until the grep-native plan's Task 11 drove them, 2026-10-05: test/fidelity/agentic-grep-glob.test.cjs,
 // every output mode against native, and agentic-tools' Grep rows, which no longer skip.)
 const RECORDED = '2026-09-28';
-const UNTIL_PHASE_A = '2026-10-15';
+const UNTIL_PHASE_A = '2026-12-15';          // was 2026-10-15; USER RULING 2026-11-18
 const UNTIL_PHASE_B = '2026-11-30';
 const UNTIL_PHASE_C = '2026-12-31';
 const UNTIL_REVIEW = '2026-12-31';
@@ -1304,7 +1307,34 @@ const RUNNER = 'deferred, no plan yet: a self-hosted runner operator tool, regis
   + 'wizardOperatorToolsEnabled launch option';
 const RELAY = (what) => `deferred, no plan yet: a relay stub that asks the user to enable ${what}; enabled only with a `
   + 'device relay, which no live check sets up';
+// The cells of the driven tools that no job drives yet (USER RULING 2026-11-18, above): every cell of
+// `tool` in `modes` but the `driven` ones (`mode@engine`), as per-cell Phase A exemptions, recorded
+// the day of the ruling. The modes are the 2.1.283 carve's (THE MODES); a mode the carve drops, or a
+// cell a job starts driving, is a finding here, so this list narrows as Phase A lands.
+const COMMON_MODES = ['print', 'interactive', 'unlisted', 'permission:acceptEdits', 'permission:auto',
+  'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan'];
+const SEARCH_MODES = COMMON_MODES.filter((mo) => mo !== 'unlisted');
+const BASH_MODES = [...COMMON_MODES, 'sandbox:on', 'sandbox:required', 'shell:bash', 'shell:zsh'];
+const PHASE_A_CELL = 'every-tool Phase A (cells): not yet driven in this mode on this engine. The tool is driven '
+  + 'only where CELL_JOBS says (a -p turn in the default mode on linux-x64-musl and darwin-arm64, plus the sandbox, '
+  + 'bash and bypassPermissions rows on musl); no driver yet runs it interactively, unlisted, in the other permission '
+  + 'modes, with sandbox.failIfUnavailable or under zsh, and no CI job runs a quaude on netbsd-arm64';
+const PHASE_A_CELLS = (tool, modes, driven, reason = PHASE_A_CELL) => modes.flatMap((mode) => {
+  const engines = SHIPPING_ENGINES.filter((en) => !driven.includes(`${mode}@${en}`));
+  if (!engines.length) return [];
+  return [{ tool, modes: [mode], ...(engines.length < SHIPPING_ENGINES.length ? { engines } : {}), reason,
+    date: '2026-11-18', until: UNTIL_PHASE_A }];
+});
 const EXEMPTIONS = [
+  // The undriven cells of the five driven tools (USER RULING 2026-11-18).
+  ...PHASE_A_CELLS('Agent', COMMON_MODES, [], 'every-tool Phase A (cells): its one driver, '
+    + 'test/fidelity/agentic-subagent-diff.test.cjs, runs in no CI job (CELL_JOBS), so no cell of it is driven; Phase A '
+    + 'puts it in one, and the other modes and netbsd-arm64 follow as for every tool'),
+  ...PHASE_A_CELLS('Bash', BASH_MODES, ['print@darwin-arm64', 'print@linux-x64-musl', 'permission:bypassPermissions@linux-x64-musl',
+    'sandbox:on@linux-x64-musl', 'shell:bash@linux-x64-musl']),
+  ...PHASE_A_CELLS('Edit', COMMON_MODES, ['print@darwin-arm64', 'print@linux-x64-musl']),
+  ...PHASE_A_CELLS('Glob', SEARCH_MODES, ['print@linux-x64-musl']),
+  ...PHASE_A_CELLS('Grep', SEARCH_MODES, ['print@linux-x64-musl']),
   // Local tools a canned mock could drive today: the to-do list proper.
   { tool: 'Read', reason: `${LOCAL}. floor-probe B4 and node-shim-agentic's Edit row script Read only to satisfy `
     + 'read-before-edit, and judge nothing it returns', date: RECORDED, until: UNTIL_PHASE_A },
@@ -1698,12 +1728,12 @@ const fxWorkflow = ({ check = `CLODE_CELL_JOB=${FX_JOB}`, files = 'test/syntheti
   `      - run: ${check} node --test test/build-gates/tool-coverage-gates.test.cjs`,
 );
 // Every cell of `tool` but the ones `keep` names (`mode@engine`), as exemption entries.
-function exemptAllBut(tool, keep, reason = 'deferred: not driven in the fixture') {
+function exemptAllBut(tool, keep, reason = 'deferred: not driven in the fixture', until = '2026-12-31') {
   const out = [];
   const kept = new Set(keep);
   for (const mode of miniModes(tool)) {
     const engines = SHIPPING_ENGINES.filter((e) => !kept.has(`${mode}@${e}`));
-    if (engines.length) out.push({ tool, modes: [mode], ...(engines.length < SHIPPING_ENGINES.length ? { engines } : {}), reason, date: '2026-09-28', until: '2026-12-31' });
+    if (engines.length) out.push({ tool, modes: [mode], ...(engines.length < SHIPPING_ENGINES.length ? { engines } : {}), reason, date: '2026-09-28', until });
   }
   return out;
 }
@@ -1712,7 +1742,7 @@ const PLAN_REASON = 'deferred: the Grep and Glob = native plan (fixture)';
 // shell:bash, Grep and Read print.
 const FIXTURE_EXEMPTIONS = [
   { tool: 'Glob', reason: PLAN_REASON, date: '2026-09-28', until: '2026-10-12' },
-  ...exemptAllBut('Grep', [`print@${FX_ENGINE}`], PLAN_REASON),
+  ...exemptAllBut('Grep', [`print@${FX_ENGINE}`], PLAN_REASON, '2026-10-12'),
   { tool: 'Monitor', reason: 'deferred: gated off by default (fixture)', date: '2026-09-28', until: '2026-12-31' },
   { tool: 'SubagentHandback', reason: 'deferred: subagents only (fixture)', date: '2026-09-28', until: '2026-12-31' },
   ...exemptAllBut('Agent', [`print@${FX_ENGINE}`]),
@@ -1915,10 +1945,14 @@ test('step 3 (b): an exemption past its `until` date is a finding naming its pha
   const r = scanCoverage(fixtureInputs({ today: '2026-10-12' }));
   assert.deepStrictEqual(r.findings, [], 'on its until date the exemption still holds');
   const late = scanCoverage(fixtureInputs({ today: '2026-10-13' }));
-  assert.ok(late.findings.length >= 1, late.findings.join('\n'));
+  // Glob's one entry, and each of Grep's per-cell entries (every Grep cell but print @ linux-x64-musl): exactly those.
+  assert.deepStrictEqual(late.findings.map((f) => f.slice(0, f.indexOf(': '))), ['Glob',
+    'Grep x print @ darwin-arm64/netbsd-arm64', 'Grep x interactive', 'Grep x permission:acceptEdits',
+    'Grep x permission:bypassPermissions', 'Grep x permission:plan'], late.findings.join('\n'));
   assert.match(late.findings[0], /^Glob: its exemption expired on 2026-10-12 \(recorded 2026-09-28: "deferred: the Grep and Glob/);
-  const phase = checkExemptionTable([{ tool: 'Read', reason: 'x', date: '2026-09-28', until: UNTIL_PHASE_A }], '2026-10-16');
-  assert.match(phase[0], /^Read: its exemption expired on 2026-10-15 \(every-tool Phase A's deadline\)/);
+  for (const f of late.findings.slice(1)) assert.match(f, /^Grep x [^ ]+(?: @ [^ ]+)?: its exemption expired on 2026-10-12 \(recorded 2026-09-28/);
+  const phase = checkExemptionTable([{ tool: 'Read', reason: 'x', date: '2026-09-28', until: UNTIL_PHASE_A }], '2026-12-16');
+  assert.match(phase[0], /^Read: its exemption expired on 2026-12-15 \(every-tool Phase A's deadline\)/);
 });
 
 test('an exemption must not cover a driven cell, may only name a registered tool, and one entry per cell', () => {
