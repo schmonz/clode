@@ -244,6 +244,21 @@ test('call-sites: every binding shape and argument form of the carve is read', (
   assert.strictEqual(inv.get('fs.statSync').sites, 2, 'a function DEFINITION named like an import, and a method call x.z(), are not calls');
 });
 
+// The two shapes the reader was blind to (final review, measured in the 2.1.283 carve: 28 promises-member sites,
+// 17 destructured requires): `X.promises.m(` on an fs binding is fs/promises.m, and a destructured require binds names.
+test('call-sites: the promises member and a destructured require are read', () => {
+  const src = 'var Q=require("fs");Q.promises.readFile(p,"utf8");Q.promises.stat(p);y.Q.promises.open(p);'
+    + 'var{promisify:pz,inspect}=c("util");pz(f);inspect(o,{depth:2});var{x}=require("left-pad");x(1)';
+  const inv = callSites.callSites([{ id: 'm', src }], ['fs', 'fs/promises', 'util']);
+  const shapes = (api) => inv.has(api) ? [...inv.get(api).shapes.values()].map((s) => s.args) : null;
+  assert.deepStrictEqual(shapes('fs/promises.readFile'), [[{ expr: true }, { lit: 'utf8' }]]);
+  assert.strictEqual(inv.get('fs/promises.stat').sites, 1);
+  assert.strictEqual(shapes('fs/promises.open'), null, 'y.Q.promises is not the fs binding');
+  assert.deepStrictEqual(shapes('util.promisify'), [[{ expr: true }]]);
+  assert.deepStrictEqual(shapes('util.inspect'), [[{ expr: true }, { obj: { depth: { lit: 2 } } }]]);
+  assert.ok(![...inv.keys()].some((k) => k.includes('left-pad')), 'a module outside the set binds nothing');
+});
+
 // The plan is the carve's: a literal option is replayed as written, an expression takes the table's
 // samples, and an API the table neither drives nor excuses is a finding, not a silent skip.
 test('plan: the carve decides what is judged; the table only fills expressions', () => {

@@ -194,14 +194,16 @@ shapes cut to the driver's argument count.
 - DIFF-PATH-DOTDOT: `path.parse` answers dir "." where node answers "" for a bare name, and `path.parse("..")`,
   `path.extname("..")` treat ".." as an extension.
 - DIFF-ISATTY-DEVNULL: `tty.isatty(0)` is true when fd 0 is /dev/null.
-- DIFF-UTIL-FORMAT: `util.format("%%")` answers "%" (node "%%" with no arguments); `util.inspect("a")` answers a
-  where node answers 'a'.
+- DIFF-UTIL-FORMAT: `util.format("%%")` answers "%" (node "%%" with no arguments). (`util.inspect("a")` answering a
+  for 'a' is fixed: util.inspect is now its own entry, which also stopped throwing when given options.)
 - DIFF-STATFS-SYNC (Linux): the linux carve calls `fs.statfsSync`, absent from the shim (the gap map's entry).
 
 Measured: `node --test test/node-shim-differential.test.cjs` on darwin-arm64 (the scratch tjs built from this
 tree, node 24.21.0, the 2.1.283 macos-arm64 provider): at c7d7716, 1785 calls judged, 372 diverging; after
 46bd197, 34431f4 and 435f78c, 301 of 1785; with fix round 1's uncapped hand-picked rows, 305 of 1793 diverging,
-1240 (case, field) pairs listed, every other field node's (2026-11-19).
+1240 (case, field) pairs listed, every other field node's (2026-11-19). With the reader seeing destructured requires and `X.promises.m(`
+(28 promises-member sites and 17 destructured builtin requires in the 2.1.283 carve; none destructure fs, os or
+child_process), 1836 judged, 302 diverging, 1237 pairs listed (2026-11-19).
 
 Measured: the same test in a node:24.22.0-alpine container (linux-x64, musl) with the tjs-linux-x64-musl engine of CI
 run 44460009323 (HEAD 2cca33a) and the 2.1.283 linux-x64-musl provider: 308 of 1808 calls diverging, 1271 pairs

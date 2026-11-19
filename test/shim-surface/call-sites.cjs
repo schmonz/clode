@@ -10,6 +10,10 @@
 // are one or two characters, so a binding is only looked up in the module that declared it):
 //   import{statSync as z}from"fs"     ->  z(...)
 //   import*as X from"fs" / import X from"fs" / X=require("fs") / X=c("fs")  ->  X.statSync(...)
+//   {statSync:z,mkdir}=require("fs") / ...=c("fs")  ->  z(...), mkdir(...)          (destructured)
+//   X.promises.readFile(...) with X bound to "fs"  ->  fs/promises.readFile          (the promises member)
+// The last two were blind until 2026-11-19 (final review): the 2.1.283 carve has 28 `X.promises.m(` sites and 17
+// destructured requires of builtins (none of fs, os or child_process; util 7, crypto 5, url 2, stream, http, events).
 //
 // LIMITS, stated so the inventory is not read as more than it is:
 //   - a call through a re-bound name (`let f=z; f(...)`), `X[name](...)`, `.call/.apply` is not seen;
@@ -147,7 +151,9 @@ function callSites(modules, moduleNames) {
   };
   for (const { src } of modules) {
     const bindings = refs.bindingsFor(src, specs);
-    if (!bindings.size) continue;
+    const destructured = [...src.matchAll(/\{([^{}=]{1,600})\}\s*=\s*(?:require|[A-Za-z_$][\w$]*)\(\s*["']([^"']+)["']\s*\)/g)]
+      .filter((m) => specs.has(m[2]));
+    if (!bindings.size && !destructured.length) continue;
     const named = new Map();   // local -> api
     const objects = new Map(); // object binding -> module name
     for (const [spec, b] of bindings) {
@@ -163,6 +169,25 @@ function callSites(modules, moduleNames) {
         if (imported && IDENT.test(imported)) named.set(local && IDENT.test(local) ? local : imported, `${mod}.${imported}`);
       }
     }
+    for (const m of destructured) {
+      const mod = m[2].replace(/^node:/, '');
+      for (const part of m[1].split(',')) {
+        const [imported, local] = part.trim().split(/\s*:\s*/);
+        if (imported && IDENT.test(imported)) named.set(local && IDENT.test(local) ? local : imported, `${mod}.${imported}`);
+      }
+    }
+    const record = (api, open) => {
+      const close = matchParen(src, open);
+      if (close < 0) { add(api, [{ unparsed: true }]); return; }
+      const parts = splitTop(src.slice(open + 1, close));
+      add(api, parts ? parts.map(classify) : [{ unparsed: true }]);
+    };
+    for (const pm of src.matchAll(/([A-Za-z_$][\w$]*)\.promises\.([A-Za-z_$][\w$]*)\s*\(/g)) {
+      const before = src[pm.index - 1];
+      if (before === '.' || (before && /[\w$]/.test(before)) || !objects.has(pm[1])) continue;
+      const sub = `${objects.get(pm[1])}/promises`;
+      if (moduleNames.includes(sub)) record(`${sub}.${pm[2]}`, pm.index + pm[0].length - 1);
+    }
     const re = /([A-Za-z_$][\w$]*)(?:\.([A-Za-z_$][\w$]*))?\s*\(/g;
     let m;
     while ((m = re.exec(src)) !== null) {
@@ -172,11 +197,7 @@ function callSites(modules, moduleNames) {
       if (m[2] !== undefined) { if (objects.has(m[1])) api = `${objects.get(m[1])}.${m[2]}`; }
       else if (named.has(m[1]) && !/function\s*$/.test(src.slice(Math.max(0, m.index - 12), m.index))) api = named.get(m[1]);
       if (!api) continue;
-      const open = m.index + m[0].length - 1;
-      const close = matchParen(src, open);
-      if (close < 0) { add(api, [{ unparsed: true }]); continue; }
-      const parts = splitTop(src.slice(open + 1, close));
-      add(api, parts ? parts.map(classify) : [{ unparsed: true }]);
+      record(api, m.index + m[0].length - 1);
     }
   }
   return inv;
