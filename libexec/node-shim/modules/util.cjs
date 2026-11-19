@@ -1,5 +1,20 @@
 'use strict';
 // node:util — M1 surface, characterization-locked.
+// %j as node does it (lib/internal/util/inspect.js tryStringify): ONLY the engine's own
+// circular-structure TypeError becomes '[Circular]'; every other throw propagates. Swallowing them
+// all invented '[Circular]' for a throwing getter (node-shim's ERR_CLODE_ENGINE_FLOOR) or a BigInt.
+// The circular message is the ENGINE's, learned once, so no engine's wording is spelled here.
+let CIRCULAR_MESSAGE;
+const firstLine = (e) => String((e && e.message) || '').split('\n')[0];
+function tryStringify(a) {
+  try { return JSON.stringify(a); } catch (err) {
+    if (CIRCULAR_MESSAGE === undefined) {
+      try { const c = {}; c.c = c; JSON.stringify(c); } catch (ce) { CIRCULAR_MESSAGE = firstLine(ce); }
+    }
+    if (err instanceof TypeError && firstLine(err) === CIRCULAR_MESSAGE) return '[Circular]';
+    throw err;
+  }
+}
 function format(fmt, ...args) {
   if (typeof fmt !== 'string') return [fmt, ...args].map(inspect1).join(' ');
   let i = 0;
@@ -13,7 +28,7 @@ function format(fmt, ...args) {
     if (m === '%f') return String(parseFloat(a));
     if (m === '%o' || m === '%O') return inspect1(a, undefined, 1);
     if (m === '%c') return '';                       // node consumes CSS and emits nothing
-    if (m === '%j') { try { return JSON.stringify(a); } catch { return '[Circular]'; } }
+    if (m === '%j') return tryStringify(a);
     return inspect1(a, undefined, 1);
   });
   for (; i < args.length; i++) out += ' ' + inspect1(args[i]);

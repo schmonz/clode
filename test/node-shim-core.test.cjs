@@ -690,3 +690,29 @@ console.log(JSON.stringify({
   assert.strictEqual(r.status, 0, r.stderr);
   assert.strictEqual(r.stdout.trim(), nodeOut);
 });
+
+// util.format('%j') swallowed EVERY JSON.stringify throw as '[Circular]'. node swallows only the
+// circular-structure TypeError and rethrows anything else (lib/internal/util/inspect.js
+// tryStringify) -- so a throwing getter (node-shim's ERR_CLODE_ENGINE_FLOOR on a Stats from an
+// engine without identity, or a BigInt) became an invented '[Circular]' instead of an error.
+const FORMAT_J = `
+const util = require('node:util');
+const out = [];
+const circ = { a: 1 }; circ.self = circ;
+out.push(util.format('%j', circ));
+const bad = { get x() { const e = new Error('getter refused'); e.code = 'E_GETTER'; throw e; } };
+try { out.push(util.format('%j', bad)); } catch (e) { out.push('threw ' + e.code + ' ' + e.message); }
+try { out.push(util.format('%j', { n: 1n })); } catch (e) { out.push('threw ' + e.name); }
+console.log(JSON.stringify(out));
+`;
+test('util.format %j: only a circular structure prints [Circular]; any other throw propagates (vs host node)', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-format-j-'));
+  const f = path.join(dir, 'prog.cjs');
+  fs.writeFileSync(f, FORMAT_J);
+  const nodeOut = require('node:child_process').execFileSync(process.execPath, [f], { encoding: 'utf8' }).trim();
+  assert.deepStrictEqual(JSON.parse(nodeOut), ['[Circular]', 'threw E_GETTER getter refused', 'threw TypeError']);
+  const r = runLoader(f);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.strictEqual(r.stdout.trim(), nodeOut);
+});
