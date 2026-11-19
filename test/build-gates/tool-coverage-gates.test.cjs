@@ -125,8 +125,9 @@
 //   - whether a driver's turn runs quaude, naude or native: every driver in the tree runs quaude
 //     (the map in the report), but the rule reads only the test's source; agentic-grep-glob's
 //     controls() also runs in its native instrument, so both tests must pass in the job;
-//   - whether a driver's turn really is in the mode it declares (the flags it passes): a
-//     declaration is read, not measured;
+//   - whether a driver's turn really is in the mode it declares: MODE_EVIDENCE checks the file
+//     spells the flag, settings or SHELL somewhere outside a comment, not that this turn passes
+//     them; print, interactive and unlisted are not checked at all;
 //   - CI's outcome: driven means "a job enforces it on every push", not "the last run was green";
 //   - a driver whose tool_use object, check or scripting lives in another file;
 //   - a tool registered by a path none of the three above reaches: a plain object literal returned
@@ -873,7 +874,8 @@ function findDrivers(sources) {
         rejected.push({ ...at, why: `the check (${check}) reads the tool_result of ${use}.id, but ${use} is never scripted to a mock` });
         continue;
       }
-      drivers.push({ ...at, name, use, check, modes, tests: testsOf(text, m, code, x.index, lineOf),
+      drivers.push({ ...at, name, use, check, modes, unmeasured: unmeasuredModes(text, modes, m),
+        tests: testsOf(text, m, code, x.index, lineOf),
         skips: skipOf(text, m, code, x.index, lineOf) });
     }
   }
@@ -887,6 +889,50 @@ function literalModes(t) {
   const els = t.endsWith(']') ? splitTop(t.slice(1, -1)) : null;
   const vs = els && els.map(one);
   return vs && vs.length && vs.every(Boolean) ? [...new Set(vs)] : null;
+}
+
+// A DECLARED MODE, MEASURED (fix round 1): what a driver's file must spell, in code or a string
+// (never only in a comment), for a declaration to count. Mechanical and per file, not per turn: it
+// catches a literal that names a mode the file never sets up, not a turn that drops the flag.
+//   permission:<m>       `--permission-mode` then <m> (or `--permission-mode=<m>`); bypassPermissions
+//                        also `--dangerously-skip-permissions`
+//   sandbox:on           a settings literal `sandbox: { ... enabled: true ... }`
+//   sandbox:required     the same with `failIfUnavailable: true`
+//   shell:<s>            SHELL set to a value spelling <s> (`SHELL: '/bin/bash'`, `SHELL: bash`, SHELL=bash)
+// print, interactive and unlisted are not measured here (recorded in WHAT IT DOES NOT SEE).
+function uncommented(text, m) {
+  const out = text.split('');
+  for (let i = 0; i < text.length; i++) {
+    if (m.mask[i] || (i && !m.mask[i - 1])) continue;
+    if (text[i] !== '/' || (text[i + 1] !== '/' && text[i + 1] !== '*')) continue;
+    for (let j = i; j < text.length && !m.mask[j]; j++) if (out[j] !== '\n') out[j] = ' ';
+  }
+  return out.join('');
+}
+const SANDBOX_ON_LITERAL = /\bsandbox['"]?\s*:\s*\{[^{}]*\benabled['"]?\s*:\s*true\b[^{}]*\}/;
+const MODE_EVIDENCE = (mode) => {
+  const [axis, v] = mode.split(':');
+  if (axis === 'permission') {
+    const flag = new RegExp(`--permission-mode['"]?(?:\\s*,\\s*['"]|=|\\s+)${esc(v)}\\b`);
+    return { what: `--permission-mode ${v}${v === 'bypassPermissions' ? ' or --dangerously-skip-permissions' : ''}`,
+      test: (t) => flag.test(t) || (v === 'bypassPermissions' && t.includes('--dangerously-skip-permissions')) };
+  }
+  if (mode === 'sandbox:on') return { what: 'a sandbox settings literal with enabled: true', test: (t) => SANDBOX_ON_LITERAL.test(t) };
+  if (mode === 'sandbox:required') {
+    return { what: 'a sandbox settings literal with enabled: true and failIfUnavailable: true',
+      test: (t) => [...t.matchAll(new RegExp(SANDBOX_ON_LITERAL.source, 'g'))].some((x) => /\bfailIfUnavailable['"]?\s*:\s*true\b/.test(x[0])) };
+  }
+  if (axis === 'shell') {
+    const set = new RegExp(`\\bSHELL['"]?\\s*[:=]\\s*[^,;\\n}]*\\b${esc(v)}\\b`);
+    return { what: `SHELL set to ${v}`, test: (t) => set.test(t) };
+  }
+  return null;
+};
+// The declared modes the file gives no evidence of: [{ mode, what }].
+function unmeasuredModes(text, modes, m = masked(text)) {
+  const t = uncommented(text, m);
+  return modes.map((mode) => ({ mode, ev: MODE_EVIDENCE(mode) })).filter((x) => x.ev && !x.ev.test(t))
+    .map((x) => ({ mode: x.mode, what: x.ev.what }));
 }
 
 // The tests that run the control at `pos`, as node:test reports them ({ name, line }): the
@@ -1113,6 +1159,11 @@ function scanCoverage({ carve, what, sources, exemptions, today, workflow, jobs,
     const own = modesByTool.get(name);
     const bad = x.modes.filter((mo) => !own.includes(mo));
     if (bad.length) findings.push(`${x.file}:${x.line}: declares ${bad.join(', ')} for ${name}, not among its cells' modes (${own.join(', ')})`);
+    for (const u of x.unmeasured) {
+      findings.push(`${x.file}:${x.line}: declares ${u.mode} for ${name}, but the file never spells ${u.what} (outside a comment); `
+        + 'that cell is not driven by it');
+    }
+    const unmet = new Set(x.unmeasured.map((u) => u.mode));
     for (const j of jb.valid) {
       if (!j.files.includes(x.file)) continue;
       if (!x.tests.length) {
@@ -1121,7 +1172,7 @@ function scanCoverage({ carve, what, sources, exemptions, today, workflow, jobs,
         continue;
       }
       for (const mo of x.modes) {
-        if (!own.includes(mo)) continue;
+        if (!own.includes(mo) || unmet.has(mo)) continue;
         const k = cellKey(name, mo, j.engine);
         if (!driven.has(k)) driven.set(k, []);
         driven.get(k).push({ driver: x, job: j.job });
@@ -1645,6 +1696,9 @@ const DRIVER_SOURCES = [
     "test('bash, sandboxed, its control in a helper', async (t) => {",
     '  controls();',
     '});',
+    // What makes those two declarations measured (MODE_EVIDENCE).
+    'const SETTINGS = { sandbox: { enabled: true } };',
+    "const ENV = { SHELL: '/bin/bash' };",
   ) },
   // A floor-probe-shaped row: the mock rule `{ tool: USE }` scripts it.
   { file: 'scripts/synthetic-probe.mjs', text: lines(
@@ -1939,6 +1993,30 @@ test('a declared mode the tool has no cell for, and a claimed driver no test run
   const jobs = [{ ...FX_JOBS[0], files: [...FX_JOBS[0].files, 'scripts/synthetic-probe.mjs'] }];
   const p = scanCoverage(fixtureInputs({ jobs, workflow: fxWorkflow({ files: jobs[0].files.join(' ') }) }));
   assert.match(p.findings.join('\n'), /^scripts\/synthetic-probe\.mjs:8: fixture-job claims this driver of Bash, but no test\(\.\.\.\) runs its control/m);
+});
+
+test('a declared mode is measured: a file that never spells its flag, settings or SHELL is a finding, and drives no such cell', () => {
+  const ev = (text, modes) => unmeasuredModes(text, modes).map((u) => u.mode);
+  assert.deepStrictEqual(ev("run(['-p', '--dangerously-skip-permissions'])", ['permission:bypassPermissions']), []);
+  assert.deepStrictEqual(ev("run(['-p', '--permission-mode', 'plan'])", ['permission:plan', 'permission:acceptEdits']), ['permission:acceptEdits']);
+  assert.deepStrictEqual(ev("run('--permission-mode=dontAsk')", ['permission:dontAsk']), []);
+  assert.deepStrictEqual(ev("run(['--dangerously-skip-permissions'])", ['permission:plan']), ['permission:plan']);
+  assert.deepStrictEqual(ev('const S = { sandbox: { enabled: true } };', ['sandbox:on', 'sandbox:required']), ['sandbox:required']);
+  assert.deepStrictEqual(ev("const S = { 'sandbox': { 'enabled': true, failIfUnavailable: true } };", ['sandbox:required']), []);
+  assert.deepStrictEqual(ev('const S = { sandbox: { enabled: false } };', ['sandbox:on']), ['sandbox:on']);
+  assert.deepStrictEqual(ev("env = { SHELL: bash }; // SHELL=zsh", ['shell:bash', 'shell:zsh']), ['shell:zsh'], 'a comment is not evidence');
+  assert.deepStrictEqual(ev('/* sandbox: { enabled: true } */ x()', ['sandbox:on']), ['sandbox:on'], 'nor is a block comment');
+  assert.deepStrictEqual(ev('x()', ['print', 'interactive', 'unlisted']), [], 'those three are not measured');
+  // The control: the fixture's sandboxed Bash driver with its settings and SHELL only in comments.
+  const src = DRIVER_SOURCES[0];
+  const stripped = { ...src, text: src.text.replace('const SETTINGS =', '// const SETTINGS =').replace('const ENV =', '// const ENV =') };
+  const r = scanCoverage(fixtureInputs({ sources: [stripped, ...DRIVER_SOURCES.slice(1), ...NEAR_MISS_SOURCES] }));
+  assert.deepStrictEqual(r.findings.map((f) => f.replace(/ \(CELL_JOBS\).*/, '')), [
+    'test/synthetic/drivers.test.cjs:45: declares sandbox:on for Bash, but the file never spells a sandbox settings literal with enabled: true (outside a comment); that cell is not driven by it',
+    'test/synthetic/drivers.test.cjs:45: declares shell:bash for Bash, but the file never spells SHELL set to bash (outside a comment); that cell is not driven by it',
+    'Bash x sandbox:on: on linux-x64-musl no CI job drives it',
+    'Bash x shell:bash: on linux-x64-musl no CI job drives it',
+  ]);
 });
 
 test('step 3 (b): an exemption past its `until` date is a finding naming its phase', () => {
