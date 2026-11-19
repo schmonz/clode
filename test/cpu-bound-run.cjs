@@ -15,10 +15,11 @@
 //                (test/file-watchdog.cjs) without a named failure first.
 // Whichever trips first kills the tree and is named in `bound` with the CPU it had used, so a red row says which.
 //
-// CPU is sampled with `ps -A -o pid=,ppid=,time=` every pollMs and summed over the child and its descendants, each pid
+// CPU is sampled from test/proc-tree.cjs's process table (`ps -A -o pid=,ppid=,time=`; on Windows the CIM table's
+// user + kernel time) every pollMs and summed over the child and its descendants, each pid
 // keeping its largest reading (an exited descendant's CPU is kept, not lost). Progress is CPU only: a new pid in the
-// tree counts only through the CPU it adds, so a loop that keeps spawning sleepers is still STALLED. Where ps cannot
-// answer (no ps, Windows), only the wall ceiling applies, and the result says so (cpuSampled false).
+// tree counts only through the CPU it adds, so a loop that keeps spawning sleepers is still STALLED. Where the table
+// cannot be read, only the wall ceiling applies, and the result says so (cpuSampled false).
 //
 // PRECONDITION: the bounded run does its work on the CPU. A run that waits on the network, or on long blocking IO,
 // makes no CPU progress while it waits and is called STALLED: bound such a run by the wall clock instead.
@@ -26,46 +27,18 @@
 // CPU-budget kill, never a false budget kill): a descendant that lives and dies between two polls is never seen, so
 // its CPU is not counted and it does not count as a new pid; and a descendant whose parent exits is reparented to
 // init (pid 1, or a subreaper), leaves the tree, and its CPU stops counting from then on.
-const { spawnSync } = require('node:child_process');
 const { spawnCollect } = require('./spawn-collect.cjs');
+const { parsePsTime, processTable, descendants } = require('./proc-tree.cjs');
 
-// ps's cumulative CPU time: [[DD-]HH:]MM:SS[.ss] (macOS prints fractions, procps does not)
-function parsePsTime(s) {
-  const m = /^(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+(?:\.\d+)?)$/.exec(String(s).trim());
-  if (!m) return null;
-  return (((+(m[1] || 0) * 24 + +(m[2] || 0)) * 60 + +m[3]) * 60 + +m[4]) * 1000;
-}
-
-function psSnapshot() {
-  const r = spawnSync('ps', ['-A', '-o', 'pid=,ppid=,time='], { encoding: 'utf8', timeout: 10000 });
-  if (r.error || r.status !== 0) return null;
-  const rows = [];
-  for (const line of r.stdout.split('\n')) {
-    const f = line.trim().split(/\s+/);
-    if (f.length < 3) continue;
-    const ms = parsePsTime(f[2]);
-    if (ms !== null) rows.push({ pid: +f[0], ppid: +f[1], ms });
-  }
-  return rows;
-}
-
-// The tree under `root` in one snapshot: [{ pid, ms }].
+// The tree under `root` in one snapshot of the table: [{ pid, ms }] (test/proc-tree.cjs walks it).
 function treeOf(rows, root) {
-  const kids = new Map();
-  for (const r of rows) { if (!kids.has(r.ppid)) kids.set(r.ppid, []); kids.get(r.ppid).push(r); }
-  const out = [], seen = new Set();
   const self = rows.find((r) => r.pid === root);
-  const stack = self ? [self] : [];
-  while (stack.length) {
-    const r = stack.pop();
-    if (seen.has(r.pid)) continue;
-    seen.add(r.pid); out.push(r);
-    for (const k of kids.get(r.pid) || []) stack.push(k);
-  }
-  return out;
+  if (!self) return [];
+  const under = new Set(descendants(rows, root));
+  return [self, ...rows.filter((r) => under.has(r.pid))];
 }
 
-function runCpuBounded(cmd, args, spawnOpts, { cpuBudgetMs, stallMs, wallMs, pollMs = 5000, snapshot = psSnapshot }) {
+function runCpuBounded(cmd, args, spawnOpts, { cpuBudgetMs, stallMs, wallMs, pollMs = 5000, snapshot = () => processTable() }) {
   let bound = null, cpuMs = 0, cpuSampled = false, timer = null, lastAdvance = Date.now();
   const best = new Map();                   // pid -> largest CPU ms seen
   const started = Date.now();

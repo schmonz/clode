@@ -408,16 +408,12 @@ function finish(text, stopped = { gone: true }) {
 //     event alone: on Windows it also fires when node-pty closes its own end of the pty, which can precede the
 //     process's end; on POSIX the pid stays a zombie until node-pty reaps it.
 // A tree not gone by the deadline is reported, by pid, never waited on forever.
-function pidAlive(pid) {
-  try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
-}
-// [[pid, ppid], ...] from `ps`, or [] where there is no ps (Windows) or it fails.
+// The liveness check, the table and the walk are test/proc-tree.cjs's. psTable: [[pid, ppid(, created)], ...], or []
+// where there is no table.
+const PT = require('./proc-tree.cjs');
+const pidAlive = PT.pidAlive;
 function psTable() {
-  try {
-    const r = require('node:child_process').spawnSync('ps', ['-A', '-o', 'pid=,ppid='], { encoding: 'utf8', timeout: 5000 });
-    if (r.status !== 0 || !r.stdout) return [];
-    return r.stdout.split('\n').map((l) => l.trim().split(/\s+/).map(Number)).filter((x) => x.length === 2 && x.every(Number.isInteger));
-  } catch { return []; }
+  try { return (PT.processTable() || []).map((r) => (r.created === undefined ? [r.pid, r.ppid] : [r.pid, r.ppid, r.created])); } catch { return []; }
 }
 // On Windows the console list is the ONLY way to see grandchildren (no process groups, no ps), so a node-pty that
 // lacks it, or a list that fails, is a BLIND stop: it throws, and stopChild reports it as a finding rather than
@@ -437,10 +433,7 @@ async function snapshotTree(child, { listConsole = consoleList, table = psTable 
   const pids = new Set([child.pid]);
   for (const p of await listConsole(child)) if (Number.isInteger(p) && p > 0) pids.add(p);
   const rows = table();
-  for (let grew = true; grew;) {
-    grew = false;
-    for (const [p, pp] of rows) if (pids.has(pp) && !pids.has(p)) { pids.add(p); grew = true; }
-  }
+  for (const root of [...pids]) for (const p of PT.descendants(rows, root)) pids.add(p);
   return [...pids];
 }
 async function stopChild(child, { exited, alive = pidAlive, killGroup = (pid) => process.kill(-pid, 'SIGKILL'),

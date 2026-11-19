@@ -19,40 +19,18 @@
 // table through PowerShell. (`taskkill /T` was rejected: it kills the sleeper with the tree, before the sleeper can
 // report what survived.)
 //
-// UNMEASURED ON WINDOWS: the CIM row source, and the kill order on a real Windows tree, have not run there. They are
-// measured when windows-latest runs test/file-watchdog.test.cjs's CONTROL green (the sync hang's grandchild must be
-// gone afterwards). Until then this is a claim, not a result.
-const { spawnSync } = require('node:child_process');
+// UNMEASURED ON WINDOWS (BACKLOG "Windows process-table and priority claims"): the CIM row source, and the kill order on a real
+// Windows tree, have not run there.
+// The table, the walk and the liveness check are test/proc-tree.cjs's, shared with tui-screen and cpu-bound-run.
+const { pidAlive: alive, parseTable, processTable, descendants } = require('./proc-tree.cjs');
 
 const POLL_MS = 1000;
 
-function alive(pid) {
-  try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
-}
-
-// [[pid, ppid], ...] -> every transitive descendant of root.
-function descendants(rows, root) {
-  const tree = new Set([root]);
-  for (let grew = true; grew;) {
-    grew = false;
-    for (const [p, pp] of rows) if (tree.has(pp) && !tree.has(p)) { tree.add(p); grew = true; }
-  }
-  tree.delete(root);
-  return [...tree];
-}
-
-function parseRows(text) {
-  return text.split(/\r?\n/).map((l) => l.trim().split(/\s+/).map(Number)).filter((x) => x.length === 2 && x.every(Number.isInteger));
-}
-
-function processRows({ platform = process.platform, run = spawnSync } = {}) {
-  const r = platform === 'win32'
-    ? run('powershell', ['-NoProfile', '-NonInteractive', '-Command',
-      'Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId) $($_.ParentProcessId)" }'],
-    { encoding: 'utf8', timeout: 30000, windowsHide: true })
-    : run('ps', ['-A', '-o', 'pid=,ppid='], { encoding: 'utf8', timeout: 10000 });
-  return r && r.status === 0 && r.stdout ? parseRows(r.stdout) : [];
-}
+// [[pid, ppid(, created)], ...]: the creation time rides along where the table has one (Windows), so descendants()
+// can refuse a reused pid's stranger.
+const toRows = (t) => t.map((r) => (r.created === undefined ? [r.pid, r.ppid] : [r.pid, r.ppid, r.created]));
+const parseRows = (text, platform) => toRows(parseTable(text, platform));
+const processRows = (opts) => toRows(processTable(opts) || []);
 
 // Kills root and everything under it except this sleeper; returns the pids still alive after.
 function killTree(root, { rows = processRows(), self = process.pid, kill = (pid) => process.kill(pid, 'SIGKILL'),

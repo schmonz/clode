@@ -273,3 +273,14 @@ test('the sleeper asks the IPC channel, never the pid, whether its file is still
   assert.match(main, /process\.connected/);
   assert.doesNotMatch(main, /alive\(pid\)/, 'a reused pid would make the sleeper kill a stranger');
 });
+
+test('proc-tree: a Windows row created before its parent is a reused pid\'s stranger, not a child', () => {
+  const { descendants, parseTable } = require('./proc-tree.cjs');
+  // root 10 was born at t=500; 20 is its real child (t=600); 30 names 10 as parent but predates it (t=100): the
+  // pid 10 it was born under was an earlier process, since gone, whose pid the kernel reused for the root.
+  const rows = parseTable('10 1 0 500\r\n20 10 0 600\r\n30 10 0 100\r\n31 30 0 120\r\n', 'win32');
+  assert.deepStrictEqual(descendants(rows, 10).sort(), [20]);
+  // CONTROL: without creation times (ps) the walk cannot tell, and takes both.
+  assert.deepStrictEqual(descendants([[10, 1], [20, 10], [30, 10]], 10).sort(), [20, 30]);
+  assert.deepStrictEqual(parseTable('10 1 1:02.50\n', 'darwin'), [{ pid: 10, ppid: 1, ms: 62500 }]);
+});
