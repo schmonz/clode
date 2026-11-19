@@ -191,7 +191,15 @@ function missingOutputLogs(toolUse) {
 // Refuses a check whose own source reads a raw request body, and a check that passes on any
 // log in missingOutputLogs(). Share one `command` object between the mock and this call, so
 // the control cannot drift from what the real run sends.
-function assertFailsOnMissingOutput(check, command) {
+// `modes` (optional) declares the cells the driver covers, a mode name or an array of them
+// ('print' when absent): test/build-gates/tool-coverage-gates.test.cjs reads it from the source,
+// as string literals, and counts the tool x mode cells where a CI job runs this test. Here it is
+// only checked for shape: the control proves the judgment, not the mode.
+function assertFailsOnMissingOutput(check, command, modes) {
+  if (modes !== undefined && !(typeof modes === 'string' && modes)
+    && !(Array.isArray(modes) && modes.length && modes.every((m) => typeof m === 'string' && m))) {
+    throw new Error(`assertFailsOnMissingOutput: modes must be a mode name or an array of them, got ${JSON.stringify(modes)}`);
+  }
   if (typeof check !== 'function') {
     throw new Error('assertFailsOnMissingOutput: `check` must be the live check\'s judgment, a function '
       + 'of the request log that returns a boolean');

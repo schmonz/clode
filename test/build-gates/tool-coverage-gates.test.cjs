@@ -40,8 +40,59 @@
 //   Measured 2026-09-28: 90 tools on the darwin-arm64 carve and 90 on linux-amd64, the same names
 //   (87 + 0 + 3). The floor is 90.
 //
+// CELLS (the observability plan's Task 1, user doctrine 2026-10-05: "Job 0 is always to be able to
+// observe our current state more accurately than yesterday"). A tool is never driven as a whole:
+// it is driven per CELL, tool x mode x engine. Bash driven in a -p turn on darwin said nothing
+// about Bash with the sandbox enabled (it failed OPEN until 8b088ef), and Grep driven on darwin
+// said nothing about Grep on Linux (every call was refused until 0204b54). Both were cells no job
+// ran.
+//   MODES, read from the pinned carve where it can say (each a finding when its anchor is not
+//   found exactly once, so a re-shaped carve is never read as "no modes"):
+//     permission:<m>  each mode of the carve's own list, the array behind `Cannot set permission
+//                     mode: must be one of ${X.join(", ")}` (2.1.283: acceptEdits, auto,
+//                     bypassPermissions, default, dontAsk, plan), less `default`, which is the
+//                     baseline below. bypassPermissions is also --dangerously-skip-permissions.
+//     sandbox:on      the settings schema's sandbox object, `{enabled:...,failIfUnavailable:...
+//     sandbox:required  .describe("Exit with an error at startup if sandbox.enabled is true...`:
+//                     enabled, and enabled with failIfUnavailable.
+//     shell:<s>       the shells the Bash tool's discovery tries by name, the one
+//                     `(C?["bash","zsh"]:["zsh","bash"]).flatMap(` (2.1.283: bash, zsh).
+//     the opt-ins     the tools a launch registers only when --tools/--allowedTools names them:
+//                     the list handed to the setter of launchOptions.replaceSearchToolsOptIn
+//                     (searchToolsOptIn: Glob, Grep) and of replaceTodoToolsOptIn.
+//   DECIDED HERE, where the carve cannot settle it (observability Task 1; one factor at a time,
+//   so the matrix stays one row per behaviour, not a product of every flag):
+//     print           the BASELINE: a -p turn in the default permission mode with the tool named
+//                     in --allowedTools (how every live check runs; for an opt-in tool the same
+//                     naming is its opt-in), no sandbox, whatever shell the turn inherits. A
+//                     control without a declaration declares this.
+//     interactive     a pty turn instead of -p, otherwise the baseline.
+//     unlisted        -p with the tool NOT named in --allowedTools: the permission path a -p turn
+//                     takes without a grant. Not a cell of a SEARCH opt-in tool, which is not
+//                     registered then (while Bash is). The todo opt-in is not such a gate: the
+//                     carve also enables those tools by model (`uU()`: the opt-in, OR the model's
+//                     family), so `unlisted` stays a cell of theirs.
+//     the others are the baseline with ONE thing changed. sandbox:* and shell:* are cells of the
+//     Bash tool only: the sandbox wraps the Bash tool's commands and the shell is its
+//     interpreter; no other tool runs either.
+//   ENGINES: the three shipping engines, darwin-arm64, linux-x64-musl and netbsd-arm64 (each must
+//   be one of scripts/tjs-legs.mjs's publishedRunTargets()). Every other published run-target is
+//   one dated exemption (OTHER_ENGINES_EXEMPTION), outside the matrix.
+//   DRIVEN, per cell: a driver (below) declares the tool and the mode, and a CI JOB in CELL_JOBS
+//   runs the driver's file on the cell's engine. Where a test merely exists drives nothing. A job
+//   counts only when .github/workflows/ci.yml has it, downloads the engine's tjs artifact
+//   (tjs-<engine>), names each claimed file, runs its tests under test/cell-reporter.mjs, and
+//   runs this file with CLODE_CELL_JOB=<job>: that run (the guard cells-ran-in-ci-job, below)
+//   fails the job unless every test that runs a claimed driver's control PASSED, not skipped, in
+//   that job, on a host of that engine. So the static claim here and what the job did are held
+//   together on every push.
+//   EXEMPTIONS are per cell: { tool, reason, date, until }, optionally narrowed by `modes` and
+//   `engines`; a cell both driven and exempted is a finding, as is one neither driven nor
+//   exempted. The dates are the every-tool plan's phases (UNTIL_PHASE_A/B/C), carried as set.
+//
 // A DRIVER (test/**/*.cjs|mjs and scripts/**/*.cjs|mjs|js; two files skipped by name,
-// DRIVER_SCAN_SKIP) is a call `assertFailsOnMissingOutput(check, USE)` (Task 1's control) where
+// DRIVER_SCAN_SKIP) is a call `assertFailsOnMissingOutput(check, USE[, MODES])` (Task 1's control,
+// MODES a mode or an array of modes as string literals, `print` when absent) where
 //   - USE is declared in that file as an object literal whose `name:` is a string literal: the
 //     tool it drives, or an alias of it ('Task' drives Agent);
 //   - check is declared in that file and reads the tool_result BY THAT OBJECT'S ID:
@@ -49,23 +100,34 @@
 //   - the mock scripts that same object: cannedToolUseSSE(USE.name, ...)/toolUseSSE(USE.name, ...),
 //     a mock rule `tool: USE`, or USE passed to a same-file function whose parameter is scripted
 //     that way (driveBashTurn(bin, DENY)).
+//   ITS TESTS: the test(...)/it(...) call holding the control (by its line, which is what
+//   node:test reports), or, for a control inside a top-level function, every test that calls that
+//   function (agentic-grep-glob's controls()). A driver with none cannot be claimed by a job.
 //   A driver CAN SKIP when its test is declared skipped (test.skip, a `{ skip }`/`{ todo }`
 //   option), or when a skip( call follows the control inside its test (outside a test: to the end
-//   of the top-level statement). A precondition skip belongs BEFORE the control; one after it can
-//   depend on the outcome, which is how agentic-tools' Grep row read a refusal as a skip
-//   until the grep-native plan's Task 11.
+//   of the top-level statement). That is shown on the map; it no longer decides the verdict,
+//   because a claimed driver's skip in its job fails that job (agentic-tools' Grep row read a
+//   refusal as a skip until the grep-native plan's Task 11; BACKLOG, "every-tool-driven reads the
+//   end to end's drivers as FIRM").
 //
-// THE VERDICT, per registered tool, and on the table:
-//   - driven by a driver that cannot skip: OK; also exempted: a finding (remove the exemption);
-//   - only by drivers that can skip, or not at all: a finding, unless EXEMPTIONS names it;
-//   - EXEMPTIONS: one entry per tool, exactly { tool, reason, date, until }; a non-empty reason;
-//     YYYY-MM-DD dates, date <= until; past `until` (UTC date) it is a finding; a tool the carve
-//     does not register, or an alias, is a finding.
-//   examined = the tools registered; floor = TOOL_FLOOR.
+// THE VERDICT, per cell (examined = the cells; floor = CELL_FLOOR):
+//   - driven by a claimed driver in a valid job: OK; also exempted: a finding (narrow the
+//     exemption);
+//   - neither driven nor exempted: a finding, one per tool x mode, naming its engines;
+//   - EXEMPTIONS: { tool, reason, date, until } plus optional `modes`/`engines` arrays; a
+//     non-empty reason; YYYY-MM-DD dates, date <= until; past `until` (UTC date) it is a finding
+//     naming its phase; a tool the carve does not register, an alias, a mode or engine that is not
+//     one of the tool's cells, or two entries covering one cell, is a finding;
+//   - a declared mode that is not a cell of the tool, a claimed driver with no test, a job
+//     CELL_JOBS names that ci.yml does not run as above, or a claimed file with no driver.
 //
 // WHAT IT DOES NOT SEE, stated:
 //   - whether a driver's turn runs quaude, naude or native: every driver in the tree runs quaude
-//     (the map in the report), but the rule reads only the test's source;
+//     (the map in the report), but the rule reads only the test's source; agentic-grep-glob's
+//     controls() also runs in its native instrument, so both tests must pass in the job;
+//   - whether a driver's turn really is in the mode it declares (the flags it passes): a
+//     declaration is read, not measured;
+//   - CI's outcome: driven means "a job enforces it on every push", not "the last run was green";
 //   - a driver whose tool_use object, check or scripting lives in another file;
 //   - a tool registered by a path none of the three above reaches: a plain object literal returned
 //     by a function (the MCP authentication stubs and the unknown-tool placeholder, whose names
@@ -604,6 +666,129 @@ function extractRegistry(text) {
 }
 
 // ==========================================================================
+// THE MODES, read from the carve
+// ==========================================================================
+const PERMISSION_ANCHOR = /Cannot set permission mode: must be one of \$\{([\w$]+)\.join\(/g;
+const SANDBOX_ANCHOR = /\{enabled:[^{},]*,failIfUnavailable:[^{}]*?\.describe\("Exit with an error at startup if sandbox\.enabled is true/g;
+const SHELLS_ANCHOR = /\?\[("\w+"(?:,"\w+")+)\]:\[("\w+"(?:,"\w+")+)\]\)\.flatMap\(/g;
+const OPT_IN_SETTER = (method) => new RegExp(`function ([\\w$]+)\\(([\\w$]+)\\)\\{[\\w$.()]*\\.launchOptions\\.${method}\\(\\2\\)\\}`, 'g');
+const OPT_INS = [['search', 'replaceSearchToolsOptIn'], ['todo', 'replaceTodoToolsOptIn']];
+
+// Every match of `re` across the carve's modules, in code unless `code` is false: [{ name, x }].
+function codeMatches(R, re, needle, code = true) {
+  const out = [];
+  for (const [name, src] of R.modules) {
+    if (needle && !src.includes(needle)) continue;
+    const mod = code ? R.mod(name) : null;
+    for (const x of src.matchAll(re)) if (!code || mod.m.mask[x.index]) out.push({ name, x });
+  }
+  return out;
+}
+// The strings (or tool names) an array expression lists, following identifiers and spreads to
+// their definitions; null, with why, when an element is not one.
+function stringsOf(R, modName, text, depth = 0) {
+  const t = text.trim();
+  if (depth > 6) return { why: `${t.slice(0, 60)} nests too deep` };
+  if (/^[\w$]+$/.test(t)) {
+    const loc = R.locate(modName, t);
+    return loc ? stringsOf(R, loc.mod, loc.text, depth + 1) : { why: `${t} has no one definition` };
+  }
+  if (t[0] !== '[' || closeOf(masked(t), 0) !== t.length) return { why: `${t.slice(0, 60)} is not an array` };
+  const els = splitTop(t.slice(1, -1));
+  if (!els) return { why: 'an array that does not lex' };
+  const out = [];
+  for (const el of els) {
+    if (el.startsWith('...')) {
+      const r = stringsOf(R, modName, el.slice(3), depth + 1);
+      if (!r.list) return r;
+      out.push(...r.list);
+      continue;
+    }
+    const v = R.expr(modName, el, new Set());
+    if (v.kind === 'string') out.push(v.value);
+    else if (v.kind === 'tool') out.push(v.name);
+    else return { why: `the element ${el} is ${v.kind}${v.why ? ` (${v.why})` : ''}` };
+  }
+  return { list: out };
+}
+
+function extractModes(text) {
+  const R = new Resolver(text);
+  const findings = [];
+  const once = (hits, what) => {
+    if (hits.length === 1) return hits[0];
+    findings.push(`${what} was found ${hits.length} time(s) in the carve, not exactly once; re-derive the mode axis`);
+    return null;
+  };
+  // Permission modes: the carve's own list of the modes --permission-mode takes.
+  let permission = [];
+  // (The anchor is template text, not code: read raw.)
+  const p = once(codeMatches(R, PERMISSION_ANCHOR, 'Cannot set permission mode', false),
+    'the permission-mode list (`Cannot set permission mode: must be one of ${X.join(...)}`)');
+  if (p) {
+    const r = stringsOf(R, p.name, p.x[1]);
+    if (!r.list) findings.push(`the permission-mode list ${p.x[1]} does not resolve to strings (${r.why})`);
+    else if (!r.list.includes('default')) findings.push(`the permission-mode list has no "default" (${r.list.join(', ')}): the baseline is gone`);
+    else permission = r.list.filter((m) => m !== 'default').sort();
+  }
+  // The sandbox: enabled, and enabled with failIfUnavailable.
+  const sandbox = once(codeMatches(R, SANDBOX_ANCHOR, 'failIfUnavailable'), 'the settings schema\'s sandbox object '
+    + '({enabled, failIfUnavailable: "Exit with an error at startup if sandbox.enabled is true ..."})') ? ['on', 'required'] : [];
+  // The Bash tool's shells, by name.
+  let shells = [];
+  const sh = once(codeMatches(R, SHELLS_ANCHOR, '.flatMap('), 'the Bash tool\'s shell discovery (`C?["bash","zsh"]:["zsh","bash"]).flatMap(`)');
+  if (sh) {
+    const a = JSON.parse(`[${sh.x[1]}]`).sort(), b = JSON.parse(`[${sh.x[2]}]`).sort();
+    if (JSON.stringify(a) !== JSON.stringify(b)) findings.push(`the shell discovery's two orders name different shells (${a} / ${b})`);
+    else shells = a;
+  }
+  // The opt-in tools: what each launch-option setter is handed `LIST.some(...)` of.
+  const optIn = {};
+  for (const [key, method] of OPT_INS) {
+    optIn[key] = [];
+    const setter = once(codeMatches(R, OPT_IN_SETTER(method), method), `the setter of launchOptions.${method}`);
+    if (!setter) continue;
+    const F = setter.x[1];
+    const calls = codeMatches(R, new RegExp(`(?<![\\w$.])${esc(F)}\\(`, 'g'), `${F}(`)
+      .filter(({ name, x }) => name !== setter.name || x.index !== setter.x.index + 'function '.length);
+    const lists = [];
+    for (const { name, x } of calls) {
+      const mod = R.mod(name);
+      const open = x.index + x[0].length - 1;
+      const close = closeOf(mod.m, open);
+      const arg = close < 0 ? '' : mod.src.slice(open + 1, close - 1);
+      const sm = /^([\s\S]+)\.some\(/.exec(arg);
+      if (!sm) continue;
+      const r = stringsOf(R, name, sm[1]);
+      if (!r.list) { findings.push(`the ${key} opt-in list ${sm[1]} does not resolve to tool names (${r.why})`); continue; }
+      lists.push(r.list);
+    }
+    if (lists.length !== 1) findings.push(`the ${key} opt-in (${F}(LIST.some(...))) was called ${lists.length} time(s), not once`);
+    else optIn[key] = [...new Set(lists[0])].sort();
+  }
+  const note = `modes from the carve: permission ${permission.join('/') || 'none'}; sandbox ${sandbox.join('/') || 'none'}; `
+    + `shells ${shells.join('/') || 'none'}; opt-in ${Object.entries(optIn).map(([k, v]) => `${k} ${v.join('/') || 'none'}`).join(', ')}`;
+  return { permission, sandbox, shells, optIn, findings, note };
+}
+
+// The cells' mode axis, from what the carve says. A mode `only` a tool has, or that a search
+// opt-in tool lacks (`unlisted`).
+const BASH = 'Bash';
+function modeAxis(md) {
+  return [
+    { mode: 'print' },
+    { mode: 'interactive' },
+    { mode: 'unlisted', notOptIn: true },
+    ...md.permission.map((m) => ({ mode: `permission:${m}` })),
+    ...md.sandbox.map((s) => ({ mode: `sandbox:${s}`, only: BASH })),
+    ...md.shells.map((s) => ({ mode: `shell:${s}`, only: BASH })),
+  ];
+}
+function modesOf(tool, axis, optIn) {
+  return axis.filter((a) => (!a.only || a.only === tool) && !(a.notOptIn && optIn.has(tool))).map((a) => a.mode);
+}
+
+// ==========================================================================
 // THE DRIVERS
 // ==========================================================================
 // Skipped by name (counted as skipped, never read): each would read as drivers of tools it drives
@@ -650,8 +835,16 @@ function findDrivers(sources) {
       const open = x.index + x[0].length - 1;
       const close = closeOf(m, open);
       const args = close < 0 ? null : splitTop(text.slice(open + 1, close - 1));
-      if (!args || args.length !== 2) { rejected.push({ ...at, why: 'the control is not called as (check, toolUse)' }); continue; }
-      const [check, use] = args;
+      if (!args || (args.length !== 2 && args.length !== 3)) {
+        rejected.push({ ...at, why: 'the control is not called as (check, toolUse[, modes])' });
+        continue;
+      }
+      const [check, use, modesText] = args;
+      const modes = modesText === undefined ? ['print'] : literalModes(modesText);
+      if (!modes) {
+        rejected.push({ ...at, why: `the modes (${modesText}) are not a string literal or an array of string literals` });
+        continue;
+      }
       if (!/^[\w$]+$/.test(use)) {
         rejected.push({ ...at, why: 'the tool_use is not a named object (an inline one cannot be the one the mock scripts)' });
         continue;
@@ -680,10 +873,62 @@ function findDrivers(sources) {
         rejected.push({ ...at, why: `the check (${check}) reads the tool_result of ${use}.id, but ${use} is never scripted to a mock` });
         continue;
       }
-      drivers.push({ ...at, name, use, check, skips: skipOf(text, m, code, x.index, lineOf) });
+      drivers.push({ ...at, name, use, check, modes, tests: testsOf(text, m, code, x.index, lineOf),
+        skips: skipOf(text, m, code, x.index, lineOf) });
     }
   }
   return { drivers, rejected, scanned, skipped };
+}
+
+// A control's modes: 'mode' or ['mode', ...], string literals only. null when not.
+function literalModes(t) {
+  const one = (s) => (/^(['"])[\w:-]+\1$/.test(s) ? s.slice(1, -1) : null);
+  if (t[0] !== '[') { const v = one(t); return v ? [v] : null; }
+  const els = t.endsWith(']') ? splitTop(t.slice(1, -1)) : null;
+  const vs = els && els.map(one);
+  return vs && vs.length && vs.every(Boolean) ? [...new Set(vs)] : null;
+}
+
+// The tests that run the control at `pos`, as node:test reports them ({ name, line }): the
+// innermost test(...)/it(...) holding it; or, when none does, every test that calls the top-level
+// function holding it (one level: agentic-grep-glob's controls()). [] when neither.
+function testsOf(text, m, code, pos, lineOf) {
+  const calls = code(/(?<![\w$.])(?:test|it)(?:\.\w+)?\s*\(/g).map((t) => {
+    const open = t.index + t[0].length - 1;
+    const close = closeOf(m, open);
+    const first = close < 0 ? null : (splitTop(text.slice(open + 1, close - 1)) || [])[0];
+    const lit = first && /^(['"`])([\s\S]*)\1$/.exec(first);
+    const name = lit && !(lit[1] === '`' && lit[2].includes('${')) ? lit[2].replace(/\\(['"`\\])/g, '$1') : null;
+    return { start: t.index, end: close, name, line: lineOf(t.index) };
+  }).filter((t) => t.end > 0);
+  const holding = (p) => calls.filter((t) => t.start < p && p < t.end).sort((a, b) => b.start - a.start)[0];
+  const own = holding(pos);
+  if (own) return [{ name: own.name, line: own.line }];
+  const fns = [
+    ...code(/(?<![\w$.])function\s*\*?\s*([\w$]+)\s*\(/g),
+    ...code(/(?<![\w$.])(?:const|let|var)\s+([\w$]+)\s*=\s*(?:async\s*)?(?:\([^)]*\)|[\w$]+)\s*=>/g),
+  ].map((f) => {
+    const after = f.index + f[0].length;
+    let end;
+    if (f[0].endsWith('=>')) {          // an arrow: a block body, or an expression to its end
+      const ws = /^\s*/.exec(text.slice(after))[0].length;
+      end = text[after + ws] === '{' ? closeOf(m, after + ws) : endOf(m, after, ',;');
+    } else {
+      const pe = closeOf(m, after - 1);
+      const bo = pe < 0 ? -1 : text.indexOf('{', pe);
+      end = bo < 0 ? -1 : closeOf(m, bo);
+    }
+    return { name: f[1], start: f.index, end };
+  }).filter((f) => f.start < pos && pos < f.end).sort((a, b) => b.start - a.start);
+  const fn = fns[fns.length - 1];
+  if (!fn) return [];
+  const out = new Map();
+  for (const c of code(new RegExp(`(?<![\\w$.])${esc(fn.name)}\\s*\\(`, 'g'))) {
+    if (c.index === fn.start || (c.index > fn.start && c.index < fn.end)) continue;
+    const t = holding(c.index);
+    if (t) out.set(t.line, { name: t.name, line: t.line });
+  }
+  return [...out.values()].sort((a, b) => a.line - b.line);
 }
 
 // The mock scripts USE: `cannedToolUseSSE(USE.name, ...)` / `toolUseSSE(USE.name, ...)`, a mock
@@ -743,102 +988,306 @@ function skipOf(text, m, code, pos, lineOf) {
 }
 
 // ==========================================================================
+// THE CI JOBS: where a driver actually runs, per engine
+// ==========================================================================
+// The jobs of .github/workflows/ci.yml, each job's own block of text (its key at two spaces).
+function jobBlocks(yaml) {
+  const out = new Map();
+  const at = [...yaml.matchAll(/^ {2}([\w-]+):[ \t]*$/gm)];
+  at.forEach((h, k) => out.set(h[1], yaml.slice(h.index, k + 1 < at.length ? at[k + 1].index : yaml.length)));
+  return out;
+}
+// Which CELL_JOBS entries ci.yml really runs as a cell job: the job exists, downloads its engine's
+// tjs artifact, runs its tests under the cell reporter, and checks them with CLODE_CELL_JOB=<job>.
+// -> { valid: [entries], findings }
+function checkJobs({ workflow, jobs, sources, engines }) {
+  const findings = [];
+  const valid = [];
+  const blocks = jobBlocks(workflow || '');
+  const files = new Set(sources.map((s) => s.file));
+  const seen = new Set();
+  for (const j of jobs) {
+    if (seen.has(j.job)) { findings.push(`CELL_JOBS names ${j.job} twice; one entry per job`); continue; }
+    seen.add(j.job);
+    const why = [];
+    if (!engines.includes(j.engine)) why.push(`its engine ${j.engine} is not a shipping engine (${engines.join(', ')})`);
+    const b = blocks.get(j.job);
+    if (!b) why.push('ci.yml has no such job');
+    else {
+      if (!b.includes(`name: tjs-${j.engine}`)) why.push(`it downloads no tjs-${j.engine} artifact`);
+      if (!b.includes('test/cell-reporter.mjs')) why.push('it runs no test under test/cell-reporter.mjs');
+      if (!new RegExp(`CLODE_CELL_JOB[=:]\\s*['"]?${esc(j.job)}['"]?(?![\\w-])`).test(b)) {
+        why.push(`it never checks its cells (CLODE_CELL_JOB=${j.job} node --test ${posixRel(__filename)})`);
+      }
+    }
+    if (why.length) { findings.push(`CELL_JOBS ${j.job} (${j.engine}) drives no cell: ${why.join('; ')}`); continue; }
+    // A claimed file that is gone, or that the job's text never names, is a finding; the job's other
+    // files still drive their cells. (Naming is the static half: the job's own check is what proves
+    // the file's tests ran.)
+    const kept = [];
+    for (const f of j.files) {
+      if (!files.has(f)) findings.push(`CELL_JOBS ${j.job} claims ${f}, which is not in the tree`);
+      else if (!b.includes(f)) findings.push(`CELL_JOBS ${j.job} claims ${f}, which the job never names in ci.yml`);
+      else kept.push(f);
+    }
+    valid.push({ ...j, files: kept });
+  }
+  return { valid, findings };
+}
+
+// ==========================================================================
 // THE VERDICT
 // ==========================================================================
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 const isIsoDate = (s) => typeof s === 'string' && ISO_DATE.test(s) && !Number.isNaN(Date.parse(`${s}T00:00:00Z`))
   && new Date(`${s}T00:00:00Z`).toISOString().slice(0, 10) === s;
-const EXEMPTION_KEYS = ['tool', 'reason', 'date', 'until'];
+const EXEMPTION_KEYS = ['tool', 'modes', 'engines', 'reason', 'date', 'until'];
+const PHASE_OF = (until) => PHASES.get(until) || null;
+const cellsTag = (e) => `${e.modes ? ` x ${e.modes.join('/')}` : ''}${e.engines ? ` @ ${e.engines.join('/')}` : ''}`;
 
 // The table's own shape, dates and expiry; needs no carve.
-function checkExemptionTable(exemptions, today) {
+function checkExemptionTable(exemptions, today, { keys = EXEMPTION_KEYS, who: whoOf = (e) => e.tool } = {}) {
   const out = [];
   const count = new Map();
   exemptions.forEach((e, k) => {
-    const who = typeof e.tool === 'string' && e.tool ? e.tool : `exemption #${k + 1}`;
-    const extra = Object.keys(e).filter((key) => !EXEMPTION_KEYS.includes(key));
-    if (extra.length) out.push(`${who}: unknown key(s) ${extra.join(', ')}; an exemption is { ${EXEMPTION_KEYS.join(', ')} }`);
-    if (typeof e.reason !== 'string' || !e.reason.trim()) out.push(`${who}: no reason; an exemption says why the tool is not driven`);
+    const name = whoOf(e);
+    const who = typeof name === 'string' && name ? `${name}${cellsTag(e)}` : `exemption #${k + 1}`;
+    const extra = Object.keys(e).filter((key) => !keys.includes(key));
+    if (extra.length) out.push(`${who}: unknown key(s) ${extra.join(', ')}; an exemption is { ${keys.join(', ')} }`);
+    for (const key of ['modes', 'engines']) {
+      if (key in e && !(Array.isArray(e[key]) && e[key].length && e[key].every((v) => typeof v === 'string' && v))) {
+        out.push(`${who}: ${key} must be a non-empty array of names (leave it out for all of them)`);
+      }
+    }
+    if (typeof e.reason !== 'string' || !e.reason.trim()) out.push(`${who}: no reason; an exemption says why the cells are not driven`);
     const dOk = isIsoDate(e.date), uOk = isIsoDate(e.until);
     if (!dOk) out.push(`${who}: date "${e.date}" is not a YYYY-MM-DD date`);
     if (!uOk) out.push(`${who}: until "${e.until}" is not a YYYY-MM-DD date`);
     if (dOk && uOk && e.until < e.date) out.push(`${who}: until ${e.until} is before its date ${e.date}`);
     else if (uOk && today > e.until) {
-      out.push(`${who}: its exemption expired on ${e.until} (recorded ${e.date}: "${e.reason}"); drive the tool, `
-        + 'or renew the exemption with a new reason, date and until');
+      const phase = PHASE_OF(e.until);
+      out.push(`${who}: its exemption expired on ${e.until}${phase ? ` (${phase}'s deadline)` : ''} (recorded ${e.date}: `
+        + `"${e.reason}"); drive the cells, or renew the exemption with a new reason, date and until`);
     }
     count.set(who, (count.get(who) || 0) + 1);
   });
-  for (const [who, n] of count) if (n > 1) out.push(`${who}: exempted ${n} times; one entry per tool`);
+  for (const [who, n] of count) if (n > 1) out.push(`${who}: exempted ${n} times; one entry per set of cells`);
   return out;
 }
 
-function scanCoverage({ carve, what, sources, exemptions, today }) {
+const cellKey = (tool, mode, engine) => `${tool}|${mode}|${engine}`;
+
+function scanCoverage({ carve, what, sources, exemptions, today, workflow, jobs, engines, published, enginesExemption }) {
   const reg = extractRegistry(carve);
+  const md = extractModes(carve);
   const { tools } = reg;
-  const findings = [...reg.findings];
+  const findings = [...reg.findings, ...md.findings];
   const byAlias = new Map();
   for (const [name, t] of tools) for (const a of t.aliases) if (a) byAlias.set(a, name);
+
+  // The engines: the shipping three are published run-targets; every other one is exempted.
+  for (const e of engines) if (!published.includes(e)) findings.push(`${e}: a shipping engine that scripts/tjs-legs.mjs does not publish`);
+  findings.push(...checkExemptionTable([enginesExemption], today, { keys: ['engines', 'reason', 'date', 'until'],
+    who: () => 'every other published engine' }).map((f) => f.replace(/ @ [^:]*:/, ':')));
+  const others = published.filter((e) => !engines.includes(e));
+
+  // The cells.
+  const axis = modeAxis(md);
+  const optIn = new Set(md.optIn.search);
+  const modesByTool = new Map([...tools.keys()].map((t) => [t, modesOf(t, axis, optIn)]));
+  let cells = 0;
+  for (const ms of modesByTool.values()) cells += ms.length * engines.length;
+
+  // The drivers, and the jobs that run them.
   const d = findDrivers(sources);
-  const drivenBy = new Map();
+  const jb = checkJobs({ workflow, jobs, sources, engines });
+  findings.push(...jb.findings);
+  const driven = new Map();                      // cellKey -> [{ driver, job }]
   const foreign = [];
+  const declared = new Map();                    // tool -> drivers
   for (const x of d.drivers) {
     const name = tools.has(x.name) ? x.name : byAlias.get(x.name);
     if (!name) { foreign.push(x); continue; }
-    if (!drivenBy.has(name)) drivenBy.set(name, { firm: [], skipping: [] });
-    drivenBy.get(name)[x.skips ? 'skipping' : 'firm'].push(x);
+    if (!declared.has(name)) declared.set(name, []);
+    declared.get(name).push(x);
+    const own = modesByTool.get(name);
+    const bad = x.modes.filter((mo) => !own.includes(mo));
+    if (bad.length) findings.push(`${x.file}:${x.line}: declares ${bad.join(', ')} for ${name}, not among its cells' modes (${own.join(', ')})`);
+    for (const j of jb.valid) {
+      if (!j.files.includes(x.file)) continue;
+      if (!x.tests.length) {
+        findings.push(`${x.file}:${x.line}: ${j.job} claims this driver of ${name}, but no test(...) runs its control, so the job `
+          + 'cannot report that it ran');
+        continue;
+      }
+      for (const mo of x.modes) {
+        if (!own.includes(mo)) continue;
+        const k = cellKey(name, mo, j.engine);
+        if (!driven.has(k)) driven.set(k, []);
+        driven.get(k).push({ driver: x, job: j.job });
+      }
+    }
   }
+  for (const j of jb.valid) {
+    for (const f of j.files) if (!d.drivers.some((x) => x.file === f)) findings.push(`CELL_JOBS ${j.job} claims ${f}, which holds no driver`);
+  }
+
+  // The exemptions, per cell.
   findings.push(...checkExemptionTable(exemptions, today));
-  const exempt = new Map();
+  const exempt = new Map();                      // cellKey -> entry
   for (const e of exemptions) {
     if (typeof e.tool !== 'string') continue;
-    if (tools.has(e.tool)) exempt.set(e.tool, e);
-    else if (byAlias.has(e.tool)) findings.push(`${e.tool}: exempted, but ${e.tool} is an alias of ${byAlias.get(e.tool)}; exempt the tool by its name`);
-    else if (tools.size) findings.push(`${e.tool}: exempted, but the carve does not register a tool of that name (${what}); remove the exemption`);
-  }
-  const at = (xs) => xs.map((x) => `${x.file}:${x.line}`).sort().join(', ');
-  let firm = 0, skipping = 0;
-  for (const name of [...tools.keys()].sort()) {
-    const dv = drivenBy.get(name) || { firm: [], skipping: [] };
-    const e = exempt.get(name);
-    if (dv.firm.length) {
-      firm++;
-      if (e) findings.push(`${name}: exempted (${e.date}, until ${e.until}) but driven by ${at(dv.firm)}; remove the exemption`);
+    if (!tools.has(e.tool)) {
+      if (byAlias.has(e.tool)) findings.push(`${e.tool}: exempted, but ${e.tool} is an alias of ${byAlias.get(e.tool)}; exempt the tool by its name`);
+      else if (tools.size) findings.push(`${e.tool}: exempted, but the carve does not register a tool of that name (${what}); remove the exemption`);
       continue;
     }
-    if (dv.skipping.length) skipping++;
-    if (e) continue;
-    if (dv.skipping.length) {
-      findings.push(`${name}: its only driver(s) can skip on their own outcome (${dv.skipping.map((x) => `${x.file}:${x.line}, ${x.skips}`).join('; ')}), `
-        + 'so a broken tool reads as a skip, never a failure: make the driver assert, or exempt the tool by name with that reason');
-    } else {
-      findings.push(`${name}: no end-to-end test drives it and judges its tool_result, and it has no exemption. Drive it `
-        + '(a live check whose assertFailsOnMissingOutput control shares its tool_use object with the mock; '
-        + 'scripts/lib/tool-result.cjs), or exempt it by name in EXEMPTIONS with a reason, a date and an until');
+    const own = modesByTool.get(e.tool);
+    const ms = Array.isArray(e.modes) ? e.modes : own;
+    const es = Array.isArray(e.engines) ? e.engines : engines;
+    const badM = ms.filter((mo) => !own.includes(mo)), badE = es.filter((en) => !engines.includes(en));
+    if (badM.length || badE.length) {
+      findings.push(`${e.tool}${cellsTag(e)}: exempts ${[...badM, ...badE].join(', ')}, not among its cells (modes ${own.join(', ')}; `
+        + `engines ${engines.join(', ')})`);
+    }
+    for (const mo of ms) {
+      for (const en of es) {
+        if (!own.includes(mo) || !engines.includes(en)) continue;
+        const k = cellKey(e.tool, mo, en);
+        if (exempt.has(k)) findings.push(`${e.tool} x ${mo} @ ${en}: exempted by two entries; one entry per cell`);
+        else exempt.set(k, e);
+      }
     }
   }
+
+  // The verdict, cell by cell; undriven, unexempted cells reported one line per tool x mode.
+  const where = (xs) => [...new Set(xs.map((x) => `${x.job}: ${x.driver.file}:${x.driver.line}`))].sort().join(', ');
+  let nDriven = 0, nExempt = 0, nNone = 0;
+  const matrix = [];
+  for (const name of [...tools.keys()].sort()) {
+    const rows = [];
+    for (const mo of modesByTool.get(name)) {
+      const none = [], states = [];
+      for (const en of engines) {
+        const k = cellKey(name, mo, en);
+        const dv = driven.get(k), e = exempt.get(k);
+        if (dv) {
+          nDriven++;
+          states.push(`${en} DRIVEN (${[...new Set(dv.map((x) => x.job))].join(', ')})`);
+          if (e) findings.push(`${name} x ${mo} @ ${en}: exempted (${e.date}, until ${e.until}) but driven by ${where(dv)}; narrow the exemption`);
+        } else if (e) {
+          nExempt++;
+          states.push(`${en} ${today > e.until ? 'EXPIRED' : 'exempt'} until ${e.until}`);
+        } else {
+          nNone++;
+          none.push(en);
+          states.push(`${en} NONE`);
+        }
+      }
+      if (none.length) {
+        findings.push(`${name} x ${mo}: on ${none.join(', ')} no CI job drives it (CELL_JOBS) and no exemption covers it`);
+      }
+      rows.push({ mode: mo, states });
+    }
+    const whole = rows.every((r) => r.states.every((s) => / exempt(?:ed)? until | EXPIRED until /.test(s)))
+      && new Set(rows.flatMap((r) => r.states.map((s) => s.replace(/^\S+ /, '')))).size === 1;
+    if (whole && !declared.has(name)) matrix.push(`${name}: every cell ${rows[0].states[0].replace(/^\S+ /, '')}`);
+    else for (const r of rows) matrix.push(`${name} x ${r.mode}: ${r.states.join('; ')}`);
+  }
   const files = new Set(d.drivers.map((x) => x.file)).size;
-  return { findings, examined: tools.size, tools, drivers: d, drivenBy, foreign,
-    note: `${what}: ${reg.note}; ${firm} driven, ${skipping} driven only by a driver that can skip, ${exempt.size} `
-      + `exempted; ${d.drivers.length} driver(s) in ${files} file(s), ${d.scanned + d.skipped} file(s) scanned, `
+  return { findings, examined: cells, tools, drivers: d, declared, driven, foreign, matrix, jobs: jb.valid,
+    note: `${what}: ${reg.note}; ${md.note}; ${cells} cell(s) over ${engines.join(', ')} (${others.length} other published `
+      + `engine(s) exempted as one): ${nDriven} driven, ${nExempt} exempted, ${nNone} neither; ${jb.valid.length} CI job(s) `
+      + `report cells; ${d.drivers.length} driver(s) in ${files} file(s), ${d.scanned + d.skipped} file(s) scanned, `
       + `${d.skipped} of them skipped by name` };
 }
 
 // ==========================================================================
-// THE EXEMPTIONS: the undriven tools, as a dated to-do list
+// THE JOB'S OWN RUN: did every claimed driver's test pass, in this job, on this engine?
+// ==========================================================================
+// `records`: what test/cell-reporter.mjs wrote ({ type, file (repo-relative), line, name, skip,
+// todo }); `host`: { platform, arch } of the job's runner. -> { findings, examined, ran }
+const ENGINE_HOST = (engine) => {
+  const [os, arch] = engine.split('-');
+  return { platform: os, arch };
+};
+function checkJobRan({ job, jobs, sources, records, host }) {
+  const findings = [];
+  const entry = jobs.find((j) => j.job === job);
+  if (!entry) return { findings: [`CLODE_CELL_JOB=${job} is not a job CELL_JOBS names (${jobs.map((j) => j.job).join(', ')})`], examined: 0, ran: [] };
+  const want = ENGINE_HOST(entry.engine);
+  if (host.platform !== want.platform || host.arch !== want.arch) {
+    findings.push(`${job} claims ${entry.engine}, but runs on ${host.platform}-${host.arch}`);
+  }
+  const d = findDrivers(sources.filter((s) => entry.files.includes(s.file)));
+  // A test reported more than once (two runs of the file in one job) passed only if every report did.
+  const outcomes = new Map();
+  for (const r of records) {
+    const k = `${r.file}:${r.line}`;
+    const o = r.type === 'test:fail' ? 'failed' : r.skip !== undefined ? `skipped (${r.skip})` : r.todo !== undefined ? `todo (${r.todo})` : 'passed';
+    outcomes.set(k, [...(outcomes.get(k) || []), o]);
+  }
+  const result = new Map([...outcomes].map(([k, os]) => [k, os.find((o) => o !== 'passed') || 'passed']));
+  const ran = [];
+  for (const f of entry.files) if (!d.drivers.some((x) => x.file === f)) findings.push(`${f}: claimed by ${job}, but holds no driver`);
+  for (const x of d.drivers) {
+    if (!x.tests.length) { findings.push(`${x.file}:${x.line}: no test(...) runs this ${x.name} control, so nothing reports it`); continue; }
+    const bad = x.tests.map((t) => [t, result.get(`${x.file}:${t.line}`) || 'not run']).filter(([, o]) => o !== 'passed');
+    if (bad.length) {
+      findings.push(`${x.file}:${x.line} (${x.name} x ${x.modes.join('/')} @ ${entry.engine}): ${bad.map(([t, o]) => `test "${t.name}" `
+        + `(line ${t.line}) ${o}`).join('; ')} in ${job}; a cell is driven only where its test passes`);
+    } else ran.push(`${x.name} x ${x.modes.join('/')} @ ${entry.engine} <- ${x.file}:${x.line}`);
+  }
+  const cells = [...new Set(ran)];
+  return { findings, examined: d.drivers.length, ran: cells,
+    note: `${job} on ${entry.engine}: ${cells.length} of ${d.drivers.length} claimed driver(s) ran (${cells.join('; ') || 'none'})` };
+}
+
+// ==========================================================================
+// THE EXEMPTIONS: the undriven cells, as a dated to-do list
 // ==========================================================================
 // Measured 2026-09-28 on the 2.1.283 carves (darwin-arm64 and linux-amd64 register the same 90
 // tools): 87 in getAllBaseTools, none added by getTools, and 3 registered outside it
-// (SubagentHandback, ObserverReport, and the MCP template `mcp`). Less nothing: a carve that
-// registers fewer is BROKEN until someone re-measures.
-const TOOL_FLOOR = 90;
+// (SubagentHandback, ObserverReport, and the MCP template `mcp`). Measured 2026-11-18 on the
+// darwin-arm64 2.1.283 carve, those 90 tools have 722 tool x mode pairs (87 with the 8 common
+// modes, Glob and Grep 7 without `unlisted`, Bash 12 with sandbox:on/required and shell:bash/zsh),
+// so 2166 cells over the three shipping engines. Less is BROKEN until someone re-measures.
+const CELL_FLOOR = 2166;
+// The engines a release claims (observability plan Task 1): each a cell column.
+const SHIPPING_ENGINES = ['darwin-arm64', 'linux-x64-musl', 'netbsd-arm64'];
 // Each gate below is read from the tool's registry element or its isEnabled() in that carve.
-// UNTIL_REVIEW is a quarterly re-decision: drive the tool, or renew its entry with a new reason
-// and date. (Grep and Glob were exempted here until the grep-native plan's Task 11 drove them,
-// 2026-10-05: test/fidelity/agentic-grep-glob.test.cjs, every output mode against native, and
-// agentic-tools' Grep rows, which no longer skip.)
+// THE DEADLINES are the every-tool plan's phases (.superpowers/sdd/2026-09-28-every-tool-driven,
+// design "Phases and deadlines"; its ledger's ruling E1 set Phase A's), carried here as set, never
+// re-dated by this file: Phase A (the 18 local tools, before the release) 2026-10-15, Phase B
+// (24 tools with their own needs; 23 are listed by name there, and they are these) 2026-11-30,
+// Phase C (claude.ai, remote, MCP, and WebSearch) 2026-12-31. The 13 tools the plan puts in no
+// phase (9 runner operators, 4 relay stubs) keep the quarterly re-decision UNTIL_REVIEW they had.
+// A lapsed phase is a finding by name, and the user re-dates it. (Grep and Glob were exempted here
+// until the grep-native plan's Task 11 drove them, 2026-10-05: test/fidelity/agentic-grep-glob.test.cjs,
+// every output mode against native, and agentic-tools' Grep rows, which no longer skip.)
 const RECORDED = '2026-09-28';
+const UNTIL_PHASE_A = '2026-10-15';
+const UNTIL_PHASE_B = '2026-11-30';
+const UNTIL_PHASE_C = '2026-12-31';
 const UNTIL_REVIEW = '2026-12-31';
+const PHASES = new Map([[UNTIL_PHASE_A, 'every-tool Phase A'], [UNTIL_PHASE_B, 'every-tool Phase B'],
+  [UNTIL_PHASE_C, 'every-tool Phase C (or the quarterly review)']]);
+// Every published engine but the three: one entry, outside the matrix (no cell is counted for
+// them, and a job run on one is not a cell job). Recorded with this gate; its until is the
+// quarterly re-decision the table already uses.
+const OTHER_ENGINES_EXEMPTION = { engines: ['*'], reason: 'not a shipping engine: the release claims darwin-arm64, '
+  + 'linux-x64-musl and netbsd-arm64 (observability plan Task 1); the others are build legs whose fidelity tier '
+  + 'scripts/tjs-legs.mjs records, and no job here drives a tool on them as a cell', date: '2026-11-18', until: UNTIL_REVIEW };
+// THE JOBS that drive cells: each runs its files' tests under test/cell-reporter.mjs on its engine,
+// then this file with CLODE_CELL_JOB=<job> (checkJobRan). Measured before claiming: each file's
+// drivers pass, never skip, in that job (its own skip-count assertion, or its step's comment).
+const CELL_JOBS = [
+  { job: 'node-shim-oracle', engine: 'linux-x64-musl', files: ['test/node-shim-agentic.test.cjs'] },
+  { job: 'node-shim-oracle-darwin', engine: 'darwin-arm64', files: ['test/node-shim-agentic.test.cjs'] },
+  { job: 'native-builder-oracle', engine: 'linux-x64-musl', files: ['test/clode-native.test.cjs'] },
+  { job: 'linux-x64-pty', engine: 'linux-x64-musl', files: ['test/quaude-build.test.cjs',
+    'test/fidelity/agentic-grep-glob.test.cjs', 'test/fidelity/agentic-sandbox-fail-closed.test.cjs'] },
+];
 const LOCAL = 'deferred, no plan yet: it runs on this machine, so a canned-mock turn could drive it, and no live check '
   + 'judges its tool_result';
 const INTERACTIVE = 'deferred, no plan yet: disabled in a non-interactive (-p) session without a permission-prompt tool, '
@@ -858,126 +1307,126 @@ const RELAY = (what) => `deferred, no plan yet: a relay stub that asks the user 
 const EXEMPTIONS = [
   // Local tools a canned mock could drive today: the to-do list proper.
   { tool: 'Read', reason: `${LOCAL}. floor-probe B4 and node-shim-agentic's Edit row script Read only to satisfy `
-    + 'read-before-edit, and judge nothing it returns', date: RECORDED, until: UNTIL_REVIEW },
+    + 'read-before-edit, and judge nothing it returns', date: RECORDED, until: UNTIL_PHASE_A },
   { tool: 'Write', reason: `${LOCAL}. agentic-tools' Write row and floor-probe C1 judge the file on disk, `
-    + 'never the tool_result', date: RECORDED, until: UNTIL_REVIEW },
-  { tool: 'NotebookEdit', reason: LOCAL, date: RECORDED, until: UNTIL_REVIEW },
-  { tool: 'TaskStop', reason: `${LOCAL} (it stops a background task; aliases KillShell, KillBash)`, date: RECORDED, until: UNTIL_REVIEW },
-  { tool: 'TaskCreate', reason: `${LOCAL} (the task list; registered unless CLAUDE_CODE_ENABLE_TASKS=false)`, date: RECORDED, until: UNTIL_REVIEW },
-  { tool: 'TaskGet', reason: `${LOCAL} (the task list; registered unless CLAUDE_CODE_ENABLE_TASKS=false)`, date: RECORDED, until: UNTIL_REVIEW },
-  { tool: 'TaskUpdate', reason: `${LOCAL} (the task list; registered unless CLAUDE_CODE_ENABLE_TASKS=false)`, date: RECORDED, until: UNTIL_REVIEW },
-  { tool: 'TaskList', reason: `${LOCAL} (the task list; registered unless CLAUDE_CODE_ENABLE_TASKS=false)`, date: RECORDED, until: UNTIL_REVIEW },
+    + 'never the tool_result', date: RECORDED, until: UNTIL_PHASE_A },
+  { tool: 'NotebookEdit', reason: LOCAL, date: RECORDED, until: UNTIL_PHASE_A },
+  { tool: 'TaskStop', reason: `${LOCAL} (it stops a background task; aliases KillShell, KillBash)`, date: RECORDED, until: UNTIL_PHASE_A },
+  { tool: 'TaskCreate', reason: `${LOCAL} (the task list; registered unless CLAUDE_CODE_ENABLE_TASKS=false)`, date: RECORDED, until: UNTIL_PHASE_A },
+  { tool: 'TaskGet', reason: `${LOCAL} (the task list; registered unless CLAUDE_CODE_ENABLE_TASKS=false)`, date: RECORDED, until: UNTIL_PHASE_A },
+  { tool: 'TaskUpdate', reason: `${LOCAL} (the task list; registered unless CLAUDE_CODE_ENABLE_TASKS=false)`, date: RECORDED, until: UNTIL_PHASE_A },
+  { tool: 'TaskList', reason: `${LOCAL} (the task list; registered unless CLAUDE_CODE_ENABLE_TASKS=false)`, date: RECORDED, until: UNTIL_PHASE_A },
   { tool: 'TodoWrite', reason: 'deferred, no plan yet: a local tool, but enabled only when the Task* tools are off '
-    + '(CLAUDE_CODE_ENABLE_TASKS=false), and no live check turns them off', date: RECORDED, until: UNTIL_REVIEW },
-  { tool: 'Skill', reason: `${LOCAL} (it needs a skill on disk)`, date: RECORDED, until: UNTIL_REVIEW },
-  { tool: 'EnterWorktree', reason: `${LOCAL} (it needs a git repository)`, date: RECORDED, until: UNTIL_REVIEW },
-  { tool: 'ExitWorktree', reason: `${LOCAL} (it needs a git repository)`, date: RECORDED, until: UNTIL_REVIEW },
+    + '(CLAUDE_CODE_ENABLE_TASKS=false), and no live check turns them off', date: RECORDED, until: UNTIL_PHASE_B },
+  { tool: 'Skill', reason: `${LOCAL} (it needs a skill on disk)`, date: RECORDED, until: UNTIL_PHASE_A },
+  { tool: 'EnterWorktree', reason: `${LOCAL} (it needs a git repository)`, date: RECORDED, until: UNTIL_PHASE_A },
+  { tool: 'ExitWorktree', reason: `${LOCAL} (it needs a git repository)`, date: RECORDED, until: UNTIL_PHASE_A },
   { tool: 'CronCreate', reason: `${LOCAL} (scheduled prompts; on unless CLAUDE_CODE_DISABLE_CRON, GrowthBook `
-    + 'tengu_kairos_cron defaults on)', date: RECORDED, until: UNTIL_REVIEW },
+    + 'tengu_kairos_cron defaults on)', date: RECORDED, until: UNTIL_PHASE_A },
   { tool: 'CronDelete', reason: `${LOCAL} (scheduled prompts; on unless CLAUDE_CODE_DISABLE_CRON, GrowthBook `
-    + 'tengu_kairos_cron defaults on)', date: RECORDED, until: UNTIL_REVIEW },
+    + 'tengu_kairos_cron defaults on)', date: RECORDED, until: UNTIL_PHASE_A },
   { tool: 'CronList', reason: `${LOCAL} (scheduled prompts; on unless CLAUDE_CODE_DISABLE_CRON, GrowthBook `
-    + 'tengu_kairos_cron defaults on)', date: RECORDED, until: UNTIL_REVIEW },
-  { tool: 'ScheduleWakeup', reason: `${LOCAL} (the dynamic /loop's pacing)`, date: RECORDED, until: UNTIL_REVIEW },
-  { tool: 'ReportFindings', reason: `${LOCAL} (structured code-review findings)`, date: RECORDED, until: UNTIL_REVIEW },
-  { tool: 'Workflow', reason: `${LOCAL} (alias RunWorkflow)`, date: RECORDED, until: UNTIL_REVIEW },
+    + 'tengu_kairos_cron defaults on)', date: RECORDED, until: UNTIL_PHASE_A },
+  { tool: 'ScheduleWakeup', reason: `${LOCAL} (the dynamic /loop's pacing)`, date: RECORDED, until: UNTIL_PHASE_A },
+  { tool: 'ReportFindings', reason: `${LOCAL} (structured code-review findings)`, date: RECORDED, until: UNTIL_PHASE_A },
+  { tool: 'Workflow', reason: `${LOCAL} (alias RunWorkflow)`, date: RECORDED, until: UNTIL_PHASE_A },
   { tool: 'ListAgents', reason: `${LOCAL} (agent teams, on by default; an empty list is still a tool_result; alias `
-    + 'ListPeers)', date: RECORDED, until: UNTIL_REVIEW },
+    + 'ListPeers)', date: RECORDED, until: UNTIL_PHASE_A },
   { tool: 'SendMessage', reason: 'deferred, no plan yet: agent teams; a driver needs a teammate session to address',
-    date: RECORDED, until: UNTIL_REVIEW },
+    date: RECORDED, until: UNTIL_PHASE_B },
   { tool: 'SubagentHandback', reason: 'deferred, no plan yet: registered outside getAllBaseTools, for a subagent to '
     + 'report back with; agentic-subagent-diff drives Agent, but its subagent answers in text and never calls this tool',
-    date: RECORDED, until: UNTIL_REVIEW },
+    date: RECORDED, until: UNTIL_PHASE_B },
   { tool: 'ObserverReport', reason: 'deferred, no plan yet: registered outside getAllBaseTools, for an observer agent only',
-    date: RECORDED, until: UNTIL_REVIEW },
+    date: RECORDED, until: UNTIL_PHASE_B },
   { tool: 'LSP', reason: "deferred, no plan yet: code intelligence through a configured language server (a plugin's LSP), "
-    + 'which no live check sets up', date: RECORDED, until: UNTIL_REVIEW },
+    + 'which no live check sets up', date: RECORDED, until: UNTIL_PHASE_B },
   { tool: 'PowerShell', reason: 'deferred, no plan yet: registered on Windows (without Git Bash, or by the GrowthBook flag '
     + 'tengu_cobalt_ridge) or by CLAUDE_CODE_USE_POWERSHELL_TOOL, and needs PowerShell; no live check runs on the Windows '
-    + 'legs', date: RECORDED, until: UNTIL_REVIEW },
+    + 'legs', date: RECORDED, until: UNTIL_PHASE_B },
   { tool: 'WebFetch', reason: 'deferred, no plan yet: it fetches a URL and asks the model to read the page, so a driver '
-    + 'needs a local HTTP server and a mock that answers that second request', date: RECORDED, until: UNTIL_REVIEW },
+    + 'needs a local HTTP server and a mock that answers that second request', date: RECORDED, until: UNTIL_PHASE_B },
   { tool: 'WebSearch', reason: "deferred, no plan yet: the search runs server-side (the API's web_search tool, for "
     + 'first-party and some cloud providers), so a canned mock would have to answer as that server tool',
-    date: RECORDED, until: UNTIL_REVIEW },
+    date: RECORDED, until: UNTIL_PHASE_C },
   { tool: 'ToolSearch', reason: 'deferred, no plan yet: registered only in tool-search mode (ENABLE_TOOL_SEARCH, or a '
-    + 'first-party endpoint that defers tools)', date: RECORDED, until: UNTIL_REVIEW },
+    + 'first-party endpoint that defers tools)', date: RECORDED, until: UNTIL_PHASE_B },
   // Off in every -p turn.
-  { tool: 'AskUserQuestion', reason: INTERACTIVE, date: RECORDED, until: UNTIL_REVIEW },
-  { tool: 'ExitPlanMode', reason: INTERACTIVE, date: RECORDED, until: UNTIL_REVIEW },
-  { tool: 'EnterPlanMode', reason: `${INTERACTIVE} (its isEnabled is ExitPlanMode's)`, date: RECORDED, until: UNTIL_REVIEW },
+  { tool: 'AskUserQuestion', reason: INTERACTIVE, date: RECORDED, until: UNTIL_PHASE_B },
+  { tool: 'ExitPlanMode', reason: INTERACTIVE, date: RECORDED, until: UNTIL_PHASE_B },
+  { tool: 'EnterPlanMode', reason: `${INTERACTIVE} (its isEnabled is ExitPlanMode's)`, date: RECORDED, until: UNTIL_PHASE_B },
   { tool: 'ProposeGoal', reason: 'deferred, no plan yet: off in every non-interactive (-p) session and in a remote '
-    + 'workspace, and behind the GrowthBook flag tengu_propose_goal (default off)', date: RECORDED, until: UNTIL_REVIEW },
+    + 'workspace, and behind the GrowthBook flag tengu_propose_goal (default off)', date: RECORDED, until: UNTIL_PHASE_B },
   // Off by default behind a GrowthBook flag.
   { tool: 'GetTask', reason: FLAG_OFF('tengu_violin_rosin', 'a local tool (it checks on a background shell)'),
-    date: RECORDED, until: UNTIL_REVIEW },
+    date: RECORDED, until: UNTIL_PHASE_B },
   { tool: 'Monitor', reason: FLAG_OFF('tengu_amber_sentinel', "a local tool (it streams a process's output)"),
-    date: RECORDED, until: UNTIL_REVIEW },
+    date: RECORDED, until: UNTIL_PHASE_B },
   { tool: 'PushNotification', reason: FLAG_OFF('tengu_kairos_push_notifications', "a notification to the user's "
-    + 'terminal or phone'), date: RECORDED, until: UNTIL_REVIEW },
+    + 'terminal or phone'), date: RECORDED, until: UNTIL_PHASE_B },
   { tool: 'SendFile', reason: FLAG_OFF('tengu_send_file', 'files to another Claude Code session (agent teams)'),
-    date: RECORDED, until: UNTIL_REVIEW },
+    date: RECORDED, until: UNTIL_PHASE_B },
   { tool: 'EndConversation', reason: 'deferred, no plan yet: enabled only for the models and entrypoints a GrowthBook '
-    + 'config lists (default off)', date: RECORDED, until: UNTIL_REVIEW },
+    + 'config lists (default off)', date: RECORDED, until: UNTIL_PHASE_B },
   // claude.ai features.
   { tool: 'Projects', reason: CLAUDE_AI("the session's claude.ai project (allow_projects_tool, CLAUDE_PROJECT_UUID)"),
-    date: RECORDED, until: UNTIL_REVIEW },
-  { tool: 'DesignSync', reason: CLAUDE_AI('claude.ai/design sync (allow_design_sync)'), date: RECORDED, until: UNTIL_REVIEW },
+    date: RECORDED, until: UNTIL_PHASE_C },
+  { tool: 'DesignSync', reason: CLAUDE_AI('claude.ai/design sync (allow_design_sync)'), date: RECORDED, until: UNTIL_PHASE_C },
   { tool: 'ClaudeDesign', reason: CLAUDE_AI('claude.ai/design projects (allow_design_sync, and a GrowthBook flag, default off)'),
-    date: RECORDED, until: UNTIL_REVIEW },
-  { tool: 'Artifact', reason: CLAUDE_AI('claude.ai-hosted artifact pages'), date: RECORDED, until: UNTIL_REVIEW },
-  { tool: 'ArtifactComments', reason: CLAUDE_AI('an artifact add-on'), date: RECORDED, until: UNTIL_REVIEW },
-  { tool: 'ArtifactData', reason: CLAUDE_AI('an artifact add-on'), date: RECORDED, until: UNTIL_REVIEW },
-  { tool: 'ArtifactCheck', reason: CLAUDE_AI('an artifact add-on'), date: RECORDED, until: UNTIL_REVIEW },
+    date: RECORDED, until: UNTIL_PHASE_C },
+  { tool: 'Artifact', reason: CLAUDE_AI('claude.ai-hosted artifact pages'), date: RECORDED, until: UNTIL_PHASE_C },
+  { tool: 'ArtifactComments', reason: CLAUDE_AI('an artifact add-on'), date: RECORDED, until: UNTIL_PHASE_C },
+  { tool: 'ArtifactData', reason: CLAUDE_AI('an artifact add-on'), date: RECORDED, until: UNTIL_PHASE_C },
+  { tool: 'ArtifactCheck', reason: CLAUDE_AI('an artifact add-on'), date: RECORDED, until: UNTIL_PHASE_C },
   { tool: 'AppifactRepl', reason: CLAUDE_AI('appifact SDK against an artifact, remote_cowork entrypoint only'),
-    date: RECORDED, until: UNTIL_REVIEW },
+    date: RECORDED, until: UNTIL_PHASE_C },
   { tool: 'RemoteTrigger', reason: CLAUDE_AI('scheduled cloud agent routines (claude.ai OAuth scopes, allow_remote_sessions)'),
-    date: RECORDED, until: UNTIL_REVIEW },
-  { tool: 'SearchPlugins', reason: CLAUDE_AI('the plugin and skill directory'), date: RECORDED, until: UNTIL_REVIEW },
-  { tool: 'SearchSkills', reason: CLAUDE_AI('the plugin and skill directory'), date: RECORDED, until: UNTIL_REVIEW },
-  { tool: 'SuggestPluginInstall', reason: CLAUDE_AI('the plugin and skill directory'), date: RECORDED, until: UNTIL_REVIEW },
-  { tool: 'SuggestSkills', reason: CLAUDE_AI('the plugin and skill directory'), date: RECORDED, until: UNTIL_REVIEW },
-  { tool: 'ListPlugins', reason: CLAUDE_AI('the plugin and skill directory'), date: RECORDED, until: UNTIL_REVIEW },
-  { tool: 'ListSkills', reason: CLAUDE_AI('the plugin and skill directory'), date: RECORDED, until: UNTIL_REVIEW },
+    date: RECORDED, until: UNTIL_PHASE_C },
+  { tool: 'SearchPlugins', reason: CLAUDE_AI('the plugin and skill directory'), date: RECORDED, until: UNTIL_PHASE_C },
+  { tool: 'SearchSkills', reason: CLAUDE_AI('the plugin and skill directory'), date: RECORDED, until: UNTIL_PHASE_C },
+  { tool: 'SuggestPluginInstall', reason: CLAUDE_AI('the plugin and skill directory'), date: RECORDED, until: UNTIL_PHASE_C },
+  { tool: 'SuggestSkills', reason: CLAUDE_AI('the plugin and skill directory'), date: RECORDED, until: UNTIL_PHASE_C },
+  { tool: 'ListPlugins', reason: CLAUDE_AI('the plugin and skill directory'), date: RECORDED, until: UNTIL_PHASE_C },
+  { tool: 'ListSkills', reason: CLAUDE_AI('the plugin and skill directory'), date: RECORDED, until: UNTIL_PHASE_C },
   { tool: 'ShareOnboardingGuide', reason: CLAUDE_AI('team onboarding share links (allow_team_onboarding, and the '
-    + 'GrowthBook flag tengu_flint_harbor_share, default off)'), date: RECORDED, until: UNTIL_REVIEW },
+    + 'GrowthBook flag tengu_flint_harbor_share, default off)'), date: RECORDED, until: UNTIL_PHASE_C },
   { tool: 'memory_list', reason: 'deferred, no plan yet: memory stores, enabled only in the "tools" memory mode',
-    date: RECORDED, until: UNTIL_REVIEW },
+    date: RECORDED, until: UNTIL_PHASE_B },
   { tool: 'memory_read', reason: 'deferred, no plan yet: memory stores, enabled only in the "tools" memory mode',
-    date: RECORDED, until: UNTIL_REVIEW },
+    date: RECORDED, until: UNTIL_PHASE_B },
   { tool: 'memory_write', reason: 'deferred, no plan yet: memory stores, enabled only in the "tools" memory mode',
-    date: RECORDED, until: UNTIL_REVIEW },
+    date: RECORDED, until: UNTIL_PHASE_B },
   // Remote and bridged sessions.
   { tool: 'SearchMcpRegistry', reason: REMOTE('MCP connectors (CLAUDE_CODE_REMOTE with a first-party endpoint)'),
-    date: RECORDED, until: UNTIL_REVIEW },
+    date: RECORDED, until: UNTIL_PHASE_C },
   { tool: 'SuggestConnectors', reason: REMOTE('MCP connectors (CLAUDE_CODE_REMOTE with a first-party endpoint)'),
-    date: RECORDED, until: UNTIL_REVIEW },
+    date: RECORDED, until: UNTIL_PHASE_C },
   { tool: 'ListConnectors', reason: REMOTE('MCP connectors (CLAUDE_CODE_REMOTE with a first-party endpoint)'),
-    date: RECORDED, until: UNTIL_REVIEW },
+    date: RECORDED, until: UNTIL_PHASE_C },
   { tool: 'ShowOnboardingRolePicker', reason: REMOTE('the Cowork onboarding role picker (CLAUDE_CODE_REMOTE)'),
-    date: RECORDED, until: UNTIL_REVIEW },
+    date: RECORDED, until: UNTIL_PHASE_C },
   { tool: 'ReadNotifications', reason: REMOTE('queued external notifications (CLAUDE_CODE_REMOTE, or a session condition '
-    + 'not decoded here)'), date: RECORDED, until: UNTIL_REVIEW },
-  { tool: 'FetchInboxMessage', reason: REMOTE('relayed inbox messages (a REPL or supervised bridge)'), date: RECORDED, until: UNTIL_REVIEW },
-  { tool: 'propose_skills', reason: REMOTE('skill proposals (CLAUDE_CODE_REMOTE_ENVIRONMENT_TYPE)'), date: RECORDED, until: UNTIL_REVIEW },
-  { tool: 'SendUserFile', reason: REMOTE('files to the user (first-party, allow_send_file)'), date: RECORDED, until: UNTIL_REVIEW },
+    + 'not decoded here)'), date: RECORDED, until: UNTIL_PHASE_C },
+  { tool: 'FetchInboxMessage', reason: REMOTE('relayed inbox messages (a REPL or supervised bridge)'), date: RECORDED, until: UNTIL_PHASE_C },
+  { tool: 'propose_skills', reason: REMOTE('skill proposals (CLAUDE_CODE_REMOTE_ENVIRONMENT_TYPE)'), date: RECORDED, until: UNTIL_PHASE_C },
+  { tool: 'SendUserFile', reason: REMOTE('files to the user (first-party, allow_send_file)'), date: RECORDED, until: UNTIL_PHASE_C },
   { tool: 'SendUserMessage', reason: 'deferred, no plan yet: the brief channel to the user (alias Brief), enabled by '
-    + 'pewter_owl_tool (an env var or a flag) or a brief or bridge mode', date: RECORDED, until: UNTIL_REVIEW },
+    + 'pewter_owl_tool (an env var or a flag) or a brief or bridge mode', date: RECORDED, until: UNTIL_PHASE_B },
   { tool: 'Poll', reason: 'deferred, no plan yet: waits for queued harness events; enabled by session conditions not '
-    + 'decoded here', date: RECORDED, until: UNTIL_REVIEW },
+    + 'decoded here', date: RECORDED, until: UNTIL_PHASE_B },
   { tool: 'SendFeedback', reason: 'deferred, no plan yet: drafts a feedback report; enabled by a feedback setting not '
-    + 'decoded here', date: RECORDED, until: UNTIL_REVIEW },
+    + 'decoded here', date: RECORDED, until: UNTIL_PHASE_B },
   // MCP.
   { tool: 'ListMcpResourcesTool', reason: MCP("it lists an MCP server's resources (alias ListMcpResources)"),
-    date: RECORDED, until: UNTIL_REVIEW },
-  { tool: 'ReadMcpResourceTool', reason: MCP('it reads one MCP resource (alias ReadMcpResource)'), date: RECORDED, until: UNTIL_REVIEW },
+    date: RECORDED, until: UNTIL_PHASE_C },
+  { tool: 'ReadMcpResourceTool', reason: MCP('it reads one MCP resource (alias ReadMcpResource)'), date: RECORDED, until: UNTIL_PHASE_C },
   { tool: 'ReadMcpResourceDirTool', reason: MCP('it lists an MCP directory resource (alias ReadMcpResourceDir)'),
-    date: RECORDED, until: UNTIL_REVIEW },
+    date: RECORDED, until: UNTIL_PHASE_C },
   { tool: 'RefreshMcpTools', reason: MCP('it re-syncs MCP tool lists (and CLAUDE_CODE_ENABLE_REFRESH_MCP_TOOLS)'),
-    date: RECORDED, until: UNTIL_REVIEW },
-  { tool: 'WaitForMcpServers', reason: MCP('it waits for MCP servers still connecting'), date: RECORDED, until: UNTIL_REVIEW },
+    date: RECORDED, until: UNTIL_PHASE_C },
+  { tool: 'WaitForMcpServers', reason: MCP('it waits for MCP servers still connecting'), date: RECORDED, until: UNTIL_PHASE_C },
   { tool: 'mcp', reason: MCP('the template every MCP server tool is copied from under its own mcp__server__tool name; '
-    + 'the name "mcp" itself never reaches the model'), date: RECORDED, until: UNTIL_REVIEW },
+    + 'the name "mcp" itself never reaches the model'), date: RECORDED, until: UNTIL_PHASE_C },
   // Self-hosted runner operators, and relay stubs.
   { tool: 'self_hosted_runner_get_pool', reason: RUNNER, date: RECORDED, until: UNTIL_REVIEW },
   { tool: 'self_hosted_runner_list_runners', reason: RUNNER, date: RECORDED, until: UNTIL_REVIEW },
@@ -1018,14 +1467,38 @@ function readSources() {
   ];
   return files.map((f) => ({ file: posixRel(f), text: fs.readFileSync(f, 'utf8') }));
 }
+const WORKFLOW = path.join(REPO, '.github', 'workflows', 'ci.yml');
+const readWorkflow = () => fs.readFileSync(WORKFLOW, 'utf8');
+// The published engines are an INPUT here: this gate does not guard scripts/tjs-legs.mjs, so it is
+// named by path, not by the relative require literal guards-population reads as "a guard of it".
+const readPublished = () => require(path.join(REPO, 'scripts', 'tjs-legs.mjs')).publishedRunTargets();
 let INPUTS = null;
 function readInputs() {
   if (!INPUTS) {
     const c = readCarve();
     INPUTS = 'skip' in c ? c : { carve: c.text, what: c.what, sources: readSources(), exemptions: EXEMPTIONS,
-      today: new Date().toISOString().slice(0, 10) };
+      today: new Date().toISOString().slice(0, 10), workflow: readWorkflow(), jobs: CELL_JOBS, engines: SHIPPING_ENGINES,
+      published: readPublished(), enginesExemption: OTHER_ENGINES_EXEMPTION };
   }
   return INPUTS;
+}
+// A CI cell job's own run (CLODE_CELL_JOB names the job, CLODE_CELL_RAN the directory its
+// test/cell-reporter.mjs runs wrote their .jsonl into).
+function readJobRun() {
+  const job = process.env.CLODE_CELL_JOB;
+  if (!job) return { skip: 'not a CI cell job (CLODE_CELL_JOB unset): a job in CELL_JOBS runs this with its reporter output' };
+  const dir = process.env.CLODE_CELL_RAN;
+  const records = [];
+  if (dir && fs.existsSync(dir)) {
+    for (const f of fs.readdirSync(dir).filter((n) => n.endsWith('.jsonl')).sort()) {
+      for (const l of fs.readFileSync(path.join(dir, f), 'utf8').split('\n')) {
+        if (!l.trim()) continue;
+        const r = JSON.parse(l);
+        records.push({ ...r, file: path.isAbsolute(r.file || '') ? posixRel(r.file) : r.file });
+      }
+    }
+  }
+  return { job, jobs: CELL_JOBS, sources: readSources(), records, host: { platform: process.platform, arch: process.arch } };
 }
 
 // ==========================================================================
@@ -1042,9 +1515,23 @@ const NOOP_RESULT = 'mapToolResultToToolResultBlockParam(e,n){return{tool_use_id
 // returns null under a condition (`Ms`, ClaudeDesign's shape), conditional and filtered spreads,
 // a `null` binding (a tool the build compiled out), and a tool object registered OUTSIDE
 // getAllBaseTools (SubagentHandback) beside a dead one nothing references (TestingPermission).
+// Its mode anchors (MINI_MODE_CHUNK) spell the 2.1.283 shapes: the permission list behind its
+// refusal's template, the sandbox settings object, the shell discovery's two orders, and the two
+// opt-in setters with their one call each.
+const MINI_MODE_CHUNK = [
+  HDR('/$bunfs/root/chunk-modes.js'),
+  'import{ro,$r,at}from"/$bunfs/root/chunk-names.js";',
+  'var zL=["acceptEdits","bypassPermissions","default","plan"],Ts=[...zL],kne=`Cannot set permission mode: must be one of ${zL.join(", ")}`;',
+  'var Emn=f(()=>u({enabled:O().optional(),failIfUnavailable:O().optional().describe("Exit with an error at startup if '
+    + 'sandbox.enabled is true but the sandbox cannot start")}));',
+  'async function Sh(n){let s=n?.includes("bash"),D=(s?["bash","zsh"]:["zsh","bash"]).flatMap((W)=>[W]);return D}',
+  'function jzr(e){n().host.launchOptions.replaceSearchToolsOptIn(e)}function Gzr(e){n().host.launchOptions.replaceTodoToolsOptIn(e)}',
+  'var jDn=[at];function Lo(T,Q){jzr([ro,$r].some(Q)),Gzr(jDn.some(Q))}',
+].join('\n');
 function miniCarve({ extra = '', extraElement = '', getToolsBody = 'let n=Jw();if(uw())n=[...n,M0,L0];return n',
-  outside = '' } = {}) {
+  outside = '', modes = MINI_MODE_CHUNK } = {}) {
   return lines(
+    modes,
     HDR('/$bunfs/root/chunk-names.js'),
     'var Ue="Bash",$r="Grep",ro="Glob",at="Read";',
     'export{Ue,$r,ro,at};',
@@ -1117,6 +1604,17 @@ const DRIVER_SOURCES = [
     "  if (/refused/.test(r.stderr)) { t.skip('refused'); return; }",
     '  assert.ok(found(mock));',
     '});',
+    // Declared modes, a control in a top-level helper that a test calls, and a script of steps.
+    "const SBX = { name: 'Bash', input: { command: 'echo S-$((6*7))' }, id: 'toolu_s' };",
+    "const sandboxed = (m) => toolResultText(m, SBX.id).includes('S-42');",
+    'const step = (USE) => ({ use: USE, emit: () => cannedToolUseSSE(USE.name, USE.input, USE.id) });',
+    'const SCRIPT = [step(SBX)];',
+    'function controls() {',
+    "  assertFailsOnMissingOutput(sandboxed, SBX, ['sandbox:on', 'shell:bash']);",
+    '}',
+    "test('bash, sandboxed, its control in a helper', async (t) => {",
+    '  controls();',
+    '});',
   ) },
   // A floor-probe-shaped row: the mock rule `{ tool: USE }` scripts it.
   { file: 'scripts/synthetic-probe.mjs', text: lines(
@@ -1160,6 +1658,12 @@ const NEAR_MISS_SOURCES = [
     "  const ok = (m) => toolResultText(m, 'toolu_n').includes('cell');",
     "  assertFailsOnMissingOutput(ok, { name: 'NotebookEdit', input: {}, id: 'toolu_n' });",
     '});',
+    "test('modes that are not a literal', async (t) => {",
+    "  const ED2 = { name: 'Edit', input: {}, id: 'toolu_e2' };",
+    "  const ok2 = (m) => toolResultText(m, ED2.id).includes('updated');",
+    '  assertFailsOnMissingOutput(ok2, ED2, MODES);',
+    '  const mock = await startMockAnthropic({ respond: () => cannedToolUseSSE(ED2.name, ED2.input, ED2.id) });',
+    '});',
     "test('a test declared skipped', { skip: DEFERRED }, async (t) => {",
     "  const MON = { name: 'Monitor', input: {}, id: 'toolu_m' };",
     "  const watched = (m) => toolResultText(m, MON.id).includes('line');",
@@ -1169,15 +1673,63 @@ const NEAR_MISS_SOURCES = [
     '});',
   ) },
 ];
+// The cells the mini carve's modes give: 3 permission modes, the sandbox, bash and zsh; Glob and
+// Grep are its search opt-ins (no `unlisted`).
+const MINI_MODES = ['print', 'interactive', 'unlisted', 'permission:acceptEdits', 'permission:bypassPermissions', 'permission:plan'];
+const MINI_BASH = [...MINI_MODES, 'sandbox:on', 'sandbox:required', 'shell:bash', 'shell:zsh'];
+const miniModes = (tool) => (tool === 'Bash' ? MINI_BASH : ['Glob', 'Grep'].includes(tool) ? MINI_MODES.filter((m) => m !== 'unlisted') : MINI_MODES);
+const MINI_CELLS = MINI_TOOLS.reduce((n, t) => n + miniModes(t).length, 0) * SHIPPING_ENGINES.length;
+const FX_JOB = 'fixture-job';
+const FX_ENGINE = 'linux-x64-musl';
+const FX_OTHERS = SHIPPING_ENGINES.filter((e) => e !== FX_ENGINE);
+const FX_JOBS = [{ job: FX_JOB, engine: FX_ENGINE, files: ['test/synthetic/drivers.test.cjs'] }];
+const fxWorkflow = ({ check = `CLODE_CELL_JOB=${FX_JOB}`, files = 'test/synthetic/drivers.test.cjs' } = {}) => lines(
+  'name: ci',
+  'jobs:',
+  '  other-job:',
+  '    runs-on: ubuntu-latest',
+  `  ${FX_JOB}:`,
+  '    runs-on: ubuntu-latest',
+  '    steps:',
+  '      - uses: actions/download-artifact@v8.0.1',
+  '        with:',
+  `          name: tjs-${FX_ENGINE}`,
+  `      - run: node --test --test-reporter=./test/cell-reporter.mjs --test-reporter-destination=x.jsonl ${files}`,
+  `      - run: ${check} node --test test/build-gates/tool-coverage-gates.test.cjs`,
+);
+// Every cell of `tool` but the ones `keep` names (`mode@engine`), as exemption entries.
+function exemptAllBut(tool, keep, reason = 'deferred: not driven in the fixture') {
+  const out = [];
+  const kept = new Set(keep);
+  for (const mode of miniModes(tool)) {
+    const engines = SHIPPING_ENGINES.filter((e) => !kept.has(`${mode}@${e}`));
+    if (engines.length) out.push({ tool, modes: [mode], ...(engines.length < SHIPPING_ENGINES.length ? { engines } : {}), reason, date: '2026-09-28', until: '2026-12-31' });
+  }
+  return out;
+}
 const PLAN_REASON = 'deferred: the Grep and Glob = native plan (fixture)';
+// The fixture job drives, on linux-x64-musl: Agent (as Task), Bash print, sandbox:on and
+// shell:bash, Grep and Read print.
 const FIXTURE_EXEMPTIONS = [
   { tool: 'Glob', reason: PLAN_REASON, date: '2026-09-28', until: '2026-10-12' },
-  { tool: 'Grep', reason: PLAN_REASON, date: '2026-09-28', until: '2026-10-12' },
+  ...exemptAllBut('Grep', [`print@${FX_ENGINE}`], PLAN_REASON),
   { tool: 'Monitor', reason: 'deferred: gated off by default (fixture)', date: '2026-09-28', until: '2026-12-31' },
   { tool: 'SubagentHandback', reason: 'deferred: subagents only (fixture)', date: '2026-09-28', until: '2026-12-31' },
+  ...exemptAllBut('Agent', [`print@${FX_ENGINE}`]),
+  ...exemptAllBut('Bash', [`print@${FX_ENGINE}`, `sandbox:on@${FX_ENGINE}`, `shell:bash@${FX_ENGINE}`]),
+  ...exemptAllBut('Read', [`print@${FX_ENGINE}`]),
 ];
+const FX_ENGINES_EXEMPTION = { engines: ['*'], reason: 'not shipping (fixture)', date: '2026-09-28', until: '2026-12-31' };
 const fixtureInputs = (over = {}) => ({ carve: miniCarve(), what: 'the synthetic carve',
-  sources: [...DRIVER_SOURCES, ...NEAR_MISS_SOURCES], exemptions: FIXTURE_EXEMPTIONS, today: '2026-09-28', ...over });
+  sources: [...DRIVER_SOURCES, ...NEAR_MISS_SOURCES], exemptions: FIXTURE_EXEMPTIONS, today: '2026-09-28',
+  workflow: fxWorkflow(), jobs: FX_JOBS, engines: SHIPPING_ENGINES, published: [...SHIPPING_ENGINES, 'haiku-x64'],
+  enginesExemption: FX_ENGINES_EXEMPTION, ...over });
+// A run of the fixture job: each test of drivers.test.cjs, as test/cell-reporter.mjs records it.
+const FX_TESTS = [11, 19, 27, 32, 47];          // the test(...) lines of drivers.test.cjs's drivers
+const fxRecords = (over = {}) => FX_TESTS.map((line) => ({ type: 'test:pass', file: 'test/synthetic/drivers.test.cjs', line,
+  name: `t${line}`, nesting: 0, ...(over[line] || {}) }));
+const fxJobRun = (over = {}) => ({ job: FX_JOB, jobs: FX_JOBS, sources: DRIVER_SOURCES, records: fxRecords(),
+  host: { platform: 'linux', arch: 'x64' }, ...over });
 
 // ==========================================================================
 // THE REGISTRY
@@ -1228,63 +1780,153 @@ test('extractRegistry names an element it cannot read, and does not count it', (
 });
 
 // ==========================================================================
+// THE MODES
+// ==========================================================================
+test('extractModes reads every mode the carve spells', () => {
+  const r = extractModes(miniCarve());
+  assert.deepStrictEqual(r.findings, []);
+  assert.deepStrictEqual(r.permission, ['acceptEdits', 'bypassPermissions', 'plan']);
+  assert.deepStrictEqual(r.sandbox, ['on', 'required']);
+  assert.deepStrictEqual(r.shells, ['bash', 'zsh']);
+  assert.deepStrictEqual(r.optIn, { search: ['Glob', 'Grep'], todo: ['Read'] });
+});
+
+test('extractModes never reads a missing or doubled anchor as "no such mode"', () => {
+  const chunk = MINI_MODE_CHUNK;
+  const gone = extractModes(miniCarve({ modes: chunk.replace('Cannot set permission mode', 'Cannot set mode')
+    .replace('failIfUnavailable:', 'failWhenMissing:').replace('.flatMap(', '.map(') }));
+  assert.strictEqual(gone.findings.length, 3, gone.findings.join('\n'));
+  assert.match(gone.findings.join('\n'), /permission-mode list .* found 0 time/);
+  assert.match(gone.findings.join('\n'), /sandbox object .* found 0 time/);
+  assert.match(gone.findings.join('\n'), /shell discovery .* found 0 time/);
+  const twice = extractModes(miniCarve({ modes: `${chunk}\n${HDR('/$bunfs/root/chunk-modes2.js')}\nvar Q9=(s?["bash","zsh"]:["zsh","bash"]).flatMap((W)=>[W]);` }));
+  assert.match(twice.findings.join('\n'), /shell discovery .* found 2 time/);
+  const noDefault = extractModes(miniCarve({ modes: chunk.replace('"default",', '') }));
+  assert.match(noDefault.findings.join('\n'), /no "default"/);
+  const optOut = extractModes(miniCarve({ modes: chunk.replace('jzr([ro,$r].some(Q)),', '') }));
+  assert.match(optOut.findings.join('\n'), /the search opt-in \(jzr\(LIST\.some\(\.\.\.\)\)\) was called 0 time/);
+});
+
+test('the mode axis: print, interactive and unlisted for every tool but the search opt-ins; sandbox and shells for Bash', () => {
+  const axis = modeAxis(extractModes(miniCarve()));
+  const optIn = new Set(['Glob', 'Grep']);
+  for (const t of MINI_TOOLS) assert.deepStrictEqual(modesOf(t, axis, optIn), miniModes(t), t);
+});
+
+// ==========================================================================
 // THE DRIVERS
 // ==========================================================================
 test('findDrivers finds each driver shape the tree uses, and no near miss', () => {
   const d = findDrivers([...DRIVER_SOURCES, ...NEAR_MISS_SOURCES]);
-  const got = d.drivers.map((x) => `${x.name}@${x.file}:${x.line}${x.skips ? ` skips (${x.skips})` : ''}`).sort();
+  const got = d.drivers.map((x) => `${x.name}@${x.file}:${x.line} ${x.modes.join('/')}${x.skips ? ` skips (${x.skips})` : ''}`).sort();
   assert.deepStrictEqual(got, [
-    'Bash@scripts/synthetic-probe.mjs:8',
-    'Bash@test/synthetic/drivers.test.cjs:15',
-    'Grep@test/synthetic/drivers.test.cjs:35 skips (a skip after the control, line 37)',
-    'Monitor@test/synthetic/near-misses.test.cjs:26 skips (the test is declared skipped)',
-    'Read@test/synthetic/drivers.test.cjs:23',
-    'Task@test/synthetic/drivers.test.cjs:28',
+    'Bash@scripts/synthetic-probe.mjs:8 print',
+    'Bash@test/synthetic/drivers.test.cjs:15 print',
+    'Bash@test/synthetic/drivers.test.cjs:45 sandbox:on/shell:bash',
+    'Grep@test/synthetic/drivers.test.cjs:35 print skips (a skip after the control, line 37)',
+    'Monitor@test/synthetic/near-misses.test.cjs:32 print skips (the test is declared skipped)',
+    'Read@test/synthetic/drivers.test.cjs:23 print',
+    'Task@test/synthetic/drivers.test.cjs:28 print',
   ]);
   const why = d.rejected.map((x) => `${x.file}:${x.line} ${x.why}`).sort();
   assert.deepStrictEqual(why, [
     'test/synthetic/near-misses.test.cjs:15 the check (listed) reads the tool_result of GLOB.id, but GLOB is never scripted to a mock',
     'test/synthetic/near-misses.test.cjs:21 the tool_use is not a named object (an inline one cannot be the one the mock scripts)',
+    'test/synthetic/near-misses.test.cjs:26 the modes (MODES) are not a string literal or an array of string literals',
     'test/synthetic/near-misses.test.cjs:8 the check (edited) never reads the tool_result of EDIT.id',
   ]);
+});
+
+test('findDrivers names the tests that run each control, by the line node:test reports', () => {
+  const d = findDrivers(DRIVER_SOURCES);
+  const tests = (line) => d.drivers.find((x) => x.file === 'test/synthetic/drivers.test.cjs' && x.line === line).tests;
+  assert.deepStrictEqual(tests(15), [{ name: 'bash, scripted in place', line: 11 }]);
+  assert.deepStrictEqual(tests(45), [{ name: 'bash, sandboxed, its control in a helper', line: 47 }], 'through the helper it calls');
+  assert.deepStrictEqual(d.drivers.find((x) => x.file === 'scripts/synthetic-probe.mjs').tests, [], 'no test runs a script row');
 });
 
 // ==========================================================================
 // THE VERDICT
 // ==========================================================================
-test('scanCoverage: the fixture carve, its drivers and its exemptions cover every tool', () => {
+test('scanCoverage: the fixture carve, its job and its exemptions cover every cell', () => {
   const r = scanCoverage(fixtureInputs());
   assert.deepStrictEqual(r.findings, []);
-  assert.strictEqual(r.examined, MINI_TOOLS.length);
+  assert.strictEqual(r.examined, MINI_CELLS);
+  assert.deepStrictEqual([...r.driven.keys()].sort(), [
+    `Agent|print|${FX_ENGINE}`, `Bash|print|${FX_ENGINE}`, `Bash|sandbox:on|${FX_ENGINE}`, `Bash|shell:bash|${FX_ENGINE}`,
+    `Grep|print|${FX_ENGINE}`, `Read|print|${FX_ENGINE}`]);
 });
 
-test('step 3 (a): a carve with one more tool, and no driver or exemption, is exactly one finding', () => {
+test('step 3 (a): a carve with one more tool, and no driver or exemption, is a finding per mode, naming every engine', () => {
   const r = scanCoverage(fixtureInputs({ carve: miniCarve(ZEBRA) }));
-  assert.strictEqual(r.findings.length, 1, r.findings.join('\n'));
-  assert.match(r.findings[0], /^Zebra: no end-to-end test drives it/);
-  assert.strictEqual(r.examined, MINI_TOOLS.length + 1);
+  assert.strictEqual(r.findings.length, MINI_MODES.length, r.findings.join('\n'));
+  for (const [k, f] of r.findings.entries()) {
+    assert.strictEqual(f, `Zebra x ${MINI_MODES[k]}: on ${SHIPPING_ENGINES.join(', ')} no CI job drives it (CELL_JOBS) and no exemption covers it`);
+  }
+  assert.strictEqual(r.examined, MINI_CELLS + MINI_MODES.length * SHIPPING_ENGINES.length);
 });
 
-test('step 3 (b): an exemption past its `until` date is a finding', () => {
+// RED FIRST, in the fixture's terms: the two escapes the observability plan names. Bash with the
+// sandbox enabled failed OPEN (8b088ef) while every Bash driver ran without it; Grep refused every
+// call on Linux (0204b54) while its driver ran on darwin only. Each is a cell no job ran.
+test('the escapes: Bash x sandbox:on with only a print driver, and Grep with no job on its engine, are uncovered cells', () => {
+  const noSandbox = DRIVER_SOURCES.map((s) => ({ ...s, text: s.text.replace("['sandbox:on', 'shell:bash']", "'shell:bash'") }));
+  const r = scanCoverage(fixtureInputs({ sources: noSandbox }));
+  assert.deepStrictEqual(r.findings, [`Bash x sandbox:on: on ${FX_ENGINE} no CI job drives it (CELL_JOBS) and no exemption covers it`]);
+  const darwinOnly = [{ ...FX_JOBS[0], engine: 'darwin-arm64' }];
+  const g = scanCoverage(fixtureInputs({ jobs: darwinOnly, workflow: fxWorkflow().replace(`tjs-${FX_ENGINE}`, 'tjs-darwin-arm64') }));
+  assert.match(g.findings.join('\n'), new RegExp(`^Grep x print: on ${FX_ENGINE} no CI job drives it`, 'm'));
+  assert.match(g.findings.join('\n'), /^Grep x print @ darwin-arm64: exempted .* but driven by fixture-job/m);
+});
+
+test('a job ci.yml does not run as a cell job drives nothing, and says why', () => {
+  const r = scanCoverage(fixtureInputs({ workflow: fxWorkflow({ check: 'true' }) }));
+  assert.match(r.findings[0], /^CELL_JOBS fixture-job \(linux-x64-musl\) drives no cell: it never checks its cells \(CLODE_CELL_JOB=fixture-job/);
+  assert.strictEqual(r.driven.size, 0);
+  const gone = checkJobs({ workflow: fxWorkflow(), jobs: [{ job: 'nope', engine: 'haiku-x64', files: ['test/none.cjs'] }],
+    sources: DRIVER_SOURCES, engines: SHIPPING_ENGINES });
+  assert.deepStrictEqual(gone.findings, ['CELL_JOBS nope (haiku-x64) drives no cell: its engine haiku-x64 is not a shipping engine '
+    + '(darwin-arm64, linux-x64-musl, netbsd-arm64); ci.yml has no such job']);
+  const lost = checkJobs({ workflow: fxWorkflow(), jobs: [{ ...FX_JOBS[0], files: [...FX_JOBS[0].files, 'test/none.cjs',
+    'test/synthetic/near-misses.test.cjs'] }], sources: [...DRIVER_SOURCES, ...NEAR_MISS_SOURCES], engines: SHIPPING_ENGINES });
+  assert.deepStrictEqual(lost.findings, ['CELL_JOBS fixture-job claims test/none.cjs, which is not in the tree',
+    'CELL_JOBS fixture-job claims test/synthetic/near-misses.test.cjs, which the job never names in ci.yml']);
+  assert.deepStrictEqual(lost.valid.map((j) => j.files), [FX_JOBS[0].files], 'the job\'s other files still drive their cells');
+});
+
+test('a test whose only driver can skip drives its cell where a job runs it; the job\'s run is what refuses the skip', () => {
+  const r = scanCoverage(fixtureInputs());
+  assert.ok(r.driven.has(`Grep|print|${FX_ENGINE}`));
+  const skipped = checkJobRan(fxJobRun({ records: fxRecords({ 32: { skip: 'refused' } }) }));
+  assert.deepStrictEqual(skipped.findings, ['test/synthetic/drivers.test.cjs:35 (Grep x print @ linux-x64-musl): test "grep, which '
+    + 'skips on its own outcome" (line 32) skipped (refused) in fixture-job; a cell is driven only where its test passes']);
+});
+
+test('a declared mode the tool has no cell for, and a claimed driver no test runs, are findings', () => {
+  const src = DRIVER_SOURCES.map((s) => ({ ...s, text: s.text.replace('assertFailsOnMissingOutput(read, READ);', "assertFailsOnMissingOutput(read, READ, 'shell:bash');") }));
+  const r = scanCoverage(fixtureInputs({ sources: src }));
+  assert.match(r.findings.join('\n'), /^test\/synthetic\/drivers\.test\.cjs:23: declares shell:bash for Read, not among its cells' modes/m);
+  const jobs = [{ ...FX_JOBS[0], files: [...FX_JOBS[0].files, 'scripts/synthetic-probe.mjs'] }];
+  const p = scanCoverage(fixtureInputs({ jobs, workflow: fxWorkflow({ files: jobs[0].files.join(' ') }) }));
+  assert.match(p.findings.join('\n'), /^scripts\/synthetic-probe\.mjs:8: fixture-job claims this driver of Bash, but no test\(\.\.\.\) runs its control/m);
+});
+
+test('step 3 (b): an exemption past its `until` date is a finding naming its phase', () => {
   const r = scanCoverage(fixtureInputs({ today: '2026-10-12' }));
   assert.deepStrictEqual(r.findings, [], 'on its until date the exemption still holds');
   const late = scanCoverage(fixtureInputs({ today: '2026-10-13' }));
-  assert.strictEqual(late.findings.length, 2, late.findings.join('\n'));
+  assert.ok(late.findings.length >= 1, late.findings.join('\n'));
   assert.match(late.findings[0], /^Glob: its exemption expired on 2026-10-12 \(recorded 2026-09-28: "deferred: the Grep and Glob/);
-  assert.match(late.findings[1], /^Grep: its exemption expired on 2026-10-12/);
+  const phase = checkExemptionTable([{ tool: 'Read', reason: 'x', date: '2026-09-28', until: UNTIL_PHASE_A }], '2026-10-16');
+  assert.match(phase[0], /^Read: its exemption expired on 2026-10-15 \(every-tool Phase A's deadline\)/);
 });
 
-test('a tool whose only driver skips on its own outcome needs an exemption', () => {
-  const r = scanCoverage(fixtureInputs({ exemptions: FIXTURE_EXEMPTIONS.filter((e) => e.tool !== 'Grep') }));
-  assert.strictEqual(r.findings.length, 1, r.findings.join('\n'));
-  assert.match(r.findings[0], /^Grep: its only driver\(s\) can skip .*test\/synthetic\/drivers\.test\.cjs:35/);
-});
-
-test('an exemption must be removed once its tool is driven, and may only name a registered tool', () => {
+test('an exemption must not cover a driven cell, may only name a registered tool, and one entry per cell', () => {
   const bash = { tool: 'Bash', reason: 'deferred: no reason at all', date: '2026-09-28', until: '2026-12-31' };
-  const r = scanCoverage(fixtureInputs({ exemptions: [...FIXTURE_EXEMPTIONS, bash] }));
-  assert.strictEqual(r.findings.length, 1, r.findings.join('\n'));
-  assert.match(r.findings[0], /^Bash: exempted .* but driven by scripts\/synthetic-probe\.mjs:8, test\/synthetic\/drivers\.test\.cjs:15; remove the exemption/);
+  const r = scanCoverage(fixtureInputs({ exemptions: [...FIXTURE_EXEMPTIONS.filter((e) => e.tool !== 'Bash'), bash] }));
+  assert.deepStrictEqual(r.findings.map((f) => f.replace(/ \(.*/, '')), [
+    `Bash x print @ ${FX_ENGINE}: exempted`, `Bash x sandbox:on @ ${FX_ENGINE}: exempted`, `Bash x shell:bash @ ${FX_ENGINE}: exempted`]);
+  assert.match(r.findings[0], /but driven by fixture-job: test\/synthetic\/drivers\.test\.cjs:15; narrow the exemption$/);
   const gone = { ...bash, tool: 'Zebra' };
   const g = scanCoverage(fixtureInputs({ exemptions: [...FIXTURE_EXEMPTIONS, gone] }));
   assert.strictEqual(g.findings.length, 1, g.findings.join('\n'));
@@ -1292,6 +1934,10 @@ test('an exemption must be removed once its tool is driven, and may only name a 
   const alias = { ...bash, tool: 'Task' };
   const a = scanCoverage(fixtureInputs({ exemptions: [...FIXTURE_EXEMPTIONS, alias] }));
   assert.match(a.findings.join('\n'), /^Task: exempted, but Task is an alias of Agent/m);
+  const twice = scanCoverage(fixtureInputs({ exemptions: [...FIXTURE_EXEMPTIONS, { ...bash, tool: 'Monitor', modes: ['print'] }] }));
+  assert.match(twice.findings.join('\n'), /^Monitor x print @ darwin-arm64: exempted by two entries/m);
+  const odd = scanCoverage(fixtureInputs({ exemptions: [...FIXTURE_EXEMPTIONS, { ...bash, tool: 'Read', modes: ['shell:zsh'], engines: ['haiku-x64'] }] }));
+  assert.match(odd.findings.join('\n'), /^Read x shell:zsh @ haiku-x64: exempts shell:zsh, haiku-x64, not among its cells/m);
 });
 
 test('checkExemptionTable refuses a malformed, doubled or expired entry', () => {
@@ -1304,43 +1950,111 @@ test('checkExemptionTable refuses a malformed, doubled or expired entry', () => 
     { ...ok, tool: 'W', date: '2026-12-31', until: '2026-10-01' },
     { ...ok, tool: 'V', extra: 1 },
     ok,
+    { ...ok, tool: 'U', modes: [] },
   ], '2026-09-28');
-  assert.deepStrictEqual(bad.map((f) => f.replace(/:.*/, '')), ['X', 'Y', 'Z', 'W', 'V', 'X']);
+  assert.deepStrictEqual(bad.map((f) => f.replace(/:.*/, '')), ['X', 'Y', 'Z', 'W', 'V', 'U x ', 'X']);
   assert.match(bad[0], /no reason/);
   assert.match(bad[1], /date "2026-9-28" is not a YYYY-MM-DD date/);
   assert.match(bad[2], /until "2026-02-30" is not a YYYY-MM-DD date/);
   assert.match(bad[3], /until 2026-10-01 is before its date 2026-12-31/);
   assert.match(bad[4], /unknown key\(s\) extra/);
-  assert.match(bad[5], /exempted 2 times/);
+  assert.match(bad[5], /modes must be a non-empty array/);
+  assert.match(bad[6], /exempted 2 times/);
 });
 
+test('the other engines are one dated exemption, and a shipping engine must be published', () => {
+  const late = scanCoverage(fixtureInputs({ enginesExemption: { ...FX_ENGINES_EXEMPTION, date: '2026-09-01', until: '2026-09-27' } }));
+  assert.match(late.findings.join('\n'), /^every other published engine: its exemption expired on 2026-09-27/m);
+  const unpublished = scanCoverage(fixtureInputs({ published: ['darwin-arm64', 'linux-x64-musl'] }));
+  assert.match(unpublished.findings.join('\n'), /^netbsd-arm64: a shipping engine that scripts\/tjs-legs\.mjs does not publish/m);
+});
+
+// LAPSED DEADLINES ARE TRUE RED. On 2026-11-18 every-tool Phase A's 2026-10-15 has passed, so
+// this is red until the user re-dates Phase A or its 18 tools are driven (observability Task 1's
+// ruling: carry the dates as set, never re-date them here).
 test('the EXEMPTIONS table is well-formed and unexpired, with or without a carve', () => {
   assert.deepStrictEqual(checkExemptionTable(EXEMPTIONS, new Date().toISOString().slice(0, 10)), []);
 });
 
-test('the floor is BROKEN, never clean, when the carve registers fewer tools than were measured', () => {
-  const r = checkGate({ name: 'fixture', floor: TOOL_FLOOR, read: () => fixtureInputs(), scan: scanCoverage });
+test('every CELL_JOBS entry is a cell job in ci.yml, with or without a carve', () => {
+  const r = checkJobs({ workflow: readWorkflow(), jobs: CELL_JOBS, sources: readSources(), engines: SHIPPING_ENGINES });
+  assert.deepStrictEqual(r.findings, []);
+  assert.strictEqual(r.valid.length, CELL_JOBS.length);
+});
+
+test('the floor is BROKEN, never clean, when the carve has fewer cells than were measured', () => {
+  const r = checkGate({ name: 'fixture', floor: CELL_FLOOR, read: () => fixtureInputs(), scan: scanCoverage });
   assert.strictEqual(r.verdict, BROKEN, r.message);
-  assert.match(r.message, new RegExp(`examined ${MINI_TOOLS.length}, floor is ${TOOL_FLOOR}`));
+  assert.match(r.message, new RegExp(`examined ${MINI_CELLS}, floor is ${CELL_FLOOR}`));
   void VIOLATION; void OK;
 });
 
 guardTests(defineGuard({
   name: 'every-tool-driven',
-  floor: TOOL_FLOOR,
+  floor: CELL_FLOOR,
   read: readInputs,
   scan: scanCoverage,
   // The failure this ratchet exists for: the carve registers one more tool, and nothing drives it.
   control: () => fixtureInputs({ carve: miniCarve(ZEBRA) }),
 }));
 
-test('the driver map, as the gate reads it', (t) => {
+// ==========================================================================
+// THE JOB'S OWN RUN
+// ==========================================================================
+test('checkJobRan: every claimed driver\'s test passed, on the job\'s engine', () => {
+  const r = checkJobRan(fxJobRun());
+  assert.deepStrictEqual(r.findings, []);
+  assert.deepStrictEqual(r.ran, [
+    'Bash x print @ linux-x64-musl <- test/synthetic/drivers.test.cjs:15',
+    'Read x print @ linux-x64-musl <- test/synthetic/drivers.test.cjs:23',
+    'Task x print @ linux-x64-musl <- test/synthetic/drivers.test.cjs:28',
+    'Grep x print @ linux-x64-musl <- test/synthetic/drivers.test.cjs:35',
+    'Bash x sandbox:on/shell:bash @ linux-x64-musl <- test/synthetic/drivers.test.cjs:45',
+  ]);
+});
+
+test('checkJobRan refuses a failed, skipped or missing test, a run on another engine, and an unknown job', () => {
+  const failed = checkJobRan(fxJobRun({ records: fxRecords({ 47: { type: 'test:fail' } }) }));
+  assert.deepStrictEqual(failed.findings, ['test/synthetic/drivers.test.cjs:45 (Bash x sandbox:on/shell:bash @ linux-x64-musl): test '
+    + '"bash, sandboxed, its control in a helper" (line 47) failed in fixture-job; a cell is driven only where its test passes']);
+  const missing = checkJobRan(fxJobRun({ records: fxRecords().filter((x) => x.line !== 11) }));
+  assert.match(missing.findings[0], /:15 \(Bash x print @ linux-x64-musl\): test "bash, scripted in place" \(line 11\) not run in fixture-job/);
+  const twice = checkJobRan(fxJobRun({ records: [...fxRecords(), { ...fxRecords()[0], skip: 'second run' }] }));
+  assert.match(twice.findings[0], /\(line 11\) skipped \(second run\)/, 'a test run twice passes only if both runs pass');
+  const host = checkJobRan(fxJobRun({ host: { platform: 'darwin', arch: 'arm64' } }));
+  assert.deepStrictEqual(host.findings, ['fixture-job claims linux-x64-musl, but runs on darwin-arm64']);
+  assert.match(checkJobRan(fxJobRun({ job: 'nope' })).findings[0], /^CLODE_CELL_JOB=nope is not a job CELL_JOBS names/);
+});
+
+guardTests(defineGuard({
+  name: 'cells-ran-in-ci-job',
+  floor: 1,
+  read: readJobRun,
+  scan: checkJobRan,
+  // The failure this exists for: a claimed driver's test skipped in its job, so the cell ran nowhere.
+  control: () => fxJobRun({ records: fxRecords({ 11: { skip: 'no quaude' } }) }),
+}));
+
+// What the job's log shows (the guard prints only on failure): the cells it ran.
+test('cells-ran-in-ci-job: the cells this CI job ran, listed', (t) => {
+  const inputs = readJobRun();
+  if ('skip' in inputs) { t.skip(inputs.skip); return; }
+  const r = checkJobRan(inputs);
+  t.diagnostic(r.note);
+  for (const line of r.ran) t.diagnostic(line);
+});
+
+test('the cell matrix and the driver map, as the gate reads them', (t) => {
   const inputs = readInputs();
   if ('skip' in inputs) { t.skip(inputs.skip); return; }
   const r = scanCoverage(inputs);
   t.diagnostic(r.note);
-  for (const [name, dv] of [...r.drivenBy].sort()) {
-    for (const x of [...dv.firm, ...dv.skipping]) t.diagnostic(`${name} <- ${x.file}:${x.line} (${x.use})${x.skips ? `, can skip: ${x.skips}` : ''}`);
+  for (const line of r.matrix) t.diagnostic(line);
+  for (const [name, ds] of [...r.declared].sort()) {
+    for (const x of ds) {
+      t.diagnostic(`${name} <- ${x.file}:${x.line} (${x.use}; ${x.modes.join('/')}; tests ${x.tests.map((s) => s.line).join(',') || 'none'})`
+        + `${x.skips ? `, can skip: ${x.skips}` : ''}`);
+    }
   }
   for (const x of r.foreign) t.diagnostic(`(not a registered tool) ${x.name} <- ${x.file}:${x.line}${x.skips ? `, can skip: ${x.skips}` : ''}`);
   for (const x of r.drivers.rejected) t.diagnostic(`(not a driver) ${x.file}:${x.line}: ${x.why}`);

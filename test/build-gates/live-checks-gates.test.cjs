@@ -205,6 +205,15 @@ test('assertFailsOnMissingOutput refuses a check that returns no boolean verdict
     /needs the tool_use \{ name, input, id \}/);
 });
 
+test('assertFailsOnMissingOutput takes the cells a driver declares, a mode or modes, and refuses any other shape', () => {
+  const check = (m) => toolResultText(m, TOOL.id).includes('LIVE-42');
+  assert.doesNotThrow(() => assertFailsOnMissingOutput(check, TOOL, 'sandbox:on'));
+  assert.doesNotThrow(() => assertFailsOnMissingOutput(check, TOOL, ['print', 'shell:bash']));
+  for (const bad of ['', [], [''], 7, { mode: 'print' }]) {
+    assert.throws(() => assertFailsOnMissingOutput(check, TOOL, bad), /modes must be a mode name or an array of them/);
+  }
+});
+
 // ==========================================================================
 // THE LEXER: a code mask, so the scan reads code, never prose.
 // ==========================================================================
