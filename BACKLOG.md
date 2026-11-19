@@ -40,6 +40,31 @@ phase timestamps in a scratch copy of rg-native.cjs, alone and beside 16 CPU hog
 30.6 MB reached the tjs reader within 0.9 s every run, and 4 of 4 loaded runs hit a 20 s timeout before printing
 (2026-11-19)
 
+## upstream-drift.yml has been red every day since 2026-10-23: five anchor steps no longer read `next` (2026-11-19)
+
+Its last green run was 2026-10-22 (39762109769). In the newest red run (44544547103, `next` = 2.1.328, pin 2.1.283), the
+`carve` job passes (2.1.328 carves, merges and compiles), and the `anchors` job fails five steps:
+
+1. Hook anchors: `remote_control_hook_anchor_present = false` (the Remote Control gate-off would not apply) and
+   `snapshot_generator_present = false` (the eager-snapshot bridge would not apply).
+2. Text tripwires: text-probe-caller-style VIOLATION (ansiCodes() no longer keeps an open code by one regex test and
+   pairs it with its close code) and text-probe-wrap-options BROKEN (0 call sites).
+3. shadow-writer-from-carve BROKEN (0 writer candidates, floor 3).
+4. rg-matrix-from-carve BROKEN (2 of 3 found: the Grep and Glob builders and the usage-error regex, one missing).
+5. regexp-capture-census BROKEN (examined 0, floor 300), WITH NO REASON in the log: checkGate dropped a BROKEN
+   verdict's findings, which for the census say which turn did not complete and its stderr. Fixed in guard.cjs
+   (2026-11-19), so the next daily run names it.
+
+Steps 1 to 4 are the newest bundle's shapes moving under anchors that read the pinned 2.1.283 shapes: every one comes
+due at the pin bump past 2.1.283 (to 2.1.327 or later), and each must be re-pinned to the new shape then, not before
+(the pin is what CI and users run). Step 5 is NOT shown to be pin-related: the census runs a mock turn of `next` under
+node and its read went blind for a reason the run did not log. It may be a turn that does not complete on 2.1.328
+(pin-related) or the instrument itself (not).
+
+Measured: `gh api .../actions/jobs/135631487683/logs` (the anchors job of run 44544547103, 986 lines, ending at the
+job's completion), and `gh run list --workflow upstream-drift.yml -L 40`: 28 failures from 2026-10-23 to 2026-11-19,
+12 successes before (2026-11-19).
+
 ## upstream-drift.yml runs gates that no aggregator judges (release.yml: judged since 2026-11-19)
 
 test/ci-gates.cjs judges ci.yml (gates-ran-in-ci) and, since the observability plan's final fix wave, release.yml
