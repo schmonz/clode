@@ -32,6 +32,7 @@
 //
 // Gates (clean skips, never failures): no tjs binary; no CLODE_PROVIDER_BIN.
 const { test, before, after } = require('node:test');
+const { spawnCollect } = require('./spawn-collect.cjs');
 const { freshHome } = require('./throwaway-home.cjs');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -115,15 +116,7 @@ after(() => { if (DIR) { try { fs.rmSync(DIR, { recursive: true, force: true });
 // Async spawn (never spawnSync — the in-process mock must stay serviceable
 // while the child runs; same rationale as the sibling e2e harnesses).
 function runTarget(bin, args, env, timeoutMs = 60000) {
-  return new Promise((resolve) => {
-    const child = spawn(bin, args, { cwd: DIR, stdio: ['ignore', 'pipe', 'pipe'], env });
-    let stdout = '', stderr = '';
-    child.stdout.on('data', (d) => { stdout += d; });
-    child.stderr.on('data', (d) => { stderr += d; });
-    const to = setTimeout(() => { child.kill('SIGKILL'); }, timeoutMs);
-    child.on('exit', (status) => { clearTimeout(to); resolve({ status, stdout, stderr }); });
-    child.on('error', (e) => { clearTimeout(to); resolve({ status: null, stdout, stderr: String(e) }); });
-  });
+  return spawnCollect(bin, args, { cwd: DIR, env }, { timeoutMs });
 }
 function cleanEnv(extra) {
   const env = { ...process.env, ...extra };

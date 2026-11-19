@@ -6,6 +6,7 @@
 // tool_result content sent back) — node is the reference for "correct". Gated on
 // a tjs binary + CLODE_PROVIDER_BIN.
 const test = require('node:test');
+const { spawnCollect } = require('../spawn-collect.cjs');
 const { throwawayHome } = require('../throwaway-home.cjs');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -30,16 +31,8 @@ function stageBundle(bin) {
   return { dir, cli };
 }
 function bootP(cli, dir, args, env, timeoutMs) {
-  return new Promise((resolve) => {
-    const [ecmd, eargv] = engineSpawn(['run', LOADER, cli, ...args]);
-    const child = spawn(ecmd, eargv, { cwd: dir, stdio: ['ignore', 'pipe', 'pipe'], env });
-    let stdout = '', stderr = '';
-    child.stdout.on('data', (d) => { stdout += d; });
-    child.stderr.on('data', (d) => { stderr += d; });
-    const to = setTimeout(() => { child.kill('SIGKILL'); }, timeoutMs);
-    child.on('exit', (status) => { clearTimeout(to); resolve({ status, stdout, stderr }); });
-    child.on('error', (e) => { clearTimeout(to); resolve({ status: null, stdout, stderr: String(e) }); });
-  });
+  const [ecmd, eargv] = engineSpawn(['run', LOADER, cli, ...args]);
+  return spawnCollect(ecmd, eargv, { cwd: dir, env }, { timeoutMs });
 }
 function mockEnv(dir, url) {
   return { ...process.env, ...throwawayHome(`${dir}-home`), ANTHROPIC_BASE_URL: url, ANTHROPIC_API_KEY: 'sk-ant-mock', NODE_PATH: path.join(REPO, 'deps', 'claude', 'node_modules') };

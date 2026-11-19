@@ -78,7 +78,7 @@ function runVictim(dir, name) {
   const done = new Promise((resolve, reject) => {
     child.on('error', (e) => reject(new Error(
       `the victim copy of ${process.execPath} at ${victim} never started: ${e.code} ${e.message}`)));
-    child.on('exit', (code, signal) => resolve({ code, signal }));
+    child.on('close', (code, signal) => resolve({ code, signal }));   // 'close': stdio drained (test/spawn-collect.cjs)
   });
   // Let the loader map the image before anything replaces it.
   const started = new Promise((resolve) => setTimeout(resolve, 500));

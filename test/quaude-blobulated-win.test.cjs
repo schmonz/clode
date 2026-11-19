@@ -16,6 +16,7 @@
 // machinery: this test is validating a DIFFERENT build output's shape, not
 // driving the ordinary built product. CLODE_QUAUDE_EXE stays its own gate.
 const test = require('node:test');
+const { spawnCollect } = require('./spawn-collect.cjs');
 const { freshHome } = require('./throwaway-home.cjs');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -25,15 +26,7 @@ const { startMockAnthropic } = require('./mock-anthropic-helper.cjs');
 function quaudeExe() { const p = process.env.CLODE_QUAUDE_EXE; return p && fs.existsSync(p) ? p : null; }
 
 function bootQuaude(exe, args, env, timeoutMs) {
-  return new Promise((resolve) => {
-    const child = spawn(exe, args, { stdio: ['ignore', 'pipe', 'pipe'], env });
-    let stdout = '', stderr = '';
-    child.stdout.on('data', (d) => { stdout += d; });
-    child.stderr.on('data', (d) => { stderr += d; });
-    const to = setTimeout(() => { child.kill('SIGKILL'); }, timeoutMs);
-    child.on('exit', (status) => { clearTimeout(to); resolve({ status, stdout, stderr }); });
-    child.on('error', (e) => { clearTimeout(to); resolve({ status: null, stdout, stderr: String(e) }); });
-  });
+  return spawnCollect(exe, args, { env }, { timeoutMs });
 }
 
 test('blobulated quaude.exe --clode-attest self-loads and verifies all members', (t) => {

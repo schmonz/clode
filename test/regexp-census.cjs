@@ -20,6 +20,7 @@
 // Run as a program (the guard does, through spawnSync, because the mock lives on an event loop a
 // synchronous read() cannot give it): node test/regexp-census.cjs <staged-dir> <out.json>
 const fs = require('node:fs');
+const { spawnCollect } = require('./spawn-collect.cjs');
 const { throwawayHome } = require('./throwaway-home.cjs');
 const os = require('node:os');
 const path = require('node:path');
@@ -81,15 +82,8 @@ async function runTurns(stageDir, workDir) {
       CLAUDE_CONFIG_DIR: cfg, CLODE_REGEXP_CENSUS_OUT: censusFile,
       NODE_PATH: path.join(__dirname, '..', 'deps', 'claude', 'node_modules') };
     delete env.CLODE_ENGINE;
-    const r = await new Promise((resolve) => {
-      const c = spawn(process.execPath, ['--require', preload, path.join(stageDir, 'cli.cjs'), '-p', turn.prompt,
-        '--allowedTools', 'Task'], { cwd: stageDir, env, stdio: ['ignore', 'pipe', 'pipe'] });
-      let so = '', se = '';
-      c.stdout.on('data', (d) => { so += d; });
-      c.stderr.on('data', (d) => { se += d; });
-      const to = setTimeout(() => c.kill('SIGKILL'), 180000);
-      c.on('exit', (status, signal) => { clearTimeout(to); resolve({ status, signal, stdout: so, stderr: se }); });
-    });
+    const r = await spawnCollect(process.execPath, ['--require', preload, path.join(stageDir, 'cli.cjs'), '-p', turn.prompt,
+      '--allowedTools', 'Task'], { cwd: stageDir, env }, { timeoutMs: 180000 });
     await mock.close();
     let census = null;
     try { census = JSON.parse(fs.readFileSync(censusFile, 'utf8')); } catch { /* absent: reported below */ }

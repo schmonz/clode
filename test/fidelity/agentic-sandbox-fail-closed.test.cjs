@@ -23,6 +23,7 @@
 // its own error and exit 1 before anything runs, as native does (measured, native 2.1.283: "Error: Settings file not
 // found: <path>", "Error: Invalid JSON provided to --settings").
 const test = require('node:test');
+const { spawnCollect } = require('../spawn-collect.cjs');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -66,15 +67,7 @@ const bashDisabled = (m) => { const r = toolResult(m, E.id); return !!r && r.isE
 
 // argv after the binary -> { status, stderr }
 function turn(bin, cwd, env, args) {
-  return new Promise((resolve) => {
-    const c = spawn(bin, args, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
-    let stderr = '';
-    c.stdout.on('data', () => {});
-    c.stderr.on('data', (d) => { stderr += d; });
-    const to = setTimeout(() => c.kill('SIGKILL'), 180000);
-    c.on('exit', (status) => { clearTimeout(to); resolve({ status, stderr }); });
-    c.on('error', (e) => { clearTimeout(to); resolve({ status: null, stderr: String(e) }); });
-  });
+  return spawnCollect(bin, args, { cwd, env }, { timeoutMs: 180000 }).then(({ status, stderr }) => ({ status, stderr }));
 }
 
 const ON = { sandbox: { enabled: true } };
