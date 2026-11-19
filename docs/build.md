@@ -125,7 +125,7 @@ flowchart LR
   s0[["engine.source"]]
   a0("ci/osxcross-darwin/Dockerfile")
   a1("patches/ — 3 files")
-  a2("scripts/ — 18 files")
+  a2("scripts/ — 19 files")
   a3("spike/quickjs/ — 2 files")
   a4("spike/quickjs/patches/ — 28 files")
   a5("spike/quickjs/qemu/ci-guest-bake.sh")
