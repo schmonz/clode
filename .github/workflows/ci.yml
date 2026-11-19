@@ -820,18 +820,11 @@ jobs:
           node --require ./test/file-watchdog-preload.cjs --test --test-concurrency=1 --test-reporter=spec --test-reporter-destination=stdout \
             --test-reporter=./test/cell-reporter.mjs --test-reporter-destination="$RUNNER_TEMP/cells/node-shim-oracle.jsonl" \
             $FILES 2>&1 | tee shim-oracle.out
-          # A SKIPPED run of either newly-added file must be distinguishable from a
-          # clean one — never a silent pass (phase-5 doctrine: a red that cannot
-          # tell "broken" from "not given what I need" carries no information, and
-          # so does a green). Both files' own t.skip() already names a reason when
-          # their precondition is absent; this asserts the job as a whole REFUSES
-          # to stay green if either one goes back to skipping — e.g. if the seed
-          # step above silently landed nowhere, or a future change drops CLODE_TJS
-          # here. `2` is this job's PRE-EXISTING, environment-appropriate skip
-          # count (a darwin-only oracle row, and the CLODE_LIVE_ROUNDTRIP opt-in
-          # finale) — neither newly-added file may add to it.
-          grep -qE '^(ℹ|#) skipped 2$' shim-oracle.out \
-            || { echo "ERROR: expected exactly 2 skips (pre-existing darwin-only + live-roundtrip-opt-in rows). A different count means shim-surface, guard-subcommands-gate, or engine-regexp-reuse skipped again (task-8 regressed), or an unrelated new skip appeared — see above." >&2; grep -E 'skipped' shim-oracle.out >&2; exit 1; }
+          # A SKIPPED run must be distinguishable from a clean one, never a silent pass. This step used to assert an
+          # anonymous `skipped 2`; a third, legitimate skip (a Windows-only row, CI run 44629240081) turned it red while
+          # a renamed one could have kept it green. The skips this job accepts are named instead (below).
+          # Skips are judged BY NAME, not counted: gates-ran-in-ci holds this job to every file it runs (test/ci-gates.cjs
+          # FILES, a skip accepted only by its test name; ci-gate-placement refuses a file a job runs that FILES does not judge).
       # DOES THE LAST RELEASE STILL HOST HEAD'S BUILD? Every engine leg's first step runs on the
       # pinned bootstrap engine (scripts/bootstrap-engine.sh), and CI run 44443821699 found out it
       # could not -- on every leg at once, after six weeks of nobody running the opt-in test that
@@ -845,10 +838,13 @@ jobs:
           # curl, not busybox wget: the resolver asks for a byte RANGE, and busybox wget refuses
           # a 206 it did not ask for with its own -c (it dies "server returned error").
           apk add --no-cache curl
-          CLODE_BOOTSTRAP_ONLINE=1 node --require ./test/file-watchdog-preload.cjs --test --test-concurrency=1 --test-reporter=spec \
+          # Under test/cell-reporter.mjs: gates-ran-in-ci holds this job to the file by name (FILES), so a skipped row,
+          # which answers nothing, is red there.
+          mkdir -p "$RUNNER_TEMP/cells"
+          CLODE_BOOTSTRAP_ONLINE=1 node --require ./test/file-watchdog-preload.cjs --test --test-concurrency=1 \
+            --test-reporter=spec --test-reporter-destination=stdout \
+            --test-reporter=./test/cell-reporter.mjs --test-reporter-destination="$RUNNER_TEMP/cells/bootstrap-online.jsonl" \
             test/bootstrap-engine-online.test.cjs 2>&1 | tee bootstrap-online.out
-          grep -qE '^(ℹ|#) skipped 0$' bootstrap-online.out \
-            || { echo "ERROR: test/bootstrap-engine-online.test.cjs skipped a row, so it answered nothing" >&2; exit 1; }
       # THE CELLS this job drives (test/build-gates/tool-coverage-gates.test.cjs, CELL_JOBS): every test that runs a
       # claimed driver's control PASSED above, on this engine, as test/cell-reporter.mjs recorded it. A skip, a failure or
       # a test that never ran means the tool x mode cell ran nowhere, and this step names it (observability plan Task 1).
@@ -1008,8 +1004,8 @@ jobs:
               --test-reporter=spec --test-reporter-destination=stdout \
               --test-reporter=./test/cell-reporter.mjs --test-reporter-destination="$RUNNER_TEMP/cells/native-builder.jsonl" \
               test/clode-native.test.cjs 2>&1 | tee native.out
-          grep -qE '^(ℹ|#) skipped 0$' native.out \
-            || { echo "ERROR: a clode-native acceptance SKIPPED (or the summary format changed) — the node-free builder went unproven" >&2; exit 1; }
+          # Skips are judged BY NAME, not counted: gates-ran-in-ci holds this job to every file it runs (test/ci-gates.cjs
+          # FILES, a skip accepted only by its test name; ci-gate-placement refuses a file a job runs that FILES does not judge).
 
       # The packaged targets themselves: build a real naude (Node SEA) and a real
       # quaude (blobulated tjs) from the same CC and diff them. The model oracle above
@@ -1042,8 +1038,8 @@ jobs:
       # because it carries the bun-shim and NOT the node-shim. The gate for that reads a
       # BUILT naude's SEA asset table, so it belongs HERE, in the one job that has one —
       # under `npm test` it would skip forever, which is the 2026-08-25 disease (sixteen
-      # tests skipping in CI since forever, invisibly). `skipped 0` is asserted for the
-      # same reason clode-native's acceptances assert it: a gate that skipped is a gate
+      # tests skipping in CI since forever, invisibly). A skip is red by name in gates-ran-in-ci
+      # (FILES accepts none for it), for the same reason as clode-native's acceptances: a gate that skipped is a gate
       # that is not there.
       - name: naude shim boundary — the bytes that make the oracle an oracle
         run: |
@@ -1052,8 +1048,8 @@ jobs:
           node --require ./test/file-watchdog-preload.cjs --test --test-reporter=spec --test-reporter-destination=stdout \
             --test-reporter=./test/cell-reporter.mjs --test-reporter-destination="$RUNNER_TEMP/cells/naude-shim-boundary.jsonl" \
             test/naude-shim-boundary.test.cjs 2>&1 | tee boundary.out
-          grep -qE '^(ℹ|#) skipped 0$' boundary.out \
-            || { echo "ERROR: the naude shim-boundary gate SKIPPED — it found no built naude to inspect (see its skip message above)" >&2; exit 1; }
+          # Skips are judged BY NAME, not counted: gates-ran-in-ci holds this job to every file it runs (test/ci-gates.cjs
+          # FILES, a skip accepted only by its test name; ci-gate-placement refuses a file a job runs that FILES does not judge).
 
       # THE CELLS this job drives (test/build-gates/tool-coverage-gates.test.cjs, CELL_JOBS): every test that runs a
       # claimed driver's control PASSED above, on this engine, as test/cell-reporter.mjs recorded it. A skip, a failure or
@@ -1241,7 +1237,7 @@ jobs:
       # generator's version choice reads every pinned version's EastAsianWidth + emoji-data;
       # cell-profile-diff reads GraphemeBreakTest at the cell version. The text steps below
       # run OFFLINE from this cache, so a cache that lacks anything they read shows up as a
-      # skip, which their `skipped 0` assertion turns red. A fetch that fails here (network,
+      # skip, which gates-ran-in-ci turns red by name (FILES accepts none). A fetch that fails here (network,
       # or bytes that no longer hash to their pin) FAILS THIS STEP by name (ruling R17).
       - name: Warm the pinned UCD cache (online, once — the text gates run offline from it)
         id: ucd
@@ -1359,13 +1355,8 @@ jobs:
               --test-reporter=./test/cell-reporter.mjs --test-reporter-destination="$RUNNER_TEMP/cells/pty-session-$(basename "$f" .test.cjs).jsonl" \
               "$f" 2>&1 | tee -a session-gates.out
           done
-          SUMMARIES=$(grep -cE '^[^ ]+ skipped [0-9]+$' session-gates.out || true)
-          SKIPPED=$(sed -nE 's/^[^ ]+ skipped ([0-9]+)$/\1/p' session-gates.out | awk '{ n += $1 } END { print n + 0 }')
-          echo "summaries: $SUMMARIES (one per file, 3 expected); skipped: $SKIPPED (none accepted)"
-          [ "$SUMMARIES" -eq 3 ] \
-            || { echo "ERROR: read $SUMMARIES node --test summaries, not one per session file (3) — a skip count over them counts nothing" >&2; exit 1; }
-          [ "$SKIPPED" -eq 0 ] \
-            || { echo "ERROR: a session gate SKIPPED (see its reason above) — it judged nothing, so this is not a pass" >&2; grep -E 'skipped' session-gates.out >&2; exit 1; }
+          # Skips are judged BY NAME, not counted: gates-ran-in-ci holds this job to every file it runs (test/ci-gates.cjs
+          # FILES, a skip accepted only by its test name; ci-gate-placement refuses a file a job runs that FILES does not judge).
       # THE TEXT GATES against the oracle installed above: Bun.ant.CellSegmenter,
       # Bun.stringWidth, Intl.Segmenter and Bun.sliceAnsi, ours under the tjs engine quaude
       # ships vs native Bun, exact equality over ~1.18M strings; the freshness gate (the
@@ -1386,7 +1377,7 @@ jobs:
       # suite legs (suite.yml), whose CLODE_PROVIDER_BIN is the pin, read the pin's.
       # They run whenever their own preconditions succeeded, not only when every PTY step
       # above did: a broken PTY gate must not mask working text gates, or the reverse.
-      # `skipped 0` is asserted because every one of these SKIPS without its oracle or its
+      # A skip is red by name in gates-ran-in-ci (FILES), because every one of these SKIPS without its oracle or its
       # cache, and a green run whose gates skipped is the lie this job keeps catching.
       - name: Text and paint gates — ours vs the TEXT ORACLE native, per consumer (offline, from the warm cache)
         if: ${{ !cancelled() && steps.oracle.outcome == 'success' && steps.ucd.outcome == 'success' && steps.deps.outcome == 'success' }}
@@ -1409,8 +1400,8 @@ jobs:
               test/build-gates/paint-probe-gates.test.cjs \
               test/build-gates/reset-patch-gates.test.cjs \
               test/bun-slice-ansi-arity.test.cjs 2>&1 | tee text-gates.out
-          grep -qE '^(ℹ|#) skipped 0$' text-gates.out \
-            || { echo "ERROR: a text gate SKIPPED (see its reason above) — it judged nothing, so this is not a pass" >&2; grep -E 'skipped' text-gates.out >&2; exit 1; }
+          # Skips are judged BY NAME, not counted: gates-ran-in-ci holds this job to every file it runs (test/ci-gates.cjs
+          # FILES, a skip accepted only by its test name; ci-gate-placement refuses a file a job runs that FILES does not judge).
       # The detector the freshness gate cannot be (ruling R24): CELL_UNICODE is a measured
       # constant, so a Bun clusterer bump moves nothing the generator reads. This re-measures
       # bun-cell and uax29 against the oracle's own two clusterers (GraphemeBreakTest at both
@@ -1525,8 +1516,8 @@ jobs:
               --test-reporter=spec --test-reporter-destination=stdout \
               --test-reporter=./test/cell-reporter.mjs --test-reporter-destination="$RUNNER_TEMP/cells/pty-sandbox.jsonl" \
               test/fidelity/agentic-sandbox-fail-closed.test.cjs 2>&1 | tee sandbox.out
-          grep -qE '^(ℹ|#) skipped 1$' sandbox.out && grep -qE '^﹣ where native would not sandbox' sandbox.out \
-            || { echo "ERROR: agentic-sandbox-fail-closed skipped something other than its D2 test (no built quaude? no bwrap/socat?): the fail-closed branch was not judged" >&2; exit 1; }
+          # Skips are judged BY NAME, not counted: gates-ran-in-ci holds this job to every file it runs (test/ci-gates.cjs
+          # FILES, a skip accepted only by its test name; ci-gate-placement refuses a file a job runs that FILES does not judge).
       # THE CELLS this job drives (test/build-gates/tool-coverage-gates.test.cjs, CELL_JOBS): every test that runs a
       # claimed driver's control PASSED above, on this engine, as test/cell-reporter.mjs recorded it. A skip, a failure or
       # a test that never ran means the tool x mode cell ran nowhere, and this step names it (observability plan Task 1).
@@ -1677,8 +1668,8 @@ jobs:
           # fully (6/6 passed, 0 skipped) against the pinned provider and must not add a
           # third skip here — a skip there means the P0 guard went right back to running
           # nowhere.
-          grep -qE '^(ℹ|#) skipped 2$' darwin-oracle.out \
-            || { echo "ERROR: expected exactly 2 skips (the darwin-branch row needing CLODE_DARWIN_PROVIDER_BIN, and the live-roundtrip opt-in finale). A different count means credential-store-attempted skipped (the P0 guard is back to running nowhere), or an unrelated new skip appeared — see above." >&2; grep -E 'skipped' darwin-oracle.out >&2; exit 1; }
+          # Skips are judged BY NAME, not counted: gates-ran-in-ci holds this job to every file it runs (test/ci-gates.cjs
+          # FILES, a skip accepted only by its test name; ci-gate-placement refuses a file a job runs that FILES does not judge).
       # THE CELLS this job drives (test/build-gates/tool-coverage-gates.test.cjs, CELL_JOBS): every test that runs a
       # claimed driver's control PASSED above, on this engine, as test/cell-reporter.mjs recorded it. A skip, a failure or
       # a test that never ran means the tool x mode cell ran nowhere, and this step names it (observability plan Task 1).

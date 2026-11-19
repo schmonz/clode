@@ -83,6 +83,9 @@ const fxManifest = (over = {}) => ({
   placed: { b: { jobs: ['oracle'], why: 'needs an engine' } },
   exempt: {},
   files: {},
+  // the oracle runs test/a.test.cjs, which its gates are judged by; the file itself is excused here so the unit rows
+  // can judge FILES on their own terms
+  unjudged: { 'test/a.test.cjs': { oracle: 'fixture: judged by its gates' } },
   aggregator: { workflow: G.CI, job: 'gates-ran-in-ci' },
   ...over,
 });
@@ -201,6 +204,7 @@ test('ci-gate-placement: each way the manifest can disagree with the tree is nam
     [{ texts: { 'suite.yml': FX_SUITE.replace('gates-ran-test-${{ matrix.os }}', 'gates-ran-oracle') } }, /artifact gates-ran-oracle is uploaded by suite.yml:suite and .*:oracle/],
     [{ legCallers: [{ workflow: 'w.yml', job: 'fast', only: 'fast', legs: ['a', 'b'] }, { workflow: 'w.yml', job: 'slow', only: 'slow', legs: ['b', 'c'] }] },
       /w.yml: jobs fast \(only: fast\) and slow \(only: slow\) both build b/],
+    [{ manifest: { unjudged: {} } }, /job oracle runs test\/a\.test\.cjs, which FILES does not judge for it/],
     [{ texts: { [G.CI]: `${FX_CI}  stray:\n    steps:\n      - run: node --test test/a.test.cjs\n` } }, /ci.yml job stray runs gate file\(s\) test\/a.test.cjs but is not in JOBS/],
   ];
   for (const [over, re] of cases) {

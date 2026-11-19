@@ -238,6 +238,34 @@ const FILES = {
   } },
 };
 
+// EVERY FILE A DECLARED JOB RUNS IS JUDGED BY NAME (final review, M7). The node-shim oracles run a glob,
+// test/node-shim-*.test.cjs minus their EXCLUDE (node-shim-tty), and used to hold the files only by an anonymous
+// `skipped N` count: a third legitimate skip (a Windows-only row) turned it red (CI run 44629240081), and a renamed
+// skip could have kept it green. Each globbed file is now in FILES for both oracles, derived from the same glob the
+// steps run; ci-gate-placement refuses a file any declared job runs that FILES does not judge (UNJUDGED below is the
+// only way out, with a reason). The skips the oracles accept are named, measured from that run's logs.
+const ORACLES = ['node-shim-oracle', 'node-shim-oracle-darwin'];
+const ORACLE_EXCLUDE = /node-shim-tty/;
+for (const f of fs.readdirSync(path.join(REPO, 'test')).filter((n) => /^node-shim-.*\.test\.cjs$/.test(n) && !ORACLE_EXCLUDE.test(n)).sort()) {
+  const rel = `test/${f}`;
+  const e = FILES[rel] || (FILES[rel] = { jobs: [] });
+  for (const id of ORACLES) if (!e.jobs.includes(id)) e.jobs.push(id);
+}
+// Off Windows the real-PowerShell row skips (and on windows-amd64-tests the POSIX nice(1) row does).
+FILES['test/node-shim-os-priority.test.cjs'].skips['os.getPriority/setPriority under quaude answer as host node does on the real Windows kernel (PowerShell, no fakes)'] =
+  'Windows only: the POSIX nice(1) row in the same file judges the oracles\' platforms';
+// node-shim-oracle's online step (it runs under the reporter for exactly this).
+FILES['test/bootstrap-engine-online.test.cjs'] = { jobs: ['node-shim-oracle'] };
+// Every cell job runs this file under --test-name-pattern=cells-ran-in-ci-job: only that guard's rows are reported.
+FILES['test/build-gates/tool-coverage-gates.test.cjs'] = { jobs: ['node-shim-oracle', 'node-shim-oracle-darwin', 'native-builder-oracle', 'linux-x64-pty'] };
+
+// The engine legs' hermeticity step runs the whole file (CI run 44597568635: 17 pass, 0 skipped, in all 29 legs).
+FILES['test/depscan-guard.test.cjs'] = { jobs: JOBS.filter((j) => j.leg).map((j) => j.id) };
+
+// Files a declared job runs that are deliberately NOT judged test by test: { file: { 'job id': why } }. Empty: every
+// file every declared job runs is judged.
+const UNJUDGED = {};
+
 // ==========================================================================
 // Pure helpers
 // ==========================================================================
@@ -291,6 +319,9 @@ function jobBlocks(yaml) {
 // Does a job's text run `file`? Named outright, or by a glob token (test/node-shim-*.test.cjs).
 function names(block, file) {
   if (block.includes(file)) return true;
+  // a glob the step filters with `grep -vE "$EXCLUDE"` (EXCLUDE='a|b') does not run what EXCLUDE matches
+  const ex = /\bEXCLUDE='([^']+)'/.exec(block);
+  if (ex && /grep -vE "\$EXCLUDE"/.test(block) && new RegExp(ex[1]).test(file)) return false;
   for (const tok of block.match(/test\/[\w./*-]*\*[\w./*-]*\.test\.cjs/g) || []) {
     const re = new RegExp(`^${tok.split('*').map((s) => s.replace(/[.+?^${}()|[\]\\/]/g, '\\$&')).join('[^/]*')}$`);
     if (re.test(file)) return true;
@@ -449,6 +480,18 @@ function checkPlacement({ manifest, registry, texts, files, legCallers = [] }) {
     }
     for (const [t, why] of Object.entries(f.skips || {})) {
       if (typeof why !== 'string' || !why.trim()) findings.push(`FILES ${file}: the accepted skip "${t}" gives no why`);
+    }
+  }
+  // EVERY FILE A DECLARED JOB RUNS IS JUDGED: in FILES for that job, or in UNJUDGED with why. A job outside the suite
+  // used to hold the rest by an anonymous `skipped N` count, which a legitimate new skip turned red and a renamed
+  // skip could keep green (M7).
+  const unjudged = manifest.unjudged || {};
+  for (const j of jobs) {
+    if (j.suite || !blocks.has(j.id)) continue;
+    for (const f of files) {
+      if (!/^test\/.*\.test\.cjs$/.test(f) || !names(blocks.get(j.id), f)) continue;
+      if ((gateFiles[f] && (gateFiles[f].jobs || []).includes(j.id)) || (unjudged[f] && unjudged[f][j.id])) continue;
+      findings.push(`job ${j.id} runs ${f}, which FILES does not judge for it (and UNJUDGED does not excuse): its skips would go uncounted`);
     }
   }
   // Every job in the per-push CI that runs a gate file must be declared, or its gates go unaccounted.
@@ -624,7 +667,8 @@ function loadRegistry({ repo = REPO, env = process.env } = {}) {
   return reg;
 }
 
-const MANIFEST = Object.freeze({ name: 'ci', jobs: JOBS, placed: PLACED, exempt: EXEMPT, files: FILES, aggregator: AGGREGATOR, need: ciNeed });
+const MANIFEST = Object.freeze({ name: 'ci', jobs: JOBS, placed: PLACED, exempt: EXEMPT, files: FILES, unjudged: UNJUDGED,
+  aggregator: AGGREGATOR, need: ciNeed });
 
 // ==========================================================================
 // RELEASE.YML, judged the same way before a release is cut (final review, observability plan): its jobs that run
@@ -656,6 +700,7 @@ for (const [file, f] of Object.entries(FILES)) {
   const here = (f.jobs || []).filter((id) => RELEASE_IDS.has(id));
   if (here.length) RELEASE_FILES[file] = { ...f, jobs: here };
 }
+RELEASE_FILES['test/depscan-guard.test.cjs'] = { jobs: RELEASE_JOBS.filter((j) => j.leg).map((j) => j.id) };
 const RELEASE_AGGREGATOR = { workflow: RELEASE, job: 'gates-ran-in-release' };
 const releaseNeed = (j) => (j.suite ? 'suite' : j.leg ? (TJS_LEGS.DARWIN_SLICES.includes(j.leg) ? 'darwin-slices' : 'leg') : j.job);
 const RELEASE_MANIFEST = Object.freeze({ name: 'release', jobs: RELEASE_JOBS, placed: RELEASE_PLACED, exempt: RELEASE_EXEMPT,
