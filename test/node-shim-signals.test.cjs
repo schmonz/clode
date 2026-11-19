@@ -40,7 +40,11 @@ function spawnLoader(prog, args = []) {
   let out = '', err = '';
   child.stdout.on('data', (d) => { out += d; });
   child.stderr.on('data', (d) => { err += d; });
-  const exited = new Promise((res) => child.on('exit', (code, signal) => res({ code, signal })));
+  // 'close', not 'exit': 'exit' can fire while the child's stdout still holds unread bytes (node's docs: "child
+  // process stdio streams might still be open"). node-shim-oracle (linux musl container, CI 44460009323) failed
+  // exactly so: exit code 0 from the SIGCONT handler, so 'resumed' had been printed, but `out` read only 'ready\n'.
+  // 'close' fires once the process has exited AND its stdio has ended, so everything it wrote is in `out`.
+  const exited = new Promise((res) => child.on('close', (code, signal) => res({ code, signal })));
   const waitFor = (pred, ms, what) => new Promise((res, rej) => {
     const t0 = Date.now();
     const iv = setInterval(() => {
