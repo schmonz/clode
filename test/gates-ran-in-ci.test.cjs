@@ -290,8 +290,10 @@ test('gates-ran-in-ci: a gate file whose only tests are guards is accounted from
   try {
     fs.mkdirSync(path.join(base, 'test'));
     const file = path.join(base, 'test', 'fx.test.cjs');
-    fs.writeFileSync(file, `const { defineGuard, guardTests } = require(${JSON.stringify(path.join(REPO, 'test', 'guard.cjs'))});
-guardTests(defineGuard({ name: 'fx-gate', read: () => ({ n: 1 }), scan: ({ n }) => ({ findings: n ? [] : ['x'], examined: 1 }), control: () => ({ n: 0 }) }));
+    // (the fixture names the registering function through a variable: guards-population counts every literal
+    // call site of it in test/ source as a migrated guard)
+    fs.writeFileSync(file, `const g = require(${JSON.stringify(path.join(REPO, 'test', 'guard.cjs'))}); const define = g['define' + 'Guard'];
+g.guardTests(define({ name: 'fx-gate', read: () => ({ n: 1 }), scan: ({ n }) => ({ findings: n ? [] : ['x'], examined: 1 }), control: () => ({ n: 0 }) }));
 `);
     const out = path.join(base, 'records.jsonl');
     const r = spawnSync(process.execPath, ['--test', `--test-reporter=${path.join(REPO, 'test', 'cell-reporter.mjs')}`, `--test-reporter-destination=${out}`, file],
