@@ -4933,25 +4933,29 @@ canned mock): exit 1, "no stdin data received in 3s", 0 requests; native: 1 requ
 b4eb2f5 (darwin-arm64, 2.1.283): 1 request, answered; `quaude -p hello` with a piped stdin: the 3 s warning, then 1
 request; with a /dev/null stdin: no warning (2026-11-18).
 
-## quaude on Windows never reuses its private guard directory, and never removes the fresh ones (found 2026-11-19)
+## FIXED 2026-11-19 — quaude on Windows never reused its private guard directory, nor removed the fresh ones
 
-libexec/quaude-bootstrap.mjs `privateGuardDir` reuses `<tmp>/clode-guard-<uid>` only when the uid is a number >= 0 and
-lstat says the directory is ours (`st.uid === uid`) and closed to others (`mode & 0o077 === 0`). On Windows none of
-those facts exist: libuv's uv_os_get_passwd sets uid to -1 there (deps/libuv/src/win/util.c), its stat reports
-`st_uid = 0` and synthesizes the mode from the read-only attribute (0o666 for any writable directory; node reports
-the same, 438, CI 44460009323), so the check can never pass and every quaude session that writes there (on Windows
-every session given a user `--settings`: policy "may exist" there, so delivery is 'merge') makes a FRESH
-`clode-guard-XXXXXX` under %TEMP%. Nothing removes it (tjs.exit runs no exit handlers), and the seven-day prune only
-looks inside the directory in use, so on Windows the merged copy of the user's settings (possibly secrets) is NEVER
-removed, contrary to the guard entry's (c). %TEMP% is per-user (%LOCALAPPDATA%\Temp, ACL'd to the user, SYSTEM and
-Administrators), so the copies are not exposed to other users. naude is not affected: it mkdtemps per run and removes
-the directory when its child exits. A portable fix needs a ruling, because each candidate changes behaviour on every
-platform: (a) a per-user location that is private by construction everywhere (under the user's own cache, not the
-shared tmp), or (b) a prune of stale `clode-guard-XXXXXX` siblings this user can remove.
+WAS: libexec/quaude-bootstrap.mjs `privateGuardDir` reused `<tmp>/clode-guard-<uid>` only when lstat showed it ours and
+closed to others. On Windows libuv reports uid -1, `st_uid = 0` and a synthesized 0o666 mode, so the check could never
+pass: every session given a user `--settings` (always 'merge' delivery there) made a fresh %TEMP%\clode-guard-XXXXXX
+that nothing removed, and the seven-day prune only looked inside the directory in use, so the merged copy of the user's
+settings was never removed (the guard entry's (c)). naude made a fresh mkdtemp directory per run and removed it.
 
-Unmeasured. Derived from the engine's libuv sources and quaude-bootstrap.mjs, not run on Windows: a quaude session
-there with `--settings <file>`, twice, then listing %TEMP%\clode-guard-* (two directories, both still present after
-exit) would measure it; the windows-*-tests CI legs can host that row.
+FIXED (controller ruling, option (a), one implementation everywhere): quaude and naude both use `<clode cache>/guard`
+(libexec/update-guard.cjs guardDirPath, resolved as libexec/clode-paths.cjs clodeCacheDir resolves the cache, so it is
+under the user's home on every platform). It is made 0700 and reused. The merged settings are content-addressed and
+pruned after a week on every use (guardSettingsToPrune). guardDirRefusal judges lstat facts. Everywhere, a symlink or
+junction is refused. Where the platform reports an owner (POSIX), the directory must be ours and 0700, and its parent
+ours or root's and not writable by every user. A refusal makes quaude and naude refuse to start (fail closed), never
+fall back. naude no longer removes the directory at exit, because another session may be using it.
+
+Measured: test/update-guard-dir.test.cjs (quaude's block extracted from the bootstrap, on a fake tjs over the real
+filesystem: two sessions give one directory; the week-old settings are pruned; a hostile parent and a symlinked guard
+are refused, with no fallback; Windows-shaped facts are accepted) and test/naude-entry.test.cjs (the same three rows for
+naude), both also under the forced-win32 pass (2026-11-19).
+
+Unmeasured. On real Windows: that the profile ACL keeps `%USERPROFILE%\.cache\clode\guard` private (an icacls row on
+windows-latest would measure it), and a real quaude session there reusing one directory.
 
 ## Untracked-until-now findings from 2026-08-23/24 (three of them)
 

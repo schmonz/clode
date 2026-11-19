@@ -90,12 +90,16 @@ function fakeChild() {
 // Run the first pass with sensible defaults, letting the caller override seams and
 // capture what happened. Returns { call, child, exited, handlers, registered, removed }.
 const NO_POLICY_HOST = { platform: 'linux', procVersion: () => undefined, exists: () => false };
+// The guard's private directory is `<clode cache>/guard` (update-guard.cjs guardDirPath): every first pass here names a
+// scratch clode cache, so no row ever writes a real one.
+const GUARD_CACHE = fs.mkdtempSync(path.join(os.tmpdir(), 'naude-guard-cache-'));
+process.on('exit', () => { fs.rmSync(GUARD_CACHE, { recursive: true, force: true }); });
 function firstPass(overrides = {}) {
   const captured = { call: null, exited: 'unset', handlers: {}, registered: [], removed: [] };
   const child = overrides.child || fakeChild();
   runNaude(Object.assign({
     argv: ['--version'], execPath: '/naude',
-    sea: fakeSea(), env: {}, cacheDir: os.tmpdir(),
+    sea: fakeSea(), env: { CLODE_CACHE: GUARD_CACHE }, cacheDir: os.tmpdir(),
     // A host with no admin policy, whatever the runner's: windows-latest is "always" (policyProbe), and a runner
     // with /etc/claude-code "may" (CI 44443821699 took 'merge' for a 'layers' test there).
     policyHost: NO_POLICY_HOST,
@@ -416,18 +420,81 @@ test('first pass: the user\'s --settings reaches the child unchanged; the guard 
   assert.ok(JSON.parse(fs.readFileSync(path.join(pluginDir, '.claude-plugin', 'plugin.json'), 'utf8')).name);
   assert.strictEqual(cap.call.args.indexOf('--managed-settings'), -1, 'naude injects no sandbox setting');
   // A private directory. What makes it private differs, and each platform's assertion is the guarantee it has:
-  //  - EVERYWHERE: a FRESH directory, made by mkdtemp (it fails rather than reuse a name, so nothing another user
-  //    planted is ever adopted) directly in the cacheDir naude was given (here os.tmpdir()).
-  //  - POSIX: mode 0700, set by mkdtemp.
-  //  - Windows: there are no POSIX modes (node reports 0o666 for any writable directory: CI 44460009323 saw 438). The
-  //    directory inherits its parent's ACL, and os.tmpdir() there is the per-user %TEMP%
-  //    (%LOCALAPPDATA%\Temp, granting the user, SYSTEM and Administrators only).
+  //  - EVERYWHERE: it is `<clode cache>/guard` (update-guard.cjs guardDirPath), a real directory, in the user's own
+  //    home (here the scratch cache this file names).
+  //  - POSIX: mode 0700, ours (guardDirRefusal refuses anything else).
+  //  - Windows: there are no POSIX modes (node reports 0o666 for any writable directory: CI 44460009323 saw 438), and
+  //    no owner (process.getuid is absent). The directory inherits the ACL of the user's profile (the user, SYSTEM and
+  //    Administrators). Unmeasured: no icacls row runs here (this file runs in the forced-win32 pass, which spawns
+  //    nothing); the BACKLOG entry on the guard directory names the windows-latest row that would measure it.
   const guardDir = path.dirname(pluginDir);
-  assert.strictEqual(path.dirname(guardDir), os.tmpdir(), 'directly in the cacheDir naude was given');
-  assert.match(path.basename(guardDir), /^clode-guard-[A-Za-z0-9]{6}$/, 'a fresh mkdtemp directory');
+  assert.strictEqual(guardDir, path.join(GUARD_CACHE, 'guard'), 'the clode cache\'s guard directory');
+  assert.ok(fs.lstatSync(guardDir).isDirectory() && !fs.lstatSync(guardDir).isSymbolicLink());
   if (process.platform !== 'win32') assert.strictEqual(fs.statSync(guardDir).mode & 0o777, 0o700, 'mode 0700');
-  fs.rmSync(path.dirname(pluginDir), { recursive: true, force: true });
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+// Controller ruling 2026-11-19 (option (a)): one guard directory per user, reused, pruned; refused, never replaced.
+test('first pass: two sessions use ONE guard directory, and it outlives the child (another session may hold it)', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naude-user-settings-'));
+  const userFile = path.join(dir, 'mine.json');
+  fs.writeFileSync(userFile, '{}');
+  const a = firstPass({ argv: ['-p', 'x', '--settings', userFile], onExit: (cb) => cb(0, null) });
+  const b = firstPass({ argv: ['-p', 'y', '--settings', userFile], onExit: (cb) => cb(0, null) });
+  const pa = pluginHooks(a.call.args).dir; const pb = pluginHooks(b.call.args).dir;
+  assert.strictEqual(pa, pb, 'the same content-addressed plugin, in the same directory');
+  assert.strictEqual(path.dirname(pa), path.join(GUARD_CACHE, 'guard'));
+  assert.ok(fs.existsSync(pa), 'not removed when either child exits');
+  assert.deepStrictEqual(fs.readdirSync(path.join(GUARD_CACHE, 'guard')).filter((n) => n.startsWith('plugin-')), [path.basename(pa)]);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('first pass: merged settings older than a week are pruned; a fresh one stays', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naude-user-settings-'));
+  const userFile = path.join(dir, 'mine.json');
+  fs.writeFileSync(userFile, JSON.stringify({ env: { MINE: '1' } }));
+  const guard = path.join(GUARD_CACHE, 'guard');
+  fs.mkdirSync(guard, { recursive: true, mode: 0o700 });
+  const stale = path.join(guard, 'settings-00000000deadbeef.json');
+  fs.writeFileSync(stale, '{"secret":1}', { mode: 0o600 });
+  const eightDaysAgo = (Date.now() - 8 * 24 * 60 * 60 * 1000) / 1000;
+  fs.utimesSync(stale, eightDaysAgo, eightDaysAgo);
+  const cap = firstPass({ argv: ['-p', 'x', '--managed-settings', 'nope', '--settings', userFile] });
+  const at = cap.call.args.indexOf('--settings');
+  const fresh = cap.call.args[at + 1];
+  assert.strictEqual(path.dirname(fresh), guard, 'the merge is written in the guard directory');
+  assert.strictEqual(fs.existsSync(stale), false, 'the week-old copy of a user\'s settings is gone');
+  assert.strictEqual(fs.existsSync(fresh), true, 'this session\'s copy stays');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('first pass: a guard directory whose parent any user can write is REFUSED (fail closed), never replaced', () => {
+  const cache = fs.mkdtempSync(path.join(os.tmpdir(), 'naude-hostile-cache-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naude-user-settings-'));
+  const userFile = path.join(dir, 'mine.json');
+  fs.writeFileSync(userFile, '{}');
+  const stderr = [];
+  try {
+    fs.chmodSync(cache, 0o777);   // the parent: writable by every user, so the guard directory could be swapped
+    // uid: the platform's own where it has one; a fixed one where it has none (Windows), so the rule is exercised on
+    // every runner and in the forced-win32 pass alike.
+    const uid = typeof process.getuid === 'function' ? process.getuid() : 0;
+    const writable = (fs.statSync(cache).mode & 0o002) !== 0;
+    const cap = firstPass({ argv: ['-p', 'x', '--settings', userFile], env: { CLODE_CACHE: cache }, uid,
+      stderr: { write: (s) => { stderr.push(s); } } });
+    if (!writable) {
+      // Windows: chmod cannot grant other users anything (node maps it to the read-only bit), so there is no hostile
+      // parent to refuse; the session runs. This branch is the honest answer, not a skip.
+      assert.ok(cap.call, 'no POSIX mode to judge: the session runs');
+      return;
+    }
+    assert.strictEqual(cap.call, null, 'nothing was spawned');
+    assert.strictEqual(cap.exited, 1);
+    assert.match(stderr.join(''), /refusing to start: the update guard's private directory is unsafe: .*parent is writable by every user/);
+  } finally {
+    fs.rmSync(cache, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 // The host decides 'layers' or 'merge' (policyProbe): Windows always may hold admin policy (the registry), WSL inherits
@@ -459,16 +526,6 @@ test('first pass: a --settings value the bundle refuses reaches it unchanged (it
   const missing = path.join(os.tmpdir(), `naude-no-such-settings-${process.pid}.json`);
   const cap = firstPass({ argv: ['-p', 'x', '--settings', missing], onExit: (cb) => cb(0, null) });
   assert.deepStrictEqual(cap.call.args.slice(0, 4), ['-p', 'x', '--settings', missing]);
-});
-
-test('first pass: the guard\'s private directory is removed when the child exits', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naude-user-settings-'));
-  const userFile = path.join(dir, 'mine.json');
-  fs.writeFileSync(userFile, '{}');
-  const cap = firstPass({ argv: ['-p', 'x', '--settings', userFile], onExit: (cb) => cb(0, null) });
-  const i = cap.call.args.indexOf('--plugin-dir');
-  assert.strictEqual(fs.existsSync(path.dirname(cap.call.args[i + 1])), false, 'removed on exit');
-  fs.rmSync(dir, { recursive: true, force: true });
 });
 
 test('first pass: \'merge\' (here, a user --managed-settings the bundle ignores) merges the hook into the user\'s --settings AND adds the plugin', () => {
