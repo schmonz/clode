@@ -1054,12 +1054,12 @@ new pin had 26 failures, from three upstream changes a carve cannot see, and the
   UTF-8 unlike WHATWG (F0 9F C3 9F: node U+FFFD U+00DF, tjs U+FFFD U+FFFD; 36 of a 4,014-string
   fuzz differ) for every non-fatal decode outside the carve, the shim's Buffer
   `toString('utf8')` included.
-- **Two errors every 2.1.283 quaude turn logs** (`--debug`, darwin and linux; not compared with
-  2.1.278): QuickJS throws `SyntaxError` constructing the bundle's artifact
-  `bracketedLeadScrubPattern` RegExp (flags `giu`; `get lead` in the artifact tool-result code),
-  which upstream catches, so that scrub never runs under quaude; and `[event-loop-stall]
+- **One error every 2.1.283 quaude turn logs** (`--debug`): `[event-loop-stall]
   process.resourceUsage() failed: not a function` (the shim has no process.resourceUsage). The
-  turn completes either way. The regex construct QuickJS rejects is not yet named.
+  turn completes. CORRECTED (observability Task 2, 2026-11-18): this said TWO errors, the other a
+  QuickJS `SyntaxError` constructing the artifact `bracketedLeadScrubPattern` RegExp; 4d0a067
+  (LEAD-SCRUB-POSSESSIVE) made that pattern compile, and a `-p` turn and a Bash-tool turn of a
+  quaude built from b4eb2f5 log no SyntaxError (darwin-arm64; linux not re-run).
 - **A quaude turn at 2.1.283 is slower than native's, and no gate sees it now.** In the
   linux-x64-pty container mirror the resize session's quaude went at least 800 ms with no
   output mid-turn (its `send` frame settled at 2.7-2.9 s with the turn in flight, 4 runs in
@@ -4561,7 +4561,12 @@ It fails on both targets, and WORSE on ours:
   string or an instance of Buffer... Received an instance of HeapSnapshotStream`.
   The bundle does `writeFileSync(e, Bun.generateHeapSnapshot("v8","arraybuffer"), …)`;
   `libexec/bun-shim.cjs:942` returns `v8.getHeapSnapshot()`, a Readable, not an
-  ArrayBuffer.
+  ArrayBuffer. CORRECTED (observability Task 2, 2026-11-18): bun-shim now writes the snapshot
+  with `v8.writeHeapSnapshot()` and returns an ArrayBuffer for the "arraybuffer" shape, and a
+  naude built from b4eb2f5 STILL fails, one step later: `Failed to create heap dump: The "data"
+  argument must be of type string or an instance of Buffer, TypedArray, or DataView. Received an
+  instance of ArrayBuffer` (node's writeFileSync takes no bare ArrayBuffer; native Bun's does).
+  Native 2.1.283 writes the .heapsnapshot and the diagnostics file.
 - **quaude (tjs):** fails EARLIER and NAMELESSLY — `Failed to create heap dump: not a
   function` — never reaching `Bun.generateHeapSnapshot` at all. Probed directly: under
   the shim, `v8` exports only `getHeapSnapshot`; `v8.getHeapStatistics` and
@@ -4606,7 +4611,11 @@ rg through a Bun API we do not implement.
 
 `echo 'say hi' | quaude -p` (and the same with options before `-p`) exits with Claude Code's own `no stdin data
 received in 3s` where native reads the piped prompt and runs the turn (measured on macOS arm64 with the 2.1.283
-carve and a canned mock; native answered, quaude made no request). A prompt given as an argument works. The
+carve and a canned mock; native answered, quaude made no request). A prompt given as an argument works, but
+CORRECTED (observability Task 2, 2026-11-18): not when stdin is ALSO a pipe. `quaude -p hello` with a piped stdin
+still waits out the 3 s timer and prints `Warning: no stdin data received in 3s, proceeding without it` before the
+turn (native: no warning, answers at once); a `/dev/null` stdin is spared (a terminal was not tried).
+naude reads a piped prompt as native does, so the gap is quaude's own (node-shim or bootstrap). The
 sandbox round-3 live rows use `-- <prompt>` for that reason. Not investigated: the likely suspects are the
 node-shim's process.stdin readiness for a pipe (the bundle waits for 'readable'/'data' with a 3s timer) and the
 bootstrap's stdin handling. A gate should drive a piped prompt end to end once it is fixed.
@@ -4638,8 +4647,10 @@ startup (`sandbox required but unavailable ... sandbox.failIfUnavailable is set`
 warning there). test/fidelity/agentic-sandbox-fail-closed.test.cjs holds it. Left: (1) real sandbox support
 (after the release); (2) "Restart to retry" will not help under quaude; (3) NAUDE does not sandbox either: under
 Node the sandbox initializes, but wrapWithSandbox refuses every sandboxed call (`Shell '/bin/bash' not found in
-PATH`, measured on macOS): it fails closed by that gap, not open; the likely cause is bun-shim's Bun.which on an
-absolute shell path, unmeasured.
+PATH`, measured on macOS): it fails closed by that gap, not open. CORRECTED (observability Task 2, 2026-11-18;
+this said "likely cause ... unmeasured"): bun-shim's `Bun.which('/bin/bash')` answers null where native's Bun
+answers "/bin/bash" (measured: the shim under node, native through its preload oracle), so the absolute-path
+lookup is a real divergence; that it is the whole cause of the refusal is still inferred.
 
 **Round 3 (2026-11-18, grep-native sandbox round 3).** Four corrections, each measured:
 - The user's own `--settings` (`X`, `=X`, file or inline JSON) was DISCARDED whole under quaude and naude: the bundle
@@ -7740,7 +7751,7 @@ cleanly on read, which is what canonical-LE was for. Nothing green today can see
 
 ### ★ tjs_evalBytecode over-consumes its argument (SIGABRT at teardown)
 
-`src/mod_engine.c:148` does `JSValue obj = argv[0]` and hands it to `JS_EvalFunction`,
+`src/mod_engine.c:138` (was :148; the call is at :152) does `JSValue obj = argv[0]` and hands it to `JS_EvalFunction`,
 which CONSUMES it, while the caller still owns `argv[0]`. Refcount underflow, symbolicated:
 
     abort <- js_free_value_rt <- free_var_ref <- js_bytecode_function_finalizer
@@ -8605,8 +8616,8 @@ is a silent loss, so they get a tracked home. Each is small; none blocks anythin
 
 ### 1. `MERGER_VERSION` is a hand-written literal, not a derived key
 
-`libexec/scc-merge.cjs:36` — `var MERGER_VERSION = '12'`. The cyclic-merge cache is
-keyed on it, so bumping it by hand is what invalidates the cache when the merger
+`libexec/scc-merge.cjs:63` — `var MERGER_VERSION = '15'` (was `:36`, `'12'`; re-read 2026-11-18).
+The cyclic-merge cache is keyed on it, so bumping it by hand is what invalidates the cache when the merger
 changes. Two documents describe it as something it is not: the cross-build umbrella's
 "keys are DERIVED by the runner from the content of the step's declared inputs. Keys
 are never hand-written", and the phase-2 design's "a hash of the merger's own source".
@@ -8657,7 +8668,7 @@ it rather than declare it.
 
 ### 3. The trace log's `interpreter` field is a constant on the fused path
 
-`libexec/clode-fuse.cjs` records `interpreter` on every build-trace line. Under a fused
+`libexec/clode-build.cjs:2243` (was clode-fuse.cjs) records `interpreter` on every build-trace line. Under a fused
 clode that value comes from the node-shim's `process.version`, which is the hardcoded
 string `'v24.0.0'` (`libexec/node-shim/modules/process.cjs:425`, with `process.release`
 undefined) — a compatibility facade for a boot-time version gate, not a fact about the
@@ -8680,7 +8691,8 @@ constant.
 
 ### 4. `quaude-fuse.js`'s merge read-back parses unguarded
 
-`libexec/quaude-fuse.js:339` does `JSON.parse(dec.decode(mergedRaw))` on the merged graph
+`libexec/quaude-blobulate.js:358` (was quaude-fuse.js:339; re-read 2026-11-18, still unguarded)
+does `JSON.parse(dec.decode(mergedRaw))` on the merged graph
 with no try/catch, so a corrupt file surfaces as an unhandled rejection (exit 1 under tjs)
 rather than a named error pointing at the file.
 
@@ -10438,7 +10450,7 @@ urgent, and it should fix the shape rather than the six lines.
 
 ## `NATIVE_ONLY` now holds a transient entry in a list that documents itself as structural
 
-`test/doctor-cli-parity.test.cjs:55` reads:
+`test/doctor-cli-parity.test.cjs:85` (was :55) reads:
 
 ```js
 const NATIVE_ONLY = ['Organization policy'];
@@ -10516,7 +10528,11 @@ larger than an env-inventory fix wave.
 
 Phase 3b absorbed 17 `CLODE_*` names into the CLI surface, so
 `libexec/cli-surface.cjs` now declares 18 (the 17 plus `CLODE_CACHE`) and all 18
-render in `--help`. `man/clode.1`'s ENVIRONMENT section documents 5 of them.
+render in `--help`. `man/clode.1`'s ENVIRONMENT section documents 5 of them. CORRECTED (observability
+Task 2, 2026-11-18): it documents 11 of the 18, so it trails `--help` by 7 (CLODE_TEMPLATES_MANIFEST,
+CLODE_TEMPLATES_BASEURL, CLODE_TEMPLATES_BLOB, CLODE_RELEASE_BASE, CLODE_TJS_PIN, CLODE_ENGINE_RECIPE,
+CLODE_ALLOW_FOREIGN_CARVE), not 13; it also documents 5 names the surface does not declare (CLODE_PROVIDERS,
+CLODE_RELEASES_URL, CLODE_WATCH_INTERVAL, CLODE_WATCH_DIR, CLODE_LIBEXEC). man/clode.1 is unchanged since bdd89f2.
 
 This is incompleteness, not a lie — every name the man page *does* document is
 accurate, and `--help` is the authority inside a shipped binary. But the man
