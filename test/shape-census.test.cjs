@@ -53,3 +53,10 @@ test('mulberry32 is the function test/lead-scrub-oracle.cjs held inline (its cor
   const f = mulberry32(20260927);
   for (let i = 0; i < 1000; i++) assert.strictEqual(f(), inline());
 });
+
+test('the lead-scrub corpus census fails a corpus without its shapes (its control; the real corpus needs the carve)', () => {
+  const { corpusCensus } = require('./lead-scrub-oracle.cjs');
+  const [shapes, bias] = corpusCensus({ plain: ['[a b]', '[a b]'] }, [0x2d0]);
+  assert.ok(shapes.findings.length >= 5, shapes.findings.join('\n'));
+  assert.deepStrictEqual(bias.findings, []);
+});

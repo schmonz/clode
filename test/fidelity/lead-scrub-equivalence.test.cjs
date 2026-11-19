@@ -36,8 +36,8 @@ const { transformGraph } = require('../../libexec/extract-claude-js.cjs');
 const CORPUS_FLOOR = 7000;
 
 // PURE. truth/subject are evaluateLead() results; controls, results that must NOT equal truth.
-function judge({ truth, subject, controls, parts, note }) {
-  const findings = [];
+function judge({ truth, subject, controls, parts, note, shapes = [] }) {
+  const findings = shapes.flatMap((r) => r.findings);
   if (truth.error) findings.push(`native could not build the original pattern: ${truth.error}`);
   if (subject.error) findings.push(`quaude could not build the rewritten pattern: ${subject.error}`);
   const n = truth.res ? truth.res.length : 0;
@@ -91,7 +91,9 @@ const guard = defineGuard({
     if (!list) throw new Error(`${version}: cannot find the phrase list \`get lead\` hands the builder in ${builder.module}`);
     const original = LS.moduleAsFunctionBody(builder.text, builder.names);
     const rewritten = LS.moduleAsFunctionBody(hooked[builder.module], builder.names);
-    const { parts } = LS.buildCorpus(new Function(original)().__free, list, builder.symbols);
+    const { parts, joinerTerminators } = LS.buildCorpus(new Function(original)().__free, list, builder.symbols);
+    // the corpus holds the shapes it claims, from an unbiased RNG (observability Task 4: test/shape-census.cjs)
+    const shapes = LS.corpusCensus(parts, joinerTerminators);
     const corpus = Object.values(parts).flat();
     const truth = LS.runNativeLead(bin, original, list, corpus);
     const subject = LS.runQuaudeLead(rewritten, list, corpus);
@@ -102,8 +104,8 @@ const guard = defineGuard({
     const note = `${version}, ${builder.module}: ${list.length} phrases, ${words.length} words; native's pattern `
       + `${truth.captures} capture groups, quaude's ${subject.captures} (${subject.sourceLength} characters); `
       + `corpus ${Object.entries(parts).map(([k, v]) => `${k} ${v.length}`).join(', ')}; the backtracking `
-      + `joiner control differs from native on ${differ}`;
-    return { truth, subject, controls: { 'a backtracking joiner separator': control }, parts, note };
+      + `joiner control differs from native on ${differ}; ${shapes.map((r) => r.summary).join('; ')}`;
+    return { truth, subject, controls: { 'a backtracking joiner separator': control }, parts, note, shapes };
   },
   scan: judge,
   control() {

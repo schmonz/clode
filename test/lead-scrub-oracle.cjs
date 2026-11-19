@@ -19,6 +19,7 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { census, rngBias, firstSighting, mulberry32 } = require('./shape-census.cjs');
 
 // ---- the verbatim 2.1.283 text ----------------------------------------------------------------
 // Byte for byte from the 2.1.283 darwin-arm64 carve (/$bunfs/root/chunk-v297v4sm.js, before the
@@ -252,8 +253,8 @@ function runQuaudeLead(body, list, corpus) {
 // every code point at 2.1.283: U+02D0 and U+A4FD), where atomicity decides the answer; and a few
 // large inputs.
 function buildCorpus(free, list, symbols, sizes = { structured: 3000, targeted: 3000, random: 1000, large: [65536, 262144] }) {
-  let seed = 20260927;
-  const rnd = () => { seed = (seed + 0x6D2B79F5) >>> 0; let t = seed; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+  // mulberry32 (test/shape-census.cjs's, the same function this file held inline: the corpus is byte-for-byte unchanged)
+  const rnd = mulberry32(CORPUS_SEED);
   const pick = (a) => a[Math.floor(rnd() * a.length)];
   const int = (lo, hi) => lo + Math.floor(rnd() * (hi - lo + 1));
   const ch = String.fromCodePoint;
@@ -323,7 +324,29 @@ function buildCorpus(free, list, symbols, sizes = { structured: 3000, targeted: 
   return { parts, joinerTerminators: J_TERM.map((c) => c.codePointAt(0)) };
 }
 
+// THE CORPUS'S SHAPE CENSUS (observability Task 4): run by test/fidelity/lead-scrub-equivalence.test.cjs over the corpus
+// it really builds from the carve's classes, so its findings join that guard's. The shapes are the ones the paragraph
+// above buildCorpus names. Floors from the 2.1.283 corpus measured 2026-11-19 (see each `why`).
+const CORPUS_SEED = 20260927;
+function corpusCensus(parts, joinerTerminators) {
+  const inputs = Object.values(parts).flat();
+  const jt = new Set(joinerTerminators);
+  const shapes = [
+    { shape: 'a distinct input', min: 6000, has: firstSighting((x) => x), why: 'every one of the 7,055 measured is distinct; a cycling RNG repeats' },
+    { shape: 'a joiner a span may end on (U+02D0, U+A4FD)', min: 800, has: (x) => [...x].some((c) => jt.has(c.codePointAt(0))),
+      why: 'the only place the joiner separator\'s atomicity is observable; a third of the 2,594 measured' },
+    { shape: 'a non-ASCII letter (a confusable)', min: 2000, has: (x) => /\p{L}/u.test(x.replace(/[\x00-\x7f]/g, '')), why: 'a third of the 6,058 measured' },
+    { shape: 'an invisible format character', min: 2200, has: (x) => /\p{Cf}/u.test(x), why: 'a third of the 6,841 measured' },
+    { shape: 'a line break inside an input', min: 200, has: (x) => /[\r\n]/.test(x), why: 'a third of the 660 measured (the pattern\'s classes hold \\r and \\n)' },
+    { shape: 'an input of 64 KiB or more', min: 2, has: (x) => x.length >= 65536, why: 'the two large inputs buildCorpus always makes (65,536 and 262,144)' },
+  ];
+  return [census('lead-scrub corpus', shapes, inputs), rngBias('lead-scrub corpus RNG', () => { const r = mulberry32(CORPUS_SEED); return (m) => Math.floor(r() * m); },
+    // floor(rnd() * a.length) over the pools, and rnd() < p for p in 0.05 .. 0.9
+    [2, 10, 20, 100, 1000])];
+}
+
 module.exports = {
+  corpusCensus,
   ATOMIC_RUN_283, ATOMIC_MU_283, BUILDER_283, MODULE_283, NAIVE_RUN_283, NAIVE_MU_283, STUBS,
   loadBuilder, sampleSpec, sampleCorpus, captures, matchesOver,
   preHookSources, findBuilder, leadList, moduleAsFunctionBody, runNativeLead, runQuaudeLead, buildCorpus, asciiJson,
