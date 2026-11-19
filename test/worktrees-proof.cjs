@@ -6,14 +6,25 @@
 // would hide anything the suite ITSELF creates there (EnterWorktree makes
 // .claude/worktrees/<name>, and every-tool Phase A drives the worktree tools).
 //
-// PURE given its inputs: { names, lstat, realpath, porcelain, root } -> { proven, names, findings, notes }.
+// PURE given its inputs: { dir, names, lstat, realpath, porcelain, root, pathApi } -> { proven, names, findings, notes }.
 //  - names:     the entry names under the directory (readdir).
-//  - lstat:     name -> { isSymbolicLink(), isDirectory() } (throws when gone).
+//  - lstat:     absolute path -> { isSymbolicLink(), isDirectory() } (throws when gone).
 //  - realpath:  absolute path -> real path (throws when gone).
 //  - porcelain: `git worktree list --porcelain` output.
 //  - root:      the checkout itself (realpath'd), which is the MAIN worktree and is never a
 //               proof for an entry: a symlink back to ROOT, or a copy that resolves there,
 //               would otherwise pass as "a registered worktree".
+//  - pathApi:   the path flavour `dir` is spelled in (default node:path). The unit rows pass
+//               path.posix or path.win32, so both shapes of path run on every host.
+//
+// TWO SPELLINGS OF ONE DIRECTORY compare equal only through realpath, which is why an entry and
+// a porcelain `worktree` line are compared after it and never as text. On Windows git prints
+// forward slashes and long names (`C:/Users/runneradmin/AppData/Local/Temp/...`) where the
+// directory was reached through an 8.3 short name (`C:\Users\RUNNER~1\...`: os.tmpdir() on a
+// GitHub runner). The realpath that canonicalizes separators, 8.3 names and drive-letter case is
+// fs.realpathSync.native (GetFinalPathNameByHandle on Windows, realpath(3) elsewhere). The JS
+// fs.realpathSync resolves links but keeps RUNNER~1, and windows-latest (CI 44460009323) called
+// a real `git worktree add` "not a worktree git registers for this repository".
 const path = require('node:path');
 
 function registeredWorktrees(porcelain, realpath, root) {
@@ -31,7 +42,7 @@ function registeredWorktrees(porcelain, realpath, root) {
     } else if (real !== root) listed.add(real);
     cur = null;
   };
-  for (const line of porcelain.split('\n')) {
+  for (const line of porcelain.split(/\r?\n/)) {
     if (line.startsWith('worktree ')) { flush(); cur = { path: line.slice('worktree '.length), prunable: false }; }
     else if (cur && line.startsWith('prunable')) cur.prunable = true;
   }
@@ -39,12 +50,12 @@ function registeredWorktrees(porcelain, realpath, root) {
   return { listed, notes };
 }
 
-function proveWorktrees({ dir, names, lstat, realpath, porcelain, root }) {
+function proveWorktrees({ dir, names, lstat, realpath, porcelain, root, pathApi = path }) {
   const { listed, notes } = registeredWorktrees(porcelain, realpath, root);
   const findings = [];
   for (const n of names) {
     if (n.startsWith('._')) continue; // the AppleDouble sidecar an NFS share plants beside each entry
-    const abs = path.join(dir, n);
+    const abs = pathApi.join(dir, n);
     let st;
     try { st = lstat(abs); } catch { findings.push(`${n}: gone between readdir and lstat`); continue; }
     if (st.isSymbolicLink()) { findings.push(`${n}: a symlink, not a worktree directory`); continue; }
@@ -63,12 +74,13 @@ function proveWorktrees({ dir, names, lstat, realpath, porcelain, root }) {
 function proveWorktreesOnDisk(root) {
   const fs = require('node:fs');
   const dir = path.join(root, '.claude', 'worktrees');
-  const realRoot = fs.realpathSync(root);
+  const realpath = (p) => fs.realpathSync.native(p);
+  const realRoot = realpath(root);
   let names;
   try { names = fs.readdirSync(dir); } catch { return { proven: false, names: [], findings: [`${dir}: absent`], notes: [] }; }
   const porcelain = require('node:child_process')
     .execFileSync('git', ['worktree', 'list', '--porcelain'], { cwd: root, encoding: 'utf8' });
-  return proveWorktrees({ dir, names, lstat: (p) => fs.lstatSync(p), realpath: (p) => fs.realpathSync(p), porcelain, root: realRoot });
+  return proveWorktrees({ dir, names, lstat: (p) => fs.lstatSync(p), realpath, porcelain, root: realRoot });
 }
 
 // Before vs after: the exclusion stands only if the proof still holds AND the set of entries
