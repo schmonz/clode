@@ -64,27 +64,47 @@ function resolve() {
   const env = { ...process.env, CLODE_CACHE: cache };
   delete env.CLODE_TJS;       // the point is the PUBLISHED engine, not this box's
   delete env.CLODE_TJS_OUT;
+  // AND not the one local_engine() finds through a node on PATH (platform-tag's tjsBin, the shared
+  // $TMPDIR/tjs/<tag>/tjs): on a dev box that is a CURRENT engine, and every row below silently
+  // tested it instead of the release (found by the stand-in shape row, 2026-11-18). A CLODE_NODE
+  // that is not executable is the resolver's own way to say "no node here".
+  env.CLODE_NODE = path.join(cache, 'no-node');
   const r = spawnSync('/bin/sh', [SH], { env, encoding: 'utf8' });
   assert.strictEqual(r.status, 0,
     `bootstrap-engine.sh refused (${r.status}):\n${r.stderr}\n`
-    + 'If this is the floor probe, the pinned release can no longer host HEAD\'s shim — '
-    + 'that is the finding, not a flake. Cut a release, or re-pin the bootstrap tag.');
+    + 'If this is the floor probe, the pinned release can no longer host HEAD\'s BUILD — '
+    + 'that is the finding, not a flake. A release alone cannot fix it (release.yml builds '
+    + 'through this same resolver): make the build not need the missing binding yet '
+    + '(`buildHost: false`, measured, in scripts/engine-api-floor.cjs), or set CLODE_TJS to an '
+    + 'engine built from this tree to cut that release by hand, then re-pin the bootstrap tag.');
   const tjs = r.stdout.trim();
   assert.ok(fs.existsSync(tjs), `resolver printed a path that does not exist: ${tjs}`);
+  assert.ok(fs.realpathSync(tjs).startsWith(fs.realpathSync(cache) + path.sep),
+    `the resolver handed back ${tjs}, not the slice it fetched into ${cache}: this row would test the wrong engine`);
   return tjs;
+}
+
+// The stale stand-in's pinned shape (test/fixtures/stale-engine-prelude.js), as data.
+function staleShape() {
+  const src = fs.readFileSync(path.join(REPO, 'test', 'fixtures', 'stale-engine-prelude.js'), 'utf8');
+  const m = /^\s*const SHAPE = (\{.*\});$/m.exec(src);
+  assert.ok(m, 'the prelude no longer carries SHAPE as one line of JSON');
+  return JSON.parse(m[1]);
 }
 
 const runTjs = (tjs, args) => spawnSync(tjs, ['run', ...args], { cwd: REPO, encoding: 'utf8' });
 
-test('the last release still bootstraps HEAD: the pinned slice fetches and passes the floor', (t) => {
+test('the last release still bootstraps HEAD: the pinned slice fetches and passes the build-host floor', (t) => {
   const skip = why();
   if (skip) return t.skip(skip);
   const tjs = resolve();
   // The resolver already ran the floor probe (it would have refused otherwise). Assert it
   // again HERE, visibly, so a reader of this file sees the acceptance rather than trusting
-  // an exit code — and so the token comes from engine-api-floor.cjs both times.
+  // an exit code — and so the token comes from engine-api-floor.cjs both times. The
+  // BUILD-HOST floor, as the resolver checks it: this engine hosts the build and never ships
+  // (scripts/engine-api-floor.cjs's roles; CI run 44443821699 is why).
   const gen = runTjs(tjs, [path.join(REPO, 'libexec', 'node-shim', 'loader.cjs'),
-    path.join(REPO, 'scripts', 'engine-api-floor.cjs'), '--emit-check']);
+    path.join(REPO, 'scripts', 'engine-api-floor.cjs'), '--emit-check', '--role', 'build-host']);
   assert.strictEqual(gen.status, 0, `could not generate the floor check under the fetched engine:\n${gen.stderr}`);
   const check = path.join(mkdtemp(), 'floor.js');
   fs.writeFileSync(check, gen.stdout);
@@ -92,6 +112,56 @@ test('the last release still bootstraps HEAD: the pinned slice fetches and passe
   assert.strictEqual(ran.stdout.trim(), OK_TOKEN,
     `the pinned release's engine does not carry HEAD's engine API floor:\n${ran.stdout}${ran.stderr}`);
   assert.strictEqual(ran.status, 0);
+});
+
+// What the build-host floor's exemptions RELY ON, on the real published bytes: the one Stats
+// read the whole engine build makes (node-shim's copyFileSync carrying the executable bit --
+// the read that killed every leg of CI run 44443821699) works, and identity is refused rather
+// than invented whenever this engine cannot report it.
+test('under the fetched engine, copyFileSync keeps the mode and identity is never invented', (t) => {
+  const skip = why();
+  if (skip) return t.skip(skip);
+  const tjs = resolve();
+  const d = mkdtemp();
+  const exe = path.join(d, 'tool.sh');
+  fs.writeFileSync(exe, '#!/bin/sh\n');
+  fs.chmodSync(exe, 0o755);
+  const prog = path.join(d, 'prog.cjs');
+  fs.writeFileSync(prog, `const fs = require('fs');
+fs.copyFileSync(${JSON.stringify(exe)}, ${JSON.stringify(path.join(d, 'copy.sh'))});
+const s = fs.statSync(${JSON.stringify(exe)});
+let ino; try { ino = String(s.ino); } catch (e) { ino = e.code; }
+console.log(JSON.stringify({ mode: s.mode & 0o777, isFile: s.isFile(), ino }));
+`);
+  const r = runTjs(tjs, [path.join(REPO, 'libexec', 'node-shim', 'loader.cjs'), prog]);
+  assert.strictEqual(r.status, 0, `${r.stdout}${r.stderr}`);
+  const got = JSON.parse(r.stdout.trim().split('\n').pop());
+  assert.strictEqual(fs.statSync(path.join(d, 'copy.sh')).mode & 0o777, 0o755);
+  assert.strictEqual(got.mode, 0o755);
+  assert.strictEqual(got.isFile, true);
+  // Which answer is right is DATA, not either-or: the pinned shape (asserted equal to this very
+  // slice by the row below) says whether its stat carries ino. Without it, the only right answer
+  // is the refusal; with it, the real inode. Never 0, and never whichever happened to come back.
+  const want = staleShape().stat.includes('ino') ? String(fs.statSync(exe).ino) : 'ERR_CLODE_ENGINE_FLOOR';
+  assert.strictEqual(got.ino, want, `ino under the published engine`);
+});
+
+// The stale STAND-IN the offline build-host gates run on (test/fixtures/stale-engine-prelude.js) is
+// only as good as its likeness to these bytes. Its binding list and stat shape are pinned DATA,
+// so this asserts, on every push, that the real published slice answers exactly that data. When
+// the bootstrap tag is re-pinned to a newer release this goes red, and SHAPE is re-measured.
+test('the stale stand-in\'s pinned shape IS the published slice\'s: bindings and stat keys', (t) => {
+  const skip = why();
+  if (skip) return t.skip(skip);
+  const tjs = resolve();
+  const SHAPE = staleShape();
+  const prog = path.join(mkdtemp(), 'shape.js');
+  fs.writeFileSync(prog, 'console.log(JSON.stringify({ bindings: Object.getOwnPropertyNames(globalThis.__tjs_fs_sync), '
+    + 'stat: Object.keys(globalThis.__tjs_fs_sync.stat(".")) }));\n');
+  const r = runTjs(tjs, [prog]);
+  assert.strictEqual(r.status, 0, `${r.stdout}${r.stderr}`);
+  assert.deepStrictEqual(JSON.parse(r.stdout.trim()), SHAPE,
+    'the published bootstrap engine is not the engine the offline gates simulate: re-measure SHAPE');
 });
 
 test("HEAD's build-tjs.cjs loads, top to bottom, under the fetched engine", (t) => {

@@ -267,17 +267,47 @@ const typeIs = (mode, t) => ((Number(mode) >>> 0) & S_IFMT) === S_IF[t];
 // files had one identity, and every character device was /dev/null (BACKLOG).
 const STAT_INTS = ['dev', 'mode', 'nlink', 'uid', 'gid', 'rdev', 'blksize', 'ino', 'size', 'blocks'];
 const STAT_TIMES = ['atime', 'mtime', 'ctime', 'birthtime'];
+// AN ENGINE WITHOUT IDENTITY (one that predates txiki-sync-stat-identity.patch: the last release's,
+// which the CI bootstrap runs the builder on) reports exactly two of these fields truthfully, mode
+// and size. Its other answers are absent (dev, ino, nlink, rdev, blksize, blocks, every time but a
+// whole-second mtime) or unverified (uid/gid, signed before that patch). So a Stats from it carries
+// those two, and READING ANY OTHER FIELD refuses with ERR_CLODE_ENGINE_FLOOR -- never an invented
+// value. The refusal sits on the read, not on the stat call, because the stat call is not where a
+// wrong answer happens: node-shim's own copyFileSync reads `.mode`, and refusing at the call made
+// every engine build on the last release's engine die there (CI run 44443821699), though the whole
+// build -- measured on that engine -- reads `mode` and nothing else.
+// test/node-shim-fs-engine-floor.test.cjs drives every field. The engine quaude SHIPS never takes
+// this path: scripts/engine-api-floor.cjs refuses it at build time (role 'runtime').
+const STALE_KEPT = new Set(['mode', 'size']);
+const hasIdentity = (raw) => typeof raw.ino === 'bigint';
 // A refusal only helps if it is seen, and the bundle (like any program) has catch-all callers that
 // would turn it into "file not found" or worse: the first one also goes to stderr, once.
 let _floorSaid = false;
-function requireIdentity(raw) {
-  if (typeof raw.ino !== 'bigint') {
-    const e = new Error('node-shim: this engine\'s sync stat carries no dev or ino (it predates '
-      + 'txiki-sync-stat-identity.patch); rebuild it: node scripts/build-tjs.cjs');
-    e.code = 'ERR_CLODE_ENGINE_FLOOR';
-    if (!_floorSaid) { _floorSaid = true; try { console.error(e.message); } catch { /* best effort */ } }
-    throw e;
+function floorError(field) {
+  const e = new Error(`node-shim: this engine's sync stat carries no ${field} (it predates `
+    + 'txiki-sync-stat-identity.patch, and reports only mode and size exactly); rebuild it: ./build.sh --only engine.compile');
+  e.code = 'ERR_CLODE_ENGINE_FLOOR';
+  if (!_floorSaid) { _floorSaid = true; try { console.error(e.message); } catch { /* best effort */ } }
+  // EVERY refusal, with its stack, for a gate that must hear the ones a caller swallowed
+  // (CLODE_ENGINE_FLOOR_LOG; build-leg fails an engine phase on a non-empty log).
+  require('../internal/engine-floor-log.cjs').engineFloorLog(e.message);
+  return e;
+}
+// Writable, as node's fields are: assigning one replaces the refusal with the value assigned.
+function refuseField(obj, f) {
+  Object.defineProperty(obj, f, {
+    enumerable: true,
+    configurable: true,
+    get() { throw floorError(f); },
+    set(v) { Object.defineProperty(this, f, { value: v, writable: true, enumerable: true, configurable: true }); },
+  });
+}
+function staleStats(obj, raw, conv, timeSuffixes) {
+  for (const f of STAT_INTS) {
+    if (STALE_KEPT.has(f)) obj[f] = conv(raw[f]);
+    else refuseField(obj, f);
   }
+  for (const sfx of timeSuffixes) for (const t of STAT_TIMES) refuseField(obj, t + sfx);
 }
 function rawInt(raw, f) { return f === 'size' ? raw.size64 : raw[f]; }
 class StatsBase {
@@ -292,7 +322,7 @@ class StatsBase {
 class Stats extends StatsBase {
   constructor(raw) {
     super();
-    requireIdentity(raw);
+    if (!hasIdentity(raw)) { staleStats(this, raw, Number, ['Ms']); return; }
     for (const f of STAT_INTS) this[f] = Number(rawInt(raw, f));
     for (const t of STAT_TIMES) this[t + 'Ms'] = Number(raw[t + 'Sec']) * 1000 + Number(raw[t + 'Nsec']) / 1000000;
   }
@@ -300,7 +330,7 @@ class Stats extends StatsBase {
 class BigIntStats extends StatsBase {
   constructor(raw) {
     super();
-    requireIdentity(raw);
+    if (!hasIdentity(raw)) { staleStats(this, raw, (v) => BigInt(v), ['Ms', 'Ns']); return; }
     for (const f of STAT_INTS) this[f] = BigInt.asIntN(64, BigInt(rawInt(raw, f)));
     const ns = {};
     for (const t of STAT_TIMES) ns[t] = BigInt.asIntN(64, raw[t + 'Sec']) * 1000000000n + BigInt.asIntN(64, raw[t + 'Nsec']);
@@ -1047,7 +1077,9 @@ function _zeroStats() { return new Stats(_ZERO_RAW); }
 // is not a stat errno, and folding it in made every watched file read as
 // deleted on a stale engine, with nothing saying why.
 function _statOrZero(p) {
-  try { return statSync(p); } catch (e) { if (e && e.code === 'ERR_CLODE_ENGINE_FLOOR') throw e; return _zeroStats(); }
+  // The poller compares mtimeMs, which an engine without identity cannot report: read it HERE, so
+  // that refusal is raised at the stat and not mistaken further on for "the file is gone".
+  try { const s = statSync(p); void s.mtimeMs; return s; } catch (e) { if (e && e.code === 'ERR_CLODE_ENGINE_FLOOR') throw e; return _zeroStats(); }
 }
 function _statsChanged(curr, prev) { return curr.mtimeMs !== prev.mtimeMs || curr.size !== prev.size; }
 

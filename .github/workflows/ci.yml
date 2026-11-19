@@ -751,6 +751,23 @@ jobs:
           # finale) — neither newly-added file may add to it.
           grep -qE '^(ℹ|#) skipped 2$' shim-oracle.out \
             || { echo "ERROR: expected exactly 2 skips (pre-existing darwin-only + live-roundtrip-opt-in rows). A different count means shim-surface, guard-subcommands-gate, or engine-regexp-reuse skipped again (task-8 regressed), or an unrelated new skip appeared — see above." >&2; grep -E 'skipped' shim-oracle.out >&2; exit 1; }
+      # DOES THE LAST RELEASE STILL HOST HEAD'S BUILD? Every engine leg's first step runs on the
+      # pinned bootstrap engine (scripts/bootstrap-engine.sh), and CI run 44443821699 found out it
+      # could not -- on every leg at once, after six weeks of nobody running the opt-in test that
+      # asks. It is cheap (one ~4MB range request, a few seconds) and this job already has the
+      # network, a node and the runtime dep closure, so it asks on every push. The slice it fetches
+      # is linux-amd64 (musl, static), this runner's. ZERO skips: a skipped answer is no answer.
+      - name: The pinned release's engine still hosts HEAD's build (bootstrap, online)
+        if: ${{ !cancelled() }}
+        run: |
+          set -o pipefail
+          # curl, not busybox wget: the resolver asks for a byte RANGE, and busybox wget refuses
+          # a 206 it did not ask for with its own -c (it dies "server returned error").
+          apk add --no-cache curl
+          CLODE_BOOTSTRAP_ONLINE=1 node --test --test-concurrency=1 --test-reporter=spec \
+            test/bootstrap-engine-online.test.cjs 2>&1 | tee bootstrap-online.out
+          grep -qE '^(ℹ|#) skipped 0$' bootstrap-online.out \
+            || { echo "ERROR: test/bootstrap-engine-online.test.cjs skipped a row, so it answered nothing" >&2; exit 1; }
       # THE CELLS this job drives (test/build-gates/tool-coverage-gates.test.cjs, CELL_JOBS): every test that runs a
       # claimed driver's control PASSED above, on this engine, as test/cell-reporter.mjs recorded it. A skip, a failure or
       # a test that never ran means the tool x mode cell ran nowhere, and this step names it (observability plan Task 1).
