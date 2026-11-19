@@ -180,6 +180,11 @@ const FILES = {
   // The Windows jobs: the node-shim oracles on the real Windows kernels, and the ConPTY TUI.
   'test/node-shim-fs-stat-identity.test.cjs': { jobs: ['windows-amd64-tests', 'windows-arm64-tests'] },
   'test/node-shim-os-devnull.test.cjs': { jobs: ['windows-amd64-tests', 'windows-arm64-tests'] },
+  // os.getPriority/setPriority through real PowerShell on the real Windows kernel; the POSIX nice(1) row skips there.
+  'test/node-shim-os-priority.test.cjs': { jobs: ['windows-amd64-tests'], skips: {
+    'os.getPriority/setPriority under quaude answer as host node does, both under nice -n 5':
+      'nice(1) is POSIX; the real-PowerShell row in the same file judges Windows',
+  } },
   'test/node-shim-tty.test.cjs': { jobs: ['windows-amd64-tui'], skips: {
     'process.stdout emits resize with updated columns on SIGWINCH': 'SIGWINCH/resize N/A on Windows ConPTY (node emits none either)',
   } },
