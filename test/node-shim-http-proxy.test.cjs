@@ -48,7 +48,7 @@ function startFixture(script, env = {}) {
       clearTimeout(timer);
       resolve({ proc, port: Number(m[1]) });
     });
-    proc.on('exit', (code) => { clearTimeout(timer); reject(new Error(`${script} exited early (${code}); stderr:\n${stderr}`)); });
+    proc.on('close', (code) => { clearTimeout(timer); reject(new Error(`${script} exited early (${code}); stderr:\n${stderr}`)); });
   });
 }
 

@@ -131,5 +131,57 @@ test('offline: a cold cache refuses without fetching, and the generator maps it 
     await assert.rejects(main(['--native', path.join(dir, 'no-such-claude'), '--check'], { CLODE_OFFLINE: '1', CLODE_CACHE: dir }),
       (e) => exitCodeFor(e) === 3);
     assert.strictEqual(exitCodeFor(new Error('sha256 mismatch')), 2);
+    // --ucd-readonly: an empty read-only dir changes nothing offline (still the named miss, exit 3); a missing value
+    // is a usage refusal.
+    await assert.rejects(main(['--native', path.join(dir, 'no-such-claude'), '--check', '--ucd-readonly', path.join(dir, 'ro')],
+      { CLODE_OFFLINE: '1', CLODE_CACHE: dir }), (e) => exitCodeFor(e) === 3);
+    await assert.rejects(main(['--native', 'x', '--ucd-readonly'], { CLODE_OFFLINE: '1', CLODE_CACHE: dir }), /--ucd-readonly needs a directory/);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+// readOnlyDir. linux-x64-pty (CI 44460009323): all six text-diff gates SKIPPED offline under the suite's throwaway
+// HOME, though CI's warm-up step had cached every pinned input in the runner's real cache. That cache now reaches the
+// tests as a READ-ONLY input (test/ucd-input.cjs): read, never written, and trusted only for bytes matching the pin.
+test('readOnlyDir: a pinned copy there is used offline; a wrong one is passed over; nothing is written anywhere', async () => {
+  const fs = require('node:fs'); const os = require('node:os'); const path = require('node:path');
+  const crypto = require('node:crypto');
+  const { fetchVerified, UcdOfflineMiss } = require('../scripts/lib/ucd.cjs');
+  const seed = fs.mkdtempSync(path.join(os.tmpdir(), 'ucd-seed-'));
+  const own = fs.mkdtempSync(path.join(os.tmpdir(), 'ucd-own-'));
+  const text = '# planted emoji-test\n';
+  const pinsTable = { '9.9.9': { 'emoji-test': { url: 'https://example.invalid/emoji-test.txt',
+    sha256: crypto.createHash('sha256').update(text).digest('hex') } } };
+  const listAll = (d) => fs.readdirSync(d, { recursive: true }).sort();
+  try {
+    fs.mkdirSync(path.join(seed, '9.9.9'));
+    const opts = { cacheDir: own, offline: true, readOnlyDir: seed, pinsTable };
+    // CONTROL: the input missing -> the named offline miss (the caller's skip), and nothing fetched or written.
+    await assert.rejects(fetchVerified('9.9.9', 'emoji-test', opts), (e) => e instanceof UcdOfflineMiss);
+    // Bytes that do not match the pin are never used.
+    fs.writeFileSync(path.join(seed, '9.9.9', 'emoji-test.txt'), 'tampered\n');
+    await assert.rejects(fetchVerified('9.9.9', 'emoji-test', opts), (e) => e instanceof UcdOfflineMiss);
+    // The pinned bytes are used, offline.
+    fs.writeFileSync(path.join(seed, '9.9.9', 'emoji-test.txt'), text);
+    assert.strictEqual(await fetchVerified('9.9.9', 'emoji-test', opts), text);
+    assert.deepStrictEqual(listAll(own), [], 'the suite\'s own cache was never written');
+    assert.deepStrictEqual(listAll(seed), ['9.9.9', path.join('9.9.9', 'emoji-test.txt')]);
+    assert.strictEqual(fs.readFileSync(path.join(seed, '9.9.9', 'emoji-test.txt'), 'utf8'), text, 'the read-only copy is unchanged');
+  } finally {
+    fs.rmSync(seed, { recursive: true, force: true }); fs.rmSync(own, { recursive: true, force: true });
+  }
+});
+
+test('the suite hands the real UCD cache over by name, and the text gates read it through test/ucd-input.cjs', () => {
+  const fs = require('node:fs'); const path = require('node:path');
+  const { ucdInputOptions } = require('./ucd-input.cjs');
+  const o = ucdInputOptions({ CLODE_TEST_UCD_CACHE: '/named/unicode', CLODE_OFFLINE: '1', CLODE_CACHE: '/suite/cache' });
+  assert.deepStrictEqual(o, { cacheDir: path.join('/suite/cache', 'unicode'), offline: true, readOnlyDir: '/named/unicode' });
+  assert.ok(process.env.CLODE_TEST_UCD_CACHE, 'suite-home.cjs sets CLODE_TEST_UCD_CACHE');
+  // The freshness gate's generator is a product script: it gets the input as an argument, never a test env name.
+  assert.match(fs.readFileSync(path.join(__dirname, 'unicode-data-fresh.test.cjs'), 'utf8'), /'--ucd-readonly', ro/);
+  for (const f of ['fidelity/text-differential.test.cjs', 'unicode-text.test.cjs']) {
+    const src = fs.readFileSync(path.join(__dirname, f), 'utf8');
+    assert.match(src, /ucdInput\(/, `${f} reads its UCD input through test/ucd-input.cjs`);
+    assert.doesNotMatch(src, /fetchVerified\(/, `${f} must not read the suite home's cache directly`);
+  }
 });

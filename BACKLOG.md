@@ -5037,6 +5037,37 @@ canned mock): exit 1, "no stdin data received in 3s", 0 requests; native: 1 requ
 b4eb2f5 (darwin-arm64, 2.1.283): 1 request, answered; `quaude -p hello` with a piped stdin: the 3 s warning, then 1
 request; with a /dev/null stdin: no warning (2026-11-18).
 
+## FIXED 2026-11-19 — quaude on Windows never reused its private guard directory, nor removed the fresh ones
+
+WAS: libexec/quaude-bootstrap.mjs `privateGuardDir` reused `<tmp>/clode-guard-<uid>` only when lstat showed it ours and
+closed to others. On Windows libuv reports uid -1, `st_uid = 0` and a synthesized 0o666 mode, so the check could never
+pass: every session given a user `--settings` (always 'merge' delivery there) made a fresh %TEMP%\clode-guard-XXXXXX
+that nothing removed, and the seven-day prune only looked inside the directory in use, so the merged copy of the user's
+settings was never removed (the guard entry's (c)). naude made a fresh mkdtemp directory per run and removed it.
+
+FIXED (controller ruling, option (a), one implementation everywhere): quaude and naude both use `<clode cache>/guard`
+(libexec/update-guard.cjs guardDirPath, resolved as libexec/clode-paths.cjs clodeCacheDir resolves the cache, so it is
+under the user's home on every platform). It is made 0700 and reused. The merged settings are content-addressed and
+pruned after a week on every use (guardSettingsToPrune). guardDirRefusal judges lstat facts. Everywhere, a symlink or
+junction is refused. Where the platform reports an owner (POSIX), the directory must be ours and 0700, and its parent
+ours or root's and not writable by every user. A refusal makes quaude and naude refuse to start (fail closed), never
+fall back. naude no longer removes the directory at exit, because another session may be using it. A BEHAVIOUR CHANGE
+for naude: the merged copy of the user's settings it used to delete when the run ended now stays in that directory
+for up to seven days (pruned on the next use after that), as quaude's always has.
+
+Measured: test/update-guard-dir.test.cjs (quaude's block extracted from the bootstrap, on a fake tjs over the real
+filesystem: two sessions give one directory; the week-old settings are pruned; a hostile parent and a symlinked guard
+are refused, with no fallback; Windows-shaped facts are accepted) and test/naude-entry.test.cjs (the same three rows for
+naude), both also under the forced-win32 pass (2026-11-19).
+
+Unmeasured. On real Windows: that the profile ACL keeps `%USERPROFILE%\.cache\clode\guard` private (an icacls row on
+windows-latest would measure it), and a real quaude session there reusing one directory. And an OPEN QUESTION, not
+yet decided: on Windows clodeCacheDir is `%USERPROFILE%\.cache\clode` (os.homedir), and in a roaming profile
+%USERPROFILE% roams (copied to the server at logoff) while `%LOCALAPPDATA%` (AppData\Local) does not. So the guard
+directory, with the merged settings copy, and the rest of the clode cache may travel with the profile. Whether
+clodeCacheDir should use %LOCALAPPDATA% on Windows is a question for clodeCacheDir itself, not for the guard alone:
+one cache resolution everywhere.
+
 ## Untracked-until-now findings from 2026-08-23/24 (three of them)
 
 These lived only in commit messages. Git preserves that; nobody browses it when

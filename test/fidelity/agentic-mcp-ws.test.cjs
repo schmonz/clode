@@ -5,6 +5,7 @@
 // delegation), does the MCP handshake, the model calls the ws MCP tool, and the
 // tool's result marshals back into the Anthropic tool_result.
 const test = require('node:test');
+const { spawnCollect } = require('../spawn-collect.cjs');
 const { throwawayHome } = require('../throwaway-home.cjs');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -28,16 +29,8 @@ function stageBundle(bin) {
   return { dir, cli };
 }
 function bootP(cli, dir, args, env, timeoutMs) {
-  return new Promise((resolve) => {
-    const [cmd, argv] = engineSpawn(['run', LOADER, cli, ...args]);
-    const child = spawn(cmd, argv, { cwd: dir, stdio: ['ignore', 'pipe', 'pipe'], env });
-    let stdout = '', stderr = '';
-    child.stdout.on('data', (d) => { stdout += d; });
-    child.stderr.on('data', (d) => { stderr += d; });
-    const to = setTimeout(() => { child.kill('SIGKILL'); }, timeoutMs);
-    child.on('exit', (status) => { clearTimeout(to); resolve({ status, stdout, stderr }); });
-    child.on('error', (e) => { clearTimeout(to); resolve({ status: null, stdout, stderr: String(e) }); });
-  });
+  const [cmd, argv] = engineSpawn(['run', LOADER, cli, ...args]);
+  return spawnCollect(cmd, argv, { cwd: dir, env }, { timeoutMs });
 }
 const MCP_MARKER = 'MCP-WS-NEEDLE-8842';
 

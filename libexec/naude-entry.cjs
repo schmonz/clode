@@ -53,8 +53,43 @@ const { isExecutableFile } = require('./clode-hosttools.cjs');
 const {
   guardVerdict, shouldInjectGuard, findSettingsArgs, settingsIsInline, decodeSettingsBytes, planGuardSettings, withSettingsArg,
   findOptionArgs, guardPluginFiles, guardDeliveryMode, withGuardLayers, policyProbe,
-  SETTINGS_FILE_MAX_BYTES,
+  SETTINGS_FILE_MAX_BYTES, guardDirPath, guardDirRefusal, guardSettingsToPrune,
 } = require('./update-guard.cjs');
+
+// The guard's private directory, naude's I/O around update-guard.cjs guardDirPath and guardDirRefusal (the same rule
+// quaude-bootstrap.mjs privateGuardDir applies). `opts.homeDir` and `opts.uid` are injectable for tests; the uid is
+// the platform's (process.getuid, absent on Windows, where guardDirRefusal judges only the type).
+function privateGuardDirSync(env, opts = {}) {
+  const home = env.HOME || (opts.homeDir || os.homedir)();
+  const dir = guardDirPath(env, home, path.sep);
+  try { fs.mkdirSync(path.dirname(dir), { recursive: true }); } catch { /* judged below */ }
+  try { fs.mkdirSync(dir, { mode: 0o700 }); } catch { /* exists, or cannot: judged below */ }
+  const facts = (p) => {
+    try {
+      const st = fs.lstatSync(p);
+      return { type: st.isSymbolicLink() ? 'link' : st.isDirectory() ? 'dir' : 'other', uid: st.uid, mode: st.mode };
+    } catch { return null; }
+  };
+  const uid = 'uid' in opts ? opts.uid : (typeof process.getuid === 'function' ? process.getuid() : undefined);
+  const refusal = guardDirRefusal(dir, facts(dir), facts(path.dirname(dir)), uid);
+  return refusal ? { refusal } : { dir };
+}
+function pruneGuardSettingsSync(dir, nowMs) {
+  let names = [];
+  try { names = fs.readdirSync(dir); } catch { return; }
+  const entries = [];
+  for (const name of names) { try { entries.push({ name, mtimeMs: fs.lstatSync(path.join(dir, name)).mtimeMs }); } catch { /* gone */ } }
+  for (const name of guardSettingsToPrune(entries, nowMs)) { try { fs.rmSync(path.join(dir, name), { force: true }); } catch { /* gone */ } }
+}
+// Write `text` to `file` unless it already holds exactly that: to a temporary name, then renamed over it, so a session
+// starting meanwhile reads the old bytes or the new, never a torn file (quaude-bootstrap.mjs writeFileOnce).
+function writeFileOnceSync(file, text) {
+  try { if (fs.readFileSync(file, 'utf8') === text) return; } catch { /* absent */ }
+  const tmp = `${file}.${Math.random().toString(36).slice(2)}.tmp`;
+  fs.writeFileSync(tmp, text, { mode: 0o600 });
+  fs.renameSync(tmp, file);
+}
+const sha256Hex = (text) => require('node:crypto').createHash('sha256').update(text).digest('hex');
 const { checkUpdate } = require('./target-update-check.cjs');
 const { carveClodeArgs, CLODE_FLAGS, attestReport } = require('./clode-attest.cjs');
 // RG-ARGV0 (grep-native Task 10c): a naude invoked as rg IS rg, as native's binary is; the Bash tool's `rg` runs it
@@ -309,8 +344,9 @@ function runNaude(opts = {}) {
   // a test, or a context with no known own binary to call back into). How the hook reaches the bundle is the rule
   // libexec/update-guard.cjs states (guardGating, "THE USER'S --settings"): never inside a user --settings value where
   // it can be avoided. naude injects no sandbox setting (see quaude-bootstrap.mjs, SANDBOXED BASH FAILS CLOSED).
-  // Anything written goes in a private directory (mkdtemp, 0700) removed when the child exits.
-  let guardDir = null;
+  // Anything written goes in quaude's private directory too: update-guard.cjs guardDirPath, `<clode cache>/guard`, one per
+  // user, 0700, reused by every session (privateGuardDirSync, below), never removed at exit (another session may be
+  // using it); the merged settings are pruned after a week, as quaude prunes them.
   const childArgv = [...argvForChild];
   if (execPath && shouldInjectGuard(childArgv)) {
     const hookCommand = '"' + execPath + '" --clode-update-guard';
@@ -329,7 +365,15 @@ function runNaude(opts = {}) {
     if (mode === 'own') {
       childArgv.splice(0, childArgv.length, ...withSettingsArg(childArgv, findSettingsArgs(childArgv), JSON.stringify(guardSettings)));
     } else {
-      guardDir = fs.mkdtempSync(path.join(cacheDir || os.tmpdir(), 'clode-guard-'));
+      const got = privateGuardDirSync(env, opts);
+      if (got.refusal) {
+        // Fail closed: never a session without its guard, never a fallback to another directory.
+        stdio('stderr').write(`naude: refusing to start: the update guard's private directory is unsafe: ${got.refusal}\n`);
+        exit(1);
+        return null;
+      }
+      const guardDir = got.dir;
+      pruneGuardSettingsSync(guardDir, (opts.now || Date.now)());
       if (mode === 'merge') {
         // Belt and braces: the hook merged into the user's value too (a value the bundle cannot use reaches it
         // unchanged and it prints its own error).
@@ -339,18 +383,19 @@ function runNaude(opts = {}) {
         const plan = planGuardSettings(found, fileText, guardSettings);
         if (!plan.passthrough) {
           if (plan.warning) stdio('stderr').write(`naude: ${plan.warning}\n`);
-          const file = path.join(guardDir, 'settings.json');
-          fs.writeFileSync(file, JSON.stringify(plan.settings), { mode: 0o600 });
+          const text = JSON.stringify(plan.settings);
+          const file = path.join(guardDir, `settings-${sha256Hex(text).slice(0, 16)}.json`);
+          writeFileOnceSync(file, text);
           childArgv.splice(0, childArgv.length, ...withSettingsArg(childArgv, found, file));
         }
       }
       // The layers, in 'layers' and 'merge' alike: the guard's hook as a session plugin.
       const files = guardPluginFiles(hookCommand);
-      const pluginDir = path.join(guardDir, 'plugin');
+      const pluginDir = path.join(guardDir, `plugin-${sha256Hex(JSON.stringify(files)).slice(0, 16)}`);
       for (const rel of Object.keys(files)) {
         const f = path.join(pluginDir, ...rel.split('/'));
         fs.mkdirSync(path.dirname(f), { recursive: true, mode: 0o700 });
-        fs.writeFileSync(f, files[rel], { mode: 0o600 });
+        writeFileOnceSync(f, files[rel]);
       }
       childArgv.splice(0, childArgv.length, ...withGuardLayers(childArgv, pluginDir, false));
     }
@@ -377,7 +422,6 @@ function runNaude(opts = {}) {
   }
   const cleanup = () => {
     for (const s of Object.keys(handlers)) procOff(s, handlers[s]);
-    if (guardDir) { try { fs.rmSync(guardDir, { recursive: true, force: true }); } catch {} }
   };
 
   // The exit hook is injectable (onExit) so tests drive it synchronously; the real

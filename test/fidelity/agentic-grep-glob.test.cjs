@@ -26,6 +26,7 @@
 // WHY A SIBLING OF agentic-tools: that file drives the bundle under the dev loader; this one drives what a user runs
 // (the built binary, whose bootstrap answers `rg` before the bundle loads), and native too.
 const test = require('node:test');
+const { spawnCollect } = require('../spawn-collect.cjs');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -252,16 +253,8 @@ function pathWithoutRg(PATH, scratch) {
 const resolveBin = (name, PATH) => PATH.split(path.delimiter).map((d) => d && path.join(d, name)).find((p) => p && fs.existsSync(p)) || null;
 
 function runTurn(bin, cwd, env, timeoutMs) {
-  return new Promise((resolve) => {
-    const child = spawn(bin, ['-p', 'search the tree', '--allowedTools', 'Grep,Glob,Bash', '--add-dir', '../outside'],
-      { cwd, stdio: ['ignore', 'pipe', 'pipe'], env });
-    let stderr = '';
-    child.stdout.on('data', () => {});
-    child.stderr.on('data', (d) => { stderr += d; });
-    const to = setTimeout(() => child.kill('SIGKILL'), timeoutMs);
-    child.on('exit', (status, signal) => { clearTimeout(to); resolve({ status, signal, stderr }); });
-    child.on('error', (e) => { clearTimeout(to); resolve({ status: null, stderr: String(e) }); });
-  });
+  return spawnCollect(bin, ['-p', 'search the tree', '--allowedTools', 'Grep,Glob,Bash', '--add-dir', '../outside'],
+    { cwd, env }, { timeoutMs }).then(({ status, signal, stderr }) => ({ status, signal, stderr }));
 }
 
 // One turn of SCRIPT by `bin` on `mode`'s PATH; every check judged. -> { findings, measured }.

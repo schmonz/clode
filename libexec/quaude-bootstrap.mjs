@@ -552,6 +552,49 @@ function sandboxWouldRun({ providerPlatform, procVersion, hasBwrap, hasSocat, po
   if (wslVersion(procVersion) === '1') return false;
   return Boolean((hasBwrap && hasSocat) || policyMaySetDeps);
 }
+// THE GUARD'S PRIVATE DIRECTORY (controller ruling 2026-11-19, option (a); BACKLOG "quaude's private guard
+// directory"). Where quaude and naude must put the guard on disk (the plugin; the fallback merged settings), they use
+// ONE directory per user, everywhere: `<clode cache>/guard`. The clode cache is resolved as libexec/clode-paths.cjs
+// clodeCacheDir resolves it (test/update-guard-dir.test.cjs holds the two equal): CLODE_CACHE, else
+// <CLODE_STATE_ROOT>/cache/clode, else <XDG_CACHE_HOME or home/.cache>/clode, home being HOME or the OS's home
+// directory. It lies in the user's own home on every platform. It is made 0700, reused by every session, and the
+// merged settings in it are pruned after GUARD_SETTINGS_MAX_AGE_MS. It replaced `<tmp>/clode-guard-<uid>` plus a
+// fresh mkdtemp fallback, whose ownership check can never pass on Windows (libuv reports uid -1, st_uid 0 and a
+// synthesized mode there), so every Windows session made a new directory that nothing removed.
+function guardDirPath(env, home, sep) {
+  const strip = (s) => String(s).replace(/[\\/]+$/, '');
+  let cache;
+  if (env.CLODE_CACHE) cache = strip(env.CLODE_CACHE);
+  else if (env.CLODE_STATE_ROOT) cache = [strip(env.CLODE_STATE_ROOT), 'cache', 'clode'].join(sep);
+  else cache = [env.XDG_CACHE_HOME ? strip(env.XDG_CACHE_HOME) : [strip(home), '.cache'].join(sep), 'clode'].join(sep);
+  return cache + sep + 'guard';
+}
+// Defence in depth, judged on lstat facts ({ type: 'dir'|'link'|'other', uid, mode }) gathered by the caller.
+// EVERYWHERE: the directory is a real directory, not a symbolic link (or junction). WHERE THE PLATFORM REPORTS
+// OWNERSHIP (uid >= 0: POSIX), also: it is ours and closed to group and other, and its parent is ours or root's and
+// not writable by other (otherwise it could be renamed away and replaced). Windows reports no owner (uid -1), so
+// there the directory's privacy is its home's ACL. A refusal is a reason string. The caller REFUSES to start on it,
+// and never falls back to another directory.
+function guardDirRefusal(dir, st, parent, uid) {
+  if (!st) return `${dir} could not be created`;
+  if (st.type === 'link') return `${dir} is a symbolic link`;
+  if (st.type !== 'dir') return `${dir} is not a directory`;
+  if (!(typeof uid === 'number' && uid >= 0)) return null;
+  if (st.uid !== uid) return `${dir} is owned by uid ${st.uid}, not by this user (uid ${uid})`;
+  if ((st.mode & 0o077) !== 0) return `${dir} is open to other users (mode ${(st.mode & 0o777).toString(8)}, not 700)`;
+  if (!parent || parent.type !== 'dir') return `${dir}'s parent is not a directory`;
+  if (parent.uid !== uid && parent.uid !== 0) return `${dir}'s parent is owned by uid ${parent.uid}, neither this user nor root`;
+  if ((parent.mode & 0o002) !== 0) return `${dir}'s parent is writable by every user (mode ${(parent.mode & 0o777).toString(8)})`;
+  return null;
+}
+// The merged settings hold a copy of the user's --settings, which may carry secrets. They are removed once older than
+// a week. tjs.exit runs no exit handlers, so a quaude session cannot remove its own copy, and a session still running
+// after a week read its settings long ago. `entries` is [{ name, mtimeMs }]; returns the names to remove.
+const GUARD_SETTINGS_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+function guardSettingsToPrune(entries, nowMs) {
+  return entries.filter((e) => /^settings-[0-9a-f]+\.json$/.test(e.name) && nowMs - e.mtimeMs > GUARD_SETTINGS_MAX_AGE_MS)
+    .map((e) => e.name);
+}
 // <<< guardGating <<<
 
 // The user's --settings FILE, decoded as the bundle decodes it, or null when the bundle could not use it (missing, not a
@@ -615,23 +658,43 @@ async function sandboxFacts(tjs, providerPlatform, procVersion, argv) {
   return { providerPlatform, procVersion, hasBwrap: await onPath('bwrap'), hasSocat: await onPath('socat'), policyMaySetDeps };
 }
 
-// quaude's PRIVATE directory for what it must put on disk (the guard plugin; the fallback merged settings): one per
-// user, `<tmp>/clode-guard-<uid>`, mode 0700, created by quaude. A name another user created first, or one that is a
-// symlink, not a directory, not ours or open to others, is never used: a fresh private directory (makeTempDir, 0700)
-// is made instead. Inside it nothing can be planted or swapped by another user, so the plain writes below are safe.
-async function privateGuardDir(tjs, tmpBase, sep) {
-  const root = tmpBase.replace(/[\\/]+$/, '');
-  const uid = tjs.system && tjs.system.userInfo ? tjs.system.userInfo.userId : undefined;
-  if (typeof uid === 'number' && uid >= 0) {
-    const dir = root + sep + 'clode-guard-' + uid;
-    try { await tjs.makeDir(dir, { mode: 0o700 }); } catch (_) { /* exists, or cannot: judged below */ }
+// >>> quaudeGuardDir (quaude's I/O around guardGating's guardDirPath and guardDirRefusal; test/update-guard-dir.test.cjs runs it on a fake tjs) >>>
+// quaude's PRIVATE directory for what it must put on disk (the guard plugin; the fallback merged settings):
+// guardDirPath's `<clode cache>/guard`, one per user on every platform, made 0700 and reused. Its parents are made
+// with the default mode, the directory itself 0700, and guardDirRefusal judges what lstat then reports. A refusal
+// comes back as { refusal }, and the caller refuses to start: never a fallback to another directory. Inside it
+// nothing can be planted or swapped by another user, so the plain writes below are safe.
+async function privateGuardDir(tjs, env, sep) {
+  const dir = guardDirPath(env, env.HOME || tjs.homeDir || '', sep);
+  const parent = dir.slice(0, dir.lastIndexOf(sep));
+  try { await tjs.makeDir(parent, { recursive: true }); } catch (_) { /* judged below */ }
+  try { await tjs.makeDir(dir, { mode: 0o700 }); } catch (_) { /* exists, or cannot: judged below */ }
+  const facts = async (p) => {
     try {
-      const st = await tjs.lstat(dir);
-      if (((st.mode || 0) & S_IFMT) === S_IFDIR && st.uid === uid && ((st.mode || 0) & 0o077) === 0) return dir;
-    } catch (_) { /* fall through to a fresh one */ }
-  }
-  return await tjs.makeTempDir(root + sep + 'clode-guard-XXXXXX');
+      const st = await tjs.lstat(p);
+      const fmt = (st.mode || 0) & 0o170000;
+      return { type: fmt === 0o040000 ? 'dir' : fmt === 0o120000 ? 'link' : 'other', uid: st.uid, mode: st.mode || 0 };
+    } catch (_) { return null; }
+  };
+  const uid = tjs.system && tjs.system.userInfo ? tjs.system.userInfo.userId : undefined;
+  const refusal = guardDirRefusal(dir, await facts(dir), await facts(parent), uid);
+  return refusal ? { refusal } : { dir };
 }
+async function pruneGuardSettings(tjs, dir, sep, nowMs) {
+  const entries = [];
+  try {
+    for await (const e of await tjs.readDir(dir)) {
+      try {
+        const st = await tjs.lstat(dir + sep + e.name);
+        entries.push({ name: e.name, mtimeMs: st.mtim instanceof Date ? st.mtim.getTime() : Number(st.mtim) });
+      } catch (_) { /* gone */ }
+    }
+  } catch (_) { /* nothing to prune */ }
+  for (const name of guardSettingsToPrune(entries, nowMs)) {
+    try { await tjs.remove(dir + sep + name); } catch (_) { /* gone, or not ours to remove */ }
+  }
+}
+// <<< quaudeGuardDir <<<
 // Write `text` to `file` unless it already holds exactly that: to a temporary name, then renamed over it, so a session
 // starting meanwhile reads the old bytes or the new, never a torn file.
 async function writeFileOnce(tjs, file, text) {
@@ -640,22 +703,6 @@ async function writeFileOnce(tjs, file, text) {
   const tmp = file + '.' + Math.random().toString(36).slice(2) + '.tmp';
   await tjs.writeFile(tmp, bytes, { mode: 0o600 });
   await tjs.rename(tmp, file);
-}
-// The fallback's merged settings hold a copy of the user's --settings (which may carry secrets): kept only in the
-// private directory, and removed once older than a week (tjs.exit runs no exit handlers, so a session cannot remove
-// its own copy; one still running after a week has read its settings long since).
-const GUARD_SETTINGS_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
-async function pruneGuardSettings(tjs, dir, sep) {
-  try {
-    for await (const e of await tjs.readDir(dir)) {
-      if (!/^settings-[0-9a-f]+\.json$/.test(e.name)) continue;
-      try {
-        const st = await tjs.lstat(dir + sep + e.name);
-        const m = st.mtim instanceof Date ? st.mtim.getTime() : Number(st.mtim);
-        if (Date.now() - m > GUARD_SETTINGS_MAX_AGE_MS) await tjs.remove(dir + sep + e.name);
-      } catch (_) { /* gone, or not ours to judge */ }
-    }
-  } catch (_) { /* nothing to prune */ }
 }
 
 async function main() {
@@ -870,7 +917,6 @@ async function main() {
     if (tjs.exePath && shouldInjectGuard(rest)) {
       const platform = tjsPlatform(undefined, globalThis.__clodeMapPlatform);
       const sep = platform === 'win32' ? '\\' : '/';
-      const tmpBase = tjs.tmpDir ?? tjs.env.TMPDIR ?? (platform === 'win32' ? 'C:\\Windows\\Temp' : '/tmp');
       // SANDBOXED BASH FAILS CLOSED (user ruling 2026-10-05) — THE NAMED DIVERGENCE, stated here once: quaude cannot
       // provide Claude Code's sandbox yet (its initialization needs node:net servers the node-shim lacks:
       // net.createServer throws "quaude does not support the sandbox yet"; BACKLOG), so where native WOULD sandbox,
@@ -903,7 +949,11 @@ async function main() {
         // Inline JSON: nothing on disk from quaude (the bundle keeps inline --settings itself, as it does natively).
         rest = withSettingsArg(rest, findSettingsArgs(rest), JSON.stringify(guardSettings));
       } else {
-        const dir = await privateGuardDir(tjs, tmpBase, sep);
+        // The guard is never left out for want of a private directory: refuse to start (fail closed) instead.
+        const got = await privateGuardDir(tjs, tjs.env, sep);
+        if (got.refusal) die(`refusing to start: the update guard's private directory is unsafe: ${got.refusal}`, 1);
+        const dir = got.dir;
+        await pruneGuardSettings(tjs, dir, sep, Date.now());
         if (mode === 'merge') {
           // Belt and braces: quaude's keys merged into the user's value too (a value the bundle cannot use reaches it
           // unchanged: it prints its own error and exits).
@@ -914,7 +964,6 @@ async function main() {
           if (!plan.passthrough) {
             if (plan.warning) console.error(`quaude: ${plan.warning}`);
             const text = JSON.stringify(plan.settings);
-            await pruneGuardSettings(tjs, dir, sep);
             const file = dir + sep + 'settings-' + (await sha256hex(new TextEncoder().encode(text))).slice(0, 16) + '.json';
             await writeFileOnce(tjs, file, text);
             rest = withSettingsArg(rest, found, file);

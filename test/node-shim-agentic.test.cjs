@@ -10,6 +10,7 @@
 // modules/fs.cjs makeFileHandle and the dogfooding transcript that surfaced it).
 // Hermetic; gated on tjs + CLODE_PROVIDER_BIN like the M3 round-trip.
 const test = require('node:test');
+const { spawnCollect } = require('./spawn-collect.cjs');
 const { throwawayHome } = require('./throwaway-home.cjs');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -58,18 +59,8 @@ function stageBundle(bin) {
 }
 // Async spawn (spawnSync would freeze the in-process mock — see node-shim-roundtrip.test.cjs).
 function bootP(cli, dir, args, env, timeoutMs) {
-  return new Promise((resolve) => {
-    const [ecmd, eargv] = engineSpawn(['run', LOADER, cli, ...args]);
-    const child = spawn(ecmd, eargv, {
-      cwd: dir, stdio: ['ignore', 'pipe', 'pipe'], env,
-    });
-    let stdout = '', stderr = '';
-    child.stdout.on('data', (d) => { stdout += d; });
-    child.stderr.on('data', (d) => { stderr += d; });
-    const to = setTimeout(() => { child.kill('SIGKILL'); }, timeoutMs);
-    child.on('exit', (status) => { clearTimeout(to); resolve({ status, stdout, stderr }); });
-    child.on('error', (e) => { clearTimeout(to); resolve({ status: null, stdout, stderr: String(e) }); });
-  });
+  const [ecmd, eargv] = engineSpawn(['run', LOADER, cli, ...args]);
+  return spawnCollect(ecmd, eargv, { cwd: dir, env }, { timeoutMs });
 }
 
 // Both rows judge the tool_result itself (scripts/lib/tool-result.cjs), never the follow-up

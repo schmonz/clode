@@ -401,6 +401,49 @@ function sandboxWouldRun({ providerPlatform, procVersion, hasBwrap, hasSocat, po
   if (wslVersion(procVersion) === '1') return false;
   return Boolean((hasBwrap && hasSocat) || policyMaySetDeps);
 }
+// THE GUARD'S PRIVATE DIRECTORY (controller ruling 2026-11-19, option (a); BACKLOG "quaude's private guard
+// directory"). Where quaude and naude must put the guard on disk (the plugin; the fallback merged settings), they use
+// ONE directory per user, everywhere: `<clode cache>/guard`. The clode cache is resolved as libexec/clode-paths.cjs
+// clodeCacheDir resolves it (test/update-guard-dir.test.cjs holds the two equal): CLODE_CACHE, else
+// <CLODE_STATE_ROOT>/cache/clode, else <XDG_CACHE_HOME or home/.cache>/clode, home being HOME or the OS's home
+// directory. It lies in the user's own home on every platform. It is made 0700, reused by every session, and the
+// merged settings in it are pruned after GUARD_SETTINGS_MAX_AGE_MS. It replaced `<tmp>/clode-guard-<uid>` plus a
+// fresh mkdtemp fallback, whose ownership check can never pass on Windows (libuv reports uid -1, st_uid 0 and a
+// synthesized mode there), so every Windows session made a new directory that nothing removed.
+function guardDirPath(env, home, sep) {
+  const strip = (s) => String(s).replace(/[\\/]+$/, '');
+  let cache;
+  if (env.CLODE_CACHE) cache = strip(env.CLODE_CACHE);
+  else if (env.CLODE_STATE_ROOT) cache = [strip(env.CLODE_STATE_ROOT), 'cache', 'clode'].join(sep);
+  else cache = [env.XDG_CACHE_HOME ? strip(env.XDG_CACHE_HOME) : [strip(home), '.cache'].join(sep), 'clode'].join(sep);
+  return cache + sep + 'guard';
+}
+// Defence in depth, judged on lstat facts ({ type: 'dir'|'link'|'other', uid, mode }) gathered by the caller.
+// EVERYWHERE: the directory is a real directory, not a symbolic link (or junction). WHERE THE PLATFORM REPORTS
+// OWNERSHIP (uid >= 0: POSIX), also: it is ours and closed to group and other, and its parent is ours or root's and
+// not writable by other (otherwise it could be renamed away and replaced). Windows reports no owner (uid -1), so
+// there the directory's privacy is its home's ACL. A refusal is a reason string. The caller REFUSES to start on it,
+// and never falls back to another directory.
+function guardDirRefusal(dir, st, parent, uid) {
+  if (!st) return `${dir} could not be created`;
+  if (st.type === 'link') return `${dir} is a symbolic link`;
+  if (st.type !== 'dir') return `${dir} is not a directory`;
+  if (!(typeof uid === 'number' && uid >= 0)) return null;
+  if (st.uid !== uid) return `${dir} is owned by uid ${st.uid}, not by this user (uid ${uid})`;
+  if ((st.mode & 0o077) !== 0) return `${dir} is open to other users (mode ${(st.mode & 0o777).toString(8)}, not 700)`;
+  if (!parent || parent.type !== 'dir') return `${dir}'s parent is not a directory`;
+  if (parent.uid !== uid && parent.uid !== 0) return `${dir}'s parent is owned by uid ${parent.uid}, neither this user nor root`;
+  if ((parent.mode & 0o002) !== 0) return `${dir}'s parent is writable by every user (mode ${(parent.mode & 0o777).toString(8)})`;
+  return null;
+}
+// The merged settings hold a copy of the user's --settings, which may carry secrets. They are removed once older than
+// a week. tjs.exit runs no exit handlers, so a quaude session cannot remove its own copy, and a session still running
+// after a week read its settings long ago. `entries` is [{ name, mtimeMs }]; returns the names to remove.
+const GUARD_SETTINGS_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+function guardSettingsToPrune(entries, nowMs) {
+  return entries.filter((e) => /^settings-[0-9a-f]+\.json$/.test(e.name) && nowMs - e.mtimeMs > GUARD_SETTINGS_MAX_AGE_MS)
+    .map((e) => e.name);
+}
 // <<< guardGating <<<
 module.exports = {
   guardVerdict, SUBCOMMANDS, shouldInjectGuard, firstPositional, hasFlag,
@@ -409,4 +452,5 @@ module.exports = {
   planGuardSettings, withSettingsArg, wslVersion, sandboxWouldRun, findOptionArgs, GUARD_PLUGIN_NAME, guardPluginFiles,
   guardDeliveryMode, withGuardLayers, policyProbe, parseManagedSettings, envTruthy, globalConfigCandidates,
   nankeenGateCached, sandboxEvidencePaths, managedSettingsSetsDeps,
+  guardDirPath, guardDirRefusal, GUARD_SETTINGS_MAX_AGE_MS, guardSettingsToPrune,
 };

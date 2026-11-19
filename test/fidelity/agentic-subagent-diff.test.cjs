@@ -12,6 +12,7 @@
 // below. The row now runs in a fresh config dir, asks for a synchronous agent, and judges the
 // answer.
 const test = require('node:test');
+const { spawnCollect } = require('../spawn-collect.cjs');
 const { throwawayHome } = require('../throwaway-home.cjs');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -96,13 +97,7 @@ function run(cmd, args, dir, env, timeoutMs) {
   // alike — so the magic alone would send BOTH sides to a /bin/sh Windows does
   // not have; the same misfire failed CI runs 30675029624 and 36039332441.
   if (wantsTrampoline(process.platform, isApeFile(cmd))) { args = ['-c', '"$@"', 'sh', cmd, ...args]; cmd = '/bin/sh'; }
-  return new Promise((res) => {
-    const c = spawn(cmd, args, { cwd: dir, stdio: ['ignore', 'pipe', 'pipe'], env });
-    let so = '', se = ''; c.stdout.on('data', (d) => so += d); c.stderr.on('data', (d) => se += d);
-    const to = setTimeout(() => c.kill('SIGKILL'), timeoutMs);
-    c.on('exit', (s) => { clearTimeout(to); res({ status: s, stdout: so, stderr: se }); });
-    c.on('error', (e) => { clearTimeout(to); res({ status: null, stdout: so, stderr: String(e) }); });
-  });
+  return spawnCollect(cmd, args, { cwd: dir, env }, { timeoutMs });
 }
 async function engineRun(cmd, argv) {
   const bin = providerBin();

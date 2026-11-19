@@ -26,6 +26,7 @@
 //     node --test test/naude-smoke.test.cjs
 // (or drop CLODE_CLAUDE_BIN if /usr/local/bin/claude or /usr/bin/claude exists.)
 const test = require('node:test');
+const { spawnCollect } = require('./spawn-collect.cjs');
 const { throwawayHome } = require('./throwaway-home.cjs');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -88,15 +89,7 @@ function stageCli(bin) {
 // forever waiting on a response the mock can never send. (Same rationale documented in
 // test/node-shim-roundtrip-oracle.test.cjs.)
 function run(bin, args, opts) {
-  return new Promise((resolve) => {
-    const child = spawn(bin, args, { env: opts.env });
-    let stdout = '';
-    let stderr = '';
-    child.stdout.on('data', (d) => { stdout += d; });
-    child.stderr.on('data', (d) => { stderr += d; });
-    const timer = setTimeout(() => { child.kill('SIGKILL'); }, opts.timeout || 180000);
-    child.on('exit', (code) => { clearTimeout(timer); resolve({ status: code, stdout, stderr }); });
-  });
+  return spawnCollect(bin, args, { env: opts.env, stdio: 'pipe' }, { timeoutMs: opts.timeout || 180000 });
 }
 
 test('naude: real SEA build boots the baked CC and answers PONG offline', async (t) => {

@@ -20,6 +20,7 @@
 // suites). Hermetic: CLODE_CACHE points into the fixture tmp dir; the repo's
 // own node_modules feeds the dep members (ensureDeps early-returns).
 const { test, before, after } = require('node:test');
+const { spawnCollect } = require('./spawn-collect.cjs');
 const { freshHome } = require('./throwaway-home.cjs');
 const assert = require('node:assert');
 const crypto = require('node:crypto');
@@ -85,15 +86,7 @@ after(() => { if (DIR) { try { fs.rmSync(DIR, { recursive: true, force: true });
 // Async spawn of the blobulated binary (the agentic oracle needs the in-process mock
 // to stay serviceable — spawnSync would starve it).
 function runQuaude(args, env, timeoutMs = 120000) {
-  return new Promise((resolve) => {
-    const child = spawn(QUAUDE, args, { cwd: DIR, stdio: ['ignore', 'pipe', 'pipe'], env });
-    let stdout = '', stderr = '';
-    child.stdout.on('data', (d) => { stdout += d; });
-    child.stderr.on('data', (d) => { stderr += d; });
-    const to = setTimeout(() => { child.kill('SIGKILL'); }, timeoutMs);
-    child.on('exit', (status) => { clearTimeout(to); resolve({ status, stdout, stderr }); });
-    child.on('error', (e) => { clearTimeout(to); resolve({ status: null, stdout, stderr: String(e) }); });
-  });
+  return spawnCollect(QUAUDE, args, { cwd: DIR, env }, { timeoutMs });
 }
 // The blobulated binary must be self-contained: no NODE_PATH ever.
 function cleanEnv(extra) {
@@ -233,15 +226,7 @@ test('the attest gate can fail: one flipped byte in a member -> VERIFICATION FAI
   fs.chmodSync(tampered, 0o755);
 
   const { ATTEST_VERIFIED, ATTEST_FAILED } = require('../libexec/clode-attest.cjs');
-  const r = await new Promise((resolve) => {
-    const child = spawn(tampered, ['--clode-attest'], { cwd: DIR, stdio: ['ignore', 'pipe', 'pipe'], env: cleanEnv() });
-    let stdout = '', stderr = '';
-    child.stdout.on('data', (d) => { stdout += d; });
-    child.stderr.on('data', (d) => { stderr += d; });
-    const to = setTimeout(() => child.kill('SIGKILL'), 120000);
-    child.on('exit', (status) => { clearTimeout(to); resolve({ status, stdout, stderr }); });
-    child.on('error', (e) => { clearTimeout(to); resolve({ status: null, stdout, stderr: String(e) }); });
-  });
+  const r = await spawnCollect(tampered, ['--clode-attest'], { cwd: DIR, env: cleanEnv() }, { timeoutMs: 120000 });
   assert.notStrictEqual(r.status, 0, `a tampered quaude exited 0:\n${r.stdout}\n${r.stderr}`);
   assert.doesNotMatch(r.stdout, new RegExp(ATTEST_VERIFIED.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
     'the tampered binary still printed the verdict the build gate greps');

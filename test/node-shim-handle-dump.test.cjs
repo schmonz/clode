@@ -31,7 +31,7 @@ function spawnLoader(prog, env = {}) {
   let out = '', err = '';
   child.stdout.on('data', (d) => { out += d; });
   child.stderr.on('data', (d) => { err += d; });
-  const exited = new Promise((res) => child.on('exit', (code, signal) => res({ code, signal })));
+  const exited = new Promise((res) => child.on('close', (code, signal) => res({ code, signal })));   // stdio drained (test/spawn-collect.cjs)
   const waitFor = (pred, ms, what) => new Promise((res, rej) => {
     const t0 = Date.now();
     const iv = setInterval(() => {

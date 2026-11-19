@@ -41,7 +41,7 @@ const SPAWN_BODY = `
   const c = cp.spawn('/bin/sh', ['-c', 'head -c ${N} /dev/zero | tr "\\\\0" "A"']);
   let len = 0;
   c.stdout.on('data', (d) => { len += d.length; });
-  c.on('exit', (code) => { console.log(JSON.stringify({ code, len })); });
+  c.on('close', (code) => { console.log(JSON.stringify({ code, len })); });
   c.on('error', (e) => { console.log(JSON.stringify({ code: null, len, err: String(e) })); });`;
 
 test('a spawned child producing >64KB of stdout before exiting completes without deadlock, matching node', (t) => {

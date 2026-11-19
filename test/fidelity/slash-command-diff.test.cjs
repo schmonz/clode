@@ -5,6 +5,7 @@
 // environment"). Run it under both engines and assert the (ANSI-stripped)
 // output matches — the slash parser/dispatch path is fidelity-clean.
 const test = require('node:test');
+const { spawnCollect } = require('../spawn-collect.cjs');
 const { throwawayHome } = require('../throwaway-home.cjs');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -32,13 +33,8 @@ function run(cmd, argv) {
   const { dir, cli } = stage(bin);
   const cfg = fs.mkdtempSync(path.join(os.tmpdir(), 'slashcfg-'));
   const env = { ...process.env, ...throwawayHome(`${dir}-home`), CLAUDE_CONFIG_DIR: cfg, ANTHROPIC_API_KEY: 'sk-ant-mock', NODE_PATH: path.join(REPO, 'deps', 'claude', 'node_modules') };
-  return new Promise((resolve) => {
-    const c = spawn(cmd, [...argv(cli), '-p', '/status'], { cwd: dir, stdio: ['ignore', 'pipe', 'pipe'], env });
-    let so = '', se = ''; c.stdout.on('data', (d) => so += d); c.stderr.on('data', (d) => se += d);
-    const to = setTimeout(() => c.kill('SIGKILL'), 60000);
-    c.on('exit', (status) => { clearTimeout(to); resolve({ status, out: (so + se).replace(STRIP, '') }); });
-    c.on('error', (e) => { clearTimeout(to); resolve({ status: null, out: String(e) }); });
-  });
+  return spawnCollect(cmd, [...argv(cli), '-p', '/status'], { cwd: dir, env }, { timeoutMs: 60000 })
+    .then((r) => ({ status: r.status, out: r.error ? String(r.error) : (r.stdout + r.stderr).replace(STRIP, '') }));
 }
 const line = (o) => (o.match(/\/status[^\n]*/) || [''])[0].trim();
 

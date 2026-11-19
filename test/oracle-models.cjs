@@ -75,7 +75,7 @@ function dispatchAsync({ cmd, argv }, opts) {
     child.stderr.on('data', (d) => { stderr += d; });
     const to = opts.timeout ? setTimeout(() => child.kill('SIGKILL'), opts.timeout) : null;
     const done = (status, signal) => { if (to) clearTimeout(to); resolve({ status, signal: signal ?? null, stdout, stderr, ms: Date.now() - t0 }); };
-    child.on('exit', (status, signal) => done(status, signal));
+    child.on('close', (status, signal) => done(status, signal));   // 'close': stdio drained (test/spawn-collect.cjs)
     child.on('error', (e) => { stderr += String(e); done(null, null); });
   });
 }

@@ -23,6 +23,7 @@
 // see scripts/platform-tag.cjs's file header for why the toolchain and the
 // bundle live at different keys/locations).
 const { test, before, after } = require('node:test');
+const { spawnCollect } = require('./spawn-collect.cjs');
 const { throwawayHome } = require('./throwaway-home.cjs');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -151,15 +152,7 @@ before(() => {
 after(() => { if (DIR) { try { fs.rmSync(DIR, { recursive: true, force: true }); } catch { /* */ } } });
 
 function runNative(bin, args, env, timeoutMs = 600000) {
-  return new Promise((resolve) => {
-    const child = spawn(bin, args, { cwd: DIR, stdio: ['ignore', 'pipe', 'pipe'], env });
-    let stdout = '', stderr = '';
-    child.stdout.on('data', (d) => { stdout += d; });
-    child.stderr.on('data', (d) => { stderr += d; });
-    const to = setTimeout(() => { child.kill('SIGKILL'); }, timeoutMs);
-    child.on('exit', (status) => { clearTimeout(to); resolve({ status, stdout, stderr }); });
-    child.on('error', (e) => { clearTimeout(to); resolve({ status: null, stdout, stderr: String(e) }); });
-  });
+  return spawnCollect(bin, args, { cwd: DIR, env }, { timeoutMs });
 }
 
 test('clode bootstrap blobulates a native builder and its internal smokes pass', (t) => {

@@ -7,6 +7,7 @@
 // shared global. See docs/superpowers/plans/2026-07-24-vm-context-isolation.md.
 // tjs + CLODE_PROVIDER_BIN gated.
 const test = require('node:test');
+const { spawnCollect } = require('../spawn-collect.cjs');
 const { throwawayHome } = require('../throwaway-home.cjs');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -37,13 +38,7 @@ function stage(bin) {
   return { dir, cli };
 }
 function run(cmd, args, dir, env, timeoutMs) {
-  return new Promise((res) => {
-    const c = spawn(cmd, args, { cwd: dir, stdio: ['ignore', 'pipe', 'pipe'], env });
-    let so = '', se = ''; c.stdout.on('data', (d) => so += d); c.stderr.on('data', (d) => se += d);
-    const to = setTimeout(() => c.kill('SIGKILL'), timeoutMs);
-    c.on('exit', (s) => { clearTimeout(to); res({ status: s, stdout: so, stderr: se }); });
-    c.on('error', (e) => { clearTimeout(to); res({ status: null, stdout: so, stderr: String(e) }); });
-  });
+  return spawnCollect(cmd, args, { cwd: dir, env }, { timeoutMs });
 }
 function walk(d, acc) {
   for (const e of (fs.existsSync(d) ? fs.readdirSync(d, { withFileTypes: true }) : [])) {

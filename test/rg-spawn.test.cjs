@@ -450,7 +450,7 @@ function bookkeepingProbe() {
       let err = '';
       child.stderr.on('data', (d) => { err += d; });
       child.stdout.resume();
-      const exited = new Promise((res) => child.on('exit', () => res()));
+      const exited = new Promise((res) => child.on('exit', () => res()));   // spawn-close: this row tests the gap between 'exit' and 'close'
       const closed = new Promise((res) => child.on('close', (code, signal) => res({ code, signal })));
       await exited;
       const killRet = child.kill('SIGTERM');          // after exit, before close: delivers nothing

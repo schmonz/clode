@@ -13,7 +13,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { sandbox, REPO } = require('./e2e.cjs');
-const { seedClaudeProfile, capture } = require('./e2e-pty.cjs');
+const { seedClaudeProfile, drive } = require('./e2e-pty.cjs');
 const { resolveClaudeBin } = require('../libexec/clode-resolve.cjs');
 const { tjsPath } = require('./node-shim-helper.cjs');
 const { stateRoot } = require('./state-root-helper.cjs');
@@ -27,7 +27,7 @@ function realProvider() {
   return fs.existsSync(home) ? home : null;
 }
 
-let SKIP = null, SCREEN = '', SBX = null, DIR = null;
+let SKIP = null, SCREEN = '', DRIVER = null, SBX = null, DIR = null;
 before(() => {
   if (!tjsPath()) { SKIP = 'no tjs binary (CLODE_TJS or build/tjs/tjs)'; return; }
   const liveRenderSkip = liveRenderSkipReason();
@@ -61,7 +61,11 @@ before(() => {
     },
   });
   if (build.status !== 0) { SKIP = `clode build failed:\n${build.stdout}\n${build.stderr}`; return; }
-  SCREEN = capture(SBX, { seconds: 12, cmd: [quaude] });
+  // drive, not capture: the driver's exit says whether quaude was stopped and GONE before it returned
+  // (tui-screen.cjs stopChild). windows-amd64-tui (CI 44460009323) found quaude.exe still mapped at cleanup, because
+  // the driver's kill never reached it on Windows and nothing waited.
+  DRIVER = drive(SBX, { seconds: 12, cmd: [quaude] });
+  SCREEN = DRIVER.stdout;
 });
 // A dir that will not go is a finding, named entry by entry (suite-home.cjs removeNamingRefusals), never swallowed:
 // windows-amd64-tui (CI 44443821699) failed removing the suite home at exit with node's root-only EPERM, and these two
@@ -76,4 +80,9 @@ after(() => {
 test('TUI renders the welcome box (Claude Code) under a built quaude', (t) => {
   if (SKIP) { t.skip(SKIP); return; }
   assert.match(SCREEN, /Claude Code/);
+});
+
+test('the driver stopped the built quaude and saw it gone before it returned (it outlives nothing)', (t) => {
+  if (SKIP) { t.skip(SKIP); return; }
+  assert.strictEqual(DRIVER.status, 0, `tui-screen exit ${DRIVER.status} (signal ${DRIVER.signal}): ${DRIVER.stderr.slice(-800)}`);
 });
