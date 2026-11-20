@@ -108,6 +108,9 @@
 //   ITS TESTS: the test(...)/it(...) call holding the control (by its line, which is what
 //   node:test reports), or, for a control inside a top-level function, every test that calls that
 //   function (agentic-grep-glob's controls()). A driver with none cannot be claimed by a job.
+//   A test that spells `quaudeSkip` (outside a comment or string) is NOT one of its tests: it runs
+//   test/tool-driver.cjs's turn on native alone, so it drives no quaude cell, whatever control it
+//   calls (tools-local's native instrument). Such tests are listed apart (nativeOnly).
 //   A driver CAN SKIP when its test is declared skipped (test.skip, a `{ skip }`/`{ todo }`
 //   option), or when a skip( call follows the control inside its test (outside a test: to the end
 //   of the top-level statement). That is shown on the map; it no longer decides the verdict,
@@ -885,8 +888,10 @@ function findDrivers(sources) {
         rejected.push({ ...at, why: `the check (${check}) reads the tool_result of ${use}.id, but ${use} is never scripted to a mock` });
         continue;
       }
+      const ran = testsOf(text, m, code, x.index, lineOf);
       drivers.push({ ...at, name, use, check, modes, unmeasured: unmeasuredModes(text, modes, m),
-        tests: testsOf(text, m, code, x.index, lineOf),
+        tests: ran.filter((t) => !t.nativeOnly).map(({ name: n, line }) => ({ name: n, line })),
+        nativeOnly: ran.filter((t) => t.nativeOnly).map(({ name: n, line }) => ({ name: n, line })),
         skips: skipOf(text, m, code, x.index, lineOf) });
     }
   }
@@ -956,11 +961,14 @@ function testsOf(text, m, code, pos, lineOf) {
     const first = close < 0 ? null : (splitTop(text.slice(open + 1, close - 1)) || [])[0];
     const lit = first && /^(['"`])([\s\S]*)\1$/.exec(first);
     const name = lit && !(lit[1] === '`' && lit[2].includes('${')) ? lit[2].replace(/\\(['"`\\])/g, '$1') : null;
-    return { start: t.index, end: close, name, line: lineOf(t.index) };
+    // A test whose code spells quaudeSkip runs its turn on native alone (test/tool-driver.cjs).
+    const nativeOnly = close > 0 && [...text.slice(t.index, close).matchAll(/(?<![\w$.])quaudeSkip\b/g)]
+      .some((q) => m.mask[t.index + q.index]);
+    return { start: t.index, end: close, name, line: lineOf(t.index), nativeOnly };
   }).filter((t) => t.end > 0);
   const holding = (p) => calls.filter((t) => t.start < p && p < t.end).sort((a, b) => b.start - a.start)[0];
   const own = holding(pos);
-  if (own) return [{ name: own.name, line: own.line }];
+  if (own) return [{ name: own.name, line: own.line, nativeOnly: own.nativeOnly }];
   const fns = [
     ...code(/(?<![\w$.])function\s*\*?\s*([\w$]+)\s*\(/g),
     ...code(/(?<![\w$.])(?:const|let|var)\s+([\w$]+)\s*=\s*(?:async\s*)?(?:\([^)]*\)|[\w$]+)\s*=>/g),
@@ -983,7 +991,7 @@ function testsOf(text, m, code, pos, lineOf) {
   for (const c of code(new RegExp(`(?<![\\w$.])${esc(fn.name)}\\s*\\(`, 'g'))) {
     if (c.index === fn.start || (c.index > fn.start && c.index < fn.end)) continue;
     const t = holding(c.index);
-    if (t) out.set(t.line, { name: t.name, line: t.line });
+    if (t) out.set(t.line, { name: t.name, line: t.line, nativeOnly: t.nativeOnly });
   }
   return [...out.values()].sort((a, b) => a.line - b.line);
 }
@@ -1183,7 +1191,8 @@ function scanCoverage({ carve, what, sources, exemptions, today, workflow, jobs,
     for (const j of jb.valid) {
       if (!j.files.includes(x.file)) continue;
       if (!x.tests.length) {
-        findings.push(`${x.file}:${x.line}: ${j.job} claims this driver of ${name}, but no test(...) runs its control, so the job `
+        findings.push(`${x.file}:${x.line}: ${j.job} claims this driver of ${name}, but no test(...) runs its control`
+          + `${x.nativeOnly.length ? ` on quaude (test(s) at line ${x.nativeOnly.map((n) => n.line).join(', ')} spell quaudeSkip: native alone)` : ''}, so the job `
           + 'cannot report that it ran');
         continue;
       }
@@ -1995,6 +2004,30 @@ test('findDrivers finds each driver shape the tree uses, and no near miss', () =
     'test/synthetic/near-misses.test.cjs:26 the modes (MODES) are not a string literal or an array of string literals',
     'test/synthetic/near-misses.test.cjs:8 the check (edited) never reads the tool_result of EDIT.id',
   ]);
+});
+
+test('a test that spells quaudeSkip drives no quaude cell (control): only its sibling that runs quaude counts', () => {
+  const src = (both) => [{ file: 'test/synthetic/native-only.test.cjs', text: lines(
+    "const { driveTool } = require('./tool-driver.cjs');",
+    "const { toolResultText, assertFailsOnMissingOutput } = require('../scripts/lib/tool-result.cjs');",
+    "const READ = { name: 'Read', input: { file_path: '/x' }, id: 'toolu_r' };",
+    "const read = (m) => toolResultText(m, READ.id).includes('LINE');",
+    'function controls() { assertFailsOnMissingOutput(read, READ); }',
+    ...(both ? ["test('quaude', async () => {", '  controls();', '  const r = await driveTool({ tool: READ });',
+      '  assert.ok(read(r.quaude.raw));', '});'] : []),
+    "test('native alone', async () => {", '  controls();',
+    "  const r = await driveTool({ tool: READ, quaudeSkip: 'native alone' });", '  assert.ok(read(r.native.raw));', '});',
+  ) }];
+  const only = findDrivers(src(false)).drivers[0];
+  assert.deepStrictEqual(only.tests, [], 'a quaudeSkip-only driver has no test that drives quaude');
+  assert.deepStrictEqual(only.nativeOnly.map((t) => t.name), ['native alone']);
+  const both = findDrivers(src(true)).drivers[0];
+  assert.deepStrictEqual(both.tests.map((t) => t.name), ['quaude']);
+  // claimed by a job, the quaudeSkip-only driver is a finding that says why, and drives no cell
+  const jobs = [{ ...FX_JOBS[0], files: ['test/synthetic/native-only.test.cjs'] }];
+  const r = scanCoverage(fixtureInputs({ sources: src(false), jobs, workflow: fxWorkflow({ files: 'test/synthetic/native-only.test.cjs' }) }));
+  assert.match(r.findings.join('\n'), /native-only\.test\.cjs:5: fixture-job claims this driver of Read, but no test\(\.\.\.\) runs its control on quaude \(test\(s\) at line 6 spell quaudeSkip/);
+  assert.ok(![...r.driven.keys()].some((k) => /Read/.test(k)), 'no Read cell is driven');
 });
 
 test('findDrivers names the tests that run each control, by the line node:test reports', () => {
