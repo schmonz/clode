@@ -94,6 +94,14 @@
 //   EXEMPTIONS are per cell: { tool, reason, date, until }, optionally narrowed by `modes` and
 //   `engines`; a cell both driven and exempted is a finding, as is one neither driven nor
 //   exempted. The dates are the every-tool plan's phases (UNTIL_PHASE_A/B/C), carried as set.
+//   NOT APPLICABLE (ruling E10, 2026-11-20): a tool x mode where the tool is NOT REGISTERED (the Task
+//   list tools when unlisted). NOT_APPLICABLE names it { tool, modes, reason, date }, and a CI job
+//   must PROVE it: a claimed `assertNotRegistered(check, USE, MODES, { absent, registered })` control
+//   (scripts/lib/tool-result.cjs) whose check passes only on the harness's "No such tool available"
+//   answer. Its cells, on every engine (registration is the carve's, not the engine's), are neither
+//   driven nor exempted, carry no deadline, and are counted in the verdict; one that is also driven or
+//   exempted, an entry no job proves, or a proof with no entry, is a finding. A target that does
+//   register the tool fails the check, so the proving job, and the cell, go red.
 //
 // A DRIVER (test/**/*.cjs|mjs and scripts/**/*.cjs|mjs|js; two files skipped by name,
 // DRIVER_SCAN_SKIP) is a call `assertFailsOnMissingOutput(check, USE[, MODES[, CONTEXT]])` (Task 1's control,
@@ -822,7 +830,7 @@ function findDrivers(sources) {
   for (const { file, text } of sources) {
     if (DRIVER_SCAN_SKIP.has(file)) { skipped++; continue; }
     scanned++;
-    if (!text.includes('assertFailsOnMissingOutput')) continue;
+    if (!text.includes('assertFailsOnMissingOutput') && !text.includes('assertNotRegistered')) continue;
     const m = masked(text);
     const code = (re) => [...text.matchAll(re)].filter((x) => m.mask[x.index]);
     const lineOf = (i) => text.slice(0, i).split('\n').length;
@@ -849,8 +857,9 @@ function findDrivers(sources) {
     const testRanges = code(/(?<![\w$.])(?:test|it)(?:\.\w+)?\s*\(/g)
       .map((t) => [t.index, closeOf(m, t.index + t[0].length - 1)]).filter(([, e]) => e > 0);
     const looseSkip = code(/(?<![\w$.])quaudeSkip\b/g).find((q) => !testRanges.some(([a, b]) => a < q.index && q.index < b));
-    for (const x of code(/(?<![\w$.])assertFailsOnMissingOutput\s*\(/g)) {
+    for (const x of code(/(?<![\w$.])(assertFailsOnMissingOutput|assertNotRegistered)\s*\(/g)) {
       if (/function\s*$/.test(text.slice(Math.max(0, x.index - 16), x.index))) continue;
+      const na = x[1] === 'assertNotRegistered';
       const at = { file, line: lineOf(x.index) };
       if (looseSkip) {
         rejected.push({ ...at, why: `the file spells quaudeSkip outside a test (line ${lineOf(looseSkip.index)}), so which `
@@ -865,6 +874,10 @@ function findDrivers(sources) {
         continue;
       }
       const [check, use, modesText] = args;   // a 4th, the context of earlier calls, does not change what is driven
+      if (na && args.length !== 4) {
+        rejected.push({ ...at, why: 'a not-applicable control is called as (check, toolUse, modes, { absent, registered })' });
+        continue;
+      }
       const modes = modesText === undefined ? ['print'] : literalModes(modesText);
       if (!modes) {
         rejected.push({ ...at, why: `the modes (${modesText}) are not a string literal or an array of string literals` });
@@ -899,7 +912,7 @@ function findDrivers(sources) {
         continue;
       }
       const ran = testsOf(text, m, code, x.index, lineOf);
-      drivers.push({ ...at, name, use, check, modes, unmeasured: unmeasuredModes(text, modes, m),
+      drivers.push({ ...at, name, use, check, modes, na, unmeasured: unmeasuredModes(text, modes, m),
         tests: ran.filter((t) => !t.nativeOnly).map(({ name: n, line }) => ({ name: n, line })),
         nativeOnly: ran.filter((t) => t.nativeOnly).map(({ name: n, line }) => ({ name: n, line })),
         skips: skipOf(text, m, code, x.index, lineOf) });
@@ -1157,7 +1170,7 @@ function checkExemptionTable(exemptions, today, { keys = EXEMPTION_KEYS, who: wh
 
 const cellKey = (tool, mode, engine) => `${tool}|${mode}|${engine}`;
 
-function scanCoverage({ carve, what, sources, exemptions, today, workflow, jobs, engines, published, enginesExemption }) {
+function scanCoverage({ carve, what, sources, exemptions, notApplicable = [], today, workflow, jobs, engines, published, enginesExemption }) {
   const reg = extractRegistry(carve);
   const md = extractModes(carve);
   const { tools } = reg;
@@ -1185,9 +1198,23 @@ function scanCoverage({ carve, what, sources, exemptions, today, workflow, jobs,
   const driven = new Map();                      // cellKey -> [{ driver, job }]
   const foreign = [];
   const declared = new Map();                    // tool -> drivers
+  const proofs = new Map();                      // `tool|mode` -> [{ driver, job }]: not-registered, proven in a job
+  const notRegistered = [];                      // the not-applicable controls, for the map
   for (const x of d.drivers) {
     const name = tools.has(x.name) ? x.name : byAlias.get(x.name);
     if (!name) { foreign.push(x); continue; }
+    if (x.na) {
+      notRegistered.push({ ...x, tool: name });
+      for (const j of jb.valid) {
+        if (!j.files.includes(x.file) || !x.tests.length) continue;
+        for (const mo of x.modes) {
+          const k = `${name}|${mo}`;
+          if (!proofs.has(k)) proofs.set(k, []);
+          proofs.get(k).push({ driver: x, job: j.job });
+        }
+      }
+      continue;
+    }
     if (!declared.has(name)) declared.set(name, []);
     declared.get(name).push(x);
     const own = modesByTool.get(name);
@@ -1246,9 +1273,42 @@ function scanCoverage({ carve, what, sources, exemptions, today, workflow, jobs,
     }
   }
 
+  // The not-applicable tool x modes (ruling E10): each proven by a claimed not-registered control.
+  const na = new Map();                          // `tool|mode` -> entry
+  notApplicable.forEach((e, k) => {
+    const who = e && typeof e.tool === 'string' ? `${e.tool}${cellsTag(e)} (not applicable)` : `not-applicable entry #${k + 1}`;
+    const extra = Object.keys(e || {}).filter((key) => !['tool', 'modes', 'reason', 'date'].includes(key));
+    if (extra.length) findings.push(`${who}: unknown key(s) ${extra.join(', ')}; a not-applicable entry is { tool, modes, reason, date }`);
+    if (!e || typeof e.reason !== 'string' || !e.reason.trim()) findings.push(`${who}: no reason; say why the tool is not registered there`);
+    if (!e || !isIsoDate(e.date)) findings.push(`${who}: date must be YYYY-MM-DD, the day it was measured`);
+    if (!e || !Array.isArray(e.modes) || !e.modes.length) { findings.push(`${who}: modes must name the modes it is not registered in`); return; }
+    if (!tools.has(e.tool)) {
+      if (tools.size) findings.push(`${who}: the carve does not register a tool of that name (${what}); remove the entry`);
+      return;
+    }
+    const own = modesByTool.get(e.tool);
+    for (const mo of e.modes) {
+      if (!own.includes(mo)) { findings.push(`${who}: ${mo} is not among its cells' modes (${own.join(', ')})`); continue; }
+      const k = `${e.tool}|${mo}`;
+      if (na.has(k)) { findings.push(`${e.tool} x ${mo}: not applicable by two entries; one entry per cell`); continue; }
+      na.set(k, e);
+      if (!proofs.has(k)) {
+        findings.push(`${e.tool} x ${mo}: declared not applicable (${e.reason}), but no CI job (CELL_JOBS) runs an `
+          + 'assertNotRegistered control that proves it; a cell is not applicable only where the target is seen not to register it');
+      }
+    }
+  });
+  for (const [k, ps] of proofs) {
+    if (!na.has(k)) {
+      const [tool, mo] = k.split('|');
+      findings.push(`${tool} x ${mo}: ${[...new Set(ps.map((p) => `${p.driver.file}:${p.driver.line}`))].join(', ')} proves it not registered, `
+        + 'but NOT_APPLICABLE has no entry for it; add one, or drive the cell');
+    }
+  }
+
   // The verdict, cell by cell; undriven, unexempted cells reported one line per tool x mode.
   const where = (xs) => [...new Set(xs.map((x) => `${x.job}: ${x.driver.file}:${x.driver.line}`))].sort().join(', ');
-  let nDriven = 0, nExempt = 0, nNone = 0;
+  let nDriven = 0, nExempt = 0, nNone = 0, nNa = 0;
   const matrix = [];
   for (const name of [...tools.keys()].sort()) {
     const rows = [];
@@ -1256,8 +1316,14 @@ function scanCoverage({ carve, what, sources, exemptions, today, workflow, jobs,
       const none = [], states = [];
       for (const en of engines) {
         const k = cellKey(name, mo, en);
-        const dv = driven.get(k), e = exempt.get(k);
-        if (dv) {
+        const dv = driven.get(k), e = exempt.get(k), n = na.get(`${name}|${mo}`);
+        if (n) {
+          nNa++;
+          const pj = [...new Set((proofs.get(`${name}|${mo}`) || []).map((p) => p.job))];
+          states.push(`${en} n/a (${pj.length ? `proven in ${pj.join(', ')}` : 'UNPROVEN'})`);
+          if (dv) findings.push(`${name} x ${mo} @ ${en}: not applicable (${n.reason}) but driven by ${where(dv)}; a registered tool is not n/a`);
+          if (e) findings.push(`${name} x ${mo} @ ${en}: not applicable (${n.reason}) and exempted (${e.date}, until ${e.until}); remove the exemption`);
+        } else if (dv) {
           nDriven++;
           states.push(`${en} DRIVEN (${[...new Set(dv.map((x) => x.job))].join(', ')})`);
           if (e) findings.push(`${name} x ${mo} @ ${en}: exempted (${e.date}, until ${e.until}) but driven by ${where(dv)}; narrow the exemption`);
@@ -1281,9 +1347,10 @@ function scanCoverage({ carve, what, sources, exemptions, today, workflow, jobs,
     else for (const r of rows) matrix.push(`${name} x ${r.mode}: ${r.states.join('; ')}`);
   }
   const files = new Set(d.drivers.map((x) => x.file)).size;
-  return { findings, examined: cells, tools, drivers: d, declared, driven, foreign, matrix, jobs: jb.valid,
+  return { findings, examined: cells, tools, drivers: d, declared, driven, foreign, matrix, jobs: jb.valid, notRegistered,
+    counts: { driven: nDriven, exempted: nExempt, notApplicable: nNa, neither: nNone },
     note: `${what}: ${reg.note}; ${md.note}; ${cells} cell(s) over ${engines.join(', ')} (${others.length} other published `
-      + `engine(s) exempted as one): ${nDriven} driven, ${nExempt} exempted, ${nNone} neither; ${jb.valid.length} CI job(s) `
+      + `engine(s) exempted as one): ${nDriven} driven, ${nExempt} exempted, ${nNa} not applicable, ${nNone} neither; ${jb.valid.length} CI job(s) `
       + `report cells; ${d.drivers.length} driver(s) in ${files} file(s), ${d.scanned + d.skipped} file(s) scanned, `
       + `${d.skipped} of them skipped by name` };
 }
@@ -1324,11 +1391,12 @@ function checkJobRan({ job, jobs, sources, records, host }) {
   const judged = d.drivers.filter((x) => x.tests.length).map((x) => ({ x,
     bad: x.tests.map((t) => [t, result.get(`${x.file}:${t.line}`) || 'not run']).filter(([, o]) => o !== 'passed') }));
   const passedCells = new Set();
-  for (const { x, bad } of judged) if (!bad.length) for (const mo of x.modes) passedCells.add(`${x.name}|${mo}`);
+  // (a not-registered control's pass never stands in for a driver's skip: it proves the opposite of driven)
+  for (const { x, bad } of judged) if (!bad.length && !x.na) for (const mo of x.modes) passedCells.add(`${x.name}|${mo}`);
   for (const x of d.drivers) if (!x.tests.length) findings.push(`${x.file}:${x.line}: no test(...) runs this ${x.name} control, so nothing reports it`);
   for (const { x, bad } of judged) {
     const tag = `${x.file}:${x.line} (${x.name} x ${x.modes.join('/')} @ ${entry.engine})`;
-    if (!bad.length) { ran.push(`${x.name} x ${x.modes.join('/')} @ ${entry.engine} <- ${x.file}:${x.line}`); continue; }
+    if (!bad.length) { ran.push(`${x.name} x ${x.modes.join('/')} @ ${entry.engine}${x.na ? ' (not registered)' : ''} <- ${x.file}:${x.line}`); continue; }
     const onlySkips = bad.every(([, o]) => o.startsWith('skipped'));
     const alone = x.modes.filter((mo) => !passedCells.has(`${x.name}|${mo}`));
     if (onlySkips && !alone.length) continue;
@@ -1439,6 +1507,9 @@ const LOCAL_CELLS = 'every-tool Phase A (cells): driven in -p turns in print, un
 // The driven cells of a tool driven in every -p mode tools-local runs (print, unlisted, the permission modes).
 const LOCAL_DRIVEN = ['print', 'unlisted', 'permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions',
   'permission:dontAsk', 'permission:plan'].flatMap((mo) => [`${mo}@linux-x64-musl`, `${mo}@darwin-arm64`]);
+// THE NOT-APPLICABLE CELLS (ruling E10): a tool x mode where the tool is not registered, proven in a CELL_JOBS job by
+// an assertNotRegistered control (see NOT APPLICABLE at the top). No deadline: the job's run is the evidence.
+const NOT_APPLICABLE = [];
 const EXEMPTIONS = [
   // The undriven cells of the five driven tools (USER RULING 2026-11-18).
   ...PHASE_A_CELLS('Agent', COMMON_MODES, [], 'every-tool Phase A (cells): its one driver, '
@@ -1612,7 +1683,7 @@ let INPUTS = null;
 function readInputs() {
   if (!INPUTS) {
     const c = readCarve();
-    INPUTS = 'skip' in c ? c : { carve: c.text, what: c.what, sources: readSources(), exemptions: EXEMPTIONS,
+    INPUTS = 'skip' in c ? c : { carve: c.text, what: c.what, sources: readSources(), exemptions: EXEMPTIONS, notApplicable: NOT_APPLICABLE,
       today: new Date().toISOString().slice(0, 10), workflow: readWorkflow(), jobs: CELL_JOBS, engines: SHIPPING_ENGINES,
       published: readPublished(), enginesExemption: OTHER_ENGINES_EXEMPTION };
   }
@@ -2184,6 +2255,63 @@ test('an exemption must not cover a driven cell, may only name a registered tool
   assert.match(odd.findings.join('\n'), /^Read x shell:zsh @ haiku-x64: exempts shell:zsh, haiku-x64, not among its cells/m);
 });
 
+// NOT APPLICABLE (ruling E10): Read x unlisted, in the fixture, is proven not registered by a claimed
+// assertNotRegistered control; its three cells are counted apart, and every way it can lie is a finding.
+const NA_SOURCE = { file: 'test/synthetic/not-registered.test.cjs', text: lines(
+  "const { toolResult, assertNotRegistered } = require('../scripts/lib/tool-result.cjs');",
+  "const RD = { name: 'Read', input: { file_path: '/y' }, id: 'toolu_na_r' };",
+  "const off = (m) => { const r = toolResult(m, RD.id); return !!r && r.text.includes('No such tool available: Read'); };",
+  "test('read is not registered when unlisted', async (t) => {",
+  "  assertNotRegistered(off, RD, ['unlisted'], { absent: 'No such tool available: Read', registered: '1\\tx' });",
+  '  await startMockAnthropic({ respond: () => cannedToolUseSSE(RD.name, RD.input, RD.id) });',
+  '});',
+  "test('a not-applicable control without its answers', async (t) => {",
+  "  assertNotRegistered(off, RD, ['unlisted']);",
+  '  await startMockAnthropic({ respond: () => cannedToolUseSSE(RD.name, RD.input, RD.id) });',
+  '});',
+) };
+const NA_READ = { tool: 'Read', modes: ['unlisted'], reason: 'not registered when unlisted (fixture)', date: '2026-11-20' };
+const naInputs = (over = {}) => {
+  const files = [...FX_JOBS[0].files, NA_SOURCE.file];
+  return fixtureInputs({ sources: [...DRIVER_SOURCES, ...NEAR_MISS_SOURCES, NA_SOURCE], jobs: [{ ...FX_JOBS[0], files }],
+    workflow: fxWorkflow({ files: files.join(' ') }), notApplicable: [NA_READ],
+    exemptions: FIXTURE_EXEMPTIONS.filter((e) => !(e.tool === 'Read' && e.modes && e.modes[0] === 'unlisted')), ...over });
+};
+test('not applicable: a tool x mode proven not registered is counted apart, neither driven nor exempted', () => {
+  const r = scanCoverage(naInputs());
+  assert.deepStrictEqual(r.findings, []);
+  assert.deepStrictEqual(r.counts, { driven: 6, exempted: MINI_CELLS - 6 - 3, notApplicable: 3, neither: 0 });
+  assert.ok(r.matrix.includes(`Read x unlisted: ${SHIPPING_ENGINES.map((e) => `${e} n/a (proven in ${FX_JOB})`).join('; ')}`), r.matrix.join('\n'));
+  assert.match(r.note, / 3 not applicable, /);
+  assert.ok(!r.driven.has(`Read|unlisted|${FX_ENGINE}`), 'a not-registered control drives nothing');
+  const d = findDrivers([NA_SOURCE]);
+  assert.deepStrictEqual(d.rejected.map((x) => [x.line, x.why]), [[9, 'a not-applicable control is called as (check, toolUse, modes, { absent, registered })']]);
+});
+test('not applicable: unproven, proven with no entry, also exempted, or also driven, is a finding', () => {
+  const unproven = scanCoverage(naInputs({ jobs: FX_JOBS, workflow: fxWorkflow() }));
+  assert.match(unproven.findings.join('\n'), /^Read x unlisted: declared not applicable \(not registered when unlisted \(fixture\)\), but no CI job/m);
+  assert.ok(unproven.matrix.some((l) => /n\/a \(UNPROVEN\)/.test(l)));
+  const noEntry = scanCoverage(naInputs({ notApplicable: [] }));
+  assert.match(noEntry.findings.join('\n'), /^Read x unlisted: test\/synthetic\/not-registered\.test\.cjs:5 proves it not registered, but NOT_APPLICABLE has no entry/m);
+  const exempted = scanCoverage(naInputs({ exemptions: FIXTURE_EXEMPTIONS }));
+  assert.strictEqual(exempted.findings.filter((f) => /: not applicable .* and exempted .*; remove the exemption$/.test(f)).length, 3, exempted.findings.join('\n'));
+  const driven = scanCoverage(naInputs({ notApplicable: [{ ...NA_READ, modes: ['print'] }] }));
+  assert.match(driven.findings.join('\n'), new RegExp(`^Read x print @ ${FX_ENGINE}: not applicable .* but driven by .*; a registered tool is not n/a$`, 'm'));
+  const odd = scanCoverage(naInputs({ notApplicable: [{ ...NA_READ, modes: ['shell:zsh'], until: '2027-01-01' }, { tool: 'Zebra', modes: ['print'], reason: 'x', date: 'soon' }] }));
+  assert.match(odd.findings.join('\n'), /unknown key\(s\) until/);
+  assert.match(odd.findings.join('\n'), /shell:zsh is not among its cells' modes/);
+  assert.match(odd.findings.join('\n'), /Zebra .*: date must be YYYY-MM-DD/);
+  assert.match(odd.findings.join('\n'), /Zebra .*: the carve does not register a tool of that name/);
+});
+test('not applicable: the proving test failing in its job (the target registered the tool) fails the job', () => {
+  const files = [...FX_JOBS[0].files, NA_SOURCE.file];
+  const run = (rec) => checkJobRan(fxJobRun({ jobs: [{ ...FX_JOBS[0], files }], sources: [...DRIVER_SOURCES, NA_SOURCE],
+    records: [...fxRecords(), { type: rec, file: NA_SOURCE.file, line: 4, name: 'read is not registered when unlisted', nesting: 0 }] }));
+  assert.deepStrictEqual(run('test:pass').findings, []);
+  assert.ok(run('test:pass').ran.includes(`Read x unlisted @ ${FX_ENGINE} (not registered) <- ${NA_SOURCE.file}:5`));
+  assert.match(run('test:fail').findings.join('\n'), /not-registered\.test\.cjs:5 \(Read x unlisted @ linux-x64-musl\): test "read is not registered when unlisted" \(line 4\) failed/);
+});
+
 test('checkExemptionTable refuses a malformed, doubled or expired entry', () => {
   const ok = { tool: 'X', reason: 'deferred: a real reason', date: '2026-09-28', until: '2026-12-31' };
   assert.deepStrictEqual(checkExemptionTable([ok], '2026-09-28'), []);
@@ -2318,6 +2446,7 @@ test('the cell matrix and the driver map, as the gate reads them', (t) => {
         + `${x.skips ? `, can skip: ${x.skips}` : ''}`);
     }
   }
+  for (const x of r.notRegistered) t.diagnostic(`(proves not registered) ${x.tool} x ${x.modes.join('/')} <- ${x.file}:${x.line} (${x.use}; tests ${x.tests.map((s) => s.line).join(',') || 'none'})`);
   for (const x of r.foreign) t.diagnostic(`(not a registered tool) ${x.name} <- ${x.file}:${x.line}${x.skips ? `, can skip: ${x.skips}` : ''}`);
   for (const x of r.drivers.rejected) t.diagnostic(`(not a driver) ${x.file}:${x.line}: ${x.why}`);
 });

@@ -86,7 +86,7 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
-const { toolResult, toolResultText, assertFailsOnMissingOutput, rawBodyReads, answeredLog } = require('../../scripts/lib/tool-result.cjs');
+const { toolResult, toolResultText, assertFailsOnMissingOutput, rawBodyReads, answeredLog, assertNotRegistered } = require('../../scripts/lib/tool-result.cjs');
 const { defineGuard, guardTests, checkGate, BROKEN } = require('../guard.cjs');
 const { throwsAsFindings } = require('../throws-as-findings.cjs');
 const { discoverFilesByExt } = require('../source-scan.cjs');
@@ -247,6 +247,24 @@ test('assertFailsOnMissingOutput takes the cells a driver declares, a mode or mo
   for (const bad of ['', [], [''], 7, { mode: 'print' }]) {
     assert.throws(() => assertFailsOnMissingOutput(check, TOOL, bad), /modes must be a mode name or an array of them/);
   }
+});
+
+// The not-applicable control (ruling E10): the check passes on the harness's "No such tool available" answer, fails on
+// the registered tool's own answer, and fails on every missing-output log.
+test('assertNotRegistered accepts a check of the harness\'s absent-tool answer, and refuses one a registered tool passes', () => {
+  const T = { name: 'TaskCreate', input: { subject: 'x' }, id: 'toolu_na' };
+  const ABSENT = '<tool_use_error>Error: No such tool available: TaskCreate. TaskCreate is disabled for this session.</tool_use_error>';
+  const answers = { absent: ABSENT, registered: 'Task #1 created successfully: x' };
+  const off = (m) => { const r = toolResult(m, T.id); return !!r && r.isError && r.text === ABSENT; };
+  assert.doesNotThrow(() => assertNotRegistered(off, T, 'unlisted', answers));
+  const anyError = (m) => { const r = toolResult(m, T.id); return !!r && r.isError && r.text.includes('Error'); };
+  assert.doesNotThrow(() => assertNotRegistered(anyError, T, 'unlisted', answers), 'a registered tool that succeeds still fails it');
+  const anything = (m) => { const r = toolResult(m, T.id); return !!r && /Task|tool/.test(r.text); };
+  assert.throws(() => assertNotRegistered(anything, T, 'unlisted', answers), /PASSES on TaskCreate's registered answer/);
+  assert.throws(() => assertNotRegistered(off, T, 'unlisted', { absent: 'Permission denied', registered: 'x' }), /No such tool available: TaskCreate/);
+  assert.throws(() => assertNotRegistered(off, T, 'unlisted', { absent: ABSENT }), /answers must be \{ absent, registered \}/);
+  const never = (m) => !!toolResult(m, T.id) && false;
+  assert.throws(() => assertNotRegistered(never, T, 'unlisted', answers), /does not pass on the absent answer/);
 });
 
 // ==========================================================================

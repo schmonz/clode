@@ -273,4 +273,32 @@ function assertFailsOnMissingOutput(check, command, modes, context) {
   }
 }
 
-module.exports = { toolResult, toolResultText, toolFollowUpText, rawBodyReads, assertFailsOnMissingOutput, answeredLog };
+// THE NOT-APPLICABLE CONTROL (every-tool ruling E10): a cell where the tool is NOT REGISTERED in that mode (the Task
+// list tools when unlisted). Neither driven nor exempted: test/build-gates/tool-coverage-gates.test.cjs counts it
+// not-applicable only where a CI job runs a check this control vetted, so the cell is proven on every run by the
+// target's own answer. `answers` is { absent, registered }: `absent` is the harness's answer to a call of a tool it
+// does not have (it must spell "No such tool available: <name>"), `registered` the tool's own answer elsewhere (print's).
+// The check must fail on every missing-output log (assertFailsOnMissingOutput), PASS on `absent` and FAIL on
+// `registered`: so a target that does register the tool fails the check, and the cell goes red.
+function assertNotRegistered(check, command, modes, answers) {
+  assertFailsOnMissingOutput(check, command, modes);
+  const { absent, registered } = answers || {};
+  const text = (c) => (typeof c === 'string' ? c : Array.isArray(c) ? c.map((b) => (b && b.text) || '').join('') : null);
+  if (text(absent) === null || text(registered) === null) {
+    throw new Error('assertNotRegistered: answers must be { absent, registered }, each a tool_result content');
+  }
+  if (!text(absent).includes(`No such tool available: ${command.name}`)) {
+    throw new Error(`assertNotRegistered: the absent answer must be the harness's "No such tool available: ${command.name}", `
+      + `got ${JSON.stringify(text(absent).slice(0, 120))}`);
+  }
+  if (check(answeredLog(command, absent, [], true)) !== true) {
+    throw new Error(`assertNotRegistered: the check does not pass on the absent answer for ${command.name}`);
+  }
+  if (check(answeredLog(command, registered)) !== false) {
+    throw new Error(`assertNotRegistered: the check PASSES on ${command.name}'s registered answer, so a target that registers `
+      + 'the tool would still read as not applicable');
+  }
+}
+
+module.exports = { toolResult, toolResultText, toolFollowUpText, rawBodyReads, assertFailsOnMissingOutput, answeredLog,
+  assertNotRegistered };
