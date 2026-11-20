@@ -1,9 +1,10 @@
 'use strict';
 // Interactive/PTY fidelity (G2) — a full human turn against the REAL API must
-// render the streamed model response in the TUI. This is the one interactive row
-// a mock cannot reach: the interactive first turn validates credentials with
-// claude.ai before it will fire, so a fake key spins forever without ever
-// dialing ANTHROPIC_BASE_URL (see RECIPE G2). So this test does the real thing —
+// render the streamed model response in the TUI. A mock CAN reach an interactive
+// turn (CORRECTED 2026-11-20: the old "validates credentials with claude.ai, so a
+// fake key spins forever" was a synchronous capture freezing the in-process mock;
+// test/tool-driver.cjs's interactive turn drives every tools-local call against
+// one). This row is about the REAL streaming API, so it does the real thing —
 // it drives native Claude Code and a built quaude under a pseudo-terminal using
 // the developer's OWN logged-in credentials, types a prompt whose answer is NOT
 // present in the prompt text ("6 times 7" -> "42", so the echoed input can't be
