@@ -12,6 +12,11 @@
 //   - tap.txt: the file's `not ok` block from the TAP;
 //   - every node diagnostic report the run wrote (the runner passes --report-on-fatalerror with --report-directory
 //     under its root: a V8 fatal error, an OOM, an abort writes one; a bare SIGSEGV does not);
+//     NOT A SIGSEGV: --report-on-fatalerror fires on V8/node fatal errors (OOM, a failed CHECK, an abort through
+//     node's handler), not on a signal the kernel delivers, so a segfault leaves no node report anywhere. On Linux,
+//     and so in CI, this keeps only tap.txt for one: no system crash reporter is read there, and a core needs
+//     `ulimit -c unlimited` plus a core_pattern the runner does not have (ubuntu-latest pipes cores to apport;
+//     BACKLOG.md says what capturing one in CI would take);
 //   - on macOS, the system's crash report for each node that crashed since the pass began (ReportCrash writes
 //     ~/Library/Logs/DiagnosticReports/node-*.ips, with the native stack, for any process that dies of a signal).
 //     That is the only native stack on offer without a core dump, which for node is gigabytes and filled this disk

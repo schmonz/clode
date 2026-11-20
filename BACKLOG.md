@@ -36,7 +36,10 @@ collector: `ClearStaleLeftTrimmedPointerVisitor::VisitRootPointers` < `InternalF
 (a node:vm script) below it, from a microtask. So it is a V8 GC defect in host node 24.21.0 (asdf's official
 darwin-arm64 build) while a vm context's script runs, not this repo's code: no test of ours can make V8 visit a stale
 left-trimmed pointer. test/run-crashes.cjs now keeps such reports (and node's own fatal-error reports) for any file
-that dies of a signal, so the next one needs no luck. Open: whether a newer node 24 fixes it (check the V8 log for
+that dies of a signal, so the next one needs no luck, ON MACOS ONLY: on Linux and in CI a SIGSEGV leaves no node
+report (--report-on-fatalerror does not fire on a signal) and no core (ubuntu-latest's core_pattern pipes to apport;
+capturing one there means `sudo sysctl kernel.core_pattern=<dir>/core.%p`, `ulimit -c unlimited` in the suite step,
+and uploading a node core of hundreds of MB, not done: no Linux crash has been seen yet). Open: whether a newer node 24 fixes it (check the V8 log for
 ClearStaleLeftTrimmedPointerVisitor fixes), and if not, a minimal repro to file upstream.
 
 ## The shipped macOS arm64 floor is 14.0, not the 11.0 it is labelled (2026-11-20)
