@@ -456,17 +456,19 @@ with TJS_HOME unset creates $HOME/.tjs holding localStorage.db only (no cookies.
 Unmeasured. The suite-hermeticity claims (suite home, sentinel HOME byte-untouched, the 18/81 spawn counts) were not
 re-run; test/suite-home-hermetic.test.cjs and a full suite with a sentinel HOME would.
 
-## 25 of the 2166 tool x mode x engine cells are driven (cells 2026-11-18; tools 2026-09-28; Grep and Glob driven 2026-10-05; Read, Write, NotebookEdit, the Task tools and TaskStop 2026-11-19)
+## 39 of the 2166 tool x mode x engine cells are driven (cells 2026-11-18; tools 2026-09-28; Grep and Glob driven 2026-10-05; Read, Write, NotebookEdit, the Task tools and TaskStop 2026-11-19; Skill, the worktree and cron tools and ScheduleWakeup 2026-11-20)
 
 Since observability Task 1 (2026-11-18) the gate counts CELLS, tool x mode x engine: 90 tools, 722
 tool x mode pairs (permission modes, sandbox, Bash shells, interactive, unlisted, from the carve where
-it says) over darwin-arm64, linux-x64-musl and netbsd-arm64, 2166 cells. 25 are driven, by four CI
+it says) over darwin-arm64, linux-x64-musl and netbsd-arm64, 2166 cells. 39 are driven, by four CI
 jobs (CELL_JOBS): Bash print (darwin, musl), bypassPermissions, sandbox:on and shell:bash (musl); Edit
 print (darwin, musl); Glob and Grep print (musl); since every-tool Task 2, Read, Write and NotebookEdit
 print (darwin, musl: test/fidelity/tools-local.test.cjs in node-shim-oracle-darwin and linux-x64-pty,
 each installing the pinned native that runs and building a quaude from it); since every-tool Task 3,
-TaskCreate, TaskGet, TaskUpdate, TaskList and TaskStop print (darwin, musl: the same file and jobs). The
-rest are per-cell exemptions; the undriven cells of the 13 driven tools, and the 10 Phase A tools still
+TaskCreate, TaskGet, TaskUpdate, TaskList and TaskStop print (darwin, musl: the same file and jobs); since
+every-tool Task 4, Skill, EnterWorktree, ExitWorktree, CronCreate, CronDelete, CronList and ScheduleWakeup
+print (darwin, musl: the same file and jobs). The
+rest are per-cell exemptions; the undriven cells of the 20 driven tools, and the 3 Phase A tools still
 undriven, fall due 2026-12-15 (USER RULING
 2026-11-18 moved Phase A there from 2026-10-15). The tool-level account below is as of 2026-09-28.
 

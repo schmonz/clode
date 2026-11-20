@@ -1448,19 +1448,12 @@ const EXEMPTIONS = [
   // The task list and TaskStop (every-tool Task 3): the same file, the same jobs, the same cells.
   ...['TaskCreate', 'TaskGet', 'TaskUpdate', 'TaskList', 'TaskStop'].flatMap((tool) =>
     PHASE_A_CELLS(tool, COMMON_MODES, ['print@linux-x64-musl', 'print@darwin-arm64'], LOCAL_CELLS)),
+  // Skill, the worktree tools, the cron tools and ScheduleWakeup (every-tool Task 4): the same file, jobs and cells.
+  ...['Skill', 'EnterWorktree', 'ExitWorktree', 'CronCreate', 'CronDelete', 'CronList', 'ScheduleWakeup'].flatMap((tool) =>
+    PHASE_A_CELLS(tool, COMMON_MODES, ['print@linux-x64-musl', 'print@darwin-arm64'], LOCAL_CELLS)),
   // Local tools a canned mock could drive today: the to-do list proper.
   { tool: 'TodoWrite', reason: 'deferred, no plan yet: a local tool, but enabled only when the Task* tools are off '
     + '(CLAUDE_CODE_ENABLE_TASKS=false), and no live check turns them off', date: RECORDED, until: UNTIL_PHASE_B },
-  { tool: 'Skill', reason: `${LOCAL} (it needs a skill on disk)`, date: RECORDED, until: UNTIL_PHASE_A },
-  { tool: 'EnterWorktree', reason: `${LOCAL} (it needs a git repository)`, date: RECORDED, until: UNTIL_PHASE_A },
-  { tool: 'ExitWorktree', reason: `${LOCAL} (it needs a git repository)`, date: RECORDED, until: UNTIL_PHASE_A },
-  { tool: 'CronCreate', reason: `${LOCAL} (scheduled prompts; on unless CLAUDE_CODE_DISABLE_CRON, GrowthBook `
-    + 'tengu_kairos_cron defaults on)', date: RECORDED, until: UNTIL_PHASE_A },
-  { tool: 'CronDelete', reason: `${LOCAL} (scheduled prompts; on unless CLAUDE_CODE_DISABLE_CRON, GrowthBook `
-    + 'tengu_kairos_cron defaults on)', date: RECORDED, until: UNTIL_PHASE_A },
-  { tool: 'CronList', reason: `${LOCAL} (scheduled prompts; on unless CLAUDE_CODE_DISABLE_CRON, GrowthBook `
-    + 'tengu_kairos_cron defaults on)', date: RECORDED, until: UNTIL_PHASE_A },
-  { tool: 'ScheduleWakeup', reason: `${LOCAL} (the dynamic /loop's pacing)`, date: RECORDED, until: UNTIL_PHASE_A },
   { tool: 'ReportFindings', reason: `${LOCAL} (structured code-review findings)`, date: RECORDED, until: UNTIL_PHASE_A },
   { tool: 'Workflow', reason: `${LOCAL} (alias RunWorkflow)`, date: RECORDED, until: UNTIL_PHASE_A },
   { tool: 'ListAgents', reason: `${LOCAL} (agent teams, on by default; an empty list is still a tool_result; alias `

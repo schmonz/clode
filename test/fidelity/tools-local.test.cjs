@@ -321,3 +321,154 @@ test('native answers the task script as TASK_NATIVE records', { skip: SKIP }, as
   if (got.length) t.diagnostic(`measured:\n${JSON.stringify(r.native.results, null, 1)}`);
   assert.deepStrictEqual(got, [], `native moved:\n${got.join('\n')}`);
 });
+
+// ==========================================================================
+// SKILL, THE WORKTREE TOOLS, THE CRON TOOLS AND ScheduleWakeup (every-tool Task 4)
+// ==========================================================================
+// One turn over a git repository holding a project skill: Skill loads it (and refuses an unknown one); CronList,
+// CronCreate, CronList, CronDelete of the id CronCreate answered, and CronDelete of an unknown id (the cron tools are
+// on unless CLAUDE_CODE_DISABLE_CRON; every job is session-only, so nothing outlives the turn, and none fires: the one
+// job is due on 1 January at 03:00 and is deleted at once); ScheduleWakeup schedules and then stops (its answer names
+// the clock time of the wakeup, so it is judged by shape); ExitWorktree outside a worktree refuses, EnterWorktree
+// makes one, and ExitWorktree removes it and its branch, which the tree left after the turn shows.
+//
+// MEASURED on native 2.1.283 darwin-arm64 (2026-11-20) and a quaude built from this tree. Driving it found two
+// defects, both fixed: the shim's readdir/readlink ignored `encoding: 'buffer'`, so quaude's ExitWorktree "could not
+// remove" the worktree native removed (test/node-shim-fs-walk.test.cjs has the differential row); and a mock-id
+// hazard in driveTool (an id inside another read as answered), now refused there.
+const S_BASE = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'tools-session-')));
+process.on('exit', () => { try { fs.rmSync(S_BASE, { recursive: true, force: true }); } catch { /* best effort */ } });
+const S_WORK = path.join(S_BASE, 'work');
+const S_WT = path.join(S_WORK, '.claude', 'worktrees', 'wt-drive');
+const SKILL_BODY = 'Say hello to $ARGUMENTS.';
+const layRepo = (work) => {
+  const skill = path.join(work, '.claude', 'skills', 'greet');
+  fs.mkdirSync(skill, { recursive: true });
+  fs.writeFileSync(path.join(skill, 'SKILL.md'), `---\nname: greet\ndescription: Greet someone by name\n---\n${SKILL_BODY}\n`);
+  fs.writeFileSync(path.join(work, 'README'), 'a repository for the worktree tools\n');
+  const { execFileSync } = require('node:child_process');
+  for (const args of [['init', '-q', '-b', 'main'], ['add', '-A'], ['commit', '-q', '-m', 'init']]) execFileSync('git', args, { cwd: work, stdio: 'ignore' });
+};
+// What the turn left: the worktrees git knows and the worktree-* branches (none of either once ExitWorktree removed it).
+const readRepo = (work) => {
+  const { execFileSync } = require('node:child_process');
+  const git = (...a) => execFileSync('git', a, { cwd: work, encoding: 'utf8' });
+  return { worktrees: git('worktree', 'list', '--porcelain').split('\n').filter((l) => l.startsWith('worktree ')).length,
+    branches: git('branch', '--list', 'worktree-*').trim(), wtDir: fs.existsSync(S_WT) };
+};
+const S_SKILL = { name: 'Skill', input: { skill: 'greet', args: 'Ada' }, id: 'toolu_ss_skill' };
+const S_NOSKILL = { name: 'Skill', input: { skill: 'no-such-skill' }, id: 'toolu_ss_unknown' };
+const C_LIST_0 = { name: 'CronList', input: {}, id: 'toolu_sc_list0' };
+const C_CREATE = { name: 'CronCreate', input: { cron: '0 3 1 1 *', prompt: 'say the new year', recurring: false }, id: 'toolu_sc_create' };
+const C_LIST_1 = { name: 'CronList', input: {}, id: 'toolu_sc_list1' };
+const C_DELETE = { name: 'CronDelete', input: { id: '<the id CronCreate answered>' }, id: 'toolu_sc_delete' };
+const C_NODELETE = { name: 'CronDelete', input: { id: 'deadbeef' }, id: 'toolu_sc_nodel' };
+const W_SCHED = { name: 'ScheduleWakeup', input: { delaySeconds: 120, reason: 'wait for the build', prompt: '/loop check the build', noop: true }, id: 'toolu_sw_sched' };
+const W_STOP = { name: 'ScheduleWakeup', input: { stop: true }, id: 'toolu_sw_halt' };
+const WT_NOEXIT = { name: 'ExitWorktree', input: { action: 'keep' }, id: 'toolu_sx_outside' };
+const WT_ENTER = { name: 'EnterWorktree', input: { name: 'wt-drive' }, id: 'toolu_se_enter' };
+const WT_REMOVE = { name: 'ExitWorktree', input: { action: 'remove' }, id: 'toolu_sx_remove' };
+// The job id, read from CronCreate's tool_result (null when it sent none).
+const cronIdOf = (m) => { const x = /^Scheduled one-shot task ([0-9a-f]{8}) /.exec(toolResultText(m, C_CREATE.id)); return x ? x[1] : null; };
+const SESSION_SCRIPT = [{ tool: S_SKILL }, { tool: S_NOSKILL }, { tool: C_LIST_0 }, { tool: C_CREATE }, { tool: C_LIST_1 },
+  { tool: C_DELETE, inputFrom: (log) => ({ id: cronIdOf(log) || 'no-cron-id' }) }, { tool: C_NODELETE }, { tool: W_SCHED },
+  { tool: W_STOP }, { tool: WT_NOEXIT }, { tool: WT_ENTER }, { tool: WT_REMOVE }];
+
+// MEASURED: native's answers; <CRON> is the job id, <WORK> the turn's working directory, <WT> the worktree.
+const SESSION_NATIVE = {
+  toolu_ss_skill: { text: 'Launching skill: greet', isError: false },
+  toolu_ss_unknown: { text: '<tool_use_error>Unknown skill: no-such-skill</tool_use_error>', isError: true },
+  toolu_sc_list0: { text: 'No scheduled jobs.', isError: false },
+  toolu_sc_create: { text: `Scheduled one-shot task <CRON> (0 3 1 1 *). Session-only (not written to disk, dies when Claude exits). It will fire once then auto-delete.`, isError: false },
+  toolu_sc_list1: { text: `<CRON> ${String.fromCodePoint(0x2014)} 0 3 1 1 * (one-shot) [session-only]: say the new year`, isError: false },
+  toolu_sc_delete: { text: 'Cancelled job <CRON>.', isError: false },
+  toolu_sc_nodel: { text: "<tool_use_error>No scheduled job with id 'deadbeef'</tool_use_error>", isError: true },
+  toolu_sw_halt: { text: `Loop stopped ${String.fromCodePoint(0x2014)} cancelled 1 pending wakeup(s); no further dynamic-loop wakeups scheduled. If you armed a Monitor for this loop, TaskStop it now; otherwise nothing more to do this turn.`, isError: false },
+  toolu_sx_outside: { text: `<tool_use_error>No-op: there is no active EnterWorktree session to exit. This tool only operates on worktrees created by EnterWorktree in the current session ${String.fromCodePoint(0x2014)} it will not touch worktrees created manually or in a previous session. No filesystem changes were made.</tool_use_error>`, isError: true },
+  toolu_se_enter: { text: 'Created worktree at <WT> on branch worktree-wt-drive. The session is now working in the worktree. Use ExitWorktree to leave mid-session, or exit the session to be prompted.', isError: false },
+  toolu_sx_remove: { text: 'Exited and removed worktree at <WT>. Session is now back in <WORK>.', isError: false },
+};
+// The tree native left: the main worktree alone, no worktree branch, no worktree directory.
+const REPO_NATIVE = { worktrees: 1, branches: '', wtDir: false };
+// ScheduleWakeup by shape: native's sentence around the wakeup's clock time and its delay from now.
+const W_SCHED_SHAPE = new RegExp(`^Next wakeup scheduled for \\d\\d:\\d\\d:\\d\\d \\(in \\d+s\\)\\. Nothing more to do this turn ${String.fromCodePoint(0x2014)} the harness re-invokes you when the wakeup fires or a task-notification arrives\\.$`);
+const sessionWant = (USE, m) => {
+  const w = SESSION_NATIVE[USE.id];
+  if (!w) return null;
+  const cron = cronIdOf(m);
+  if (w.text.includes('<CRON>') && !cron) return null;
+  return { text: w.text.split('<CRON>').join(cron).split('<WT>').join(S_WT).split('<WORK>').join(S_WORK), isError: w.isError };
+};
+const sessionSame = (r, USE, m) => {
+  const w = sessionWant(USE, m);
+  return !!r && !!w && r.text === w.text && r.isError === w.isError;
+};
+const sSkill = (m) => sessionSame(toolResult(m, S_SKILL.id), S_SKILL, m);
+const sNoSkill = (m) => sessionSame(toolResult(m, S_NOSKILL.id), S_NOSKILL, m);
+const cList0 = (m) => sessionSame(toolResult(m, C_LIST_0.id), C_LIST_0, m);
+const cCreate = (m) => sessionSame(toolResult(m, C_CREATE.id), C_CREATE, m);
+const cList1 = (m) => sessionSame(toolResult(m, C_LIST_1.id), C_LIST_1, m);
+const cDelete = (m) => sessionSame(toolResult(m, C_DELETE.id), C_DELETE, m);
+const cNoDelete = (m) => sessionSame(toolResult(m, C_NODELETE.id), C_NODELETE, m);
+const wSched = (m) => { const r = toolResult(m, W_SCHED.id); return !!r && !r.isError && W_SCHED_SHAPE.test(r.text); };
+const wStop = (m) => sessionSame(toolResult(m, W_STOP.id), W_STOP, m);
+const wtNoExit = (m) => sessionSame(toolResult(m, WT_NOEXIT.id), WT_NOEXIT, m);
+const wtEnter = (m) => sessionSame(toolResult(m, WT_ENTER.id), WT_ENTER, m);
+const wtRemove = (m) => sessionSame(toolResult(m, WT_REMOVE.id), WT_REMOVE, m);
+const sessionVerdicts = (m) => [[S_SKILL, sSkill(m)], [S_NOSKILL, sNoSkill(m)], [C_LIST_0, cList0(m)], [C_CREATE, cCreate(m)],
+  [C_LIST_1, cList1(m)], [C_DELETE, cDelete(m)], [C_NODELETE, cNoDelete(m)], [W_SCHED, wSched(m)], [W_STOP, wStop(m)],
+  [WT_NOEXIT, wtNoExit(m)], [WT_ENTER, wtEnter(m)], [WT_REMOVE, wtRemove(m)]];
+// What CronCreate answers, for the controls of the calls whose check reads its id.
+const CRON_CONTEXT = [{ use: C_CREATE, content: SESSION_NATIVE[C_CREATE.id].text.split('<CRON>').join('0abc1234') }];
+
+function sessionControls() {
+  assertFailsOnMissingOutput(sSkill, S_SKILL);
+  assertFailsOnMissingOutput(sNoSkill, S_NOSKILL);
+  assertFailsOnMissingOutput(cList0, C_LIST_0);
+  assertFailsOnMissingOutput(cCreate, C_CREATE);
+  assertFailsOnMissingOutput(cNoDelete, C_NODELETE);
+  assertFailsOnMissingOutput(wSched, W_SCHED);
+  assertFailsOnMissingOutput(wStop, W_STOP);
+  assertFailsOnMissingOutput(wtNoExit, WT_NOEXIT);
+  assertFailsOnMissingOutput(wtEnter, WT_ENTER);
+  assertFailsOnMissingOutput(wtRemove, WT_REMOVE);
+  // CronList's second answer and CronDelete's read the id CronCreate answered: their controls carry that answer, and
+  // each check is shown to pass on its own answer with it, so a control's failure is about that call's output alone
+  assertFailsOnMissingOutput(cList1, C_LIST_1, 'print', CRON_CONTEXT);
+  assertFailsOnMissingOutput(cDelete, C_DELETE, 'print', CRON_CONTEXT);
+  assert.ok(cList1(answeredLog(C_LIST_1, SESSION_NATIVE[C_LIST_1.id].text.split('<CRON>').join('0abc1234'), CRON_CONTEXT)),
+    'the second CronList check passes on its own answer with CronCreate\'s');
+  assert.ok(cDelete(answeredLog(C_DELETE, SESSION_NATIVE[C_DELETE.id].text.split('<CRON>').join('0abc1234'), CRON_CONTEXT)),
+    'the CronDelete check passes on its own answer with CronCreate\'s');
+}
+
+function sessionFindings(label, side) {
+  const out = [];
+  if (side.status !== 0) out.push(`${label}: the turn exited ${side.status}${side.signal ? ` (${side.signal})` : ''}: ${side.stderr.slice(0, 800)}`);
+  for (const [USE, same] of sessionVerdicts(side.raw)) {
+    if (!same) out.push(`${label}: ${USE.id} ${USE.name} sent ${JSON.stringify(side.sent[USE.id])}\n    got: ${JSON.stringify(toolResult(side.raw, USE.id))}`);
+  }
+  try { assert.deepStrictEqual(side.inspected, REPO_NATIVE); } catch { out.push(`${label}: the repository left ${JSON.stringify(side.inspected)}, native's ${JSON.stringify(REPO_NATIVE)}`); }
+  return out;
+}
+
+test('Skill, the worktree tools, the cron tools and ScheduleWakeup in a built quaude: every tool_result, and the repository left, equal native\'s', { skip: SKIP }, async (t) => {
+  const q = builtQuaude();
+  if (q.skip) { t.skip(q.skip); return; }
+  sessionControls();
+  const r = await driveTool({ script: SESSION_SCRIPT, base: S_BASE, quaude: q.path, setup: layRepo, inspect: readRepo,
+    nativeSkip: 'native is judged against the same recorded answers by the next test' });
+  const got = sessionFindings('quaude', r.quaude);
+  assert.deepStrictEqual(got, [], `${got.length} finding(s) against native's answers:\n${got.join('\n')}`);
+});
+
+test('native answers the session script as SESSION_NATIVE records', { skip: SKIP }, async (t) => {
+  const native = rgOracle(process.env);
+  if (!native) { t.skip(rgOracleSkip(process.env)); return; }
+  sessionControls();
+  const r = await driveTool({ script: SESSION_SCRIPT, base: S_BASE, native, setup: layRepo, inspect: readRepo,
+    quaudeSkip: 'quaude is judged by the test above' });
+  const got = sessionFindings('native', r.native);
+  if (got.length) t.diagnostic(`measured:\n${JSON.stringify(r.native.results, null, 1)}`);
+  assert.deepStrictEqual(got, [], `native moved:\n${got.join('\n')}`);
+});
