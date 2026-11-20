@@ -146,6 +146,44 @@ test('provision resolves a real sha256 tool on this host (integration)', () => {
   assert.ok(REGISTRY.sha256.candidates.some((c) => c.name === got.candidate.name));
 });
 
+// --- tar: the one argument shape (tarPlan), judged by a model of Git for Windows' GNU tar -------------------
+// CI 9c655b7 windows-latest: every materializeDeps row died in the tar KAT, "C\:\\Users\\...\\clode-run-n2gbTv
+// <newline>aude-sea-9gxkv1\\clode-kat-tar-3824.dst: Cannot open", because GNU tar unquotes backslash escapes in its
+// -C argument (and reads a colon in the archive argument as a remote host). This model of it judges an argument
+// list the way that tar parses one, on every host, so the Windows shape is judged everywhere.
+function gnuTarModel(args) {
+  const arc = args[args.findIndex((x) => /^-[cx]z?f$/.test(x)) + 1];
+  if (!args.includes('--force-local') && /^[^/\\]*:/.test(arc)) return { status: 2, stderr: `tar: Cannot connect to ${arc.split(':')[0]}: resolve failed` };
+  const esc = { n: '\n', t: '\t', r: '\r', f: '\f', v: '\v', b: '\b', a: '\x07', '\\': '\\' };
+  const dir = args[args.indexOf('-C') + 1].replace(/\\(.)/g, (m, ch) => (ch in esc ? esc[ch] : m));
+  if (/[\x00-\x1f]/.test(dir)) return { status: 2, stderr: `tar: ${JSON.stringify(dir)}: Cannot open: No such file or directory` };
+  return { status: 0, stderr: '' };
+}
+const WIN_ARCHIVE = 'C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\clode-run-n2gbTv\\naude-sea-9gxkv1\\clode-kat-tar-3824.tar';
+const WIN_DIR = 'C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\clode-run-n2gbTv\\naude-sea-9gxkv1\\clode-kat-tar-3824.dst';
+
+test('CONTROL: the GNU tar model refuses the shapes that broke CI (a drive-letter archive, a backslash-escaped -C)', () => {
+  const absolute = gnuTarModel(['-xf', WIN_ARCHIVE, '-C', 'C:/x']);
+  assert.strictEqual(absolute.status, 2);
+  assert.match(absolute.stderr, /Cannot connect to C/);
+  const escaped = gnuTarModel(['-xf', 'a.tar', '-C', WIN_DIR]);
+  assert.strictEqual(escaped.status, 2);
+  assert.match(escaped.stderr, /clode-run-n2gbTv\\naude-sea-9gxkv1.*Cannot open/);
+});
+
+test('tarPlan hands a Windows archive and dir to GNU tar in a shape it reads: basename in its dir, -C with slashes', () => {
+  const { tarPlan } = require('../libexec/host-provision.cjs');
+  const plan = tarPlan('-xf', WIN_ARCHIVE, WIN_DIR, path.win32);
+  assert.deepStrictEqual(plan, {
+    cwd: 'C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\clode-run-n2gbTv\\naude-sea-9gxkv1',
+    args: ['-xf', 'clode-kat-tar-3824.tar', '-C', 'C:/Users/RUNNER~1/AppData/Local/Temp/clode-run-n2gbTv/naude-sea-9gxkv1/clode-kat-tar-3824.dst'],
+  });
+  const r = gnuTarModel(plan.args);
+  assert.strictEqual(r.status, 0, r.stderr);
+  // and on POSIX the plan is the paths themselves
+  assert.deepStrictEqual(tarPlan('-xzf', '/t/n/a.tar.gz', '/t/n/out', path.posix), { cwd: '/t/n', args: ['-xzf', 'a.tar.gz', '-C', '/t/n/out'] });
+});
+
 // --- tar: real-host integration (create + extract round-trip KAT) ---------
 test('provision resolves a real tar on this host (integration)', () => {
   const got = provision('tar', { dataDir: tmpDataDir() });

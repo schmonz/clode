@@ -85,11 +85,9 @@ function archiveExtract(archivePath, destDir, opts = {}) {
   const { path: tarBin } = provision('tar', { env, dataDir, spawn });
   const isZip = archivePath.toLowerCase().endsWith('.zip');
   const flag = isZip ? '-xf' : '-xzf';
-  // Pass the archive by BASENAME with cwd=its dir, never as an absolute path — an
-  // absolute arg like `C:\…\a.zip` is misread as a remote host:path by Git Bash's
-  // GNU tar on Windows (the drive-letter colon). Mirrors clode-node's tarExtract.
-  const res = spawn(tarBin, [flag, path.basename(archivePath), '-C', destDir],
-    { stdio: 'inherit', cwd: path.dirname(archivePath) });
+  // tarPlan (host-provision.cjs): the one tar argument shape, safe for Git for Windows' GNU tar.
+  const plan = require('./host-provision.cjs').tarPlan(flag, archivePath, destDir);
+  const res = spawn(tarBin, plan.args, { stdio: 'inherit', cwd: plan.cwd });
   if (res.error) throw res.error;
   if (res.status !== 0) {
     throw new Error(`clode-rcodesign: ${tarBin} ${flag} ${archivePath} -C ${destDir} exited ${res.status}`);

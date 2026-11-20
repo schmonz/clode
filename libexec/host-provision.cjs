@@ -87,6 +87,20 @@ const ZSTD_KAT = {
   expected: 'clode'.repeat(20),
 };
 
+// TAR ARGUMENTS: one shape for every tar call (the KAT below, clode-node.cjs, clode-rcodesign.cjs). Under a bash
+// PATH on Windows `tar` is Git for Windows' GNU tar, which misreads two things in a Windows path:
+//   - an archive argument with a colon is a remote host:path (C:\x.tar -> host "C", "Cannot connect to C");
+//   - its -C argument is UNQUOTED, so a backslash escape is a character: the KAT's dir
+//     ...\clode-run-n2gbTv\naude-sea-9gxkv1 reached tar as "...clode-run-n2gbTv<newline>aude-sea-9gxkv1" and every
+//     materializeDeps row failed "Cannot open" (CI 9c655b7, windows-latest). Any user whose path has a segment
+//     starting n, t, r, ... hits the same.
+// So tar runs in the archive's dir with the archive by basename (no colon), and -C gets the directory with forward
+// slashes (no escapes; GNU tar, bsdtar and Windows' own tar all take C:/x). Not --force-local: only GNU tar has it.
+// On POSIX the slash form is the path itself. `p` is injectable so a row can hand it Windows paths anywhere.
+function tarPlan(flag, archive, dir, p = path) {
+  return { cwd: p.dirname(archive), args: [flag, p.basename(archive), '-C', dir.split(p.sep).join('/')] };
+}
+
 const REGISTRY = {
   sha256: {
     id: 'sha256',
@@ -132,24 +146,18 @@ const REGISTRY = {
       const src = base + '.src';
       const dst = base + '.dst';
       const arc = base + '.tar';
-      // Pass the archive by BASENAME with cwd=its dir, never as an absolute path.
-      // On Windows under a bash PATH, `tar` is Git Bash's GNU tar, which reads an
-      // absolute archive arg like `C:\…\x.tar` as a remote `host:path` (the
-      // drive-letter colon → host "C") and dies "Cannot connect to C:". A bare
-      // basename has no colon, so create/extract work uniformly on GNU tar
-      // (Windows/Linux) and bsdtar (macOS). `-C <dir>` is a change-dir, not
-      // remote-parsed, so an absolute path there is fine. Mirrors naude-sea.cjs.
-      const arcDir = path.dirname(arc);
-      const arcName = path.basename(arc);
+      // The arguments are tarPlan's (above): Git for Windows' GNU tar misreads a Windows path otherwise.
       try {
         fs.rmSync(src, { recursive: true, force: true });
         fs.rmSync(dst, { recursive: true, force: true });
         fs.mkdirSync(src, { recursive: true });
         fs.mkdirSync(dst, { recursive: true });
         fs.writeFileSync(path.join(src, 'ok'), 'clode-tar-kat');
-        const c = run(bin, ['-cf', arcName, '-C', src, 'ok'], { cwd: arcDir });
+        const cp = tarPlan('-cf', arc, src);
+        const c = run(bin, [...cp.args, 'ok'], { cwd: cp.cwd });
         if (!c || c.status !== 0) return false;
-        const x = run(bin, ['-xf', arcName, '-C', dst], { cwd: arcDir });
+        const xp = tarPlan('-xf', arc, dst);
+        const x = run(bin, xp.args, { cwd: xp.cwd });
         if (!x || x.status !== 0) return false;
         return fs.readFileSync(path.join(dst, 'ok'), 'utf8') === 'clode-tar-kat';
       } catch {
@@ -386,4 +394,4 @@ function provision(id, opts = {}) {
     + (tried.length ? ` [tried: ${tried.join('; ')}]` : ''));
 }
 
-module.exports = { provision, parseSha256, REGISTRY };
+module.exports = { provision, parseSha256, tarPlan, REGISTRY };
