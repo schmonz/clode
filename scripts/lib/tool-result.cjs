@@ -249,6 +249,12 @@ function assertFailsOnMissingOutput(check, command, modes, context) {
     }
   }
 }
+// The control for a check that judges a SWITCH's effect rather than a cell's answer (a --settings deny makes the tool
+// absent, so the check passes on "No such tool available"): the missing-output rows only. It claims no cell: the
+// coverage gate counts assertFailsOnMissingOutput and assertNotRegistered, never this.
+function assertFailsOnMissingOutputClaimingNoCell(check, command, context) {
+  failsOnMissingOutput(check, command, undefined, context);
+}
 function failsOnMissingOutput(check, command, modes, context) {
   if (modes !== undefined && !(typeof modes === 'string' && modes)
     && !(Array.isArray(modes) && modes.length && modes.every((m) => typeof m === 'string' && m))) {
@@ -316,4 +322,4 @@ function assertNotRegistered(check, command, modes, answers) {
 }
 
 module.exports = { toolResult, toolResultText, toolFollowUpText, rawBodyReads, assertFailsOnMissingOutput, answeredLog,
-  assertNotRegistered };
+  assertNotRegistered, assertFailsOnMissingOutputClaimingNoCell };

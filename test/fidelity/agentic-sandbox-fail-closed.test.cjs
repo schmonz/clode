@@ -31,7 +31,7 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { builtQuaude } = require('../built-binary.cjs');
 const { startMockAnthropic, cannedSSE, cannedToolUseSSE } = require('../mock-anthropic-helper.cjs');
-const { toolResult, assertFailsOnMissingOutput } = require('../../scripts/lib/tool-result.cjs');
+const { toolResult, assertFailsOnMissingOutput, assertFailsOnMissingOutputClaimingNoCell } = require('../../scripts/lib/tool-result.cjs');
 
 // The bundle's required-branch refusal, naming the gap (round 3, USER ruling M1: node-shim's net.createServer throws
 // "quaude does not support the sandbox yet: net.createServer"; before, the reason read "not a function").
@@ -222,7 +222,9 @@ test('the user\'s --settings is honoured under quaude: env, hooks and permission
   // The cells: E and U run under --dangerously-skip-permissions; bashDisabled is a plain -p turn.
   assertFailsOnMissingOutput(envHonoured, E, 'permission:bypassPermissions');
   assertFailsOnMissingOutput(updateDenied, U, 'permission:bypassPermissions');
-  assertFailsOnMissingOutput(bashDisabled, E);
+  // bashDisabled judges a SWITCH's effect (--settings deny), never a cell: it passes on "No such tool available", so it
+  // is vetted by the control that claims no cell (final-review I3), and drives nothing
+  assertFailsOnMissingOutputClaimingNoCell(bashDisabled, E);
   const findings = [];
 
   // A FILE carrying env and a PreToolUse hook (the sandbox off): both apply, and quaude's update-guard hook runs too.

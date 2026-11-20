@@ -86,7 +86,7 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
-const { toolResult, toolResultText, assertFailsOnMissingOutput, rawBodyReads, answeredLog, assertNotRegistered } = require('../../scripts/lib/tool-result.cjs');
+const { toolResult, toolResultText, assertFailsOnMissingOutput, rawBodyReads, answeredLog, assertNotRegistered, assertFailsOnMissingOutputClaimingNoCell } = require('../../scripts/lib/tool-result.cjs');
 const { defineGuard, guardTests, checkGate, BROKEN } = require('../guard.cjs');
 const { throwsAsFindings } = require('../throws-as-findings.cjs');
 const { discoverFilesByExt } = require('../source-scan.cjs');
@@ -188,6 +188,10 @@ test('assertFailsOnMissingOutput refuses a check that passes on "No such tool av
   assert.throws(() => assertFailsOnMissingOutput(mentions, T), /PASSES on "No such tool available: TaskCreate"/);
   const own = (m) => toolResultText(m, T.id).includes('Task #1 created');
   assert.doesNotThrow(() => assertFailsOnMissingOutput(own, T), 'a check of the tool\'s own answer still passes the control');
+  // a check of a switch's effect (a --settings deny) is vetted by the control that claims no cell, which still refuses
+  // a check that passes on missing output
+  assert.doesNotThrow(() => assertFailsOnMissingOutputClaimingNoCell(isAnError, T));
+  assert.throws(() => assertFailsOnMissingOutputClaimingNoCell(() => true, T), /PASSES when the tool's output is missing/);
 });
 
 test('assertFailsOnMissingOutput refuses a check that reads the raw request body', () => {
