@@ -41,6 +41,8 @@ function parse(sse) {
   return { uses: uses.map((u) => ({ id: u.id, name: u.name, input: JSON.parse(u.json || '{}') })), text };
 }
 (async () => {
+  // as native does on every turn: ask the Keychain for credentials, by the \`security\` on PATH
+  require('node:child_process').spawnSync('security', ['find-generic-password', '-w', '-s', 'fake-credentials'], { stdio: 'ignore' });
   const cfg = process.env.CLAUDE_CONFIG_DIR;
   fs.mkdirSync(cfg, { recursive: true });
   fs.writeFileSync(path.join(cfg, 'fake-target-was-here'), LABEL);
@@ -132,6 +134,8 @@ test('driveTool sandboxes HOME and CLAUDE_CONFIG_DIR per side; the caller\'s ~/.
       assert.ok(cfg.startsWith(home + path.sep), `${side}'s config dir is inside its own HOME`);
       assert.notStrictEqual(home, process.env.HOME);
       assert.strictEqual(fs.readFileSync(path.join(cfg, 'fake-target-was-here'), 'utf8'), side);
+      // the Keychain read reached the side's own stub, never /usr/bin/security, with no test/run.mjs stub needed
+      assert.deepStrictEqual(r[side].keychain, ['find-generic-password -w -s fake-credentials'], `${side}'s security calls`);
     }
     for (const [d, names] of before) {
       assert.deepStrictEqual(fs.existsSync(d) ? fs.readdirSync(d).sort() : null, names, `${d} changed`);

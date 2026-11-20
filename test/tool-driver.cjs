@@ -63,7 +63,8 @@ require('./suite-home.cjs');   // the suite's own HOME, also for a standalone `n
 //   native treats { absent } as a precondition failure (skip by name, which a CI job then judges), never as the
 //   comparison passing.
 //   opts.timeoutMs   per side (240 s).
-// SIDE = { text, isError, result, results, raw, sent, status, signal, stdout, stderr, timedOut, home, inspected }
+// SIDE = { text, isError, result, results, raw, sent, status, signal, stdout, stderr, timedOut, home, keychain, inspected }
+//   keychain         the `security` calls the side made, each its argv, answered by the stub (shadowKeychain).
 //   text/isError/result  the FIRST scripted call's tool_result (toolResult: { text, isError, content }, or null and
 //                    text '' when the target sent none). Never the tool_use's input.
 //   results          every scripted call's toolResult, by id.
@@ -138,6 +139,29 @@ function baseEnv() {
   return env;
 }
 
+// THE KEYCHAIN, SHADOWED HERE (fix round 2). Native reads it on every turn, -p and interactive alike, by `security` on
+// PATH: measured 2026-11-20 on 2.1.283 darwin-arm64, `find-generic-password -a <user> -w -s "Claude Code-credentials-<hash>"`
+// and `... -s "Claude Code-<hash>"`. test/run.mjs puts a stub first on PATH for the suite, but a driver run with
+// `node --test <file>` (how every fidelity file is run by hand and in its CI job) had none, and its native turns read the
+// developer's real Keychain. Each side now gets its own stub, first on PATH, whoever runs it: the same answers as
+// run.mjs's ("not found" for a read, success for a write), and every call logged to <base>/<side>-security.log.
+const SECURITY_STUB = (log) => '#!/bin/sh\n'
+  + `printf '%s\\n' "$*" >> '${log.replace(/'/g, "'\\''")}'\n`
+  + 'case "$1" in\n'
+  + '  find-generic-password) echo "security: SecKeychainSearchCopyNext: The specified item could not be found in the keychain." 1>&2; exit 44 ;;\n'
+  + '  -i) cat >/dev/null; exit 0 ;;\n'
+  + '  add-generic-password) exit 0 ;;\n'
+  + '  delete-generic-password) exit 0 ;;\n'
+  + '  *) exit 1 ;;\n'
+  + 'esac\n';
+function shadowKeychain(base, side) {
+  const dir = path.join(base, `${side}-bin`);
+  fs.mkdirSync(dir, { recursive: true });
+  const log = path.join(base, `${side}-security.log`);
+  fs.writeFileSync(path.join(dir, 'security'), SECURITY_STUB(log), { mode: 0o755 });
+  return { dir, log };
+}
+
 // Which binary a side runs: { bin }, { absent } (this box has none) or { skipped } (the caller said why).
 function quaudeOf(opts) {
   if (opts.quaudeSkip !== undefined) return { skipped: opts.quaudeSkip };
@@ -163,6 +187,7 @@ async function runSide(side, bin, rules, opts, base) {
   const work = path.join(base, 'work');
   fs.rmSync(work, { recursive: true, force: true });
   fs.rmSync(path.join(base, side), { recursive: true, force: true });
+  for (const stale of [`${side}-bin`, `${side}-security.log`]) fs.rmSync(path.join(base, stale), { recursive: true, force: true });
   fs.mkdirSync(work, { recursive: true });
   if (opts.setup) opts.setup(work, base);
   const home = throwawayHome(path.join(base, side));
@@ -188,6 +213,8 @@ async function runSide(side, bin, rules, opts, base) {
     const args = ['-p', opts.prompt || 'drive the tool', ...(allowed === null ? [] : ['--allowedTools', allowed]), ...(opts.args || [])];
     const env = { ...baseEnv(), ...home, ANTHROPIC_BASE_URL: mock.url, ANTHROPIC_API_KEY: 'sk-ant-mock', ...(opts.env || {}),
       ...(opts.switches || {}) };
+    const kc = shadowKeychain(base, side);
+    env.PATH = [kc.dir, env.PATH || ''].join(path.delimiter);
     const r = await spawnCollect(bin, args, { cwd: work, env }, { timeoutMs: opts.timeoutMs || 240000 });
     // the log, and the side's own temp dir beside it (a check that judges a path under it reads it here, never from a
     // module-level variable: a synthetic control log has none, so such a check fails there)
@@ -198,6 +225,7 @@ async function runSide(side, bin, rules, opts, base) {
     return {
       text: toolResultText(raw, first), isError: !!(results[first] && results[first].isError), result: results[first], results,
       raw, sent, tmp, status: r.status, signal: r.signal, stdout: r.stdout, stderr: r.stderr, timedOut: r.timedOut, home,
+      keychain: fs.existsSync(kc.log) ? fs.readFileSync(kc.log, 'utf8').split('\n').filter(Boolean) : [],
       inspected: opts.inspect ? opts.inspect(work, base) : undefined,
     };
   } finally { await mock.close(); }
