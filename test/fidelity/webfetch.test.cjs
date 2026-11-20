@@ -110,12 +110,15 @@ function findings(label, { side, seen }) {
   return out;
 }
 
+// The control, run by both tests (tools-local's shape): the check must FAIL when WebFetch's output is missing.
+function controls() { assertFailsOnMissingOutput(fetched, USE); }
+
 const SKIP = process.platform === 'win32' ? 'the target\'s certificate is made with openssl, which a Windows runner need not have' : false;
 
 test('WebFetch in a built quaude fetches a TLS 1.2, rsa_pss_rsae_sha256 page as native does', { skip: SKIP }, async (t) => {
   const q = builtQuaude();
   if (q.skip) { t.skip(q.skip); return; }
-  assertFailsOnMissingOutput(fetched, USE);
+  controls();
   const got = findings('quaude', await turn('quaude', { quaude: q.path,
     nativeSkip: 'native is judged against the same answer by the next test' }));
   assert.deepStrictEqual(got, [], got.join('\n'));
@@ -125,7 +128,7 @@ test('WebFetch in a built quaude fetches a TLS 1.2, rsa_pss_rsae_sha256 page as 
 test('native fetches the same page and answers as recorded', { skip: SKIP }, async (t) => {
   const native = rgOracle(process.env);
   if (!native) { t.skip(rgOracleSkip(process.env)); return; }
-  assertFailsOnMissingOutput(fetched, USE);
+  controls();
   const got = findings('native', await turn('native', { native, quaudeSkip: 'quaude is judged by the test above' }));
   assert.deepStrictEqual(got, [], `native moved:\n${got.join('\n')}`);
 });
