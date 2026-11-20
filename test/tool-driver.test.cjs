@@ -1,0 +1,175 @@
+'use strict';
+// test/tool-driver.cjs, the ONE harness every every-tool Phase A driver runs its turn through, against FAKE quaude and
+// native binaries: a node script that speaks to the mock as the real target does (POST /v1/messages, read the
+// scripted tool_use from the SSE, "run" it, POST the follow-up carrying its tool_result, print the closing text).
+// The fake's tool COMPUTES its answer (PRODUCT-<a*b>), so the input never spells it: a driver that read the tool_use
+// instead of the tool_result could not find it.
+//
+// What is held: driveTool returns the tool_result of the scripted call (and '' when the target sent none, never the
+// input); each side gets a fresh HOME and CLAUDE_CONFIG_DIR of its own under the driver's base, and the caller's own
+// ~/.claude is untouched; native is skipped WITH its reason (named by the caller, or a provider that is not there);
+// a script of several calls is answered in order. FakeDriverTool is not a registered tool, so
+// test/build-gates/tool-coverage-gates.test.cjs lists this file's driver as foreign, never as a cell.
+const test = require('node:test');
+const assert = require('node:assert');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { driveTool } = require('./tool-driver.cjs');
+const { toolResultText, assertFailsOnMissingOutput } = require('../scripts/lib/tool-result.cjs');
+
+const SKIP = process.platform === 'win32' ? 'the fake targets are #!/bin/sh wrappers' : false;
+
+// The fake target. FAKE_MODE=silent answers the tool_use with a plain text turn (no tool_result at all).
+const FAKE_SRC = `'use strict';
+const fs = require('node:fs');
+const path = require('node:path');
+const LABEL = process.argv[2];
+const args = process.argv.slice(3);
+const prompt = args[args.indexOf('-p') + 1];
+const url = process.env.ANTHROPIC_BASE_URL + '/v1/messages';
+function parse(sse) {
+  const uses = []; let text = '';
+  for (const block of sse.split('\\n\\n')) {
+    const line = block.split('\\n').find((l) => l.startsWith('data: '));
+    if (!line) continue;
+    const ev = JSON.parse(line.slice(6));
+    if (ev.type === 'content_block_start' && ev.content_block.type === 'tool_use') uses.push({ id: ev.content_block.id, name: ev.content_block.name, json: '' });
+    if (ev.type === 'content_block_delta' && ev.delta.type === 'input_json_delta') uses[uses.length - 1].json += ev.delta.partial_json;
+    if (ev.type === 'content_block_delta' && ev.delta.type === 'text_delta') text += ev.delta.text;
+  }
+  return { uses: uses.map((u) => ({ id: u.id, name: u.name, input: JSON.parse(u.json || '{}') })), text };
+}
+(async () => {
+  const cfg = process.env.CLAUDE_CONFIG_DIR;
+  fs.mkdirSync(cfg, { recursive: true });
+  fs.writeFileSync(path.join(cfg, 'fake-target-was-here'), LABEL);
+  const messages = [{ role: 'user', content: [{ type: 'text', text: prompt }] }];
+  for (let i = 0; i < 10; i++) {
+    const r = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model: 'fake', messages }) });
+    const turn = parse(await r.text());
+    if (!turn.uses.length) { process.stdout.write(turn.text + '\\n'); return; }
+    messages.push({ role: 'assistant', content: turn.uses.map((u) => ({ type: 'tool_use', id: u.id, name: u.name, input: u.input })) });
+    if (process.env.FAKE_MODE === 'silent') { messages.push({ role: 'user', content: [{ type: 'text', text: 'continue' }] }); continue; }
+    messages.push({ role: 'user', content: turn.uses.map((u) => ({ type: 'tool_result', tool_use_id: u.id,
+      content: [{ type: 'text', text: LABEL + ' PRODUCT-' + (u.input.a * u.input.b) + ' home=' + process.env.HOME + ' cfg=' + cfg }] })) });
+  }
+  process.exit(3);
+})();
+`;
+
+function fakes() {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'tool-driver-fakes-')));
+  const src = path.join(dir, 'fake-target.cjs');
+  fs.writeFileSync(src, FAKE_SRC);
+  const bin = (label) => {
+    const p = path.join(dir, label);
+    fs.writeFileSync(p, `#!/bin/sh\nexec '${process.execPath}' '${src}' ${label} "$@"\n`, { mode: 0o755 });
+    return p;
+  };
+  return { dir, quaude: bin('quaude'), native: bin('native') };
+}
+
+const FAKE = { name: 'FakeDriverTool', input: { a: 6, b: 7 }, id: 'toolu_fake_driver_1' };
+const FAKE_TWO = { name: 'FakeDriverTool', input: { a: 3, b: 5 }, id: 'toolu_fake_driver_2' };
+const sawProduct = (m) => toolResultText(m, FAKE.id).includes('PRODUCT-42');
+const sawSecond = (m) => toolResultText(m, FAKE_TWO.id).includes('PRODUCT-15');
+
+test('driveTool returns the tool_result of the scripted call, from quaude and from native, each judged', { skip: SKIP }, async () => {
+  assertFailsOnMissingOutput(sawProduct, FAKE);
+  const f = fakes();
+  try {
+    const r = await driveTool({ tool: FAKE, quaude: f.quaude, native: f.native });
+    assert.strictEqual(r.quaude.status, 0, r.quaude.stderr);
+    assert.ok(sawProduct(r.quaude.raw), `quaude: ${JSON.stringify(r.quaude.text)}`);
+    assert.match(r.quaude.text, /^quaude PRODUCT-42 /);
+    assert.strictEqual(r.quaude.isError, false);
+    assert.match(r.quaude.stdout, /TOOL-DRIVER-DONE/, 'the turn reached the closing text');
+    assert.strictEqual(r.native.status, 0, r.native.stderr);
+    assert.ok(sawProduct(r.native.raw), `native: ${JSON.stringify(r.native.text)}`);
+    assert.match(r.native.text, /^native PRODUCT-42 /);
+  } finally { fs.rmSync(f.dir, { recursive: true, force: true }); }
+});
+
+test('driveTool never reads the tool_use: a target that sends no tool_result yields empty text', { skip: SKIP }, async () => {
+  assertFailsOnMissingOutput(sawProduct, FAKE);
+  const f = fakes();
+  try {
+    const r = await driveTool({ tool: FAKE, quaude: f.quaude, nativeSkip: 'not under test here', env: { FAKE_MODE: 'silent' } });
+    assert.strictEqual(r.quaude.status, 0, r.quaude.stderr);
+    assert.strictEqual(r.quaude.text, '');
+    assert.strictEqual(r.quaude.result, null);
+    assert.ok(!sawProduct(r.quaude.raw));
+  } finally { fs.rmSync(f.dir, { recursive: true, force: true }); }
+});
+
+test('driveTool sandboxes HOME and CLAUDE_CONFIG_DIR per side; the caller\'s ~/.claude is untouched', { skip: SKIP }, async () => {
+  const f = fakes();
+  const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'tool-driver-base-')));
+  const callerDirs = [process.env.CLAUDE_CONFIG_DIR, process.env.HOME && path.join(process.env.HOME, '.claude')].filter(Boolean);
+  const before = callerDirs.map((d) => [d, fs.existsSync(d) ? fs.readdirSync(d).sort() : null]);
+  assertFailsOnMissingOutput(sawProduct, FAKE);
+  try {
+    const r = await driveTool({ tool: FAKE, base, quaude: f.quaude, native: f.native });
+    assert.ok(sawProduct(r.quaude.raw) && sawProduct(r.native.raw));
+    for (const side of ['quaude', 'native']) {
+      const said = /home=(\S+) cfg=(\S+)$/.exec(r[side].text);
+      assert.ok(said, `${side}: ${r[side].text}`);
+      const [, home, cfg] = said;
+      assert.strictEqual(home, r[side].home.HOME);
+      assert.strictEqual(cfg, r[side].home.CLAUDE_CONFIG_DIR);
+      assert.ok(home.startsWith(path.join(base, side) + path.sep), `${side}'s HOME ${home} is under ${base}/${side}`);
+      assert.ok(cfg.startsWith(home + path.sep), `${side}'s config dir is inside its own HOME`);
+      assert.notStrictEqual(home, process.env.HOME);
+      assert.strictEqual(fs.readFileSync(path.join(cfg, 'fake-target-was-here'), 'utf8'), side);
+    }
+    for (const [d, names] of before) {
+      assert.deepStrictEqual(fs.existsSync(d) ? fs.readdirSync(d).sort() : null, names, `${d} changed`);
+      assert.ok(!fs.existsSync(path.join(d, 'fake-target-was-here')));
+    }
+    assert.ok(fs.existsSync(base), 'a base the caller made is the caller\'s to remove');
+  } finally {
+    fs.rmSync(f.dir, { recursive: true, force: true });
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test('driveTool reports a native skip with its reason', { skip: SKIP }, async () => {
+  assertFailsOnMissingOutput(sawProduct, FAKE);
+  const f = fakes();
+  try {
+    const named = await driveTool({ tool: FAKE, quaude: f.quaude, nativeSkip: 'the turn needs claude.ai credentials' });
+    assert.deepStrictEqual(named.native, { skipped: 'the turn needs claude.ai credentials' });
+    assert.ok(sawProduct(named.quaude.raw));
+    const gone = path.join(f.dir, 'no-such-native');
+    const missing = await driveTool({ tool: FAKE, quaude: f.quaude, native: gone });
+    assert.match(missing.native.skipped, /no-such-native/);
+    assert.throws(() => driveTool({ tool: FAKE, quaude: f.quaude, nativeSkip: '' }), /one-line reason/);
+  } finally { fs.rmSync(f.dir, { recursive: true, force: true }); }
+});
+
+test('driveTool answers a script of several calls in order, and lays the fixture before each side', { skip: SKIP }, async () => {
+  assertFailsOnMissingOutput(sawSecond, FAKE_TWO);
+  const f = fakes();
+  const laid = [];
+  try {
+    const r = await driveTool({
+      script: [{ tool: FAKE }, { tool: FAKE_TWO }], quaude: f.quaude, native: f.native,
+      setup: (work) => { fs.writeFileSync(path.join(work, 'fixture.txt'), 'x'); laid.push(work); },
+      inspect: (work) => fs.readdirSync(work),
+    });
+    assert.ok(sawProduct(r.quaude.raw) && sawSecond(r.quaude.raw));
+    assert.ok(sawProduct(r.native.raw) && sawSecond(r.native.raw));
+    assert.match(r.quaude.text, /PRODUCT-42/, 'text is the FIRST call\'s');
+    assert.match(r.quaude.results[FAKE_TWO.id].text, /PRODUCT-15/);
+    assert.strictEqual(laid.length, 2);
+    assert.strictEqual(laid[0], laid[1], 'both sides run in the same working directory, so paths need no rewriting');
+    assert.deepStrictEqual(r.quaude.inspected, ['fixture.txt']);
+  } finally { fs.rmSync(f.dir, { recursive: true, force: true }); }
+});
+
+test('driveTool refuses a call that is not a { name, input, id } tool_use', () => {
+  const NAMELESS = { name: 'X' };
+  assert.throws(() => driveTool({ tool: NAMELESS }), /\{ name, input, id \}/);
+  assert.throws(() => driveTool({}), /tool_use/);
+});

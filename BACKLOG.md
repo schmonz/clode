@@ -442,6 +442,35 @@ The entries fall due by phase (the every-tool plan): Phase A 2026-12-15 (moved f
 USER RULING 2026-11-18), Phase B 2026-11-30, Phase C and the runner/relay tools 2026-12-31. That day
 the gate goes red, and each must be driven or re-dated with a new reason.
 
+**Tool coverage: the plan that works the table down.** The plan is
+.superpowers/sdd/2026-09-28-every-tool-driven/plan.md (spec: design.md beside it; both untracked on
+purpose). Its phases, each tool's `until` in the gate being its phase's constant (UNTIL_PHASE_A/B/C):
+- Phase A, before the release, 2026-12-15 (release-blocking): the 18 local tools Read, Write,
+  NotebookEdit, TaskCreate, TaskGet, TaskUpdate, TaskList, TaskStop, Skill, EnterWorktree,
+  ExitWorktree, CronCreate, CronDelete, CronList, ScheduleWakeup, ReportFindings, Workflow,
+  ListAgents; and the undriven cells of Agent, Bash, Edit, Grep and Glob.
+- Phase B, after the release, 2026-11-30 (a date set before Phase A moved past it; re-dating it is
+  the user's call): 24 tools needing a local helper, a pty or a default-off flag (WebFetch,
+  SendMessage, LSP, ToolSearch, the memory tools, TodoWrite, SubagentHandback, ObserverReport,
+  SendUserMessage, EndConversation, Poll, SendFeedback, PowerShell; AskUserQuestion, EnterPlanMode,
+  ExitPlanMode, ProposeGoal; GetTask, Monitor, PushNotification, SendFile).
+- Phase C, 2026-12-31: 30 tools needing claude.ai, a remote session or MCP, each given a harness or
+  a permanent exemption with evidence (WebSearch is server-side).
+Every driver runs its turn through ONE harness, test/tool-driver.cjs `driveTool` (every-tool Task 1):
+the mock scripts the caller's `tool: USE`, the built quaude and then native 2.1.283 (the pinned
+provider, never PATH's `claude`) each run one -p turn over the same tree in a HOME and
+CLAUDE_CONFIG_DIR of their own, and the caller judges each side's tool_result (toolResultText, with
+its assertFailsOnMissingOutput control in the caller's file, where both gates read it) and compares
+quaude's with native's, or names in one line why native cannot run the turn. The LAST task of each
+phase updates this entry: what it drove, what it exempted permanently and why, and the phase's
+new state.
+
+Measured: test/tool-driver.test.cjs, driveTool against fake quaude and native targets (2026-11-19)
+
+Measured: a scratch script (not committed) calling driveTool to drive Read over a one-file tree with the
+built quaude and native 2.1.283 darwin-arm64: both exited 0 with the same tool_result text, byte for
+byte, in 26 s for both turns (2026-11-19)
+
 Measured: test/build-gates/tool-coverage-gates.test.cjs with CLODE_PROVIDER_BIN at the darwin-arm64 2.1.283 carve:
 every-tool-driven OK, examined 2166 cells: 90 tools (87 in getAllBaseTools, 3 outside it), 2166 cells over
 darwin-arm64, linux-x64-musl and netbsd-arm64, 9 driven, 2157 exempted, 0 neither; 4 CI jobs report cells (2026-11-18).
