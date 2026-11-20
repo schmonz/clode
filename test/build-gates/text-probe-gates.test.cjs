@@ -470,7 +470,13 @@ const WRAP_BAD = `${SYNTH_HELPER}function caller(a){return zu(a,10,{wordWrap:fal
 
 guardTests(defineGuard({
   name: 'text-probe-wrap-options',
-  floor: 1,
+  // 18, MEASURED 2026-11-20: the 2.1.283 carve has 18 call sites to the wrapper on both
+  // macos-arm64 (`zu`) and linux-amd64 (`Gu`); this file's verdict note names them. A floor of
+  // 1 only caught a carve that lost every call site; one that lost most of them would have
+  // passed, judging WRAP_OPTIONS against a fraction of what the bundle asks for. A bump that
+  // legitimately drops call sites reads BROKEN until someone re-measures and moves this: loud
+  // on purpose.
+  floor: 18,
   read: readWrapCarve,
   scan: (i) => scanWrapOptions({ ...i, wrapOptions: WRAP_OPTIONS }),
   control: () => ({ bundle: WRAP_BAD, what: 'synthetic control' }),
