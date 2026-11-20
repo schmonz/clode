@@ -667,7 +667,9 @@ test('native answers the Task 5 script as T5_NATIVE records', { skip: SKIP }, as
 // (fix round 2): in plan and auto the auto-mode safety classifier is asked about it first (the turns answer it with
 // autoModeSeverity: 10, an allow; unanswered, native refuses the call as "temporarily unavailable"); its subagent then
 // runs in every mode, and hands back its answer in every mode but auto, where a subagent must report through
-// SubagentHandback and native says this one did not.
+// SubagentHandback and native says this one did not. INTERACTIVE (fix round 2): the same calls typed into a pty
+// (test/tool-driver.cjs interactiveTurn: no -p, the profile past onboarding with the mock's key approved); it runs in
+// auto mode by default, and every answer is print's but Agent's, which goes to the background (AGENT_BG).
 const E_EDIT = { name: 'Edit', input: { file_path: W('a.txt'), old_string: 'two', new_string: 'TWO' }, id: 'toolu_m6_edit' };
 const B_ECHO = { name: 'Bash', input: { command: 'echo mode-turn-$((6*7))', description: 'Print a marker' }, id: 'toolu_m6_bash' };
 const MODE_SCRIPT = [...SCRIPT, { tool: E_EDIT }, { tool: B_ECHO }, ...TASK_SCRIPT, ...T5_SCRIPT, ...SESSION_SCRIPT];
@@ -678,6 +680,7 @@ const MODE_ARGS = {
   'permission:dontAsk': { args: ['--permission-mode', 'dontAsk'] },
   'permission:plan': { args: ['--permission-mode', 'plan'] },
   unlisted: { allowedTools: null },
+  interactive: { interactive: true },
 };
 const layBoth = (work) => { layTree(work); layRepo(work); };
 const readBoth = (work, base) => ({ tree: readTree(work), gitState: readRepo(work), workflow: readWorkflow(work, base) });
@@ -718,6 +721,19 @@ const uListOff = (m) => t5Same(toolResult(m, T_LIST_1.id), TASK_OFF('TaskList'))
 // the other six Task list calls, unlisted: the same answer, each call by its own id
 const taskOff = (USE) => (m) => t5Same(toolResult(m, USE.id), TASK_OFF(USE.name));
 const aAgentAuto = (m) => { const r = toolResult(m, A_AGENT.id); return !!r && !r.isError && AGENT_AUTO.test(r.text); };
+// INTERACTIVE (fix round 2): a typed turn in a pty (test/tool-driver.cjs interactiveTurn). MEASURED on native 2.1.283
+// darwin-arm64 (2026-11-20): interactive runs in auto mode by default, and every call answers as in print but Agent,
+// which runs in the background whatever run_in_background says: its answer is the launch, with the random agentId
+// (twice) and the side's own task output file under CLAUDE_CODE_TMPDIR (claude-<uid>/<cwd>/<session>/tasks/<id>.output).
+const AGENT_BG = new RegExp('^' + esc(`Async agent launched successfully. (This tool result is internal metadata ${EM} never quote or paste any part of it, including the agentId below, into a user-facing reply.)`)
+  + '\\nagentId: (a[0-9a-f]{16}) ' + esc("(internal ID - do not mention to user. Use SendMessage with to: '") + '\\1'
+  + esc("', summary: '<5-10 word recap>' to continue this agent.)") + '\\n'
+  + esc(`The agent is working in the background. You will be notified automatically when it completes. You know nothing about its results until that notification arrives ${EM} do not report, assume, or predict them; continue other work or respond to the user in the meantime.`) + '\\n'
+  + esc(`Do not duplicate this agent's work ${EM} avoid working with the same files or topics it is using.`) + '\\n'
+  + 'output_file: /\\S+/claude-tmp/claude-\\d+/\\S+/[0-9a-f-]{36}/tasks/\\1\\.output\\n'
+  + esc(`Do NOT Read or tail this file via the shell tool ${EM} it is the full subagent JSONL transcript and reading it will overflow your context. If the user asks for progress, say the agent is still running; you'll get a completion notification.`) + '$');
+const iAgentBg = (m) => { const r = toolResult(m, A_AGENT.id); return !!r && !r.isError && AGENT_BG.test(r.text); };
+const AGENT_BG_SAMPLE = `Async agent launched successfully. (This tool result is internal metadata ${EM} never quote or paste any part of it, including the agentId below, into a user-facing reply.)\nagentId: a0123456789abcdef (internal ID - do not mention to user. Use SendMessage with to: 'a0123456789abcdef', summary: '<5-10 word recap>' to continue this agent.)\nThe agent is working in the background. You will be notified automatically when it completes. You know nothing about its results until that notification arrives ${EM} do not report, assume, or predict them; continue other work or respond to the user in the meantime.\nDo not duplicate this agent's work ${EM} avoid working with the same files or topics it is using.\noutput_file: /t/native/claude-tmp/claude-502/-t-work/778401d9-d5bd-4811-9043-3d8fcf49a214/tasks/a0123456789abcdef.output\nDo NOT Read or tail this file via the shell tool ${EM} it is the full subagent JSONL transcript and reading it will overflow your context. If the user asks for progress, say the agent is still running; you'll get a completion notification.`;
 // mode -> [call, its check, its own answer (the controls' positive side)]
 const MODE_CHECKS = {
   'permission:plan': [[WRITE_NEW, pWriteNew, PLAN_REFUSED('new.txt')], [WRITE_UNREAD, pWriteUnread, PLAN_REFUSED('b.txt')],
@@ -730,6 +746,7 @@ const MODE_CHECKS = {
     [T_LIST_1, uListOff, TASK_OFF('TaskList')],
     ...[T_CREATE_2, T_GET_2, T_GET_NONE, T_BLOCK_2, T_DONE_1, T_LIST_2].map((U) => [U, taskOff(U), TASK_OFF(U.name)])],
   'permission:auto': [[A_AGENT, aAgentAuto, { text: agentSample(AGENT_UNREPORTED), isError: false }]],
+  interactive: [[A_AGENT, iAgentBg, { text: AGENT_BG_SAMPLE, isError: false }]],
 };
 // The calls' verdicts in `mode`: a call the mode changes is judged by ITS check, any other by its print check.
 const modeVerdicts = (m, mode, side) => {
@@ -753,31 +770,31 @@ const printAnswer = (USE) => (USE === E_EDIT ? EDIT_DONE : USE === A_AGENT ? { t
 // in print; a mode's changed answer declares its mode through its own check.
 function modeControls() {
   // each declares its cells as a literal list, the gate's rule (test/build-gates/tool-coverage-gates.test.cjs)
-  assertFailsOnMissingOutput(readWhole, READ, ['permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted']);
-  assertFailsOnMissingOutput(writeNew, WRITE_NEW, ['permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk']);
-  assertFailsOnMissingOutput(nbReplace, NB_REPLACE, ['permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk']);
-  assertFailsOnMissingOutput(mEdit, E_EDIT, ['permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk']);
-  assertFailsOnMissingOutput(mEcho, B_ECHO, ['permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted']);
-  assertFailsOnMissingOutput(tCreate1, T_CREATE_1, ['permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan']);
-  assertFailsOnMissingOutput(tGetNone, T_GET_NONE, ['permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan']);
-  assertFailsOnMissingOutput(tList1, T_LIST_1, ['permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan']);
-  assertFailsOnMissingOutput(tStart1, T_START_1, ['permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan']);
-  assertFailsOnMissingOutput(tKillNone, T_KILL_NONE, ['permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted']);
-  assertFailsOnMissingOutput(sSkill, S_SKILL, ['permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted']);
-  assertFailsOnMissingOutput(wtEnter, WT_ENTER, ['permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted']);
-  assertFailsOnMissingOutput(wtRemove, WT_REMOVE, ['permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted']);
-  assertFailsOnMissingOutput(cCreate, C_CREATE, ['permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted']);
-  assertFailsOnMissingOutput(cList0, C_LIST_0, ['permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted']);
-  assertFailsOnMissingOutput(cNoDelete, C_NODELETE, ['permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted']);
-  assertFailsOnMissingOutput(cList1, C_LIST_1, ['permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted'], CRON_CONTEXT);
-  assertFailsOnMissingOutput(wSched, W_SCHED, ['permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted']);
-  assertFailsOnMissingOutput(rOne, R_ONE, ['permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted']);
-  assertFailsOnMissingOutput(fName, F_NAME, ['permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted']);
-  assertFailsOnMissingOutput(aListNative, A_LIST, ['permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted']);
-  assertFailsOnMissingOutput(aListQuaude, A_LIST, ['permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted']);
-  assertFailsOnMissingOutput(tBg, T_BG, ['permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted']);
-  assertFailsOnMissingOutput(tStop, T_STOP, ['permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted'], BG_CONTEXT);
-  assertFailsOnMissingOutput(tGet1, T_GET_1, ['permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan']);
+  assertFailsOnMissingOutput(readWhole, READ, ['interactive', 'permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted']);
+  assertFailsOnMissingOutput(writeNew, WRITE_NEW, ['interactive', 'permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk']);
+  assertFailsOnMissingOutput(nbReplace, NB_REPLACE, ['interactive', 'permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk']);
+  assertFailsOnMissingOutput(mEdit, E_EDIT, ['interactive', 'permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk']);
+  assertFailsOnMissingOutput(mEcho, B_ECHO, ['interactive', 'permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted']);
+  assertFailsOnMissingOutput(tCreate1, T_CREATE_1, ['interactive', 'permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan']);
+  assertFailsOnMissingOutput(tGetNone, T_GET_NONE, ['interactive', 'permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan']);
+  assertFailsOnMissingOutput(tList1, T_LIST_1, ['interactive', 'permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan']);
+  assertFailsOnMissingOutput(tStart1, T_START_1, ['interactive', 'permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan']);
+  assertFailsOnMissingOutput(tKillNone, T_KILL_NONE, ['interactive', 'permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted']);
+  assertFailsOnMissingOutput(sSkill, S_SKILL, ['interactive', 'permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted']);
+  assertFailsOnMissingOutput(wtEnter, WT_ENTER, ['interactive', 'permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted']);
+  assertFailsOnMissingOutput(wtRemove, WT_REMOVE, ['interactive', 'permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted']);
+  assertFailsOnMissingOutput(cCreate, C_CREATE, ['interactive', 'permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted']);
+  assertFailsOnMissingOutput(cList0, C_LIST_0, ['interactive', 'permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted']);
+  assertFailsOnMissingOutput(cNoDelete, C_NODELETE, ['interactive', 'permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted']);
+  assertFailsOnMissingOutput(cList1, C_LIST_1, ['interactive', 'permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted'], CRON_CONTEXT);
+  assertFailsOnMissingOutput(wSched, W_SCHED, ['interactive', 'permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted']);
+  assertFailsOnMissingOutput(rOne, R_ONE, ['interactive', 'permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted']);
+  assertFailsOnMissingOutput(fName, F_NAME, ['interactive', 'permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted']);
+  assertFailsOnMissingOutput(aListNative, A_LIST, ['interactive', 'permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted']);
+  assertFailsOnMissingOutput(aListQuaude, A_LIST, ['interactive', 'permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted']);
+  assertFailsOnMissingOutput(tBg, T_BG, ['interactive', 'permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted']);
+  assertFailsOnMissingOutput(tStop, T_STOP, ['interactive', 'permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted'], BG_CONTEXT);
+  assertFailsOnMissingOutput(tGet1, T_GET_1, ['interactive', 'permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan']);
   assertFailsOnMissingOutput(aAgent, A_AGENT, ['permission:acceptEdits', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted']);
   // the mode's own answers: plan's refusals, unlisted's ungranted writes and workflow review, auto's unreported subagent
   assertFailsOnMissingOutput(pWriteNew, WRITE_NEW, 'permission:plan');
@@ -794,6 +811,7 @@ function modeControls() {
   assertFailsOnMissingOutput(uReadB, READ_B, 'unlisted');
   assertFailsOnMissingOutput(uRun, F_RUN, 'unlisted');
   assertFailsOnMissingOutput(aAgentAuto, A_AGENT, 'permission:auto');
+  assertFailsOnMissingOutput(iAgentBg, A_AGENT, 'interactive');
   // not registered, unlisted: not applicable, never driven (each fails on the tool's own print answer)
   assertNotRegistered(uCreateOff, T_CREATE_1, ['unlisted'], { absent: TASK_OFF('TaskCreate').text, registered: printAnswer(T_CREATE_1).text });
   assertNotRegistered(uGetOff, T_GET_1, ['unlisted'], { absent: TASK_OFF('TaskGet').text, registered: printAnswer(T_GET_1).text });
