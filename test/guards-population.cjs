@@ -1019,15 +1019,6 @@ const PRODUCTION_GATE_EXCLUSIONS = [
       + 'not match, and the refuse half matched ensureToolchain throwing when its own '
       + 'toolchain install left no loadable esbuild. It derives no verdict from any '
       + 'artifact and refuses no input.' },
-  // MEASURED 2026-11-20 (every-tool Task 5, ruling E11), both halves: the verdict half is the
-  // UPSTREAM_PIN version `.match()` and the reporter-line filter for its summary; the refuse half
-  // is die(), exit 2 when its own steps cannot run (a dirty checkout, an unreachable guest, a
-  // failed build there). It WRITES the evidence; the verdict on it is the every-tool-driven
-  // gate's (checkLocalRuns in test/build-gates/tool-coverage-gates.test.cjs), which it never gives.
-  { file: 'scripts/vm-cells.mjs',
-    because: 'a run step that writes driven-local evidence from a VM run: the verdict half matched '
-      + 'its UPSTREAM_PIN parse and its summary filter, and the refuse half is its exit 2 when its '
-      + 'own steps cannot run. The verdict on what it writes is the every-tool-driven gate\'s.' },
 ];
 
 function isRecordedProductionGateExclusion(rel) {
