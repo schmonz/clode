@@ -1552,14 +1552,13 @@ const COMMON_MODES = ['print', 'interactive', 'unlisted', 'permission:acceptEdit
   'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan'];
 const SEARCH_MODES = COMMON_MODES.filter((mo) => mo !== 'unlisted');
 const BASH_MODES = [...COMMON_MODES, 'sandbox:on', 'sandbox:required', 'shell:bash', 'shell:zsh'];
-const PHASE_A_CELL = 'every-tool Phase A (cells): not yet driven in this mode on this engine. Driver paths: Grep and '
-  + 'Glob interactive, a Grep and a Glob call in test/fidelity/tools-local.test.cjs\'s interactive turn (test/tool-driver.cjs '
-  + 'interactive) in linux-x64-pty, node-shim-oracle-darwin and netbsd-arm64-cells; Bash: NONE OF THESE RUNS TODAY '
-  + '(agentic-sandbox-fail-closed drives only sandbox:on, and only on linux-x64-musl); sandbox:required (every engine) needs '
+const PHASE_A_CELL = 'every-tool Phase A (cells): not yet driven in this mode on this engine, and NO JOB RUNS IT. Bash '
+  + '(agentic-sandbox-fail-closed drives only sandbox:on, and only on linux-x64-musl): sandbox:required (every engine) needs '
   + 'a failIfUnavailable turn added to test/fidelity/agentic-sandbox-fail-closed.test.cjs, sandbox:on@darwin-arm64 a run '
-  + 'of that file in node-shim-oracle-darwin (Seatbelt), sandbox:on@netbsd-arm64 a NetBSD sandbox, which upstream does '
-  + 'not have (its fail-closed answer is the cell), and shell:zsh (every engine) a driveTool turn with env { SHELL: zsh } '
-  + 'in tools-local, with zsh in linux-x64-pty (macOS has its own; netbsd-arm64-cells installs it)';
+  + 'of that file in node-shim-oracle-darwin (Seatbelt), and sandbox:on@netbsd-arm64 a NetBSD sandbox, which upstream does '
+  + 'not have (its fail-closed answer is the cell); the sandbox under quaude needs a real net.createServer (BACKLOG). '
+  + 'shell:zsh (every engine) needs a driveTool turn with env { SHELL: zsh } in tools-local; zsh itself is cheap '
+  + 'everywhere (macOS runners ship /bin/zsh, linux-x64-pty would apt-get it, netbsd-arm64-cells already installs it)';
 const PHASE_A_CELLS = (tool, modes, driven, reason = PHASE_A_CELL) => modes.flatMap((mode) => {
   const engines = SHIPPING_ENGINES.filter((en) => !driven.includes(`${mode}@${en}`));
   if (!engines.length) return [];
@@ -1572,10 +1571,10 @@ const LOCAL_CELLS = 'every-tool Phase A (cells): driven in print, interactive (a
 // The driven cells of a tool driven in every turn tools-local runs (print, interactive, unlisted, the permission modes).
 const LOCAL_DRIVEN = ['print', 'interactive', 'unlisted', 'permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions',
   'permission:dontAsk', 'permission:plan'].flatMap((mo) => [`${mo}@linux-x64-musl`, `${mo}@darwin-arm64`, `${mo}@netbsd-arm64`]);
-// Grep and Glob: agentic-grep-glob in print and every permission mode, in linux-x64-pty, node-shim-oracle-darwin and
-// netbsd-arm64-cells.
+// Grep and Glob: agentic-grep-glob in print and every permission mode, and tools-local's interactive turn (final-review
+// I4), in linux-x64-pty, node-shim-oracle-darwin and netbsd-arm64-cells.
 const SEARCH_DRIVEN = ['print', 'permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions',
-  'permission:dontAsk', 'permission:plan'].flatMap((mo) => [`${mo}@linux-x64-musl`, `${mo}@darwin-arm64`, `${mo}@netbsd-arm64`]);
+  'permission:dontAsk', 'permission:plan', 'interactive'].flatMap((mo) => [`${mo}@linux-x64-musl`, `${mo}@darwin-arm64`, `${mo}@netbsd-arm64`]);
 // THE PINNED DIVERGENCES (final-review M1): tools whose claimed cells hold quaude to a NAMED difference from native's
 // answer, each in a driver file that names it. Counted apart in the verdict.
 const PINNED_DIVERGENCES = [

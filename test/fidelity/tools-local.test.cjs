@@ -674,6 +674,12 @@ test('native answers the Task 5 script as T5_NATIVE records', { skip: SKIP }, as
 const E_EDIT = { name: 'Edit', input: { file_path: W('a.txt'), old_string: 'two', new_string: 'TWO' }, id: 'toolu_m6_edit' };
 const B_ECHO = { name: 'Bash', input: { command: 'echo mode-turn-$((6*7))', description: 'Print a marker' }, id: 'toolu_m6_bash' };
 const MODE_SCRIPT = [...SCRIPT, { tool: E_EDIT }, { tool: B_ECHO }, ...TASK_SCRIPT, ...T5_SCRIPT, ...SESSION_SCRIPT];
+// GREP AND GLOB, INTERACTIVE (final-review I4): agentic-grep-glob drives them in print and every permission mode; the
+// interactive turn here adds one call of each, last (after Edit made a.txt's TWO), each matching one file so no mtime
+// order is judged. Only in the interactive turn: the other modes' Grep and Glob cells are agentic-grep-glob's.
+const G_TWO = { name: 'Grep', input: { pattern: 'TWO', path: path.join(BASE, 'work'), output_mode: 'files_with_matches' }, id: 'toolu_m6_grep' };
+const G_NB = { name: 'Glob', input: { pattern: '*.ipynb', path: path.join(BASE, 'work') }, id: 'toolu_m6_glob' };
+const modeScript = (mode) => (mode === 'interactive' ? [...MODE_SCRIPT, { tool: G_TWO }, { tool: G_NB }] : MODE_SCRIPT);
 // The mode turns, spelled here because the coverage gate reads each mode's flag in this file, and held equal to
 // test/tool-driver.cjs's MODE_TURNS (ruling E12; modeControls asserts it). modeFindings holds every turn to exactly its
 // entry (modeTurnFinding), which is what lets the unlisted turn's "No such tool available" prove the Task list tools
@@ -741,6 +747,11 @@ const AGENT_BG = new RegExp('^' + esc(`Async agent launched successfully. (This 
   + 'output_file: /\\S+/claude-tmp/claude-\\d+/\\S+/[0-9a-f-]{36}/tasks/\\1\\.output\\n'
   + esc(`Do NOT Read or tail this file via the shell tool ${EM} it is the full subagent JSONL transcript and reading it will overflow your context. If the user asks for progress, say the agent is still running; you'll get a completion notification.`) + '$');
 const iAgentBg = (m) => { const r = toolResult(m, A_AGENT.id); return !!r && !r.isError && AGENT_BG.test(r.text); };
+// MEASURED on native 2.1.283 darwin-arm64 (2026-11-20): both answer relative to the working directory
+const GREP_DONE = { text: 'Found 1 file\na.txt', isError: false };
+const GLOB_DONE = { text: 'n.ipynb', isError: false };
+const iGrep = (m) => t5Same(toolResult(m, G_TWO.id), GREP_DONE);
+const iGlob = (m) => t5Same(toolResult(m, G_NB.id), GLOB_DONE);
 const AGENT_BG_SAMPLE = `Async agent launched successfully. (This tool result is internal metadata ${EM} never quote or paste any part of it, including the agentId below, into a user-facing reply.)\nagentId: a0123456789abcdef (internal ID - do not mention to user. Use SendMessage with to: 'a0123456789abcdef', summary: '<5-10 word recap>' to continue this agent.)\nThe agent is working in the background. You will be notified automatically when it completes. You know nothing about its results until that notification arrives ${EM} do not report, assume, or predict them; continue other work or respond to the user in the meantime.\nDo not duplicate this agent's work ${EM} avoid working with the same files or topics it is using.\noutput_file: /t/native/claude-tmp/claude-502/-t-work/778401d9-d5bd-4811-9043-3d8fcf49a214/tasks/a0123456789abcdef.output\nDo NOT Read or tail this file via the shell tool ${EM} it is the full subagent JSONL transcript and reading it will overflow your context. If the user asks for progress, say the agent is still running; you'll get a completion notification.`;
 // mode -> [call, its check, its own answer (the controls' positive side)]
 const MODE_CHECKS = {
@@ -759,7 +770,8 @@ const MODE_CHECKS = {
 // The calls' verdicts in `mode`: a call the mode changes is judged by ITS check, any other by its print check.
 const modeVerdicts = (m, mode, side) => {
   const own = new Map((MODE_CHECKS[mode] || []).map(([USE, check]) => [USE.id, check]));
-  return [...verdicts(m), [E_EDIT, mEdit(m)], [B_ECHO, mEcho(m)], ...taskVerdicts(m), ...t5Verdicts(m, side), ...sessionVerdicts(m)]
+  return [...verdicts(m), [E_EDIT, mEdit(m)], [B_ECHO, mEcho(m)], ...taskVerdicts(m), ...t5Verdicts(m, side), ...sessionVerdicts(m),
+    ...(mode === 'interactive' ? [[G_TWO, iGrep(m)], [G_NB, iGlob(m)]] : [])]
     .map(([USE, same]) => [USE, own.has(USE.id) ? own.get(USE.id)(m) : same]);
 };
 // What the turn leaves, by mode: print's, or (plan, unlisted) the tree as laid and, unlisted, no workflow run.
@@ -821,6 +833,8 @@ function modeControls() {
   assertFailsOnMissingOutput(uRun, F_RUN, 'unlisted');
   assertFailsOnMissingOutput(aAgentAuto, A_AGENT, 'permission:auto');
   assertFailsOnMissingOutput(iAgentBg, A_AGENT, 'interactive');
+  assertFailsOnMissingOutput(iGrep, G_TWO, 'interactive');
+  assertFailsOnMissingOutput(iGlob, G_NB, 'interactive');
   // not registered, unlisted: not applicable, never driven (each fails on the tool's own print answer)
   assertNotRegistered(uCreateOff, T_CREATE_1, ['unlisted'], { absent: TASK_OFF('TaskCreate').text, registered: printAnswer(T_CREATE_1).text });
   assertNotRegistered(uGetOff, T_GET_1, ['unlisted'], { absent: TASK_OFF('TaskGet').text, registered: printAnswer(T_GET_1).text });
@@ -855,7 +869,7 @@ for (const mode of Object.keys(MODE_ARGS)) {
     const q = builtQuaude();
     if (q.skip) { t.skip(q.skip); return; }
     modeControls();
-    const r = await driveTool({ script: MODE_SCRIPT, base: BASE, quaude: q.path, setup: layBoth, inspect: readBoth, autoModeSeverity: 10, ...MODE_ARGS[mode],
+    const r = await driveTool({ script: modeScript(mode), base: BASE, quaude: q.path, setup: layBoth, inspect: readBoth, autoModeSeverity: 10, ...MODE_ARGS[mode],
       nativeSkip: 'native is judged against the same recorded answers by its own test' });
     const got = modeFindings('quaude', r.quaude, mode);
     const survived = await sleepSurvivors('quaude');
@@ -866,7 +880,7 @@ for (const mode of Object.keys(MODE_ARGS)) {
     const native = rgOracle(process.env);
     if (!native) { t.skip(rgOracleSkip(process.env)); return; }
     modeControls();
-    const r = await driveTool({ script: MODE_SCRIPT, base: BASE, native, setup: layBoth, inspect: readBoth, autoModeSeverity: 10, ...MODE_ARGS[mode],
+    const r = await driveTool({ script: modeScript(mode), base: BASE, native, setup: layBoth, inspect: readBoth, autoModeSeverity: 10, ...MODE_ARGS[mode],
       quaudeSkip: 'quaude is judged by its own test' });
     const got = modeFindings('native', r.native, mode);
     const survived = await sleepSurvivors('native');
