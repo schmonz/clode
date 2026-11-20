@@ -104,6 +104,20 @@ test('CONTROL: a dead run\'s root whose pid the kernel reused for a LATER proces
   assert.strictEqual(fs.existsSync(root), false);
 });
 
+// THE CLOCK SKEW, MEASURED WHERE IT RUNS (every CI job that runs the suite prints this line): how far the process
+// table's start time for a child sits from the wall clock at its spawn. 78bd732 said Linux ps can read up to ~2 s early
+// (whole-second btime + jiffies, then truncated); this line is the measurement that claim waits on (BACKLOG.md).
+test('MEASURE: ps start of a child minus the wall clock at its spawn (a diagnostic line; it judges nothing but that ps read it)', (t) => {
+  if (process.platform === 'win32') { t.skip('the line is about ps; Windows reads CIM CreationDate, a FILETIME'); return; }
+  const before = Date.now();
+  const pid = liveChild(t);
+  const after = Date.now();
+  const started = RR.pidOwner(pid).started;
+  assert.ok(typeof started === 'number', 'ps read the live child');
+  const line = `run-tmp clock skew: ${process.platform} ps start - wall clock at spawn = ${started - before} ms (spawn took ${after - before} ms)`;
+  t.diagnostic(line);
+});
+
 test('a stamped root is its run\'s while the pid\'s owner has the stamped start, whatever the filesystem says of the dir', (t) => {
   const original = scratch(t);
   const pid = liveChild(t);

@@ -35,9 +35,12 @@ function pidOwner(pid, { platform = process.platform, run = require('node:child_
 // Windows), so they agree for the same process and differ for a later one the kernel gave the pid to.
 // WHY NOT THE ROOT'S BIRTH TIME (CI ubuntu-latest on b3e9aaf: a reused pid's root read as live). On Linux ps's start
 // is the boot time from /proc/stat (whole seconds) plus the process's start in jiffies, then printed truncated to whole
-// seconds: up to about two seconds EARLIER than the wall clock a birth time is in, so a process started 1.1 s after the
-// root read as started before it. Measured in node:24-bookworm (2026-11-20): the fs keeps a birth time there and a
-// rename moves only ctime, so the clock is the cause; where a filesystem keeps no birth time (birthtimeMs 0) the old
+// seconds, so it reads EARLY. MEASURED (2026-11-20, node:24-bookworm under Docker on an x86-64 Linux host; the
+// MEASURE row in test/run-tmp.test.cjs, which every CI suite job now prints as "run-tmp clock skew"): a child's ps
+// start sat -643 to -1606 ms from the wall clock at its spawn over six runs (darwin, same row: -788 ms, truncation
+// alone). So a process started 1.1 s after the root could read as started before it. The ubuntu-latest runner's own
+// number is the CI line; until it is read, that runner's skew is unmeasured. In that container the fs keeps a birth
+// time and a rename moves only ctime, so the clock is the cause; where a filesystem keeps no birth time (birthtimeMs 0) the old
 // ctime fallback was wrong as well, since every entry added, removed or renamed moves ctime later. Comparing ps with ps
 // (the stamp) has neither problem.
 // A DOUBT COUNTS AS LIVE, never as dead: an owner that cannot be read (ps answered nothing, PowerShell failed or timed
