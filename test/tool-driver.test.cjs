@@ -15,7 +15,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { driveTool, TOOL_SWITCHES, ptyHarnessMissing, keychainShadowFinding } = require('./tool-driver.cjs');   // first: it applies the suite home, standalone too
+const { driveTool, TOOL_SWITCHES, ptyHarnessMissing, keychainShadowFinding, MODE_TURNS, modeTurnFinding } = require('./tool-driver.cjs');   // first: it applies the suite home, standalone too
 const { toolResultText, assertFailsOnMissingOutput } = require('../scripts/lib/tool-result.cjs');
 
 const SKIP = process.platform === 'win32' ? 'the fake targets are #!/bin/sh wrappers' : false;
@@ -268,6 +268,44 @@ test('driveTool refuses a darwin native turn whose Keychain read bypassed the st
 
 const FAKE_AGENT = { name: 'FakeDriverTool', input: { prompt: 'answer with SUB-TOKEN-9' }, id: 'toolu_fake_agent_1' };
 const sawSubagent = (m) => toolResultText(m, FAKE_AGENT.id).includes('SUBAGENT-SAID SUB-ANSWER-9');
+// RULING E12: a not-registered answer proves something only in the mode's own turn. What the turn RAN is recorded
+// (SIDE.turn) and judged; each planted turn below is the unlisted (or plan) turn plus one way to switch a tool off that
+// the old list of spellings missed, or one extra arg, and each is a finding. The mode's own turns are not.
+test('modeTurnFinding: only a turn that ran exactly its MODE_TURNS entry is the mode\'s own (planted: every way round it)', { skip: SKIP }, async () => {
+  const f = fakes();
+  const deny = { permissions: { deny: ['FakeDriverTool'] } };
+  const run = (mode, over = {}) => driveTool({ tool: FAKE, quaude: f.quaude, nativeSkip: 'judged on quaude alone', ...MODE_TURNS[mode], ...over });
+  try {
+    for (const mode of ['print', 'unlisted', 'permission:plan']) {
+      const r = await run(mode);
+      assert.strictEqual(r.quaude.status, 0, r.quaude.stderr);
+      assert.ok(sawProduct(r.quaude.raw), `${mode}: the turn ran`);
+      assert.strictEqual(modeTurnFinding('quaude', r.quaude, mode), null, `${mode} is its own turn`);
+      if (mode !== 'unlisted') assert.match(modeTurnFinding('quaude', r.quaude, 'unlisted'), /--allowedTools "FakeDriverTool", not null/);
+    }
+    const planted = [
+      ['--disallowed-tools', 'unlisted', { args: ['--disallowed-tools', 'FakeDriverTool'] }, /args \["--disallowed-tools","FakeDriverTool"\], not \[\]/],
+      ['--settings deny', 'unlisted', { args: ['--settings', JSON.stringify(deny)] }, /args \["--settings",.*permissions.*deny.*\], not \[\]/],
+      ['a fixture .claude/settings.json', 'unlisted', { setup: (work) => {
+        fs.mkdirSync(path.join(work, '.claude'), { recursive: true });
+        fs.writeFileSync(path.join(work, '.claude', 'settings.json'), JSON.stringify(deny));
+      } }, /setup wrote settings work\/\.claude\/settings\.json$/],
+      ['an extra arg', 'permission:plan', { args: ['--permission-mode', 'plan', '--add-dir', f.dir] }, /args \["--permission-mode","plan","--add-dir",.*\], not \["--permission-mode","plan"\]/],
+      ['a switch', 'unlisted', { switches: { CLAUDE_CODE_ENABLE_TASKS: 'false' } }, /switches \{"CLAUDE_CODE_ENABLE_TASKS":"false"\}/],
+      ['extra env', 'unlisted', { env: { ENABLE_TOOL_SEARCH: 'false' } }, /env ENABLE_TOOL_SEARCH/],
+    ];
+    for (const [what, mode, over, why] of planted) {
+      const r = await run(mode, over);
+      assert.strictEqual(r.quaude.status, 0, `${what}: ${r.quaude.stderr}`);
+      const finding = modeTurnFinding('quaude', r.quaude, mode);
+      assert.ok(finding && finding.startsWith(`quaude ${mode}: not the mode's own turn (ruling E12)`), `${what}: ${finding}`);
+      assert.match(finding, why, what);
+    }
+    assert.match(modeTurnFinding('quaude', {}, 'unlisted'), /records no turn/);
+    assert.match(modeTurnFinding('quaude', {}, 'permission:yolo'), /is not a mode turn/);
+  } finally { fs.rmSync(f.dir, { recursive: true, force: true }); }
+});
+
 test('driveTool answers an Agent call\'s subagent with its reply, not with the next scripted call', { skip: SKIP }, async () => {
   assertFailsOnMissingOutput(sawSubagent, FAKE_AGENT);
   const f = fakes();

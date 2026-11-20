@@ -65,7 +65,9 @@ require('./suite-home.cjs');   // the suite's own HOME, also for a standalone `n
 //   native treats { absent } as a precondition failure (skip by name, which a CI job then judges), never as the
 //   comparison passing.
 //   opts.timeoutMs   per side (240 s), times CLODE_TIMEOUT_SCALE on a slow host.
-// SIDE = { text, isError, result, results, raw, sent, status, signal, stdout, stderr, timedOut, home, keychain, inspected }
+// SIDE = { text, isError, result, results, raw, sent, status, signal, stdout, stderr, timedOut, home, keychain, turn, inspected }
+//   turn             what the turn ran: { args, allowedTools, scripted, interactive, switches, env (its keys), settings
+//                    (files setup wrote that are settings) }; modeTurnFinding judges it against MODE_TURNS.
 //   keychain         the `security` calls the side made, each its argv, answered by the stub (shadowKeychain).
 //   text/isError/result  the FIRST scripted call's tool_result (toolResult: { text, isError, content }, or null and
 //                    text '' when the target sent none). Never the tool_use's input.
@@ -209,7 +211,9 @@ async function runSide(side, bin, rules, opts, base) {
   fs.rmSync(path.join(base, side), { recursive: true, force: true });
   for (const stale of [`${side}-bin`, `${side}-security.log`]) fs.rmSync(path.join(base, stale), { recursive: true, force: true });
   fs.mkdirSync(work, { recursive: true });
+  const laid = filesUnder(base);
   if (opts.setup) opts.setup(work, base);
+  const settings = [...filesUnder(base)].filter((f) => !laid.has(f) && SETTINGS_FILE.test(f)).sort();
   const home = throwawayHome(path.join(base, side));
   // Claude Code's per-uid temp dir (background task output, among others): throwawayHome's CLAUDE_CODE_TMPDIR.
   const tmp = home.CLAUDE_CODE_TMPDIR;
@@ -248,6 +252,8 @@ async function runSide(side, bin, rules, opts, base) {
       text: toolResultText(raw, first), isError: !!(results[first] && results[first].isError), result: results[first], results,
       raw, sent, tmp, status: r.status, signal: r.signal, stdout: r.stdout, stderr: r.stderr, timedOut: r.timedOut, home,
       keychain: fs.existsSync(kc.log) ? fs.readFileSync(kc.log, 'utf8').split('\n').filter(Boolean) : [],
+      turn: { args: [...(opts.args || [])], allowedTools: allowed, scripted: names.join(','), interactive: !!opts.interactive,
+        switches: { ...(opts.switches || {}) }, env: Object.keys(opts.env || {}).sort(), settings },
       inspected: opts.inspect ? opts.inspect(work, base) : undefined,
     };
   } finally { await mock.close(); }
@@ -294,6 +300,54 @@ async function interactiveTurn(bin, flags, work, env, home, opts) {
   } catch (e) {
     return { status: 1, signal: null, stdout: '', stderr: `the interactive turn could not run: ${e.message.slice(0, 1200)}`, timedOut: false };
   }
+}
+
+// THE MODE TURNS (every-tool ruling E12): the one turn each mode cell is driven by, as driveTool options. A tool is
+// NOT APPLICABLE in a mode (assertNotRegistered) only when the MODE does not register it, so a not-registered answer
+// proves nothing unless its turn was EXACTLY this one: these args and --allowedTools, no switches, no extra env, and a
+// setup that wrote no settings. A positive rule, not a list of disabling spellings: --disallowedTools,
+// --disallowed-tools, --settings '{"permissions":{"deny":[...]}}', a fixture .claude/settings.json and whatever upstream
+// adds next are all just "not the mode's turn". modeTurnFinding judges what the turn ACTUALLY ran (SIDE.turn).
+const PERMISSION_MODES = ['acceptEdits', 'auto', 'bypassPermissions', 'dontAsk', 'plan'];
+const MODE_TURNS = Object.freeze({
+  print: Object.freeze({}),
+  ...Object.fromEntries(PERMISSION_MODES.map((p) => [`permission:${p}`, Object.freeze({ args: Object.freeze(['--permission-mode', p]) })])),
+  unlisted: Object.freeze({ allowedTools: null }),
+  interactive: Object.freeze({ interactive: true }),
+});
+// A file setup wrote that Claude Code reads as settings: any *settings*.json, or any file at the top of a .claude dir
+// (its skills/, worktrees/ and the like below it are fixtures, not configuration).
+const SETTINGS_FILE = /(?:^|[\\/])(?:[^\\/]*settings[^\\/]*\.json|\.claude[\\/][^\\/]+)$/i;
+function filesUnder(dir) {
+  const out = new Set();
+  const walk = (d, rel) => {
+    let ents;
+    try { ents = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const e of ents) {
+      const r = rel ? `${rel}/${e.name}` : e.name;
+      if (e.isDirectory()) walk(path.join(d, e.name), r); else out.add(r);
+    }
+  };
+  walk(dir, '');
+  return out;
+}
+// -> null when SIDE ran exactly MODE_TURNS[mode], else a finding naming every difference.
+function modeTurnFinding(label, side, mode) {
+  const want = MODE_TURNS[mode];
+  if (!want) return `${label}: ${JSON.stringify(mode)} is not a mode turn (MODE_TURNS: ${Object.keys(MODE_TURNS).join(', ')})`;
+  const t = side && side.turn;
+  if (!t) return `${label} ${mode}: the side records no turn (SIDE.turn), so what it ran cannot be judged`;
+  const diff = [];
+  const wantArgs = want.args || [];
+  if (JSON.stringify(t.args) !== JSON.stringify(wantArgs)) diff.push(`args ${JSON.stringify(t.args)}, not ${JSON.stringify(wantArgs)}`);
+  const wantAllowed = want.allowedTools === null ? null : t.scripted;
+  if (t.allowedTools !== wantAllowed) diff.push(`--allowedTools ${JSON.stringify(t.allowedTools)}, not ${JSON.stringify(wantAllowed)}`);
+  if (t.interactive !== !!want.interactive) diff.push(`interactive ${t.interactive}, not ${!!want.interactive}`);
+  if (Object.keys(t.switches).length) diff.push(`switches ${JSON.stringify(t.switches)}`);
+  if (t.env.length) diff.push(`env ${t.env.join(', ')}`);
+  if (t.settings.length) diff.push(`setup wrote settings ${t.settings.join(', ')}`);
+  return diff.length ? `${label} ${mode}: not the mode's own turn (ruling E12), so no answer in it proves a tool not `
+    + `registered: ${diff.join('; ')}` : null;
 }
 
 // Validates synchronously (a malformed call throws at the call site), then drives quaude, then native.
@@ -344,4 +398,4 @@ function ptyHarnessMissing() {
   } catch (e) { return `no PTY harness here (node-pty): ${e.message.split('\n')[0]}`; }
 }
 
-module.exports = { driveTool, DONE, TOOL_SWITCHES, shadowKeychain, keychainShadowFinding, CLASSIFIER_STOP, ptyHarnessMissing, SCALE };
+module.exports = { driveTool, DONE, TOOL_SWITCHES, MODE_TURNS, modeTurnFinding, shadowKeychain, keychainShadowFinding, CLASSIFIER_STOP, ptyHarnessMissing, SCALE };

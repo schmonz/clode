@@ -27,7 +27,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { driveTool } = require('../tool-driver.cjs');
+const { driveTool, MODE_TURNS, modeTurnFinding } = require('../tool-driver.cjs');
 const { builtQuaude } = require('../built-binary.cjs');
 const { rgOracle, rgOracleSkip } = require('../provider-resolve.cjs');
 const { toolResult, toolResultText, toolFollowUpText, assertFailsOnMissingOutput, answeredLog, assertNotRegistered } = require('../../scripts/lib/tool-result.cjs');
@@ -673,18 +673,12 @@ test('native answers the Task 5 script as T5_NATIVE records', { skip: SKIP }, as
 const E_EDIT = { name: 'Edit', input: { file_path: W('a.txt'), old_string: 'two', new_string: 'TWO' }, id: 'toolu_m6_edit' };
 const B_ECHO = { name: 'Bash', input: { command: 'echo mode-turn-$((6*7))', description: 'Print a marker' }, id: 'toolu_m6_bash' };
 const MODE_SCRIPT = [...SCRIPT, { tool: E_EDIT }, { tool: B_ECHO }, ...TASK_SCRIPT, ...T5_SCRIPT, ...SESSION_SCRIPT];
-const MODE_ARGS = {
-  // print: the same combined turn with every tool named in --allowedTools, as the print tests run; the one call only
-  // this turn makes in print is Edit's (its print cell on netbsd-arm64, where node-shim-agentic cannot build a quaude)
-  print: {},
-  'permission:acceptEdits': { args: ['--permission-mode', 'acceptEdits'] },
-  'permission:auto': { args: ['--permission-mode', 'auto'] },
-  'permission:bypassPermissions': { args: ['--permission-mode', 'bypassPermissions'] },
-  'permission:dontAsk': { args: ['--permission-mode', 'dontAsk'] },
-  'permission:plan': { args: ['--permission-mode', 'plan'] },
-  unlisted: { allowedTools: null },
-  interactive: { interactive: true },
-};
+// The mode turns are test/tool-driver.cjs's MODE_TURNS (ruling E12), never a local copy: print (every tool named in
+// --allowedTools, as the print tests run; the one call only this turn makes in print is Edit's, its print cell on
+// netbsd-arm64, where node-shim-agentic cannot build a quaude), the five --permission-mode turns, unlisted (no
+// --allowedTools) and interactive. modeFindings holds every turn to exactly its entry (modeTurnFinding), which is what
+// lets the unlisted turn's "No such tool available" prove the Task list tools not registered.
+const MODE_ARGS = MODE_TURNS;
 const layBoth = (work) => { layTree(work); layRepo(work); };
 const readBoth = (work, base) => ({ tree: readTree(work), gitState: readRepo(work), workflow: readWorkflow(work, base) });
 // The two calls only this turn makes, as print answers them (Edit's success, unlike Write's, has no file-state note).
@@ -833,6 +827,8 @@ function modeControls() {
 
 function modeFindings(label, side, mode) {
   const out = [];
+  const impure = modeTurnFinding(label, side, mode);
+  if (impure) out.push(impure);
   if (side.status !== 0) out.push(`${label} ${mode}: the turn exited ${side.status}${side.signal ? ` (${side.signal})` : ''}: ${side.stderr.slice(0, 800)}`);
   for (const [USE, same] of modeVerdicts(side.raw, mode, label)) {
     if (!same) out.push(`${label} ${mode}: ${USE.id} ${USE.name} sent ${JSON.stringify(side.sent[USE.id])}\n    got: ${JSON.stringify(toolResult(side.raw, USE.id))}`);

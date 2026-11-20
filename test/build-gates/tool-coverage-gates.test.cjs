@@ -824,23 +824,14 @@ const DRIVER_SCAN_SKIP = new Map([
 const EMITTER_OF = (use) => new RegExp(`(?<![\\w$.])(?:cannedToolUseSSE|toolUseSSE)\\s*\\(\\s*${esc(use)}\\.name\\b`, 'g');
 const RULE_OF = (use) => new RegExp(`(?<![\\w$.])tool\\s*:\\s*${esc(use)}(?![\\w$.(])`, 'g');
 
-// THE N/A BACK DOOR, CLOSED (Task 5 approval condition, 2026-11-20): a tool is not applicable only where the MODE
-// does not register it, never where the test switched it off. A file that spells a switch that unregisters tools
-// (driveTool's `switches`, TOOL_SWITCHES, CLAUDE_CODE_ENABLE_* / CLAUDE_CODE_DISABLE_*, CLAUDE_CODE_SIMPLE,
-// --disallowedTools, --tools), in code or in a string, anywhere outside a comment, proves nothing not registered:
-// CLAUDE_CODE_ENABLE_TASKS=false (Phase B's TodoWrite driver) turns the Task tools off in every mode. File-wide, because
-// a test takes its options by a spread (MODE_ARGS[mode]) the scan cannot follow.
-const NA_DISABLER = /(?<![\w$])(?:switches|TOOL_SWITCHES|disallowedTools|CLAUDE_CODE_(?:ENABLE|DISABLE)_[A-Z0-9_]+|CLAUDE_CODE_SIMPLE)(?![\w$])|--tools(?![\w-])/g;
-function disablerOutsideComments(text, mask) {
-  for (const x of text.matchAll(NA_DISABLER)) {
-    if (mask[x.index]) return x;
-    let i = x.index;
-    while (i > 0 && !mask[i - 1]) i--;
-    while (i < x.index && /\s/.test(text[i])) i++;
-    if (!(text.startsWith('//', i) || text.startsWith('/*', i))) return x;   // a string, not a comment
-  }
-  return null;
-}
+// THE N/A BACK DOOR, CLOSED BY A POSITIVE RULE (ruling E12, 2026-11-20; it replaces Task 5's list of disabling
+// spellings, which missed --disallowed-tools, --settings '{"permissions":{"deny":[...]}}' and a fixture
+// .claude/settings.json): a tool is not applicable only where the MODE does not register it, so a not-registered
+// answer proves something only in a turn that was EXACTLY that mode's (test/tool-driver.cjs MODE_TURNS: its args and
+// --allowedTools, no switches, no extra env, a setup that wrote no settings). That is judged at RUNTIME, on what the
+// turn actually ran (modeTurnFinding over SIDE.turn); this scan holds the file to calling it, in code: a proof in a
+// file that never judges its turn is refused.
+const NA_JUDGE = /(?<![\w$.])modeTurnFinding\s*\(/g;
 
 function findDrivers(sources) {
   const drivers = [], rejected = [];
@@ -896,10 +887,9 @@ function findDrivers(sources) {
         rejected.push({ ...at, why: 'a not-applicable control is called as (check, toolUse, modes, { absent, registered })' });
         continue;
       }
-      const off = na && disablerOutsideComments(text, m.mask);
-      if (off) {
-        rejected.push({ ...at, why: `a not-applicable control in a file that spells ${off[0]} (line ${lineOf(off.index)}), a switch `
-          + 'that unregisters tools: not registered must be the mode\'s answer, never a switch\'s' });
+      if (na && !code(NA_JUDGE).length) {
+        rejected.push({ ...at, why: 'a not-applicable control in a file that never calls modeTurnFinding: not registered is the '
+          + 'mode\'s answer only in the mode\'s own turn, judged on what the turn ran (ruling E12)' });
         continue;
       }
       const modes = modesText === undefined ? ['print'] : literalModes(modesText);
@@ -2298,7 +2288,7 @@ const NA_SOURCE = { file: 'test/synthetic/not-registered.test.cjs', text: lines(
   "const off = (m) => { const r = toolResult(m, RD.id); return !!r && r.text.includes('No such tool available: Read'); };",
   "test('read is not registered when unlisted', async (t) => {",
   "  assertNotRegistered(off, RD, ['unlisted'], { absent: 'No such tool available: Read', registered: '1\\tx' });",
-  '  await startMockAnthropic({ respond: () => cannedToolUseSSE(RD.name, RD.input, RD.id) });',
+  "  const r = await driveTool({ ...MODE_TURNS.unlisted, respond: () => cannedToolUseSSE(RD.name, RD.input, RD.id) }); assert.strictEqual(modeTurnFinding('quaude', r.quaude, 'unlisted'), null);",
   '});',
   "test('a not-applicable control without its answers', async (t) => {",
   "  assertNotRegistered(off, RD, ['unlisted']);",
@@ -2322,27 +2312,20 @@ test('not applicable: a tool x mode proven not registered is counted apart, neit
   const d = findDrivers([NA_SOURCE]);
   assert.deepStrictEqual(d.rejected.map((x) => [x.line, x.why]), [[9, 'a not-applicable control is called as (check, toolUse, modes, { absent, registered })']]);
 });
-// PLANTED: the same proof, in a file that switches the tool off. Each spelling is refused; a comment naming one is not.
-const naSwitched = (spelling, file) => ({ file, text: NA_SOURCE.text.replace("test('read is not registered when unlisted', async (t) => {",
-  `const OFF = ${spelling};\ntest('read is not registered when unlisted', async (t) => {`) });
-test('not applicable: a proof in a file that spells a tool-unregistering switch is refused (the N/A back door)', () => {
-  const planted = [
-    ["{ switches: { CLAUDE_CODE_ENABLE_TASKS: 'false' } }", 'switches'],
-    ["{ env: { 'CLAUDE_CODE_ENABLE_TASKS': 'false' } }", 'CLAUDE_CODE_ENABLE_TASKS'],
-    ["{ args: ['--disallowedTools', 'Read'] }", 'disallowedTools'],
-    ["{ args: ['--tools', 'Bash'] }", '--tools'],
-    ["{ env: { CLAUDE_CODE_SIMPLE: '1' } }", 'CLAUDE_CODE_SIMPLE'],
-    ["{ env: { CLAUDE_CODE_DISABLE_FOO: '1' } }", 'CLAUDE_CODE_DISABLE_FOO'],
-  ];
-  for (const [spelling, word] of planted) {
-    const d = findDrivers([naSwitched(spelling, 'test/synthetic/na-switched.test.cjs')]);
-    assert.ok(d.rejected.some((x) => x.line === 6 && x.why.startsWith(`a not-applicable control in a file that spells ${word} (line 4)`)),
-      `${spelling}: ${JSON.stringify(d.rejected)}`);
-    assert.ok(!d.drivers.some((x) => x.na), `${spelling} proved n/a`);
+// PLANTED (ruling E12): the same proof in a file that never judges its turn, or names the judge only in a comment or
+// a string, is refused; the runtime half (each disabling spelling, an extra arg) is test/tool-driver.test.cjs's.
+const naUnjudged = (judge, file) => ({ file, text: NA_SOURCE.text.replace(
+  "assert.strictEqual(modeTurnFinding('quaude', r.quaude, 'unlisted'), null);", judge) });
+test('not applicable: a proof in a file that never judges its turn with modeTurnFinding is refused (the N/A back door)', () => {
+  for (const judge of ['', "// modeTurnFinding('quaude', r.quaude, 'unlisted')", "const s = \"modeTurnFinding('q', r, 'unlisted')\";"]) {
+    const d = findDrivers([naUnjudged(judge, 'test/synthetic/na-unjudged.test.cjs')]);
+    assert.ok(d.rejected.some((x) => x.line === 5 && x.why.startsWith('a not-applicable control in a file that never calls modeTurnFinding')),
+      `${JSON.stringify(judge)}: ${JSON.stringify(d.rejected)}`);
+    assert.ok(!d.drivers.some((x) => x.na), `${JSON.stringify(judge)} proved n/a`);
   }
-  const commented = findDrivers([naSwitched("null // not { switches }, nor CLAUDE_CODE_ENABLE_TASKS /* --tools */", 'test/synthetic/na-commented.test.cjs')]);
-  assert.ok(commented.drivers.some((x) => x.na && x.line === 6), JSON.stringify(commented.rejected));
-  const r = scanCoverage(naInputs({ sources: [...DRIVER_SOURCES, ...NEAR_MISS_SOURCES, { ...naSwitched("{ switches: {} }", NA_SOURCE.file) }] }));
+  const judged = findDrivers([NA_SOURCE]);
+  assert.ok(judged.drivers.some((x) => x.na && x.line === 5), JSON.stringify(judged.rejected));
+  const r = scanCoverage(naInputs({ sources: [...DRIVER_SOURCES, ...NEAR_MISS_SOURCES, naUnjudged('', NA_SOURCE.file)] }));
   assert.match(r.findings.join('\n'), /^Read x unlisted: declared not applicable .*, but no CI job/m);
 });
 test('not applicable: unproven, proven with no entry, also exempted, or also driven, is a finding', () => {
