@@ -326,6 +326,53 @@ test('native answers the task script as TASK_NATIVE records', { skip: SKIP }, as
 });
 
 // ==========================================================================
+// BASH UNDER zsh (USER RULING 2026-11-20: the shell:zsh cells are driven now)
+// ==========================================================================
+// The Bash tool runs a user's zsh as readily as bash: SHELL names it (by name: Claude Code takes SHELL only when it is
+// bash or zsh). One call whose answer only zsh can give: ${ZSH_NAME} is set by zsh alone, and $((6*7)) is computed,
+// so neither the command text nor bash's answer ("shell=none-42") passes. zsh is in every job that runs this file
+// (macOS ships /bin/zsh, linux-x64-pty apt-installs it, netbsd-arm64-cells' package list has it); a box without it
+// skips by name, which a CI job reports as a failure of its cell.
+const Z_ECHO = { name: 'Bash', input: { command: 'echo shell=${ZSH_NAME:-none}-$((6*7))', description: 'Print which shell ran' }, id: 'toolu_z7_echo' };
+// MEASURED on native 2.1.283 darwin-arm64 (2026-11-20)
+const ZSH_DONE = { text: 'shell=zsh-42', isError: false };
+const zEcho = (m) => t5Same(toolResult(m, Z_ECHO.id), ZSH_DONE);
+function zshPath() {
+  for (const d of [...(process.env.PATH || '').split(path.delimiter), '/bin', '/usr/bin', '/opt/pkg/bin', '/usr/pkg/bin']) {
+    const p = path.join(d, 'zsh');
+    try { fs.accessSync(p, fs.constants.X_OK); return p; } catch { /* next */ }
+  }
+  return null;
+}
+function zshControls() {
+  assertFailsOnMissingOutput(zEcho, Z_ECHO, 'shell:zsh');
+  assert.ok(!zEcho(answeredLog(Z_ECHO, 'shell=none-42')), 'bash\'s answer is not zsh\'s');
+}
+
+test('Bash with SHELL=zsh in a built quaude: the command runs under zsh, as native\'s does', { skip: SKIP }, async (t) => {
+  const zsh = zshPath();
+  if (!zsh) { t.skip('no zsh on PATH here (the shell:zsh cell needs one)'); return; }
+  const q = builtQuaude();
+  if (q.skip) { t.skip(q.skip); return; }
+  zshControls();
+  const r = await driveTool({ tool: Z_ECHO, quaude: q.path, env: { SHELL: zsh },
+    nativeSkip: 'native is judged against the same recorded answer by the next test' });
+  assert.strictEqual(r.quaude.status, 0, r.quaude.stderr.slice(0, 800));
+  assert.ok(zEcho(r.quaude.raw), `quaude under zsh answered ${JSON.stringify(toolResult(r.quaude.raw, Z_ECHO.id))}, native's ${JSON.stringify(ZSH_DONE)}`);
+});
+
+test('native answers the zsh Bash turn as ZSH_DONE records', { skip: SKIP }, async (t) => {
+  const zsh = zshPath();
+  if (!zsh) { t.skip('no zsh on PATH here'); return; }
+  const native = rgOracle(process.env);
+  if (!native) { t.skip(rgOracleSkip(process.env)); return; }
+  zshControls();
+  const r = await driveTool({ tool: Z_ECHO, native, env: { SHELL: zsh }, quaudeSkip: 'quaude is judged by the test above' });
+  assert.strictEqual(r.native.status, 0, r.native.stderr.slice(0, 800));
+  assert.ok(zEcho(r.native.raw), `native moved: ${JSON.stringify(toolResult(r.native.raw, Z_ECHO.id))}`);
+});
+
+// ==========================================================================
 // SKILL, THE WORKTREE TOOLS, THE CRON TOOLS AND ScheduleWakeup (every-tool Task 4)
 // ==========================================================================
 // One turn over a git repository holding a project skill: Skill loads it (and refuses an unknown one); CronList,

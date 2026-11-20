@@ -247,6 +247,7 @@ const FILES = {
     jobSkips: { 'netbsd-arm64-cells': NO_NATIVE([
       'native answers this script as NATIVE records', 'native answers the task script as TASK_NATIVE records',
       'native answers the session script as SESSION_NATIVE records', 'native answers the Task 5 script as T5_NATIVE records',
+      'native answers the zsh Bash turn as ZSH_DONE records',
       ...LOCAL_MODE_TURNS.map((m) => `native answers every Phase A call in ${m} as recorded`)]) } },
   'test/build-gates/rg-regex-gates.test.cjs': { jobs: ['linux-x64-pty'] },
   'test/build-gates/rg-types-gates.test.cjs': { jobs: ['linux-x64-pty'] },
