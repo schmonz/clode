@@ -1359,19 +1359,21 @@ const SHIPPING_ENGINES = ['darwin-arm64', 'linux-x64-musl', 'netbsd-arm64'];
 // release) 2026-10-15, MOVED to 2026-12-15 by USER RULING 2026-11-18 (it lapsed unmet; the ruling
 // also gives the 117 cells that were neither driven nor exempted when this gate first counted cells
 // a Phase A exemption to the same date, PHASE_A_CELLS below: every-tool Phase A drives them), Phase B
-// (24 tools with their own needs; 23 are listed by name there, and they are these) 2026-11-30,
-// Phase C (claude.ai, remote, MCP, and WebSearch) 2026-12-31. The 13 tools the plan puts in no
+// (24 tools with their own needs; 23 are listed by name there, and they are these) 2026-11-30, MOVED to
+// 2027-01-15 by USER RULING 2026-11-19 (it fell before Phase A's moved date, though Phase B follows the release),
+// Phase C (claude.ai, remote, MCP, and WebSearch) 2026-12-31, MOVED to 2027-02-15 by USER RULING 2026-11-19. The 13 tools the plan puts in no
 // phase (9 runner operators, 4 relay stubs) keep the quarterly re-decision UNTIL_REVIEW they had.
 // A lapsed phase is a finding by name, and the user re-dates it. (Grep and Glob were exempted here
 // until the grep-native plan's Task 11 drove them, 2026-10-05: test/fidelity/agentic-grep-glob.test.cjs,
 // every output mode against native, and agentic-tools' Grep rows, which no longer skip.)
 const RECORDED = '2026-09-28';
 const UNTIL_PHASE_A = '2026-12-15';          // was 2026-10-15; USER RULING 2026-11-18
-const UNTIL_PHASE_B = '2026-11-30';
-const UNTIL_PHASE_C = '2026-12-31';
+const UNTIL_PHASE_B = '2027-01-15';          // was 2026-11-30; USER RULING 2026-11-19
+const UNTIL_PHASE_C = '2027-02-15';          // was 2026-12-31; USER RULING 2026-11-19
+// The quarterly re-decision: NOT Phase C (it shared Phase C's date until that ruling, and stays where it was).
 const UNTIL_REVIEW = '2026-12-31';
 const PHASES = new Map([[UNTIL_PHASE_A, 'every-tool Phase A'], [UNTIL_PHASE_B, 'every-tool Phase B'],
-  [UNTIL_PHASE_C, 'every-tool Phase C (or the quarterly review)']]);
+  [UNTIL_PHASE_C, 'every-tool Phase C'], [UNTIL_REVIEW, 'the quarterly review']]);
 // Every published engine but the three: one entry, outside the matrix (no cell is counted for
 // them, and a job run on one is not a cell job). Recorded with this gate; its until is the
 // quarterly re-decision the table already uses.

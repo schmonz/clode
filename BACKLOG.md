@@ -459,7 +459,8 @@ and the table is the to-do list, grouped by what a driver would need:
   claude.ai features and 8 remote/bridged-session tools; 9 self-hosted runner operator tools; 4
   device-relay stubs.
 The entries fall due by phase (the every-tool plan): Phase A 2026-12-15 (moved from 2026-10-15 by
-USER RULING 2026-11-18), Phase B 2026-11-30, Phase C and the runner/relay tools 2026-12-31. That day
+USER RULING 2026-11-18), Phase B 2027-01-15 (moved from 2026-11-30 by USER RULING 2026-11-19), Phase C 2027-02-15 (moved from 2026-12-31 by USER RULING 2026-11-19), the runner/relay tools' quarterly
+review 2026-12-31 (unchanged). That day
 the gate goes red, and each must be driven or re-dated with a new reason.
 
 **Tool coverage: the plan that works the table down.** The plan is
@@ -469,12 +470,12 @@ purpose). Its phases, each tool's `until` in the gate being its phase's constant
   NotebookEdit, TaskCreate, TaskGet, TaskUpdate, TaskList, TaskStop, Skill, EnterWorktree,
   ExitWorktree, CronCreate, CronDelete, CronList, ScheduleWakeup, ReportFindings, Workflow,
   ListAgents; and the undriven cells of Agent, Bash, Edit, Grep and Glob.
-- Phase B, after the release, 2026-11-30 (a date set before Phase A moved past it; re-dating it is
-  the user's call): 24 tools needing a local helper, a pty or a default-off flag (WebFetch,
+- Phase B, after the release, 2027-01-15 (moved from 2026-11-30, which fell before Phase A's moved
+  date, by USER RULING 2026-11-19): 24 tools needing a local helper, a pty or a default-off flag (WebFetch,
   SendMessage, LSP, ToolSearch, the memory tools, TodoWrite, SubagentHandback, ObserverReport,
   SendUserMessage, EndConversation, Poll, SendFeedback, PowerShell; AskUserQuestion, EnterPlanMode,
   ExitPlanMode, ProposeGoal; GetTask, Monitor, PushNotification, SendFile).
-- Phase C, 2026-12-31: 30 tools needing claude.ai, a remote session or MCP, each given a harness or
+- Phase C, 2027-02-15 (moved from 2026-12-31 by USER RULING 2026-11-19): 30 tools needing claude.ai, a remote session or MCP, each given a harness or
   a permanent exemption with evidence (WebSearch is server-side).
 Every driver runs its turn through ONE harness, test/tool-driver.cjs `driveTool` (every-tool Task 1):
 the mock scripts the caller's `tool: USE`, the built quaude and then native 2.1.283 (the pinned
