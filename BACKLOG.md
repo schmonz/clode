@@ -494,14 +494,14 @@ with TJS_HOME unset creates $HOME/.tjs holding localStorage.db only (no cookies.
 Unmeasured. The suite-hermeticity claims (suite home, sentinel HOME byte-untouched, the 18/81 spawn counts) were not
 re-run; test/suite-home-hermetic.test.cjs and a full suite with a sentinel HOME would.
 
-## 538 of the 2166 tool x mode x engine cells are CLAIMED by a CI job (179 of them only by netbsd-arm64-cells, placed: not yet run), 12 are not applicable; NO GREEN CI RUN HAS YET SHOWN THEM RAN; Phase A's 18 tools, Agent, Edit and Bash in print, interactive, unlisted and every permission mode (cells 2026-11-18; tools 2026-09-28; Grep and Glob driven 2026-10-05; Read, Write, NotebookEdit, the Task tools and TaskStop 2026-11-19; Skill, the worktree and cron tools, ScheduleWakeup, ReportFindings, Workflow and ListAgents 2026-11-20; the -p modes, interactive, Agent and the Grep/Glob modes 2026-11-20)
+## Every-tool Phase A is complete at cell level, pending the green CI run: 541 of the 2166 tool x mode x engine cells are CLAIMED by a CI job (180 of them only by netbsd-arm64-cells, placed: not yet run), 12 are not applicable; NO GREEN CI RUN HAS YET SHOWN THEM RAN; Phase A's 18 tools, Agent, Edit and Bash in print, interactive, unlisted and every permission mode (cells 2026-11-18; tools 2026-09-28; Grep and Glob driven 2026-10-05; Read, Write, NotebookEdit, the Task tools and TaskStop 2026-11-19; Skill, the worktree and cron tools, ScheduleWakeup, ReportFindings, Workflow and ListAgents 2026-11-20; the -p modes, interactive, Agent and the Grep/Glob modes 2026-11-20)
 
 Since observability Task 1 (2026-11-18) the gate counts CELLS, tool x mode x engine: 90 tools, 722
 tool x mode pairs (permission modes, sandbox, Bash shells, interactive, unlisted, from the carve where
 it says) over darwin-arm64, linux-x64-musl and netbsd-arm64, 2166 cells. Measured: the every-tool-driven
 gate's verdict over the 2.1.283 darwin-arm64 carve (test/build-gates/tool-coverage-gates.test.cjs, 2026-11-20):
-538 claimed by a CI job (179 of them only by netbsd-arm64-cells, placed: not yet run, CELL_JOBS' `placed`, deleted
-after its first green run; 24 hold the ListAgents pinned divergence), 1616 exempted, 12 not applicable, 0 neither,
+541 claimed by a CI job (180 of them only by netbsd-arm64-cells, placed: not yet run, CELL_JOBS' `placed`, deleted
+after its first green run; 24 hold the ListAgents pinned divergence), 1613 exempted, 12 not applicable, 0 neither,
 over five CI jobs (CELL_JOBS). CLAIMED IS NOT SEEN (final-review C1): the verdict is a static scan of what each job's
 files declare. Only cells-ran-in-ci-job, gathered by gates-ran-in-ci on a green CI run, shows a cell ran, and no CI
 run has yet completed gates-ran-in-ci on the code that claims the interactive, Agent, not-applicable and E12 cells.
@@ -544,15 +544,12 @@ scripts/tjs-legs.mjs GUEST_CELL_JOBS, with the measurements behind them: on the 
 NOT YET RUN IN CI (a870927 starts its first run): until that run is green, its cells are claimed only by a placed job. If it proves impossible or too slow, the fallback is driven-local
 (60865ea, reverted by a77092d): committed evidence from the local VM, with a 30-day window.
 
-What still falls due 2026-12-15 (USER RULING 2026-11-18 moved Phase A there from 2026-10-15), each with a reason
-naming its driver path: 8 cells, all Bash, EXEMPT and run by no job today (the 6 interactive Grep/Glob cells are
-claimed since final-review I4). agentic-sandbox-fail-closed claims only sandbox:on, on linux-x64-musl.
-sandbox:required on every engine needs a failIfUnavailable turn added to that file, sandbox:on@darwin a darwin run of
-it with Seatbelt, and sandbox:on@netbsd the fail-closed answer on a host upstream cannot sandbox; the sandbox under
-quaude needs a real net.createServer (planned below). shell:zsh on every engine needs a tools-local turn with env
-{ SHELL: zsh }. zsh is cheap in every job: macOS runners ship /bin/zsh, linux-x64-pty would apt-get it, and
-netbsd-arm64-cells already installs it. Whether these 8 keep the 2026-12-15 date is the user's call. The tool-level
-account below is as of 2026-09-28.
+Nothing falls due 2026-12-15 any more: UNTIL_PHASE_A is retired (2026-11-20, plan Task 5 step 3), because it covered
+0 cells. USER RULING 2026-11-20 settled the last 8 Bash cells. The 3 shell:zsh cells are driven now (tools-local's
+SHELL=zsh turn, whose answer only zsh gives, against native, in all three jobs). The 5 sandbox cells
+(sandbox:on@darwin-arm64 and @netbsd-arm64, sandbox:required on every engine) move to UNTIL_PHASE_B (2027-01-15):
+"needs net.createServer (BACKLOG)", planned below. A Phase A cell that no job claims is now an exemption with no
+date, which the gate reports by name. The tool-level account below is as of 2026-09-28.
 
 Deferred from the Phase A final review (2026-11-20), no plan yet:
 - M5: the shim's fs.realpath and fs.mkdtemp ignore the `encoding` option (readdir, readlink and opendir were fixed
@@ -594,13 +591,12 @@ purpose). Its phases, each tool's `until` in the gate being its phase's constant
   NotebookEdit, TaskCreate, TaskGet, TaskUpdate, TaskList, TaskStop, Skill, EnterWorktree,
   ExitWorktree, CronCreate, CronDelete, CronList, ScheduleWakeup, ReportFindings, Workflow,
   ListAgents; and the undriven cells of Agent, Bash, Edit, Grep and Glob. STATE (2026-11-20, every-tool Task 5 and
-  the final-review fix wave): COMPLETE AT TOOL LEVEL, NOT AT CELL LEVEL. TOOL LEVEL: all 18 are driven in a -p turn
+  the final-review fix wave; cells closed by USER RULING 2026-11-20): COMPLETE AT CELL LEVEL, PENDING THE GREEN CI RUN. TOOL LEVEL: all 18 are driven in a -p turn
   against native, no tool exemption is left with UNTIL_PHASE_A, and driving them found and fixed shim defects (each in
   its task's report; among them readdir/readlink/opendir ignoring `encoding`, which kept quaude's ExitWorktree from
-  removing a worktree) and named one divergence (ListAgents, above). CELL LEVEL: 538 cells are claimed by CI jobs, but
-  no green run has yet shown the newest claims ran (above), and 8 Bash cells stay per-cell exemptions under
-  UNTIL_PHASE_A, each with its written reason. Retiring UNTIL_PHASE_A means driving those 8 or a user ruling that
-  moves them.
+  removing a worktree) and named one divergence (ListAgents, above). CELL LEVEL: every Phase A cell is claimed by a
+  CI job (541), but no green run has yet shown the newest claims ran (above). The 5 sandbox cells moved to Phase B.
+  UNTIL_PHASE_A is removed.
 - PLANNED, before Phase B's SendMessage (2026-11-20): a real `net.createServer` in the shim (unix-socket and loopback
   TCP listen, accepted sockets with data/end/close, server close). It is the one prerequisite shared by the sandbox's
   network proxies (sandboxed Bash under quaude), UDS peer messaging (SendMessage between sessions), and ListAgents'
