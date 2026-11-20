@@ -10,6 +10,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
+const { defineGuard, guardTests } = require('./guard.cjs');
 
 const REPO = path.resolve(__dirname, '..');
 const yml = fs.readFileSync(path.join(REPO, '.github/workflows/ci.yml'), 'utf8');
@@ -50,21 +51,39 @@ function listTests(files) {
   return r.stdout.split('\n').filter((l) => l.startsWith('{')).map((l) => JSON.parse(l)).filter((x) => x.nesting === 0 && x.line && !/\.test\.cjs$/.test(x.name));
 }
 
-test('netbsd-arm64-cells lanes: every test of its two files is selected by exactly one run, and no run selects nothing', () => {
-  const runs = laneRuns();
-  assert.ok(runs.length >= 8, `found only ${runs.length} runs`);
-  const files = [...new Set(runs.flatMap((r) => r.files))].sort();
-  assert.deepStrictEqual(files, ['test/fidelity/agentic-grep-glob.test.cjs', 'test/fidelity/tools-local.test.cjs']);
-  const tests = listTests(files);
-  assert.ok(tests.length > 20, `listed only ${tests.length} tests`);
-  const selects = (run, t) => run.files.some((f) => t.file.endsWith(f))
-    && (!run.names.length || run.names.some((p) => new RegExp(p).test(t.name)))
-    && !run.skips.some((p) => new RegExp(p).test(t.name));
-  const findings = [];
-  for (const t of tests) {
-    const by = runs.filter((r) => selects(r, t)).map((r) => r.id);
-    if (by.length !== 1) findings.push(`${path.basename(t.file)}:${t.line} "${t.name}" is selected by ${by.length ? by.join(' and ') : 'no run'}`);
-  }
-  for (const r of runs) if (!tests.some((t) => selects(r, t))) findings.push(`run ${r.id} selects no test`);
-  assert.deepStrictEqual(findings, []);
+const FILES = ['test/fidelity/agentic-grep-glob.test.cjs', 'test/fidelity/tools-local.test.cjs'];
+const selects = (run, t) => run.files.some((f) => t.file.endsWith(f))
+  && (!run.names.length || run.names.some((p) => new RegExp(p).test(t.name)))
+  && !run.skips.some((p) => new RegExp(p).test(t.name));
+
+const lanesGuard = defineGuard({
+  name: 'ci-lanes: netbsd-arm64-cells selects every test of its two files exactly once',
+  read() {
+    const runs = laneRuns();
+    return { runs, tests: listTests(FILES) };
+  },
+  scan({ runs, tests }) {
+    const findings = [];
+    if (runs.length < 8) findings.push(`found only ${runs.length} runs: the reader is blind`);
+    const files = [...new Set(runs.flatMap((r) => r.files))].sort();
+    if (JSON.stringify(files) !== JSON.stringify(FILES)) findings.push(`the runs name ${files.join(', ')}, not ${FILES.join(', ')}`);
+    for (const t of tests) {
+      const by = runs.filter((r) => selects(r, t)).map((r) => r.id);
+      if (by.length !== 1) findings.push(`${path.basename(t.file)}:${t.line} "${t.name}" is selected by ${by.length ? by.join(' and ') : 'no run'}`);
+    }
+    for (const r of runs) if (!tests.some((t) => selects(r, t))) findings.push(`run ${r.id} selects no test`);
+    return { findings, examined: tests.length };
+  },
+  floor: 20,
+  control() {
+    // a lane pattern that drops `interactive`, and one run that doubles another: both must be reported
+    const runs = laneRuns();
+    return { runs: [...runs.filter((r) => r.id !== 'modes3-tools'), { ...runs.find((r) => r.id === 'modes1-tools'), id: 'dup' }], tests: CONTROL_TESTS };
+  },
 });
+const CONTROL_TESTS = [
+  { file: '/r/test/fidelity/tools-local.test.cjs', line: 915, name: "every Phase A call in a built quaude in unlisted: each tool_result" },
+  { file: '/r/test/fidelity/tools-local.test.cjs', line: 915, name: "every Phase A call in a built quaude in print: each tool_result" },
+  ...Array.from({ length: 20 }, (_, i) => ({ file: '/r/test/fidelity/agentic-grep-glob.test.cjs', line: 100 + i, name: `filler ${i}` })),
+];
+guardTests(lanesGuard);
