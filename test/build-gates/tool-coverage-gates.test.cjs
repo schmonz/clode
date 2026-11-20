@@ -1509,12 +1509,16 @@ const LOCAL_DRIVEN = ['print', 'unlisted', 'permission:acceptEdits', 'permission
   'permission:dontAsk', 'permission:plan'].flatMap((mo) => [`${mo}@linux-x64-musl`, `${mo}@darwin-arm64`]);
 // THE NOT-APPLICABLE CELLS (ruling E10): a tool x mode where the tool is not registered, proven in a CELL_JOBS job by
 // an assertNotRegistered control (see NOT APPLICABLE at the top). No deadline: the job's run is the evidence.
-const NOT_APPLICABLE = [];
+// MEASURED on native 2.1.283 darwin-arm64 and a built quaude (2026-11-20): with no --allowedTools, each Task list call
+// answers "No such tool available: X. X is disabled for this session, in subagents as well as here." (the opt-in todo
+// tools, THE MODES: not registered unless allowed), proven in both tools-local jobs on every push.
+const NOT_APPLICABLE = ['TaskCreate', 'TaskGet', 'TaskUpdate', 'TaskList'].map((tool) => ({ tool, modes: ['unlisted'],
+  reason: 'not registered when unlisted: the Task list tools are opt-in, and with no --allowedTools the session has none '
+    + '(test/fidelity/tools-local.test.cjs, assertNotRegistered, in linux-x64-pty and node-shim-oracle-darwin)', date: '2026-11-20' }));
 const EXEMPTIONS = [
   // The undriven cells of the five driven tools (USER RULING 2026-11-18).
-  ...PHASE_A_CELLS('Agent', COMMON_MODES, [], 'every-tool Phase A (cells): its one driver, '
-    + 'test/fidelity/agentic-subagent-diff.test.cjs, runs in no CI job (CELL_JOBS), so no cell of it is driven; Phase A '
-    + 'puts it in one, and the other modes and netbsd-arm64 follow as for every tool'),
+  // Agent: one synchronous call in tools-local's T5 turn and every mode turn (fix round 2), its subagent answered by the mock.
+  ...PHASE_A_CELLS('Agent', COMMON_MODES, LOCAL_DRIVEN, LOCAL_CELLS),
   ...PHASE_A_CELLS('Bash', BASH_MODES, [...LOCAL_DRIVEN, 'permission:bypassPermissions@linux-x64-musl',
     'sandbox:on@linux-x64-musl', 'shell:bash@linux-x64-musl']),
   ...PHASE_A_CELLS('Edit', COMMON_MODES, LOCAL_DRIVEN),
@@ -1527,8 +1531,10 @@ const EXEMPTIONS = [
   ...PHASE_A_CELLS('Write', COMMON_MODES, LOCAL_DRIVEN, LOCAL_CELLS),
   ...PHASE_A_CELLS('NotebookEdit', COMMON_MODES, LOCAL_DRIVEN, LOCAL_CELLS),
   // The task list and TaskStop (every-tool Task 3): the same file, the same jobs, the same cells.
-  ...['TaskCreate', 'TaskGet', 'TaskUpdate', 'TaskList', 'TaskStop'].flatMap((tool) =>
-    PHASE_A_CELLS(tool, COMMON_MODES, LOCAL_DRIVEN, LOCAL_CELLS)),
+  // The four list tools are not registered when unlisted (NOT_APPLICABLE), so that mode is no exemption of theirs.
+  ...['TaskCreate', 'TaskGet', 'TaskUpdate', 'TaskList'].flatMap((tool) =>
+    PHASE_A_CELLS(tool, COMMON_MODES.filter((mo) => mo !== 'unlisted'), LOCAL_DRIVEN, LOCAL_CELLS)),
+  ...PHASE_A_CELLS('TaskStop', COMMON_MODES, LOCAL_DRIVEN, LOCAL_CELLS),
   // Skill, the worktree tools, the cron tools and ScheduleWakeup (every-tool Task 4): the same file, jobs and cells.
   ...['Skill', 'EnterWorktree', 'ExitWorktree', 'CronCreate', 'CronDelete', 'CronList', 'ScheduleWakeup'].flatMap((tool) =>
     PHASE_A_CELLS(tool, COMMON_MODES, LOCAL_DRIVEN, LOCAL_CELLS)),
