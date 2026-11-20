@@ -1806,7 +1806,7 @@ runs:
           *) echo "ERROR: not a ${{ inputs.macos-arch }} Mach-O (cross-file bypassed?) — got: $f" >&2; exit 1 ;;
         esac
 
-    - name: Floor gate — shipped asset carries LC_VERSION_MIN_MACOSX = the pinned floor
+    - name: Floor gate — shipped asset carries the pinned floor (LC_VERSION_MIN_MACOSX / LC_BUILD_VERSION minos)
       if: inputs.macos-min != '' && runner.os == 'macOS' && inputs.cross-image == ''
       shell: bash
       run: |
@@ -1822,16 +1822,11 @@ runs:
         fi
         LOADCMDS="$RUNNER_TEMP/floor-gate-loadcmds"
         otool -l "$TARGET" > "$LOADCMDS"
-        if grep -q LC_BUILD_VERSION "$LOADCMDS"; then
-          echo "ERROR: LC_BUILD_VERSION present — pre-10.14 dyld needs LC_VERSION_MIN_MACOSX" >&2
-          exit 1
-        fi
-        got=$(awk '/cmd LC_VERSION_MIN_MACOSX/{f=1} f && /version /{print $2; exit}' "$LOADCMDS")
-        if [ "$got" != "${{ inputs.macos-min }}" ]; then
-          echo "ERROR: LC_VERSION_MIN_MACOSX=$got, want ${{ inputs.macos-min }}" >&2
-          exit 1
-        fi
-        echo "floor gate ok: LC_VERSION_MIN_MACOSX $got"
+        # The verdict lives in scripts/macho-floor.cjs (tested against real otool -l
+        # captures, the shipped 0.20260831.1 arm64 slice's minos-14.0 among them): a
+        # floor < 10.14 must be LC_VERSION_MIN_MACOSX with no LC_BUILD_VERSION; a floor
+        # >= 10.14 (arm64) must be LC_BUILD_VERSION minos. Both equal to the pin.
+        node scripts/macho-floor.cjs check "${{ inputs.macos-min }}" "$LOADCMDS"
 
     # UPLOADED BEFORE THE PRODUCT GATE, DELIBERATELY. This is the ENGINE; the
     # smoke below tests the PRODUCT built from it, and the two fail for different

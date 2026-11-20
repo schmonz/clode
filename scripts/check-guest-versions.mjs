@@ -14,7 +14,10 @@
 // catalogs and exits nonzero on drift. Pure logic (cmpVersions/drift) is
 // characterized by test/check-guest-versions.test.cjs; the network sweep
 // runs in CI only.
+import { createRequire } from 'node:module';
 import { legsFor } from './tjs-legs.mjs';
+
+const { ALLOWED: ALLOWED_LABELS, parseRunnerReadme } = createRequire(import.meta.url)('./runner-labels.cjs');
 
 // Segment-wise natural compare over the formats the catalogs actually use:
 // 10.1 / 7.10 / 6.4.2 / r151058 / r1beta5 / 202604-build / 11.4-gcc.
@@ -67,11 +70,13 @@ async function vmactionsCatalog(platform) {
     .map((n) => n.replace(/\.conf$/, ''));
 }
 
-// GH-hosted runner labels from the runner-images README.
+// GH-hosted runner labels from the runner-images README TABLE, split into offered and
+// DEPRECATED. The old reader collected every backticked label anywhere in the README, so
+// a row kept only under a "deprecated" badge (macos-14, 2026-11-16) read as offered and
+// this watcher stayed green until the release that used it was cancelled.
 async function runnerLabels() {
   const readme = await gh('/repos/actions/runner-images/contents/README.md');
-  const text = Buffer.from(readme.content, 'base64').toString('utf8');
-  return [...new Set([...text.matchAll(/`((?:macos|ubuntu|windows)-[a-z0-9.-]+)`/g)].map((m) => m[1]))];
+  return parseRunnerReadme(Buffer.from(readme.content, 'base64').toString('utf8'));
 }
 
 const VMACTIONS = new Set(['solaris', 'openindiana']);
@@ -116,13 +121,21 @@ async function main() {
   // CI-tier native pin (the newest end) is flagged when a newer same-variant
   // generation label appears. Release natives are floors: old by design,
   // only the still-offered check applies.
-  const labels = await runnerLabels();
+  const { offered: labels, deprecated, problems: readmeProblems } = await runnerLabels();
+  problems.push(...readmeProblems);
+  // scripts/runner-labels.cjs ALLOWED is what the every-push guard trusts; hold it to the
+  // live table. A deprecated allowed label is the months-ahead warning.
+  for (const l of ALLOWED_LABELS) {
+    if (!labels.includes(l)) problems.push(`runner-labels.cjs: allowed label ${l} is no longer offered — move it to RETIRED and re-pin its users`);
+    else if (deprecated.includes(l)) problems.push(`runner-labels.cjs: allowed label ${l} is DEPRECATED upstream — migrate before it is retired`);
+  }
   const gen = (s) => Number((s.match(/-(\d+)/) ?? [])[1] ?? NaN);
   const variant = (s) => s.replace(/^(macos|ubuntu)-[\d.]+/, '');
   const isPlain = (s) => !/latest|large|xlarge|slim|vs\d/.test(s);
   const native = (list) => list.filter((l) => (!l['guest-platform'] || l['guest-platform'] === 'native') && /^(macos|ubuntu)-\d/.test(l.os));
   for (const l of [...native(ci), ...native(release)]) {
     if (!labels.includes(l.os)) problems.push(`${l.leg}: runner label ${l.os} no longer offered`);
+    else if (deprecated.includes(l.os)) problems.push(`${l.leg}: runner label ${l.os} is DEPRECATED upstream — migrate before it is retired`);
   }
   for (const l of native(ci)) {
     const family = l.os.match(/^(macos|ubuntu)/)[1];

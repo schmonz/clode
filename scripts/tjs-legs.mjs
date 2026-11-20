@@ -67,15 +67,25 @@ const LEGS = [
   // Naming (user decision 2026-07-10): tjs builders own the CANONICAL name
   // clode-<ver>-<platform>; the transitional Node-SEA binaries carry the
   // -node engine tag instead.
-  // macos-14 = the oldest arm64 runner GitHub hosts (= the publish floor);
-  // ci rides the newest (macos-26).
+  // Release builds on the OLDEST arm64 runner GitHub still hosts (the 2026-07-11
+  // policy, 22bd1e3); ci rides the newest (macos-26). That was macos-14 until GitHub
+  // retired it for arm64 on 2026-11-02 (release dry run 44653527211 was cancelled on
+  // it), so now macos-15. The labels allowed here live in scripts/runner-labels.cjs.
+  //
+  // THE 11.0 FLOOR WAS A LABEL, NOT A FACT, until 2026-11-19. This leg set no
+  // macos-min, so clang took the deployment target from the runner: the arm64 slice of
+  // the published clode-0.20260831.1-macos carries LC_BUILD_VERSION minos 14.0 (measured
+  // with otool), not 11.0. The runner OS WAS the floor, which is why retiring the
+  // runner looked like it threatened the floor. 'macos-min': '11.0' now pins the
+  // deployment target explicitly, so the floor no longer depends on which image builds
+  // it, and the floor gate checks minos on every run.
   // publish:false: the arm64/x64 legs still build + blobulate + smoke (validation) and
   // upload their bare ENGINE slice (tjs-darwin-*), which release.yml's
   // darwin-universal job lipo's into the shipped 4-arch fat binary. The single-
   // arch builders are redundant with the universal (which contains their slices)
   // — darwin ships exactly ONE artifact, clode-<ver>-macos (user pref
   // 2026-07-15). i386/ppc were never standalone (no-exec) — universal-only.
-  { leg: 'darwin-arm64', os: 'macos-14', 'ci-os': 'macos-26', publish: false, pack: true, ci: true, floor: '11.0',
+  { leg: 'darwin-arm64', os: 'macos-15', 'ci-os': 'macos-26', publish: false, pack: true, ci: true, floor: '11.0', 'macos-min': '11.0',
     // MAINTAINER RULING 2026-08-04: tier 1 keeps its STRICT meaning — all six
     // FLOOR_ROWS (A1,B1,B4,C1,D1,G7) green, no partial credit. Not one
     // run-target in the whole ledger clears that bar today, this one
@@ -993,8 +1003,13 @@ export function legsFor(tier) {
   }
   if (tier === 'ci') {
     return LEGS.filter((l) => l.ci).map(({ ci, publish, ciOnly, 'ci-os': ciOs, 'ci-guest-version': ciVer,
-      'macos-min': _mm, 'macos-sdk': _ms, 'macos-arch': _ma, 'cross-image': _ci, ...leg }) => {
+      'macos-min': mm, 'macos-sdk': ms, 'macos-arch': _ma, 'cross-image': ci_, ...leg }) => {
       if (ciOs) leg.os = ciOs;                          // ci rides the newest runner/guest
+      // The floor fields are stripped (29685d8) only for the old floors that need a pinned
+      // SDK or cross toolchain (ppc/i386/x64). A floor that is a plain CMake deployment
+      // target (darwin-arm64's 11.0) stays, so a floor regression goes red on push, not
+      // at the release dry run.
+      if (mm && !ms && !ci_ && !leg['cross-dockerfile']) leg['macos-min'] = mm;
       if (ciVer) leg['guest-version'] = ciVer;
       // House rule: new-to-CI VM legs earn hard status. But a leg we SHIP has
       // already earned it — IF WE PUBLISH IT, CI GATES IT (user, 2026-07-17).

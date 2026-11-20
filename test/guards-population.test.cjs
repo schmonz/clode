@@ -698,6 +698,7 @@ test('the controlled set is EXACTLY the modules a guard was deliberately written
     'scripts/lib/rg-probe.cjs',
     'scripts/lib/text-probe.cjs',
     'scripts/lib/tool-result.cjs',
+    'scripts/macho-floor.cjs',  // ADDED 2026-11-20: the build-leg macOS floor gate's verdict (new gate, born controlled)
     'scripts/oracle-native-version.cjs',
     'scripts/render-build-graph.cjs',
   ].sort(),
