@@ -1678,15 +1678,29 @@ jobs:
           # nowhere.
           # Skips are judged BY NAME, not counted: gates-ran-in-ci holds this job to every file it runs (test/ci-gates.cjs
           # FILES, a skip accepted only by its test name; ci-gate-placement refuses a file a job runs that FILES does not judge).
-      # THE LOCAL TOOLS ON DARWIN (every-tool Tasks 2-5: all 18 Phase A tools, Read through ListAgents):
+      # The interactive cell (every-tool Task 5 fix round 2): tools-local types its turn into a pty, through the same
+      # harness linux-x64-pty installs (node-pty + @xterm/headless under test/). agentic-grep-glob's quaude searches
+      # with the host's ugrep (libexec/rg-native.cjs, UGREP_MIN), which macos-latest does not ship.
+      - name: Install the PTY harness (node-pty + @xterm/headless) and ugrep for the end-to-end turns
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          npm install --prefix test
+          node test/harness-preflight.cjs
+          brew install ugrep
+          ugrep --version | head -1
+      # THE LOCAL TOOLS ON DARWIN (every-tool Tasks 2-5: all 18 Phase A tools, Read through ListAgents, and Agent):
       # test/fidelity/tools-local.test.cjs against a quaude built from this tree (judged against native's recorded
-      # answers) and against native itself. The staged provider above is a minimised carve that cannot run, so this step installs UPSTREAM_PIN's
+      # answers) and against native itself, in print, interactive, unlisted and every permission mode; and
+      # test/fidelity/agentic-grep-glob.test.cjs (Grep, Glob and the Bash tool's rg, in print and every permission mode),
+      # with CLODE_E2E_NATIVE=1 so its native instrument runs too. The staged provider above is a minimised carve that cannot run, so this step installs UPSTREAM_PIN's
       # darwin-arm64 platform package on its own, as linux-x64-pty's rg step does for linux: a native that RUNS, which
       # the quaude is also built from. Both tests must pass; no skip is accepted (test/ci-gates.cjs FILES).
-      - name: Local tools end to end — tools-local against a built quaude and native
+      - name: Local tools end to end — tools-local and agentic-grep-glob against a built quaude and native
         if: ${{ !cancelled() }}
         env:
           CLODE_TJS: ${{ runner.temp }}/tjs/tjs
+          CLODE_E2E_NATIVE: '1'
         run: |
           set -euo pipefail
           V=$(sed -n 's/^claude-code //p' UPSTREAM_PIN)
@@ -1700,7 +1714,7 @@ jobs:
             node --require ./test/file-watchdog-preload.cjs --test --test-concurrency=1 \
               --test-reporter=spec --test-reporter-destination=stdout \
               --test-reporter=./test/cell-reporter.mjs --test-reporter-destination="$RUNNER_TEMP/cells/darwin-tools-local.jsonl" \
-              test/fidelity/tools-local.test.cjs
+              test/fidelity/tools-local.test.cjs test/fidelity/agentic-grep-glob.test.cjs
       # THE CELLS this job drives (test/build-gates/tool-coverage-gates.test.cjs, CELL_JOBS): every test that runs a
       # claimed driver's control PASSED above, on this engine, as test/cell-reporter.mjs recorded it. A skip, a failure or
       # a test that never ran means the tool x mode cell ran nowhere, and this step names it (observability plan Task 1).

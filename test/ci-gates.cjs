@@ -227,7 +227,7 @@ const FILES = {
     'RG-MMAP-EVERYWHERE: macOS native in a tree with a quote and a non-ASCII letter prints its record as inTree spells it (native, macOS)':
       'macOS only: it judges the macOS native\'s own record of the RG-MMAP-EVERYWHERE divergence',
   } },
-  'test/fidelity/agentic-grep-glob.test.cjs': { jobs: ['linux-x64-pty'] },
+  'test/fidelity/agentic-grep-glob.test.cjs': { jobs: ['linux-x64-pty', 'node-shim-oracle-darwin'] },
   'test/fidelity/tools-local.test.cjs': { jobs: ['linux-x64-pty', 'node-shim-oracle-darwin'] },
   'test/build-gates/rg-regex-gates.test.cjs': { jobs: ['linux-x64-pty'] },
   'test/build-gates/rg-types-gates.test.cjs': { jobs: ['linux-x64-pty'] },

@@ -35,8 +35,9 @@ const { spawn } = require('node:child_process');
 const { builtQuaude } = require('../built-binary.cjs');
 const { providerBin, skipReason } = require('../provider-resolve.cjs');
 const { throwawayHome } = require('../throwaway-home.cjs');
-const { startMockAnthropic, cannedSSE, cannedToolUseSSE } = require('../mock-anthropic-helper.cjs');
+const { startMockAnthropic, cannedSSE, cannedToolUseSSE, cannedMessage } = require('../mock-anthropic-helper.cjs');
 const { toolResult, assertFailsOnMissingOutput } = require('../../scripts/lib/tool-result.cjs');
+const { shadowKeychain, CLASSIFIER_STOP } = require('../tool-driver.cjs');
 
 // THE TREE: <B>/work is the working directory, <B>/outside is added with --add-dir. Every file gets its own mtime
 // (T0 + dt): files_with_matches and Glob list newest first, and a tie would leave the order to the walk.
@@ -230,6 +231,26 @@ function controls() {
   }
 }
 
+// THE PERMISSION MODES (every-tool Task 5 fix round 2): the same turn, on the PATH with no rg, in each mode the carve
+// lists (Grep and Glob are search opt-ins: no `unlisted` cell). Every scripted tool is in --allowedTools and Grep and
+// Glob only read, so each answer is print's; MEASURED on native 2.1.283 darwin-arm64 (2026-11-20, CLODE_E2E_NATIVE=1).
+// In plan and auto the Bash tool's rg calls first go to the auto-mode safety classifier, which the mock answers with
+// an allow; unanswered, native refuses them as "temporarily unavailable".
+const PERMISSION_TURNS = {
+  'permission:acceptEdits': ['--permission-mode', 'acceptEdits'],
+  'permission:auto': ['--permission-mode', 'auto'],
+  'permission:bypassPermissions': ['--permission-mode', 'bypassPermissions'],
+  'permission:dontAsk': ['--permission-mode', 'dontAsk'],
+  'permission:plan': ['--permission-mode', 'plan'],
+};
+// Their controls, each declaring the mode cells it drives (the gate's rule: a literal list).
+function modeControls() {
+  assertFailsOnMissingOutput(gFiles, G_FILES, ['permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan']);
+  assertFailsOnMissingOutput(gContent, G_CONTENT, ['permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan']);
+  assertFailsOnMissingOutput(glJs, GL_JS, ['permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan']);
+  assertFailsOnMissingOutput(glOutside, GL_OUTSIDE, ['permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan']);
+}
+
 // What the turn inherits: none of the caller's own Claude Code session (a test run from inside one carries
 // CLAUDE_CODE_ENTRYPOINT and friends, which change which tools register) nor its API settings.
 function baseEnv() {
@@ -252,13 +273,14 @@ function pathWithoutRg(PATH, scratch) {
 }
 const resolveBin = (name, PATH) => PATH.split(path.delimiter).map((d) => d && path.join(d, name)).find((p) => p && fs.existsSync(p)) || null;
 
-function runTurn(bin, cwd, env, timeoutMs) {
-  return spawnCollect(bin, ['-p', 'search the tree', '--allowedTools', 'Grep,Glob,Bash', '--add-dir', '../outside'],
+function runTurn(bin, cwd, env, timeoutMs, extra = []) {
+  return spawnCollect(bin, ['-p', 'search the tree', '--allowedTools', 'Grep,Glob,Bash', '--add-dir', '../outside', ...extra],
     { cwd, env }, { timeoutMs }).then(({ status, signal, stderr }) => ({ status, signal, stderr }));
 }
 
-// One turn of SCRIPT by `bin` on `mode`'s PATH; every check judged. -> { findings, measured }.
-async function judge(bin, mode) {
+// One turn of SCRIPT by `bin` on `mode`'s PATH (and in `perm`, a permission mode's flags: PERMISSION_TURNS); every
+// check judged. -> { findings, measured }.
+async function judge(bin, mode, perm = null) {
   const t = makeTree(fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'grep-glob-e2e-'))));
   try {
     const trip = path.join(t.base, 'trip');
@@ -269,14 +291,22 @@ async function judge(bin, mode) {
     const PATH = mode === PATH_MODES[1] ? `${trip}${path.delimiter}${noRg}` : noRg;
     const bash = resolveBin('bash', noRg);
     const mock = await startMockAnthropic({
-      respond: (body) => { const next = SCRIPT.find((s) => !body.includes(s.use.id)); return next ? next.emit() : cannedSSE('E2E-DONE'); },
+      respond: (body) => {
+        // plan and auto ask the auto-mode classifier about each Bash rg call: an allow (test/tool-driver.cjs autoModeSeverity)
+        if (body.includes(CLASSIFIER_STOP)) return cannedMessage('<severity>10', '</severity>');
+        const next = SCRIPT.find((s) => !body.includes(s.use.id)); return next ? next.emit() : cannedSSE('E2E-DONE');
+      },
     });
     try {
-      const env = { ...host, ...throwawayHome(t.base), PATH, SHELL: bash, ANTHROPIC_BASE_URL: mock.url, ANTHROPIC_API_KEY: 'sk-ant-mock' };
-      const r = await runTurn(bin, t.work, env, 240000);
+      // the Keychain: native reads it every turn, so a stub of its own answers, first on PATH (test/tool-driver.cjs)
+      const kc = shadowKeychain(t.base, 'turn');
+      const env = { ...host, ...throwawayHome(t.base), PATH: `${kc.dir}${path.delimiter}${PATH}`, SHELL: bash,
+        ANTHROPIC_BASE_URL: mock.url, ANTHROPIC_API_KEY: 'sk-ant-mock' };
+      const r = await runTurn(bin, t.work, env, 240000, perm ? PERMISSION_TURNS[perm] : []);
       const findings = [];
+      if (perm) mode = `${mode}, ${perm}`;
       if (r.status !== 0) findings.push(`${mode}: the turn exited ${r.status}${r.signal ? ` (${r.signal})` : ''}: ${r.stderr.slice(0, 800)}`);
-      judged = { mode, base: t.base };
+      judged = { mode: perm ? PATH_MODES[0] : mode, base: t.base };
       const measured = {};
       for (const [USE, same] of verdicts(mock)) {
         const got = toolResult(mock, USE.id);
@@ -330,3 +360,23 @@ test('native answers this script as NATIVE records (CLODE_E2E_NATIVE=1)', { skip
   if (process.env.CLODE_E2E_NATIVE_OUT) fs.writeFileSync(process.env.CLODE_E2E_NATIVE_OUT, JSON.stringify(measured, null, 1));
   assert.deepStrictEqual(findings, [], `native moved:\n${findings.join('\n')}`);
 });
+
+for (const perm of Object.keys(PERMISSION_TURNS)) {
+  test(`Grep, Glob and the Bash tool's rg in a built quaude in ${perm}: every tool_result equals native's`, { skip: SKIP }, async (t) => {
+    const q = builtQuaude();
+    if (q.skip) { t.skip(q.skip); return; }
+    controls();
+    modeControls();
+    const { findings } = await judge(q.path, PATH_MODES[0], perm);
+    assert.deepStrictEqual(findings, [], `${findings.length} tool_result(s) differ from native's:\n${findings.join('\n')}`);
+  });
+  test(`native answers this script in ${perm} as NATIVE records (CLODE_E2E_NATIVE=1)`, { skip: SKIP || (process.env.CLODE_E2E_NATIVE !== '1' && 'opt-in: CLODE_E2E_NATIVE=1 re-measures native') }, async (t) => {
+    const bin = providerBin(process.env);
+    if (!bin) { t.skip(skipReason(process.env)); return; }
+    controls();
+    modeControls();
+    const r = await judge(bin, PATH_MODES[0], perm);
+    if (r.findings.length) t.diagnostic(`measured:\n${JSON.stringify(r.measured, null, 1)}`);
+    assert.deepStrictEqual(r.findings, [], `native moved:\n${r.findings.join('\n')}`);
+  });
+}
