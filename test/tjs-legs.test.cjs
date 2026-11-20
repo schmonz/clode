@@ -758,7 +758,16 @@ test('version policy: ci rides the newest end, release the oldest floor', () => 
   // floor itself is now pinned by macos-min, not inherited from the runner.
   assert.strictEqual(rel('darwin-arm64').os, 'macos-15');
   assert.strictEqual(rel('darwin-arm64')['macos-min'], '11.0');
-  assert.strictEqual(rel('darwin-arm64').floor, rel('darwin-arm64')['macos-min'], 'the asset floor label must be the pinned deployment target');
+  // EVERY darwin RELEASE leg: the floor a leg advertises is the deployment target it pins.
+  // A floor with no macos-min is a label the runner decides (arm64 shipped minos 14.0
+  // under "11.0" that way until a0a2d4e). Release tier only: the ci tier strips the
+  // macos floor fields by design (29685d8) — ci rides the newest runner, floor-free.
+  const darwin = release.filter((l) => /^darwin-/.test(l.leg));
+  assert.ok(darwin.length >= 4, `expected the four darwin slices, got ${darwin.length}`);
+  for (const l of darwin) {
+    assert.ok(l.floor, `${l.leg}: no floor`);
+    assert.strictEqual(l['macos-min'], l.floor, `${l.leg}: floor ${l.floor} but macos-min ${l['macos-min']} — the floor must be the pinned deployment target`);
+  }
   assert.strictEqual(cin('darwin-arm64').os, 'macos-26');       // newest hosted arm64
   // glibc is a CI-only canary (absent from release); ci still rides the newest.
   assert.strictEqual(rel('linux-x64-glibc'), undefined, 'glibc is ciOnly — not in the release tier');

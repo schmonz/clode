@@ -1822,29 +1822,11 @@ runs:
         fi
         LOADCMDS="$RUNNER_TEMP/floor-gate-loadcmds"
         otool -l "$TARGET" > "$LOADCMDS"
-        WANT="${{ inputs.macos-min }}"
-        # Which load command the floor lives in depends on the floor: pre-10.14 dyld
-        # only understands LC_VERSION_MIN_MACOSX, and arm64 (floor >= 11.0) only ever
-        # carries LC_BUILD_VERSION (its `minos`). Both are checked to equal the pin.
-        if [ "$(printf '%s\n' "$WANT" | awk -F. '{print ($1*100+$2 >= 1014) ? "new" : "old"}')" = new ]; then
-          got=$(awk '/cmd LC_BUILD_VERSION/{f=1} f && /minos /{print $2; exit}' "$LOADCMDS")
-          if [ "$got" != "$WANT" ]; then
-            echo "ERROR: LC_BUILD_VERSION minos=${got:-<none>}, want $WANT" >&2
-            exit 1
-          fi
-          echo "floor gate ok: LC_BUILD_VERSION minos $got"
-        else
-          if grep -q LC_BUILD_VERSION "$LOADCMDS"; then
-            echo "ERROR: LC_BUILD_VERSION present — pre-10.14 dyld needs LC_VERSION_MIN_MACOSX" >&2
-            exit 1
-          fi
-          got=$(awk '/cmd LC_VERSION_MIN_MACOSX/{f=1} f && /version /{print $2; exit}' "$LOADCMDS")
-          if [ "$got" != "$WANT" ]; then
-            echo "ERROR: LC_VERSION_MIN_MACOSX=$got, want $WANT" >&2
-            exit 1
-          fi
-          echo "floor gate ok: LC_VERSION_MIN_MACOSX $got"
-        fi
+        # The verdict lives in scripts/macho-floor.cjs (tested against real otool -l
+        # captures, the shipped 0.20260831.1 arm64 slice's minos-14.0 among them): a
+        # floor < 10.14 must be LC_VERSION_MIN_MACOSX with no LC_BUILD_VERSION; a floor
+        # >= 10.14 (arm64) must be LC_BUILD_VERSION minos. Both equal to the pin.
+        node scripts/macho-floor.cjs check "${{ inputs.macos-min }}" "$LOADCMDS"
 
     # UPLOADED BEFORE THE PRODUCT GATE, DELIBERATELY. This is the ENGINE; the
     # smoke below tests the PRODUCT built from it, and the two fail for different

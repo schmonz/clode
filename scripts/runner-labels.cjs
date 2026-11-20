@@ -33,7 +33,17 @@ const RETIRED = Object.freeze({
   'windows-2019': 'retired (no longer in the actions/runner-images table)',
 });
 
-const LABEL_RE = /\b((?:macos|ubuntu|windows)-(?:latest|\d[\d.]*)(?:-(?:arm64|arm|intel|large|xlarge))?)\b/g;
+// FAIL CLOSED. Labels are read from the places a runner label can appear -- a YAML
+// `runs-on:` or `os:` value, and a tjs-legs.mjs `os:` / `'ci-os':` string -- and EVERY
+// value found there counts, whatever its shape (ubuntu-slim, windows-2025-vs2026,
+// macos-15-xlarge, xcode-..., or a typo). ALLOWED decides; no label-shaped regex does.
+// A `${{ ... }}` expression is skipped: what it resolves to (the leg manifest) is
+// scanned itself.
+const CONTEXTS = [
+  /^\s*(?:-\s*)?runs-on:\s*(.+?)\s*$/,                    // YAML runs-on: <label> | [a, b]
+  /^\s*(?:-\s*)?os:\s*([^\s#'"{[][^\s#]*)\s*(?:#.*)?$/,   // YAML matrix `os: <label>`
+];
+const JS_CONTEXTS = [/(?:^|[\s{,])os:\s*'([^']+)'/g, /'ci-os':\s*'([^']+)'/g];
 
 // Labels USED in a file's text, skipping comment lines (# for YAML, // for JS): prose
 // about a retired image (this file's own reason for existing) is not a use of it.
@@ -41,7 +51,18 @@ function labelsIn(text) {
   const out = new Set();
   for (const line of String(text).split('\n')) {
     if (/^\s*(#|\/\/)/.test(line)) continue;
-    for (const m of line.matchAll(LABEL_RE)) out.add(m[1]);
+    for (const re of CONTEXTS) {
+      const m = re.exec(line);
+      if (!m) continue;
+      let v = m[1].replace(/\s+#.*$/, '').trim();
+      if (v.includes('${{')) continue;
+      v = v.replace(/^\[|\]$/g, '');
+      for (const part of v.split(',')) {
+        const l = part.trim().replace(/^['"]|['"]$/g, '');
+        if (l) out.add(l);
+      }
+    }
+    for (const re of JS_CONTEXTS) for (const m of line.matchAll(re)) out.add(m[1]);
   }
   return [...out];
 }
@@ -51,18 +72,25 @@ function labelsIn(text) {
 function parseRunnerReadme(md) {
   const offered = new Set();
   const deprecated = new Set();
+  const problems = [];
+  let labelCol = -1;
   for (const line of String(md).split('\n')) {
     if (!line.startsWith('|')) continue;
     const cells = line.split('|').map((c) => c.trim());
-    if (cells.length < 5) continue;
-    const labels = [...(cells[3] || '').matchAll(/`([a-z0-9.-]+)`/g)].map((m) => m[1]);
+    // The header names the label column; find it rather than assume its position.
+    const hdr = cells.findIndex((c) => /^YAML Label$/i.test(c));
+    if (hdr >= 0) { labelCol = hdr; continue; }
+    if (labelCol < 0) continue;
+    const labels = [...(cells[labelCol] || '').matchAll(/`([a-z0-9.-]+)`/g)].map((m) => m[1]);
     if (!labels.length) continue;
-    const isDeprecated = /deprecated/i.test(cells[1] || '');
+    // The badge may sit in ANY cell of the row.
+    const isDeprecated = cells.some((c) => /deprecated/i.test(c));
     for (const l of labels) (isDeprecated ? deprecated : offered).add(l);
   }
-  // A label listed in both a live and a deprecated row (e.g. a family's x64 and arm64
-  // rows) is offered — but NOT safely: report it as deprecated too.
-  return { offered: [...offered, ...deprecated], deprecated: [...deprecated] };
+  if (labelCol < 0) problems.push('runner-images README: no table with a "YAML Label" column -- the format moved; nothing was read');
+  else if (offered.size + deprecated.size === 0) problems.push('runner-images README: the label table is empty');
+  // A label listed in both a live and a deprecated row is offered -- but NOT safely.
+  return { offered: [...offered, ...deprecated], deprecated: [...deprecated], problems };
 }
 
 module.exports = { ALLOWED, RETIRED, labelsIn, parseRunnerReadme };

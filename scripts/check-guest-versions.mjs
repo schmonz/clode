@@ -121,7 +121,8 @@ async function main() {
   // CI-tier native pin (the newest end) is flagged when a newer same-variant
   // generation label appears. Release natives are floors: old by design,
   // only the still-offered check applies.
-  const { offered: labels, deprecated } = await runnerLabels();
+  const { offered: labels, deprecated, problems: readmeProblems } = await runnerLabels();
+  problems.push(...readmeProblems);
   // scripts/runner-labels.cjs ALLOWED is what the every-push guard trusts; hold it to the
   // live table. A deprecated allowed label is the months-ahead warning.
   for (const l of ALLOWED_LABELS) {

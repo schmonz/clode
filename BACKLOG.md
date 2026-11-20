@@ -8,6 +8,25 @@ Concrete clode-under-Node divergences from native Claude Code, to triage and fix
 That page is GENERATED from `scripts/build-graph.cjs` — the one declaration of the build — so it
 cannot drift from it; it is also where the honest answer to "does this need node?" lives.
 
+## The shipped macOS arm64 floor is 14.0, not the 11.0 it is labelled (2026-11-20)
+
+Measured: HTTP range reads of the fat header and the arm64 slice's load commands, and otool -l of the downloaded
+release asset, captured into test/fixtures/macho-floor/ and refused by test/build-gates/macho-floor-gates.test.cjs
+(2026-11-20).
+
+- release v0.20260831.1, asset `clode-0.20260831.1-macos`: arm64 slice (fat_arch 3, offset 15384576) carries
+  `LC_BUILD_VERSION minos 14.0 sdk 14.5`. The ppc/i386/x86_64 slices carry their real floors (10.4/10.4/10.6).
+- the bootstrap template engine `macos-11.0-arm64` (scripts/bootstrap-engine.manifest.json, templates-26.6.0-1a230d3
+  bytes 51510246+2550351, sha256 b8b05b31... matches the manifest): also `minos 14.0 sdk 14.5`.
+
+So the shipped release's real arm64 floor is macOS 14.0, and its `macos-11.0-arm64` template tag is a label, not the
+binary's floor. A macOS 11-13 arm64 Mac's dyld refuses that slice. Cause: the darwin-arm64 leg pinned no deployment
+target, so clang took the runner's (macos-14). Fixed by a0a2d4e for the next release (`'macos-min': '11.0'`, the floor
+gate now reads LC_BUILD_VERSION minos via scripts/macho-floor.cjs, and test/tjs-legs.test.cjs holds every darwin
+release leg's floor to its macos-min). Open until a release ships with an arm64 slice measured at minos 11.0, and
+until the bootstrap manifest is re-pinned to that release (the bootstrap engine runs only on the build host, so its
+14.0 floor limits which Macs can BUILD, not which can run a built quaude).
+
 ## Windows process-table and priority claims have not run on a real Windows box (2026-11-19)
 
 Three Windows code paths are judged only off Windows, through fakes, and each code comment that says so cites this
