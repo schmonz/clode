@@ -440,9 +440,11 @@ function scanWrapOptions({ bundle, wrapOptions, what }) {
   }
   const findings = [];
   let examined = 0;
+  const sites = new Map();   // each call site's options literal, as the carve spells it -> how many
   for (const parts of found.callSites) {
     examined++;
     const optText = parts[2].trim();
+    sites.set(optText, (sites.get(optText) || 0) + 1);
     const parsed = parseOptionsLiteral(optText);
     if (parsed === null) {
       findings.push(`could not parse the options passed to ${found.wrapperName}(): ${optText} — `
@@ -455,7 +457,8 @@ function scanWrapOptions({ bundle, wrapOptions, what }) {
       }
     }
   }
-  return { findings, examined, note: `${what}: ${examined} call site(s) to ${found.wrapperName}()` };
+  const named = [...sites].map(([t, n]) => `${n} x ${t}`).join('; ');
+  return { findings, examined, note: `${what}: ${examined} call site(s) to ${found.wrapperName}(): ${named}` };
 }
 
 // A minimal synthetic carve with the two functions this scan's shape needs, and one caller —
@@ -470,7 +473,18 @@ const WRAP_BAD = `${SYNTH_HELPER}function caller(a){return zu(a,10,{wordWrap:fal
 
 guardTests(defineGuard({
   name: 'text-probe-wrap-options',
-  floor: 1,
+  // 18, MEASURED 2026-11-20: the 2.1.283 carve has 18 call sites to the wrapper on both
+  // macos-arm64 (`zu`) and linux-amd64 (`Gu`), the same options literals on both:
+  //   4 x {trim:!0,hard:!0}   6 x {hard:!0,trim:!1}   4 x {trim:!1,hard:!0}   1 x {hard:!1,trim:!1}
+  //   1 x {hard:!0}           1 x {hard:!0,trim:!0}   1 x {hard:p?.hard??!1,trim:!1,wordWrap:!0}
+  // The verdict's note lists them the same way (options literal -> count), so a re-measure is a
+  // read of the BROKEN message, not a hand count. Not yet run in CI at 18: it awaits its first
+  // run on main. A floor of
+  // 1 only caught a carve that lost every call site; one that lost most of them would have
+  // passed, judging WRAP_OPTIONS against a fraction of what the bundle asks for. A bump that
+  // legitimately drops call sites reads BROKEN until someone re-measures and moves this: loud
+  // on purpose.
+  floor: 18,
   read: readWrapCarve,
   scan: (i) => scanWrapOptions({ ...i, wrapOptions: WRAP_OPTIONS }),
   control: () => ({ bundle: WRAP_BAD, what: 'synthetic control' }),

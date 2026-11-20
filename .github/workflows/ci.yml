@@ -1358,11 +1358,14 @@ jobs:
           # Skips are judged BY NAME, not counted: gates-ran-in-ci holds this job to every file it runs (test/ci-gates.cjs
           # FILES, a skip accepted only by its test name; ci-gate-placement refuses a file a job runs that FILES does not judge).
       # THE TEXT GATES against the oracle installed above: Bun.ant.CellSegmenter,
-      # Bun.stringWidth, Intl.Segmenter and Bun.sliceAnsi, ours under the tjs engine quaude
-      # ships vs native Bun, exact equality over ~1.18M strings; the freshness gate (the
+      # Bun.stringWidth, Intl.Segmenter, Bun.sliceAnsi and Bun.wrapAnsi, ours under the tjs
+      # engine quaude ships vs native Bun, exact equality over ~1.18M strings (wrapAnsi at
+      # BASIC_WRAPS on each, plus corpusWraps() at FULL_WRAPS: scripts/lib/text-probe.cjs); the freshness gate (the
       # generated table is what the generator makes from the pinned UCD + that native); the
       # UAX #29 conformance test; the check that the segmenter gate's painted-style column
-      # still restates the bundle's own ansiCodes()/SC; and the carve-time tripwire that no
+      # still restates the bundle's own ansiCodes()/SC; the check that every one of the carve's
+      # Bun.wrapAnsi call sites (its floor in text-probe-gates) passes an option shape the wrap gates judge
+      # (text-probe-wrap-options); and the carve-time tripwire that no
       # Bun.sliceAnsi call in the oracle's bundle passes an ellipsis (CLODE_PROVIDER_BIN is the
       # oracle here, so the bundle literals, the style check and the tripwire read the bundle
       # the tables were generated from). And CellSegmenter's paint()/setCell() (phase 5): the
