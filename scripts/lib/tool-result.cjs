@@ -234,7 +234,22 @@ function missingOutputLogs(toolUse, context = []) {
 // `context` (optional, after modes): the earlier calls the check reads, [{ use, content[, isError] }], each with the
 // answer it really got (missingOutputLogs). Without it, a check that also needs an earlier call's answer fails on
 // every missing-output log for the wrong reason (that answer is missing too) and proves nothing about its own call.
+// A DRIVEN cell's check must also FAIL on the harness's answer for a tool that is not registered ("No such tool
+// available: <name>", final-review I3): a check that passed there would read an unregistered tool as driven. Only
+// assertNotRegistered, whose check must pass there, skips that row.
 function assertFailsOnMissingOutput(check, command, modes, context) {
+  failsOnMissingOutput(check, command, modes, context);
+  const use = command;
+  for (const absent of [`<tool_use_error>Error: No such tool available: ${use.name}</tool_use_error>`,
+    `<tool_use_error>Error: No such tool available: ${use.name}. ${use.name} is disabled for this session, in subagents as well as here.</tool_use_error>`]) {
+    if (check(answeredLog(use, absent, context || [], true)) !== false) {
+      throw new Error(`assertFailsOnMissingOutput: this check PASSES on "No such tool available: ${use.name}", the answer of a `
+        + 'target that does not register the tool, so an unregistered tool would read as driven. Judge the tool\'s own '
+        + 'answer; a cell where the tool is not registered is proven with assertNotRegistered.');
+    }
+  }
+}
+function failsOnMissingOutput(check, command, modes, context) {
   if (modes !== undefined && !(typeof modes === 'string' && modes)
     && !(Array.isArray(modes) && modes.length && modes.every((m) => typeof m === 'string' && m))) {
     throw new Error(`assertFailsOnMissingOutput: modes must be a mode name or an array of them, got ${JSON.stringify(modes)}`);
@@ -281,7 +296,7 @@ function assertFailsOnMissingOutput(check, command, modes, context) {
 // The check must fail on every missing-output log (assertFailsOnMissingOutput), PASS on `absent` and FAIL on
 // `registered`: so a target that does register the tool fails the check, and the cell goes red.
 function assertNotRegistered(check, command, modes, answers) {
-  assertFailsOnMissingOutput(check, command, modes);
+  failsOnMissingOutput(check, command, modes);
   const { absent, registered } = answers || {};
   const text = (c) => (typeof c === 'string' ? c : Array.isArray(c) ? c.map((b) => (b && b.text) || '').join('') : null);
   if (text(absent) === null || text(registered) === null) {

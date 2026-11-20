@@ -180,6 +180,16 @@ test('assertFailsOnMissingOutput accepts a check that judges a computed marker i
   assert.doesNotThrow(() => assertFailsOnMissingOutput(check, TOOL));
 });
 
+test('assertFailsOnMissingOutput refuses a check that passes on "No such tool available" (planted: an unregistered tool read as driven)', () => {
+  const T = { name: 'TaskCreate', input: { subject: 's' }, id: 'toolu_absent' };
+  const isAnError = (m) => { const r = toolResult(m, T.id); return !!r && r.isError && r.text.includes('Error:'); };
+  assert.throws(() => assertFailsOnMissingOutput(isAnError, T), /PASSES on "No such tool available: TaskCreate"/);
+  const mentions = (m) => toolResultText(m, T.id).includes('TaskCreate');
+  assert.throws(() => assertFailsOnMissingOutput(mentions, T), /PASSES on "No such tool available: TaskCreate"/);
+  const own = (m) => toolResultText(m, T.id).includes('Task #1 created');
+  assert.doesNotThrow(() => assertFailsOnMissingOutput(own, T), 'a check of the tool\'s own answer still passes the control');
+});
+
 test('assertFailsOnMissingOutput refuses a check that reads the raw request body', () => {
   const MARK = 'LIVE-RAW';
   const check = (m) => m.requests.some((q) => (q.body || '').includes(MARK));
