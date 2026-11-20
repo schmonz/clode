@@ -479,13 +479,14 @@ with TJS_HOME unset creates $HOME/.tjs holding localStorage.db only (no cookies.
 Unmeasured. The suite-hermeticity claims (suite home, sentinel HOME byte-untouched, the 18/81 spawn counts) were not
 re-run; test/suite-home-hermetic.test.cjs and a full suite with a sentinel HOME would.
 
-## 532 of the 2166 tool x mode x engine cells are driven (177 of them on netbsd-arm64, by a CI job not yet run), 12 are not applicable; Phase A's 18 tools, Agent, Edit and Bash in print, interactive, unlisted and every permission mode (cells 2026-11-18; tools 2026-09-28; Grep and Glob driven 2026-10-05; Read, Write, NotebookEdit, the Task tools and TaskStop 2026-11-19; Skill, the worktree and cron tools, ScheduleWakeup, ReportFindings, Workflow and ListAgents 2026-11-20; the -p modes, interactive, Agent and the Grep/Glob modes 2026-11-20)
+## 532 of the 2166 tool x mode x engine cells are driven (355 observed + 177 placed (not yet run): netbsd-arm64-cells), 12 are not applicable; Phase A's 18 tools, Agent, Edit and Bash in print, interactive, unlisted and every permission mode (cells 2026-11-18; tools 2026-09-28; Grep and Glob driven 2026-10-05; Read, Write, NotebookEdit, the Task tools and TaskStop 2026-11-19; Skill, the worktree and cron tools, ScheduleWakeup, ReportFindings, Workflow and ListAgents 2026-11-20; the -p modes, interactive, Agent and the Grep/Glob modes 2026-11-20)
 
 Since observability Task 1 (2026-11-18) the gate counts CELLS, tool x mode x engine: 90 tools, 722
 tool x mode pairs (permission modes, sandbox, Bash shells, interactive, unlisted, from the carve where
 it says) over darwin-arm64, linux-x64-musl and netbsd-arm64, 2166 cells. Measured: the every-tool-driven
 gate's verdict over the 2.1.283 darwin-arm64 carve (test/build-gates/tool-coverage-gates.test.cjs, 2026-11-20):
-355 driven, 1799 exempted, 12 not applicable, 0 neither, by four CI jobs (CELL_JOBS).
+532 driven (355 observed + 177 placed (not yet run): netbsd-arm64-cells, CELL_JOBS' `placed`, deleted after
+its first green run), 1622 exempted, 12 not applicable, 0 neither, by five CI jobs (CELL_JOBS).
 
 What is driven. test/fidelity/tools-local.test.cjs (node-shim-oracle-darwin and linux-x64-pty, each installing the
 pinned native that runs and building a quaude from it) drives 23 tools (Read, Write, NotebookEdit, Edit, Bash, Agent,
@@ -518,7 +519,7 @@ there from the engine the netbsd-arm64 leg (now in the ci tier) built that push.
 scripts/tjs-legs.mjs GUEST_CELL_JOBS, with the measurements behind them: on the local HVF guest the two files pass,
 19 tests pass, 18 native tests skip by name, 0 fail, in about 23 minutes (1679fe5); TCG is about 10-18 times slower (the leg's engine build,
 54 minutes in release run 44691559850), so the job runs four lanes and scales every wait by CLODE_TIMEOUT_SCALE.
-NOT YET RUN IN CI: the first push measures it. If it proves impossible or too slow, the fallback is driven-local
+NOT YET RUN IN CI (a870927 starts its first run): until that run is green, its cells count as placed, not observed. If it proves impossible or too slow, the fallback is driven-local
 (60865ea, reverted by a77092d): committed evidence from the local VM, with a 30-day window.
 
 What still falls due 2026-12-15 (USER RULING 2026-11-18 moved Phase A there from 2026-10-15), each with a reason
