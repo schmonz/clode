@@ -927,7 +927,7 @@ function findDrivers(sources) {
       }
       const ran = testsOf(text, m, code, x.index, lineOf);
       drivers.push({ ...at, name, use, check, modes, na, unmeasured: unmeasuredModes(text, modes, m),
-        tests: ran.filter((t) => !t.nativeOnly).map(({ name: n, line }) => ({ name: n, line })),
+        tests: ran.filter((t) => !t.nativeOnly).map(({ name: n, template, line }) => ({ name: n, line, ...(template ? { template } : {}) })),
         nativeOnly: ran.filter((t) => t.nativeOnly).map(({ name: n, line }) => ({ name: n, line })),
         skips: skipOf(text, m, code, x.index, lineOf) });
     }
@@ -998,14 +998,17 @@ function testsOf(text, m, code, pos, lineOf) {
     const first = close < 0 ? null : (splitTop(text.slice(open + 1, close - 1)) || [])[0];
     const lit = first && /^(['"`])([\s\S]*)\1$/.exec(first);
     const name = lit && !(lit[1] === '`' && lit[2].includes('${')) ? lit[2].replace(/\\(['"`\\])/g, '$1') : null;
+    // A template name (a test made in a loop): every test it makes shares this line, so checkJobRan tells them apart
+    // by name, matching each record against it (I1).
+    const template = lit && lit[1] === '`' && lit[2].includes('${') ? lit[2] : null;
     // A test whose code spells quaudeSkip runs its turn on native alone (test/tool-driver.cjs).
     const nativeOnly = close > 0 && [...text.slice(t.index, close).matchAll(/(?<![\w$.])quaudeSkip\b/g)]
       .some((q) => m.mask[t.index + q.index]);
-    return { start: t.index, end: close, name, line: lineOf(t.index), nativeOnly };
+    return { start: t.index, end: close, name, template, line: lineOf(t.index), nativeOnly };
   }).filter((t) => t.end > 0);
   const holding = (p) => calls.filter((t) => t.start < p && p < t.end).sort((a, b) => b.start - a.start)[0];
   const own = holding(pos);
-  if (own) return [{ name: own.name, line: own.line, nativeOnly: own.nativeOnly }];
+  if (own) return [{ name: own.name, template: own.template, line: own.line, nativeOnly: own.nativeOnly }];
   const fns = [
     ...code(/(?<![\w$.])function\s*\*?\s*([\w$]+)\s*\(/g),
     ...code(/(?<![\w$.])(?:const|let|var)\s+([\w$]+)\s*=\s*(?:async\s*)?(?:\([^)]*\)|[\w$]+)\s*=>/g),
@@ -1028,7 +1031,7 @@ function testsOf(text, m, code, pos, lineOf) {
   for (const c of code(new RegExp(`(?<![\\w$.])${esc(fn.name)}\\s*\\(`, 'g'))) {
     if (c.index === fn.start || (c.index > fn.start && c.index < fn.end)) continue;
     const t = holding(c.index);
-    if (t) out.set(t.line, { name: t.name, line: t.line, nativeOnly: t.nativeOnly });
+    if (t) out.set(t.line, { name: t.name, template: t.template, line: t.line, nativeOnly: t.nativeOnly });
   }
   return [...out.values()].sort((a, b) => a.line - b.line);
 }
@@ -1387,7 +1390,7 @@ const ENGINE_HOST = (engine) => {
   const [os, arch] = engine.split('-');
   return { platform: os, arch };
 };
-function checkJobRan({ job, jobs, sources, records, host }) {
+function checkJobRan({ job, jobs, sources, records: records_, host }) {
   const findings = [];
   const entry = jobs.find((j) => j.job === job);
   if (!entry) return { findings: [`CLODE_CELL_JOB=${job} is not a job CELL_JOBS names (${jobs.map((j) => j.job).join(', ')})`], examined: 0, ran: [] };
@@ -1397,33 +1400,50 @@ function checkJobRan({ job, jobs, sources, records, host }) {
   }
   const d = findDrivers(sources.filter((s) => entry.files.includes(s.file)));
   // A test reported more than once (two runs of the file in one job) passed only if every report did.
-  const outcomes = new Map();
-  for (const r of records) {
+  const records = new Map();                     // `file:line` -> [{ name, o }]
+  for (const r of records_) {
     const k = `${r.file}:${r.line}`;
     const o = r.type === 'test:fail' ? 'failed' : r.skip !== undefined ? `skipped (${r.skip})` : r.todo !== undefined ? `todo (${r.todo})` : 'passed';
-    outcomes.set(k, [...(outcomes.get(k) || []), o]);
+    records.set(k, [...(records.get(k) || []), { name: r.name, o }]);
   }
-  const result = new Map([...outcomes].map(([k, os]) => [k, os.find((o) => o !== 'passed') || 'passed']));
+  const worst = (rs) => (rs.length ? rs.map((r) => r.o).find((o) => o !== 'passed') || 'passed' : 'not run');
+  // BY NAME, NOT ONLY BY LINE (I1): tests made in a loop share one file:line, so a sibling's pass must never stand in
+  // for a mode whose own test never ran. A template-named test's record counts for mode `mo` only when its name,
+  // matched against the template, interpolates `mo`. (A template that interpolates no declared mode, a label, say,
+  // keys by line as before.)
+  const outcomeOf = (x, t, mo) => {
+    const rs = records.get(`${x.file}:${t.line}`) || [];
+    if (!t.template) return worst(rs);
+    const lit = (q) => q.replace(/\\(['"`\\])/g, '$1').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp(`^${t.template.split(/\$\{[^}]*\}/).map(lit).join('(.+?)')}$`);
+    const caps = rs.map((r) => ({ r, caps: (re.exec(r.name || '') || []).slice(1) }));
+    if (!caps.some((c) => x.modes.some((m) => c.caps.includes(m)))) return worst(rs);
+    return worst(caps.filter((c) => c.caps.includes(mo)).map((c) => c.r));
+  };
   const ran = [];
   for (const f of entry.files) if (!d.drivers.some((x) => x.file === f)) findings.push(`${f}: claimed by ${job}, but holds no driver`);
   // A FAILED or unreported test is always a finding. A SKIPPED one is a finding unless every cell its
   // driver declares is driven by another driver whose tests all passed in this job: a test that
   // judges one branch of a host fact (agentic-sandbox-fail-closed's fail-closed and D2 tests) skips
   // where the other branch applies, and the cell is still judged; the fail-closed test's sandbox:on
-  // controls have no such twin, so its skip fails the job.
+  // controls have no such twin, so its skip fails the job. Judged per declared mode.
   const judged = d.drivers.filter((x) => x.tests.length).map((x) => ({ x,
-    bad: x.tests.map((t) => [t, result.get(`${x.file}:${t.line}`) || 'not run']).filter(([, o]) => o !== 'passed') }));
+    byMode: new Map(x.modes.map((mo) => [mo, x.tests.map((t) => [t, outcomeOf(x, t, mo)]).filter(([, o]) => o !== 'passed')])) }));
   const passedCells = new Set();
   // (a not-registered control's pass never stands in for a driver's skip: it proves the opposite of driven)
-  for (const { x, bad } of judged) if (!bad.length && !x.na) for (const mo of x.modes) passedCells.add(`${x.name}|${mo}`);
+  for (const { x, byMode } of judged) if (!x.na) for (const [mo, bad] of byMode) if (!bad.length) passedCells.add(`${x.name}|${mo}`);
   for (const x of d.drivers) if (!x.tests.length) findings.push(`${x.file}:${x.line}: no test(...) runs this ${x.name} control, so nothing reports it`);
-  for (const { x, bad } of judged) {
-    const tag = `${x.file}:${x.line} (${x.name} x ${x.modes.join('/')} @ ${entry.engine})`;
-    if (!bad.length) { ran.push(`${x.name} x ${x.modes.join('/')} @ ${entry.engine}${x.na ? ' (not registered)' : ''} <- ${x.file}:${x.line}`); continue; }
+  for (const { x, byMode } of judged) {
+    const okModes = x.modes.filter((mo) => !byMode.get(mo).length);
+    const badModes = x.modes.filter((mo) => byMode.get(mo).length);
+    if (okModes.length) ran.push(`${x.name} x ${okModes.join('/')} @ ${entry.engine}${x.na ? ' (not registered)' : ''} <- ${x.file}:${x.line}`);
+    if (!badModes.length) continue;
+    const bad = [...new Map(badModes.flatMap((mo) => byMode.get(mo)).map(([t, o]) => [`${t.line}|${o}`, [t, o]])).values()];
     const onlySkips = bad.every(([, o]) => o.startsWith('skipped'));
-    const alone = x.modes.filter((mo) => !passedCells.has(`${x.name}|${mo}`));
+    const alone = badModes.filter((mo) => !passedCells.has(`${x.name}|${mo}`));
     if (onlySkips && !alone.length) continue;
-    findings.push(`${tag}: ${bad.map(([t, o]) => `test "${t.name}" (line ${t.line}) ${o}`).join('; ')} in ${job}; a cell is driven `
+    const tag = `${x.file}:${x.line} (${x.name} x ${badModes.join('/')} @ ${entry.engine})`;
+    findings.push(`${tag}: ${bad.map(([t, o]) => `test "${t.name || t.template}" (line ${t.line}) ${o}`).join('; ')} in ${job}; a cell is driven `
       + `only where its test passes${onlySkips ? ` (no other passing test here drives ${alone.map((mo) => `${x.name} x ${mo}`).join(', ')})` : ''}`);
   }
   const cells = [...new Set(ran)];
@@ -2447,6 +2467,35 @@ test('checkJobRan: every claimed driver\'s test passed, on the job\'s engine', (
     'Grep x print @ linux-x64-musl <- test/synthetic/drivers.test.cjs:35',
     'Bash x sandbox:on/shell:bash @ linux-x64-musl <- test/synthetic/drivers.test.cjs:45',
   ]);
+});
+
+// PLANTED (final-review I1): tests made in a loop share one file:line. Each mode's cell counts only on its own record,
+// by name; drop one mode's record and that cell goes red while its sibling still counts.
+const LOOP_SOURCE = { file: 'test/synthetic/loop.test.cjs', text: lines(
+  "const { toolResultText, assertFailsOnMissingOutput } = require('../scripts/lib/tool-result.cjs');",
+  "const RD = { name: 'Read', input: { file_path: '/y' }, id: 'toolu_loop_r' };",
+  "const seen = (m) => toolResultText(m, RD.id).includes('LOOP-42');",
+  "for (const mode of ['print', 'unlisted']) {",
+  '  test(`read in ${mode}, judged`, async (t) => {',
+  "    assertFailsOnMissingOutput(seen, RD, ['print', 'unlisted']);",
+  '    await startMockAnthropic({ respond: () => cannedToolUseSSE(RD.name, RD.input, RD.id) });',
+  '  });',
+  '}',
+) };
+test('checkJobRan keys a loop\'s tests by name: a mode whose own test never ran is not credited by a sibling\'s pass (I1)', () => {
+  const rec = (mode, type = 'test:pass') => ({ type, file: LOOP_SOURCE.file, line: 5, name: `read in ${mode}, judged`, nesting: 0 });
+  const run = (loop) => checkJobRan(fxJobRun({ jobs: [{ ...FX_JOBS[0], files: [...FX_JOBS[0].files, LOOP_SOURCE.file] }],
+    sources: [...DRIVER_SOURCES, LOOP_SOURCE], records: [...fxRecords(), ...loop] }));
+  const both = run([rec('print'), rec('unlisted')]);
+  assert.deepStrictEqual(both.findings, []);
+  assert.ok(both.ran.includes(`Read x print/unlisted @ ${FX_ENGINE} <- ${LOOP_SOURCE.file}:6`), both.ran.join('\n'));
+  const dropped = run([rec('print')]);
+  assert.ok(dropped.ran.includes(`Read x print @ ${FX_ENGINE} <- ${LOOP_SOURCE.file}:6`), dropped.ran.join('\n'));
+  assert.ok(!dropped.ran.some((l) => /Read x .*unlisted/.test(l)), dropped.ran.join('\n'));
+  assert.deepStrictEqual(dropped.findings, [`${LOOP_SOURCE.file}:6 (Read x unlisted @ ${FX_ENGINE}): test "read in \${mode}, judged" (line 5) `
+    + `not run in ${FX_JOB}; a cell is driven only where its test passes`]);
+  const failed = run([rec('print'), rec('unlisted', 'test:fail')]);
+  assert.match(failed.findings.join('\n'), /\(Read x unlisted @ linux-x64-musl\): test "read in \$\{mode\}, judged" \(line 5\) failed/);
 });
 
 test('checkJobRan refuses a failed, skipped or missing test, a run on another engine, and an unknown job', () => {
