@@ -32,7 +32,9 @@ function pidOwner(pid, { platform = process.platform, run = require('node:child_
 // A root's pid is that run's only if its process is alive AND either started no later than the root was born (a run
 // makes its root after it starts) or is node running test/run.mjs. A pid the kernel reused for something started
 // later is not the run: its root is a dead run's, swept, never counted as a live overlap. Birth time where the
-// filesystem keeps one; otherwise ctime, which is no earlier (so a doubt counts as live, never as dead).
+// filesystem keeps one; otherwise ctime, which is no earlier (so a doubt counts as live, never as dead). An owner that
+// cannot be read (ps answered nothing, PowerShell failed or timed out: started null) is a doubt too: a live pid whose
+// start is unknown counts as live, so a running suite's root is never swept for want of a process table.
 const RUNNER_COMMAND = /\bnode(?:\.exe)?\b.*\btest[\\/]run\.mjs\b/;
 function ownsRoot(root, pid, { alive = require('./proc-tree.cjs').pidAlive, owner = pidOwner } = {}) {
   if (!alive(pid)) return false;
@@ -40,7 +42,7 @@ function ownsRoot(root, pid, { alive = require('./proc-tree.cjs').pidAlive, owne
   if (o.command && RUNNER_COMMAND.test(o.command)) return true;
   let born;
   try { const st = fs.statSync(root); born = st.birthtimeMs > 0 ? st.birthtimeMs : st.ctimeMs; } catch { return false; }
-  return o.started !== null && o.started <= born;
+  return o.started === null || o.started <= born;
 }
 
 // The clode-run-<pid>-* roots in `parents`, other than `self`'s: [{ path, pid, alive }], alive meaning ownsRoot.
@@ -70,12 +72,18 @@ function removeStaleRoots(parents, opts = {}) {
 // THE OVERLAP WATCHER: a child of the runner (`node run-tmp.cjs --watch-overlap <out> <runner pid> <parent>...`) that
 // samples for other live roots every second and appends each new pid to <out>, until the runner is gone. A child,
 // because the runner spends the run inside spawnSync, where no timer of its own can fire.
-function watchOverlap(out, runner, parents, { every = 1000 } = {}) {
+// Each pid's owner is read once (pidOwner on Windows starts a PowerShell, about a second each): a pid's start time and
+// command do not change while it lives, and the liveness check that comes first stays per tick.
+function cachedOwner(owner = pidOwner) {
+  const cache = new Map();
+  return (pid) => { if (!cache.has(pid)) cache.set(pid, owner(pid)); return cache.get(pid); };
+}
+function watchOverlap(out, runner, parents, { every = 1000, owner = cachedOwner() } = {}) {
   const { pidAlive } = require('./proc-tree.cjs');
   const seen = new Set();
   const tick = () => {
     if (!pidAlive(runner)) process.exit(0);
-    for (const r of runRoots(parents, { self: runner })) {
+    for (const r of runRoots(parents, { self: runner, owner })) {
       if (r.alive && !seen.has(r.pid)) { seen.add(r.pid); try { fs.appendFileSync(out, `${r.pid}\n`); } catch { /* root gone */ } }
     }
   };
@@ -98,7 +106,7 @@ function overlapPids(out, parents) {
   return [...pids].sort((a, b) => a - b);
 }
 
-module.exports = { ROOT_NAME, RUNNER_COMMAND, pidOwner, ownsRoot, runRoots, removeStaleRoots, watchOverlap, startOverlapWatch, overlapPids };
+module.exports = { ROOT_NAME, RUNNER_COMMAND, pidOwner, cachedOwner, ownsRoot, runRoots, removeStaleRoots, watchOverlap, startOverlapWatch, overlapPids };
 
 if (require.main === module && process.argv[2] === '--watch-overlap') {
   watchOverlap(process.argv[3], Number(process.argv[4]), process.argv.slice(5));

@@ -112,6 +112,26 @@ test('a pid running node test/run.mjs owns a root whatever its start time; anyth
   assert.strictEqual(RR.ownsRoot(root, 1, { alive: () => false, owner: () => ({ started: 0, command: 'node test/run.mjs' }) }), false);
 });
 
+test('a live pid whose owner cannot be read (ps empty, PowerShell failing or timing out) counts as live: its root is never swept', (t) => {
+  const original = scratch(t);
+  const root = path.join(original, 'clode-run-424242-Dd00Dd');
+  fs.mkdirSync(root);
+  const unread = () => ({ started: null, command: null });
+  assert.strictEqual(RR.ownsRoot(root, 424242, { alive: () => true, owner: unread }), true);
+  assert.deepStrictEqual(RR.removeStaleRoots([original], { alive: () => true, owner: unread }), []);
+  assert.ok(fs.existsSync(root), 'the live run keeps its root');
+  // CONTROL: the same root with its pid dead is swept
+  assert.deepStrictEqual(RR.removeStaleRoots([original], { alive: () => false, owner: unread }).map((r) => r.pid), [424242]);
+});
+
+test('the watcher reads each pid\'s owner once (on Windows that is a PowerShell per root per second otherwise)', () => {
+  let calls = 0;
+  const owner = RR.cachedOwner((pid) => { calls++; return { started: pid, command: null }; });
+  for (let i = 0; i < 5; i++) { owner(7); owner(8); }
+  assert.strictEqual(calls, 2);
+  assert.deepStrictEqual(owner(7), { started: 7, command: null });
+});
+
 test('only <prefix of 5+ characters><generated suffix> is judged: short generic prefixes and other shapes are anyone\'s', (t) => {
   const original = scratch(t);
   const before = RT.snapshot(original);
