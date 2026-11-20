@@ -1813,8 +1813,117 @@ jobs:
   # finding, so a gate that stops running anywhere turns CI red instead of going dark (shim-surface was dark in the
   # suite since 2.1.243 and passed in node-shim-oracle only as one of an anonymous "skipped 2"). Runs once every job it
   # judges FINISHES, whatever its conclusion: a red job's list still says what ran, and a missing list is the finding.
+  # THE NETBSD/ARM64 TOOL CELLS (every-tool ruling E11b, 2026-11-20). netbsd-arm64 is a shipping engine with no native
+  # runner, so its tool x mode cells are driven in a NetBSD/arm64 guest: the engine the netbsd-arm64 leg built this push
+  # (tjs-slow), a quaude built from it IN the guest, tools-local and agentic-grep-glob run against that quaude, judged by
+  # the answers recorded from native (NetBSD has no native Claude Code: every native test skips there by name, accepted
+  # for this job alone in test/ci-gates.cjs). Every setting comes from the manifest (scripts/tjs-legs.mjs
+  # GUEST_CELL_JOBS, which also records why it is TCG on an x64 runner and how long that was measured to take).
+  netbsd-arm64-cells-plan:
+    needs: [changes]
+    if: needs.changes.outputs.code != 'false' && !cancelled()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      job: ${{ steps.plan.outputs.job }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          submodules: false
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version-file: .tool-versions
+      - id: plan
+        run: echo "job=$(node scripts/tjs-legs.mjs cells netbsd-arm64-cells)" >> "$GITHUB_OUTPUT"
+  netbsd-arm64-cells:
+    # after tjs-slow FINISHES, whatever its conclusion (see linux-x64-pty): a missing engine fails the download loudly
+    needs: [changes, tjs-slow, netbsd-arm64-cells-plan]
+    if: needs.changes.outputs.code != 'false' && !cancelled() && needs.netbsd-arm64-cells-plan.result == 'success'
+    runs-on: ${{ fromJSON(needs.netbsd-arm64-cells-plan.outputs.job).os }}
+    timeout-minutes: ${{ fromJSON(needs.netbsd-arm64-cells-plan.outputs.job).timeout }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          submodules: false
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version-file: .tool-versions
+      # Under the workspace, which is the only channel to the guest (cross-platform-actions rsyncs it both ways).
+      - uses: actions/download-artifact@v8.0.2
+        with:
+          name: tjs-netbsd-arm64   # the bare engine from the netbsd-arm64 leg (tjs-slow)
+          path: .matrix/tjs
+      # The provider's BYTES (clode extracts from them, never execs them): NetBSD has no carve of its own, so clode
+      # build takes the linux one, as `clode fetch claude` does (the build says so).
+      - name: Stage the Claude provider (npm, pinned)
+        run: |
+          set -euo pipefail
+          V=$(sed -n 's/^claude-code //p' UPSTREAM_PIN)
+          npm i -g @anthropic-ai/claude-code@"$V" 2>&1 | tail -3
+          cp "$(node scripts/stage-provider.mjs)" .matrix/provider
+      - name: Drive the netbsd-arm64 cells in the guest (four lanes; CLODE_TIMEOUT_SCALE for TCG)
+        uses: ./.github/actions/guest
+        with:
+          platform: ${{ fromJSON(needs.netbsd-arm64-cells-plan.outputs.job).platform }}
+          arch: ${{ fromJSON(needs.netbsd-arm64-cells-plan.outputs.job).arch }}
+          version: ${{ fromJSON(needs.netbsd-arm64-cells-plan.outputs.job).version }}
+          packages: ${{ fromJSON(needs.netbsd-arm64-cells-plan.outputs.job).packages }}
+          log-name: netbsd-arm64-cells
+          script: |
+            set -e
+            M="$PWD/.matrix"
+            mkdir -p "$M/cache" "$M/deps" "$M/state" "$M/no-providers" "$M/gates-ran/cells" "$M/gates-ran/gates"
+            chmod +x "$M/tjs/tjs"
+            # no provider resolvable here (an empty store, a private state root): every native test skips by name
+            export CLODE_TJS="$M/tjs/tjs" CLODE_CACHE="$M/cache" CLODE_DEPS="$M/deps" CLODE_STATE_ROOT="$M/state" \
+              CLODE_TEST_PROVIDER_STORE="$M/no-providers" CLODE_TIMEOUT_SCALE=${{ fromJSON(needs.netbsd-arm64-cells-plan.outputs.job).timeoutScale }}
+            t0=$(date +%s); el() { echo "$(( $(date +%s) - t0 ))s"; }
+            CLODE_CLAUDE_BIN="$M/provider" node scripts/stage0.mjs build --out "$M/quaude"
+            echo "quaude built after $(el)"
+            # the PTY harness for the interactive turns: node-pty has no netbsd-arm64 prebuild, and its source build
+            # misses three headers and libutil there (measured 2026-11-20 on the local NetBSD/arm64 guest)
+            PYTHON="$(command -v python3.13 || command -v python3)" CXXFLAGS='-include termios.h -include sys/ioctl.h -include util.h' \
+              LDFLAGS=-lutil npm install --prefix test --no-audit --no-fund 2>&1 | tail -5
+            node test/harness-preflight.cjs
+            echo "harness ready after $(el)"
+            export CLODE_QUAUDE="$M/quaude"
+            # FOUR LANES, disjoint by test name, their records unioned for the cell check below: the 8 mode turns
+            # (each ~125 s under HVF) in three lanes, everything else in the fourth.
+            lane() {
+              n=$1; shift
+              node --test --test-concurrency=1 --test-reporter=spec --test-reporter-destination="$M/lane-$n.log" \
+                --test-reporter=./test/cell-reporter.mjs --test-reporter-destination="$M/gates-ran/cells/$n.jsonl" "$@" \
+                || echo "lane $n: a test failed" >> "$M/lanes.failed"
+              echo "lane $n done after $(el)"
+            }
+            lane rest --test-skip-pattern='Phase A call in' test/fidelity/tools-local.test.cjs test/fidelity/agentic-grep-glob.test.cjs &
+            lane modes1 --test-name-pattern='Phase A call in (a built quaude in )?(print|permission:acceptEdits|permission:auto)[: ]' test/fidelity/tools-local.test.cjs &
+            lane modes2 --test-name-pattern='Phase A call in (a built quaude in )?(permission:bypassPermissions|permission:dontAsk|permission:plan)[: ]' test/fidelity/tools-local.test.cjs &
+            lane modes3 --test-name-pattern='Phase A call in (a built quaude in )?(unlisted|interactive)[: ]' test/fidelity/tools-local.test.cjs &
+            wait
+            for f in "$M"/lane-*.log; do echo "==== $f"; cat "$f"; done
+            # THE CELLS this job drives (CELL_JOBS), checked HERE: the check reads the host it runs on (netbsd-arm64)
+            CLODE_CELL_JOB=netbsd-arm64-cells CLODE_CELL_RAN="$M/gates-ran/cells" node --test \
+              --test-reporter=spec --test-reporter-destination=stdout \
+              --test-reporter=./test/cell-reporter.mjs --test-reporter-destination="$M/gates-ran/gates/cells-check.jsonl" \
+              --test-name-pattern=cells-ran-in-ci-job test/build-gates/tool-coverage-gates.test.cjs
+            echo "cells checked after $(el)"
+            if [ -f "$M/lanes.failed" ]; then cat "$M/lanes.failed"; exit 1; fi
+      # THIS JOB'S GATE LIST, for gates-ran-in-ci (see linux-x64-pty): uploaded whatever happened above.
+      - name: Upload this job's gate list (judged by gates-ran-in-ci)
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: gates-ran-netbsd-arm64-cells
+          path: .matrix/gates-ran
+          if-no-files-found: warn
+          overwrite: true
+
   gates-ran-in-ci:
-    needs: [changes, tjs, tjs-slow, test, node-shim-oracle, node-shim-oracle-darwin, native-builder-oracle, linux-x64-pty, windows-amd64-tests, windows-arm64-tests, windows-amd64-tui]
+    needs: [changes, tjs, tjs-slow, test, node-shim-oracle, node-shim-oracle-darwin, native-builder-oracle, linux-x64-pty, netbsd-arm64-cells, windows-amd64-tests, windows-arm64-tests, windows-amd64-tui]
     if: needs.changes.outputs.code != 'false' && !cancelled()
     runs-on: ubuntu-latest
     timeout-minutes: 45

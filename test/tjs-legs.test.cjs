@@ -30,7 +30,7 @@ const legsFor = (tier, only) => JSON.parse(
 // fields. `legsDirect` is the manifest itself; ledger assertions must read it,
 // not the matrix JSON.
 const { runTargetsFor, publishedRunTargets, DARWIN_SLICES, fidelityFor, floorCoverage,
-  FLOOR_ROWS, parseResultsRows, legsFor: legsDirect } = require('../scripts/tjs-legs.mjs');
+  FLOOR_ROWS, parseResultsRows, legsFor: legsDirect, GUEST_CELL_JOBS, guestCellJob } = require('../scripts/tjs-legs.mjs');
 const { assetName } = require('../scripts/canonical-name.cjs');
 
 // The published asset name is the ONLY name a downloader ever sees, and nothing fetches
@@ -216,7 +216,10 @@ test('ci tier: every release OS is exercised, exactly one leg per VM OS', () => 
   assert.deepStrictEqual([...ciOSes].sort(), wanted);
   for (const os of ciOSes) {
     if (os === 'linux' || os === 'darwin') continue; // native tier keeps its historical multi-leg set
-    const legs = ci.filter((l) => osOf(l) === os);
+    // A leg a guest cell job runs on (GUEST_CELL_JOBS: a shipping engine's tool cells, ruling E11b) is in ci for
+    // that job, beside its OS's one engine leg; it is counted apart, by that reason alone.
+    const cellLegs = new Set(GUEST_CELL_JOBS.map((j) => j.leg));
+    const legs = ci.filter((l) => osOf(l) === os && !cellLegs.has(l.leg));
     if (os === 'windows') {
       // windows-amd64 (MSVC publisher) + windows-arm64 (the finale leg). Both permanent.
       assert.deepStrictEqual(legs.map((l) => l.leg).sort(), ['windows-amd64', 'windows-arm64'],
@@ -225,6 +228,20 @@ test('ci tier: every release OS is exercised, exactly one leg per VM OS', () => 
     }
     assert.strictEqual(legs.length, 1, `${os}: expected exactly one ci leg, got ${legs.map((l) => l.leg)}`);
   }
+});
+
+test('guest cell jobs: each runs on a ci leg\'s own guest, with measured settings', () => {
+  assert.ok(GUEST_CELL_JOBS.length >= 1);
+  for (const j of GUEST_CELL_JOBS) {
+    const g = guestCellJob(j.job);
+    const l = legsFor('ci').find((x) => x.leg === j.leg);
+    assert.ok(l, `${j.job}: its leg ${j.leg} is in the ci tier`);
+    assert.deepStrictEqual([g.os, g.platform, g.arch, g.version], [l.os, l['guest-platform'], l['guest-arch'], l['guest-version']]);
+    assert.ok(Number.isInteger(g.timeoutScale) && g.timeoutScale >= 1, 'timeoutScale is CLODE_TIMEOUT_SCALE: an integer >= 1');
+    assert.ok(Number.isInteger(g.timeout) && g.timeout > 0 && g.timeout <= 360, 'timeout fits a hosted job (360 min)');
+    assert.match(g.packages, /\bnodejs\b/, 'the drivers run under node');
+  }
+  assert.throws(() => guestCellJob('nope'), /no guest cell job nope/);
 });
 
 // IF WE PUBLISH IT, CI GATES IT (user, 2026-07-17). The house rule — new-to-CI VM

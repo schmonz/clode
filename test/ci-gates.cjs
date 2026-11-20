@@ -58,6 +58,7 @@ const JOBS = [
   { id: 'node-shim-oracle-darwin', workflow: CI, job: 'node-shim-oracle-darwin' },
   { id: 'native-builder-oracle', workflow: CI, job: 'native-builder-oracle' },
   { id: 'linux-x64-pty', workflow: CI, job: 'linux-x64-pty' },
+  { id: 'netbsd-arm64-cells', workflow: CI, job: 'netbsd-arm64-cells' },
   { id: 'windows-amd64-tests', workflow: CI, job: 'windows-amd64-tests' },
   { id: 'windows-arm64-tests', workflow: CI, job: 'windows-arm64-tests' },
   { id: 'windows-amd64-tui', workflow: CI, job: 'windows-amd64-tui' },
@@ -109,7 +110,7 @@ const PLACED = {
   'credential-store-attempted': { jobs: ['node-shim-oracle-darwin'],
     why: 'security(1) is darwin-only: "this guard has no other platform\'s credential-store call modeled yet"' },
   // Every CI cell job checks its cells with this guard (test/build-gates/tool-coverage-gates.test.cjs).
-  'cells-ran-in-ci-job': { jobs: ['node-shim-oracle', 'node-shim-oracle-darwin', 'native-builder-oracle', 'linux-x64-pty'],
+  'cells-ran-in-ci-job': { jobs: ['node-shim-oracle', 'node-shim-oracle-darwin', 'native-builder-oracle', 'linux-x64-pty', 'netbsd-arm64-cells'],
     why: 'it judges a cell job\'s own reporter output: "not a CI cell job (CLODE_CELL_JOB unset)"' },
   // linux-x64-pty: the PTY harness, the pinned native that runs as rg, the text oracle.
   'tui-initial-frame-cells': { jobs: ['linux-x64-pty'], why: NO_ENGINE },
@@ -165,8 +166,17 @@ const EXEMPT = {
 
 // ==========================================================================
 // FILES: named gate files a job accounts for test by test. Every test of the file must be reported
-// in that job and pass; a skip is accepted only by its exact test name, with why.
+// in that job and pass; a skip is accepted only by its exact test name, with why: in every job that runs the file
+// (`skips`), or in one job alone (`jobSkips: { <job id>: { <test name>: why } }`), for a skip that is a fact of that
+// job's host and must stay red everywhere else (a native test on NetBSD, which has no native Claude Code).
 // ==========================================================================
+// The modes tools-local's mode turns run (its MODE_ARGS) and agentic-grep-glob's permission turns (PERMISSION_TURNS),
+// by which their native tests are named.
+const SEARCH_PERMISSION_MODES = ['permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk',
+  'permission:plan'];
+const LOCAL_MODE_TURNS = ['print', ...SEARCH_PERMISSION_MODES, 'unlisted', 'interactive'];
+const NO_NATIVE = (names) => Object.fromEntries(names.map((n) => [n, 'no native Claude Code on NetBSD: the test runs native '
+  + 'alone, and no provider resolves there ("no Claude provider found")']));
 const FILES = {
   // node-shim-oracle: added there (task-8, observability Task 5) because the suite cannot run them.
   'test/shim-surface.test.cjs': { jobs: ['node-shim-oracle'] },
@@ -227,8 +237,17 @@ const FILES = {
     'RG-MMAP-EVERYWHERE: macOS native in a tree with a quote and a non-ASCII letter prints its record as inTree spells it (native, macOS)':
       'macOS only: it judges the macOS native\'s own record of the RG-MMAP-EVERYWHERE divergence',
   } },
-  'test/fidelity/agentic-grep-glob.test.cjs': { jobs: ['linux-x64-pty', 'node-shim-oracle-darwin'] },
-  'test/fidelity/tools-local.test.cjs': { jobs: ['linux-x64-pty', 'node-shim-oracle-darwin'] },
+  // netbsd-arm64-cells: NetBSD has no native Claude Code, so each file's native tests skip there, and there alone
+  // (no provider resolvable: "no Claude provider found"); quaude is judged by the answers recorded from native.
+  'test/fidelity/agentic-grep-glob.test.cjs': { jobs: ['linux-x64-pty', 'node-shim-oracle-darwin', 'netbsd-arm64-cells'],
+    jobSkips: { 'netbsd-arm64-cells': NO_NATIVE([
+      'native answers this script as NATIVE records (CLODE_E2E_NATIVE=1)',
+      ...SEARCH_PERMISSION_MODES.map((m) => `native answers this script in ${m} as NATIVE records (CLODE_E2E_NATIVE=1)`)]) } },
+  'test/fidelity/tools-local.test.cjs': { jobs: ['linux-x64-pty', 'node-shim-oracle-darwin', 'netbsd-arm64-cells'],
+    jobSkips: { 'netbsd-arm64-cells': NO_NATIVE([
+      'native answers this script as NATIVE records', 'native answers the task script as TASK_NATIVE records',
+      'native answers the session script as SESSION_NATIVE records', 'native answers the Task 5 script as T5_NATIVE records',
+      ...LOCAL_MODE_TURNS.map((m) => `native answers every Phase A call in ${m} as recorded`)]) } },
   'test/build-gates/rg-regex-gates.test.cjs': { jobs: ['linux-x64-pty'] },
   'test/build-gates/rg-types-gates.test.cjs': { jobs: ['linux-x64-pty'] },
   'test/fidelity/lead-scrub-equivalence.test.cjs': { jobs: ['linux-x64-pty'] },
@@ -258,7 +277,7 @@ FILES['test/node-shim-os-priority.test.cjs'].skips['os.getPriority/setPriority u
 // node-shim-oracle's online step (it runs under the reporter for exactly this).
 FILES['test/bootstrap-engine-online.test.cjs'] = { jobs: ['node-shim-oracle'] };
 // Every cell job runs this file under --test-name-pattern=cells-ran-in-ci-job: only that guard's rows are reported.
-FILES['test/build-gates/tool-coverage-gates.test.cjs'] = { jobs: ['node-shim-oracle', 'node-shim-oracle-darwin', 'native-builder-oracle', 'linux-x64-pty'] };
+FILES['test/build-gates/tool-coverage-gates.test.cjs'] = { jobs: ['node-shim-oracle', 'node-shim-oracle-darwin', 'native-builder-oracle', 'linux-x64-pty', 'netbsd-arm64-cells'] };
 
 // The engine legs' hermeticity step runs the whole file (CI run 44597568635: 17 pass, 0 skipped, in all 29 legs).
 FILES['test/depscan-guard.test.cjs'] = { jobs: JOBS.filter((j) => j.leg).map((j) => j.id) };
@@ -482,6 +501,12 @@ function checkPlacement({ manifest, registry, texts, files, legCallers = [] }) {
     for (const [t, why] of Object.entries(f.skips || {})) {
       if (typeof why !== 'string' || !why.trim()) findings.push(`FILES ${file}: the accepted skip "${t}" gives no why`);
     }
+    for (const [id, sk] of Object.entries(f.jobSkips || {})) {
+      if (!(f.jobs || []).includes(id)) findings.push(`FILES ${file}: jobSkips names ${id}, which is not among its jobs`);
+      for (const [t, why] of Object.entries(sk || {})) {
+        if (typeof why !== 'string' || !why.trim()) findings.push(`FILES ${file}: the accepted skip "${t}" in ${id} gives no why`);
+      }
+    }
   }
   // EVERY FILE A DECLARED JOB RUNS IS JUDGED: in FILES for that job, or in UNJUDGED with why. A job outside the suite
   // used to hold the rest by an anonymous `skipped N` count, which a legitimate new skip turned red and a renamed
@@ -584,9 +609,10 @@ function checkRan({ manifest, records, registry = [], needs = null }) {
         const o = outcomeOf(trs);
         if (o === 'passed') continue;
         if (o.startsWith('skipped') && f.skips && t in f.skips) continue;
+        if (o.startsWith('skipped') && f.jobSkips && f.jobSkips[j.id] && t in f.jobSkips[j.id]) continue;
         findings.push(`${j.id}: ${file}: test "${t}" ${o}`, j);
       }
-      for (const t of Object.keys(f.skips || {})) {
+      for (const t of [...Object.keys(f.skips || {}), ...Object.keys((f.jobSkips || {})[j.id] || {})]) {
         if (!tests.has(t)) findings.push(`${j.id}: ${file}: the accepted skip "${t}" was never reported (renamed or gone?): re-measure it`, j, true);
       }
     }

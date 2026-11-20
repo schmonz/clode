@@ -1483,6 +1483,10 @@ const CELL_JOBS = [
   { job: 'linux-x64-pty', engine: 'linux-x64-musl', files: ['test/quaude-build.test.cjs',
     'test/fidelity/agentic-grep-glob.test.cjs', 'test/fidelity/agentic-sandbox-fail-closed.test.cjs',
     'test/fidelity/tools-local.test.cjs'] },
+  // netbsd-arm64 has no native runner: its cells run in a NetBSD/arm64 guest (ruling E11b; scripts/tjs-legs.mjs
+  // GUEST_CELL_JOBS), against the answers recorded from native, whose own tests skip there by name.
+  { job: 'netbsd-arm64-cells', engine: 'netbsd-arm64', files: ['test/fidelity/tools-local.test.cjs',
+    'test/fidelity/agentic-grep-glob.test.cjs'] },
 ];
 const LOCAL = 'deferred, no plan yet: it runs on this machine, so a canned-mock turn could drive it, and no live check '
   + 'judges its tool_result';
@@ -1510,15 +1514,12 @@ const SEARCH_MODES = COMMON_MODES.filter((mo) => mo !== 'unlisted');
 const BASH_MODES = [...COMMON_MODES, 'sandbox:on', 'sandbox:required', 'shell:bash', 'shell:zsh'];
 const PHASE_A_CELL = 'every-tool Phase A (cells): not yet driven in this mode on this engine. Driver paths: Grep and '
   + 'Glob interactive, a Grep and a Glob call in test/fidelity/tools-local.test.cjs\'s interactive turn (test/tool-driver.cjs '
-  + 'interactive) in linux-x64-pty and node-shim-oracle-darwin; Bash: NONE OF ITS FIVE RUNS TODAY (agentic-sandbox-fail-closed '
-  + 'drives only sandbox:on, and only on linux-x64-musl); sandbox:required (both engines) needs a failIfUnavailable '
-  + 'turn added to test/fidelity/agentic-sandbox-fail-closed.test.cjs, and sandbox:on@darwin-arm64 a run of that file '
-  + 'in node-shim-oracle-darwin (Seatbelt); shell:zsh (both engines) needs a driveTool turn with env { SHELL: zsh } in '
-  + 'tools-local, and zsh in linux-x64-pty (macOS has its own); '
-  + 'netbsd-arm64, a CELL_JOBS job on a NetBSD arm64 host, which CI does not have: a self-hosted NetBSD/arm64 '
-  + 'runner, or a qemu NetBSD/arm64 guest inside a Linux job, that builds a quaude there and runs these files; NetBSD has '
-  + 'no native Claude Code, so their native tests skip there by name and quaude is judged against the answers recorded '
-  + 'from native on darwin-arm64 and linux-x64 (test/ci-gates.cjs FILES would name that skip)';
+  + 'interactive) in linux-x64-pty, node-shim-oracle-darwin and netbsd-arm64-cells; Bash: NONE OF THESE RUNS TODAY '
+  + '(agentic-sandbox-fail-closed drives only sandbox:on, and only on linux-x64-musl); sandbox:required (every engine) needs '
+  + 'a failIfUnavailable turn added to test/fidelity/agentic-sandbox-fail-closed.test.cjs, sandbox:on@darwin-arm64 a run '
+  + 'of that file in node-shim-oracle-darwin (Seatbelt), sandbox:on@netbsd-arm64 a NetBSD sandbox, which upstream does '
+  + 'not have (its fail-closed answer is the cell), and shell:zsh (every engine) a driveTool turn with env { SHELL: zsh } '
+  + 'in tools-local, with zsh in linux-x64-pty (macOS has its own; netbsd-arm64-cells installs it)';
 const PHASE_A_CELLS = (tool, modes, driven, reason = PHASE_A_CELL) => modes.flatMap((mode) => {
   const engines = SHIPPING_ENGINES.filter((en) => !driven.includes(`${mode}@${en}`));
   if (!engines.length) return [];
@@ -1526,17 +1527,15 @@ const PHASE_A_CELLS = (tool, modes, driven, reason = PHASE_A_CELL) => modes.flat
     date: '2026-11-18', until: UNTIL_PHASE_A }];
 });
 const LOCAL_CELLS = 'every-tool Phase A (cells): driven in print, interactive (a typed pty turn), unlisted and every '
-  + 'permission mode on linux-x64-musl and darwin-arm64 (test/fidelity/tools-local.test.cjs, in linux-x64-pty and '
-  + 'node-shim-oracle-darwin). Left: ' + 'netbsd-arm64, a CELL_JOBS job on a NetBSD arm64 host, which CI does not have: a self-hosted NetBSD/arm64 '
-  + 'runner, or a qemu NetBSD/arm64 guest inside a Linux job, that builds a quaude there and runs these files; NetBSD has '
-  + 'no native Claude Code, so their native tests skip there by name and quaude is judged against the answers recorded '
-  + 'from native on darwin-arm64 and linux-x64 (test/ci-gates.cjs FILES would name that skip)';
+  + 'permission mode on every shipping engine (test/fidelity/tools-local.test.cjs, in linux-x64-pty, node-shim-oracle-darwin '
+  + 'and netbsd-arm64-cells); an exemption left here is a mode its call does not answer as in print, judged nowhere yet';
 // The driven cells of a tool driven in every turn tools-local runs (print, interactive, unlisted, the permission modes).
 const LOCAL_DRIVEN = ['print', 'interactive', 'unlisted', 'permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions',
-  'permission:dontAsk', 'permission:plan'].flatMap((mo) => [`${mo}@linux-x64-musl`, `${mo}@darwin-arm64`]);
-// Grep and Glob: agentic-grep-glob in print and every permission mode, in linux-x64-pty and node-shim-oracle-darwin.
+  'permission:dontAsk', 'permission:plan'].flatMap((mo) => [`${mo}@linux-x64-musl`, `${mo}@darwin-arm64`, `${mo}@netbsd-arm64`]);
+// Grep and Glob: agentic-grep-glob in print and every permission mode, in linux-x64-pty, node-shim-oracle-darwin and
+// netbsd-arm64-cells.
 const SEARCH_DRIVEN = ['print', 'permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions',
-  'permission:dontAsk', 'permission:plan'].flatMap((mo) => [`${mo}@linux-x64-musl`, `${mo}@darwin-arm64`]);
+  'permission:dontAsk', 'permission:plan'].flatMap((mo) => [`${mo}@linux-x64-musl`, `${mo}@darwin-arm64`, `${mo}@netbsd-arm64`]);
 // THE NOT-APPLICABLE CELLS (ruling E10): a tool x mode where the tool is not registered, proven in a CELL_JOBS job by
 // an assertNotRegistered control (see NOT APPLICABLE at the top). No deadline: the job's run is the evidence.
 // MEASURED on native 2.1.283 darwin-arm64 and a built quaude (2026-11-20): with no --allowedTools, each Task list call
@@ -1550,7 +1549,7 @@ const EXEMPTIONS = [
   // Agent: one synchronous call in tools-local's T5 turn and every mode turn (fix round 2), its subagent answered by the mock.
   ...PHASE_A_CELLS('Agent', COMMON_MODES, LOCAL_DRIVEN, LOCAL_CELLS),
   ...PHASE_A_CELLS('Bash', BASH_MODES, [...LOCAL_DRIVEN, 'permission:bypassPermissions@linux-x64-musl',
-    'sandbox:on@linux-x64-musl', 'shell:bash@linux-x64-musl', 'shell:bash@darwin-arm64']),
+    'sandbox:on@linux-x64-musl', 'shell:bash@linux-x64-musl', 'shell:bash@darwin-arm64', 'shell:bash@netbsd-arm64']),
   ...PHASE_A_CELLS('Edit', COMMON_MODES, LOCAL_DRIVEN),
   ...PHASE_A_CELLS('Glob', SEARCH_MODES, SEARCH_DRIVEN),
   ...PHASE_A_CELLS('Grep', SEARCH_MODES, SEARCH_DRIVEN),

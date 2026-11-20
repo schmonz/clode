@@ -486,6 +486,9 @@ const LEGS = [
   { leg: 'netbsd-arm64', os: 'ubuntu-latest', 'guest-platform': 'netbsd', 'guest-arch': 'arm64',
     'guest-version': '10.1', 'guest-packages': 'cmake gmake nodejs git-base bash', floor: '10.1',
     wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, timeout: 300, 'soft-fail': true,  // cpa, TCG
+    // ci (every-tool ruling E11b, 2026-11-20): the per-push engine for the netbsd-arm64-cells job (GUEST_CELL_JOBS
+    // below), which drives this shipping engine's tool cells; a publisher, so ci strips soft-fail and gates it.
+    ci: true,
     // CORRECTED 2026-08-04 audit: date/bundle were wrong (2.1.218 did not exist
     // on 2026-07-25 as originally claimed — first appears 2026-07-23, 4db0a21).
     // Real dated evidence is the phase-3 NetBSD/evbarm-aarch64 qemu+HVF spike,
@@ -1010,6 +1013,35 @@ const LEGS = [
     } },
 ];
 
+// THE GUEST CELL JOBS (every-tool ruling E11b, 2026-11-20): a shipping engine with no native CI runner has its tool x
+// mode cells driven in a guest, in ci.yml's job of that name (test/build-gates/tool-coverage-gates.test.cjs CELL_JOBS,
+// test/ci-gates.cjs FILES). The guest is the engine leg's own (guestCellJob reads the leg, so the two cannot drift);
+// the job adds what running the drivers needs there. Its numbers are MEASURED, never chosen:
+//   - the same files on the same OS under qemu+HVF (the local NetBSD/arm64 guest, 4 vCPUs, 2026-11-20): 23 min,
+//     each of tools-local's 9 mode turns ~125 s; the engine there builds in ~3 min;
+//   - this leg's engine build under cross-platform-actions (TCG on an x64 runner: no hardware acceleration for an
+//     arm64 guest there): 54 min (release run 44691559850), 19-119 min over 2026-08..11, so TCG runs ~10-18x HVF.
+//   So one serial pass would take 4-7 h, past a hosted job's 6 h. The job runs the drivers in four parallel lanes (the
+//   VM has 4 vCPUs, MTTCG), each a disjoint set of tests by name, and every wait in them is multiplied by
+//   `timeoutScale` (CLODE_TIMEOUT_SCALE, test/tool-driver.cjs). An arm64 runner would not help: cross-platform-actions
+//   ships one x86-64 qemu (resources v2.1.0, measured with file(1)), and GitHub's arm64 runners offer it no KVM.
+//   `timeout` is the hosted maximum until the first run measures this job; then derive it as guestTimeout does.
+export const GUEST_CELL_JOBS = [
+  { job: 'netbsd-arm64-cells', leg: 'netbsd-arm64',
+    // the drivers' needs: node (the test runner), bash and zsh (the Bash tool's shells), ugrep and bfs (the search
+    // applets quaude runs for Grep and Glob), python3 and gmake (node-pty's source build: no netbsd-arm64 prebuild)
+    packages: 'nodejs bash zsh ugrep bfs python313 gmake',
+    timeoutScale: 20, timeout: 350 },
+];
+export function guestCellJob(job) {
+  const j = GUEST_CELL_JOBS.find((x) => x.job === job);
+  if (!j) throw new Error(`no guest cell job ${job}; known: ${GUEST_CELL_JOBS.map((x) => x.job).join(', ')}`);
+  const l = legsFor('ci').find((x) => x.leg === j.leg);
+  if (!l) throw new Error(`${job}: its leg ${j.leg} is not in the ci tier, so no per-push engine exists for it`);
+  return { job: j.job, leg: l.leg, os: l.os, platform: l['guest-platform'], arch: l['guest-arch'], version: l['guest-version'],
+    packages: j.packages, timeoutScale: j.timeoutScale, timeout: j.timeout };
+}
+
 export function legsFor(tier) {
   if (tier === 'release') {
     // DETERMINISTIC RELEASE CONTENTS (user doctrine 2026-07-14: slow releases
@@ -1309,5 +1341,7 @@ export function cli(tier, only, versionOverride, macosMinOverride) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  console.log(JSON.stringify(cli(process.argv[2], process.argv[3], process.argv[4], process.argv[5])));
+  // `cells <job>`: one guest cell job's settings, for ci.yml's plan step (never spelled in workflow YAML)
+  if (process.argv[2] === 'cells') console.log(JSON.stringify(guestCellJob(process.argv[3])));
+  else console.log(JSON.stringify(cli(process.argv[2], process.argv[3], process.argv[4], process.argv[5])));
 }

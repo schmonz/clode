@@ -284,6 +284,20 @@ test('gates-ran-in-ci: a gate file is accounted test by test, skips only by name
   assert.ok(none.findings.some((f) => /oracle: no test of test\/a.test.cjs reported/.test(f)), none.findings.join('\n'));
 });
 
+test('gates-ran-in-ci: a job-only skip is accepted in that job alone, and must be reported there', () => {
+  const files = { 'test/a.test.cjs': { jobs: ['oracle'], jobSkips: { oracle: { 'native row': 'no native on this host' } } } };
+  const ok = G.checkRan(fxRan({ manifest: { files }, records: { oracle: [rec('guard gate: b'), rec('native row', { skip: 'no native' })] } }));
+  assert.deepStrictEqual(ok.findings, []);
+  const gone = G.checkRan(fxRan({ manifest: { files }, records: { oracle: [rec('guard gate: b'), rec('other row')] } }));
+  assert.ok(gone.findings.some((f) => /the accepted skip "native row" was never reported/.test(f)), gone.findings.join('\n'));
+  // the same skip in a job the entry does not name is a finding (PLANTED: the skip leaks to another job)
+  const two = { 'test/a.test.cjs': { jobs: ['oracle', 'test-ubuntu-latest'], jobSkips: { oracle: { 'native row': 'no native' } } } };
+  const leak = G.checkRan(fxRan({ manifest: { files: two }, records: { oracle: [rec('guard gate: b'), rec('native row', { skip: 'x' })],
+    'test-ubuntu-latest': [rec('guard gate: b'), rec('native row', { skip: 'x' })] } }));
+  assert.ok(leak.findings.some((f) => /test-ubuntu-latest: test\/a.test.cjs: test "native row" skipped/.test(f)), leak.findings.join('\n'));
+  assert.ok(!leak.findings.some((f) => /^DARK: oracle: test\/a.test.cjs: test "native row"/.test(f)), leak.findings.join('\n'));
+});
+
 test('gates-ran-in-ci: a record\'s file is repo-relative on every runner', () => {
   assert.strictEqual(G.repoFile('/home/runner/work/clode/clode/test/fidelity/x.test.cjs'), 'test/fidelity/x.test.cjs');
   assert.strictEqual(G.repoFile('D:\\a\\clode\\clode\\test\\x.test.cjs'), 'test/x.test.cjs');
