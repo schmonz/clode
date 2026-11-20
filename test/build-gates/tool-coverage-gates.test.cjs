@@ -1427,18 +1427,16 @@ const EXEMPTIONS = [
   ...PHASE_A_CELLS('Edit', COMMON_MODES, ['print@darwin-arm64', 'print@linux-x64-musl']),
   ...PHASE_A_CELLS('Glob', SEARCH_MODES, ['print@linux-x64-musl']),
   ...PHASE_A_CELLS('Grep', SEARCH_MODES, ['print@linux-x64-musl']),
-  // Read, Write and NotebookEdit: driven in a -p turn on linux-x64-musl and darwin-arm64 (test/fidelity/tools-local.test.cjs,
+  // Read, Write and NotebookEdit (and the Task tools below): driven in a -p turn on linux-x64-musl and darwin-arm64 (test/fidelity/tools-local.test.cjs,
   // every-tool Task 2, in linux-x64-pty and node-shim-oracle-darwin, each with a built quaude and a native that runs).
   // Their other cells are the Phase A remainder, as for the five above.
   ...PHASE_A_CELLS('Read', COMMON_MODES, ['print@linux-x64-musl', 'print@darwin-arm64'], LOCAL_CELLS),
   ...PHASE_A_CELLS('Write', COMMON_MODES, ['print@linux-x64-musl', 'print@darwin-arm64'], LOCAL_CELLS),
   ...PHASE_A_CELLS('NotebookEdit', COMMON_MODES, ['print@linux-x64-musl', 'print@darwin-arm64'], LOCAL_CELLS),
+  // The task list and TaskStop (every-tool Task 3): the same file, the same jobs, the same cells.
+  ...['TaskCreate', 'TaskGet', 'TaskUpdate', 'TaskList', 'TaskStop'].flatMap((tool) =>
+    PHASE_A_CELLS(tool, COMMON_MODES, ['print@linux-x64-musl', 'print@darwin-arm64'], LOCAL_CELLS)),
   // Local tools a canned mock could drive today: the to-do list proper.
-  { tool: 'TaskStop', reason: `${LOCAL} (it stops a background task; aliases KillShell, KillBash)`, date: RECORDED, until: UNTIL_PHASE_A },
-  { tool: 'TaskCreate', reason: `${LOCAL} (the task list; registered unless CLAUDE_CODE_ENABLE_TASKS=false)`, date: RECORDED, until: UNTIL_PHASE_A },
-  { tool: 'TaskGet', reason: `${LOCAL} (the task list; registered unless CLAUDE_CODE_ENABLE_TASKS=false)`, date: RECORDED, until: UNTIL_PHASE_A },
-  { tool: 'TaskUpdate', reason: `${LOCAL} (the task list; registered unless CLAUDE_CODE_ENABLE_TASKS=false)`, date: RECORDED, until: UNTIL_PHASE_A },
-  { tool: 'TaskList', reason: `${LOCAL} (the task list; registered unless CLAUDE_CODE_ENABLE_TASKS=false)`, date: RECORDED, until: UNTIL_PHASE_A },
   { tool: 'TodoWrite', reason: 'deferred, no plan yet: a local tool, but enabled only when the Task* tools are off '
     + '(CLAUDE_CODE_ENABLE_TASKS=false), and no live check turns them off', date: RECORDED, until: UNTIL_PHASE_B },
   { tool: 'Skill', reason: `${LOCAL} (it needs a skill on disk)`, date: RECORDED, until: UNTIL_PHASE_A },

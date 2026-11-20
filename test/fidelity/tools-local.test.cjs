@@ -1,6 +1,6 @@
 'use strict';
-// THE LOCAL FILE TOOLS END TO END: Read, Write and NotebookEdit in a built quaude, judged against native (every-tool
-// plan, Phase A, Task 2).
+// THE LOCAL TOOLS END TO END: Read, Write and NotebookEdit (every-tool plan, Phase A, Task 2), and the Task* tools
+// and TaskStop (Task 3, the second half of this file), in a built quaude, judged against native.
 //
 // WHAT IS JUDGED. One -p turn (test/tool-driver.cjs driveTool) against a canned mock that asks, one tool_use per
 // follow-up, for every call in SCRIPT, over a tree laid fresh in <B>/work: Read a whole file, a line range
@@ -30,7 +30,7 @@ const path = require('node:path');
 const { driveTool } = require('../tool-driver.cjs');
 const { builtQuaude } = require('../built-binary.cjs');
 const { rgOracle, rgOracleSkip } = require('../provider-resolve.cjs');
-const { toolResult, assertFailsOnMissingOutput } = require('../../scripts/lib/tool-result.cjs');
+const { toolResult, toolResultText, assertFailsOnMissingOutput } = require('../../scripts/lib/tool-result.cjs');
 
 // The tree, laid fresh before each side's turn. <B> is a temp dir both sides share, so the absolute paths the tool_use
 // inputs must name are the same for both.
@@ -152,5 +152,135 @@ test('native answers this script as NATIVE records', { skip: SKIP }, async (t) =
       && { text: r.native.results[s.tool.id].text.split(BASE).join('<B>'), isError: r.native.results[s.tool.id].isError }]));
     t.diagnostic(`measured:\n${JSON.stringify(measured, null, 1)}`);
   }
+  assert.deepStrictEqual(got, [], `native moved:\n${got.join('\n')}`);
+});
+
+// ==========================================================================
+// THE TASK LIST AND TaskStop (every-tool Task 3)
+// ==========================================================================
+// One turn: create two tasks, list them, get one, mark it in progress, make the second blocked by it, get that, get a
+// task that does not exist, complete the first, list again; then start a background Bash, stop it with TaskStop (its
+// task_id is the id the Bash call answered with, read from the log as the turn runs: driveTool's inputFrom), stop it
+// again, and stop an unknown id through TaskStop's alias KillShell (its deprecated shell_id). The Task* tools register
+// unless CLAUDE_CODE_ENABLE_TASKS=false (the carve's todo opt-in; naming them in --allowedTools opts in as well).
+//
+// MEASURED on native 2.1.283 darwin-arm64 (2026-11-19) and a quaude built from this tree, the same on every call. Task
+// ids count from 1 per session; a background task's id is random, and its output lands under CLAUDE_CODE_TMPDIR,
+// which driveTool points into each side's sandbox, so those two calls are judged by shape: the id, and the path
+// <tmp>/claude-<uid>/<cwd slug>/<session uuid>/tasks/<id>.output.
+const T_CREATE_1 = { name: 'TaskCreate', input: { subject: 'Write the parser', description: 'Parse the input file', activeForm: 'Writing the parser' }, id: 'toolu_tk_create_1' };
+const T_CREATE_2 = { name: 'TaskCreate', input: { subject: 'Test the parser', description: 'Cover every branch' }, id: 'toolu_tk_create_2' };
+const T_LIST_1 = { name: 'TaskList', input: {}, id: 'toolu_tk_list_1' };
+const T_GET_1 = { name: 'TaskGet', input: { taskId: '1' }, id: 'toolu_tk_get_1' };
+const T_START_1 = { name: 'TaskUpdate', input: { taskId: '1', status: 'in_progress' }, id: 'toolu_tk_start_1' };
+const T_BLOCK_2 = { name: 'TaskUpdate', input: { taskId: '2', addBlockedBy: ['1'] }, id: 'toolu_tk_block_2' };
+const T_GET_2 = { name: 'TaskGet', input: { taskId: '2' }, id: 'toolu_tk_get_2' };
+const T_GET_NONE = { name: 'TaskGet', input: { taskId: '99' }, id: 'toolu_tk_get_none' };
+const T_DONE_1 = { name: 'TaskUpdate', input: { taskId: '1', status: 'completed' }, id: 'toolu_tk_done_1' };
+const T_LIST_2 = { name: 'TaskList', input: {}, id: 'toolu_tk_list_2' };
+const T_BG = { name: 'Bash', input: { command: 'sleep 30', description: 'wait', run_in_background: true }, id: 'toolu_tk_bg' };
+const T_STOP = { name: 'TaskStop', input: { task_id: '<the background id>' }, id: 'toolu_tk_stop' };
+const T_STOP_AGAIN = { name: 'TaskStop', input: { task_id: '<the background id>' }, id: 'toolu_tk_stop_again' };
+const T_KILL_NONE = { name: 'KillShell', input: { shell_id: 'no-such-task' }, id: 'toolu_tk_kill_none' };
+// The background id, read from the Bash call's tool_result (null when it sent none).
+const bgIdOf = (m) => { const x = /^Command running in background with ID: (\w+)\./.exec(toolResultText(m, T_BG.id)); return x ? x[1] : null; };
+const stopInput = (log) => ({ task_id: bgIdOf(log) || 'no-background-id' });
+const TASK_SCRIPT = [{ tool: T_CREATE_1 }, { tool: T_CREATE_2 }, { tool: T_LIST_1 }, { tool: T_GET_1 }, { tool: T_START_1 },
+  { tool: T_BLOCK_2 }, { tool: T_GET_2 }, { tool: T_GET_NONE }, { tool: T_DONE_1 }, { tool: T_LIST_2 }, { tool: T_BG },
+  { tool: T_STOP, inputFrom: stopInput }, { tool: T_STOP_AGAIN, inputFrom: stopInput }, { tool: T_KILL_NONE }];
+
+// MEASURED: native's answers; <ID> is the background id.
+const TASK_NATIVE = {
+  toolu_tk_create_1: { text: 'Task #1 created successfully: Write the parser', isError: false },
+  toolu_tk_create_2: { text: 'Task #2 created successfully: Test the parser', isError: false },
+  toolu_tk_list_1: { text: '#1 [pending] Write the parser\n#2 [pending] Test the parser', isError: false },
+  toolu_tk_get_1: { text: 'Task #1: Write the parser\nStatus: pending\nDescription: Parse the input file', isError: false },
+  toolu_tk_start_1: { text: 'Updated task #1 status', isError: false },
+  toolu_tk_block_2: { text: 'Updated task #2 blockedBy', isError: false },
+  toolu_tk_get_2: { text: 'Task #2: Test the parser\nStatus: pending\nDescription: Cover every branch\nBlocked by: #1', isError: false },
+  toolu_tk_get_none: { text: 'Task not found', isError: false },
+  toolu_tk_done_1: { text: 'Updated task #1 status', isError: false },
+  toolu_tk_list_2: { text: '#1 [completed] Write the parser\n#2 [pending] Test the parser', isError: false },
+  toolu_tk_stop: { text: '{"message":"Successfully stopped task: <ID> (sleep 30)","task_id":"<ID>","task_type":"local_bash","command":"sleep 30"}', isError: false },
+  toolu_tk_stop_again: { text: '<tool_use_error>No task found with ID: <ID></tool_use_error>', isError: true },
+  toolu_tk_kill_none: { text: '<tool_use_error>No task found with ID: no-such-task</tool_use_error>', isError: true },
+};
+// The side being judged: its CLAUDE_CODE_TMPDIR (set before any check runs).
+let taskTmp = '/nonexistent-task-tmp';
+const escRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const taskWant = (USE, m) => { const w = TASK_NATIVE[USE.id]; const id = bgIdOf(m); return w && id && { text: w.text.split('<ID>').join(id), isError: w.isError }; };
+const taskSame = (r, USE, m) => {
+  const w = USE.id === T_KILL_NONE.id || !TASK_NATIVE[USE.id].text.includes('<ID>') ? TASK_NATIVE[USE.id] : taskWant(USE, m);
+  return !!r && !!w && r.text === w.text && r.isError === w.isError;
+};
+const tCreate1 = (m) => taskSame(toolResult(m, T_CREATE_1.id), T_CREATE_1, m);
+const tCreate2 = (m) => taskSame(toolResult(m, T_CREATE_2.id), T_CREATE_2, m);
+const tList1 = (m) => taskSame(toolResult(m, T_LIST_1.id), T_LIST_1, m);
+const tGet1 = (m) => taskSame(toolResult(m, T_GET_1.id), T_GET_1, m);
+const tStart1 = (m) => taskSame(toolResult(m, T_START_1.id), T_START_1, m);
+const tBlock2 = (m) => taskSame(toolResult(m, T_BLOCK_2.id), T_BLOCK_2, m);
+const tGet2 = (m) => taskSame(toolResult(m, T_GET_2.id), T_GET_2, m);
+const tGetNone = (m) => taskSame(toolResult(m, T_GET_NONE.id), T_GET_NONE, m);
+const tDone1 = (m) => taskSame(toolResult(m, T_DONE_1.id), T_DONE_1, m);
+const tList2 = (m) => taskSame(toolResult(m, T_LIST_2.id), T_LIST_2, m);
+// The background call, by shape: native's sentence around this side's own sandboxed output path.
+const tBg = (m) => {
+  const r = toolResult(m, T_BG.id);
+  const id = bgIdOf(m);
+  if (!r || r.isError || !id) return false;
+  const shape = new RegExp(`^Command running in background with ID: ${id}\\. Output is being written to: ${escRe(taskTmp)}/claude-\\d+/[^/]+/[0-9a-f-]{36}/tasks/${id}\\.output\\. You will be notified when it completes\\. To check interim output, use Read on that file path\\.$`);
+  return shape.test(r.text);
+};
+const tStop = (m) => taskSame(toolResult(m, T_STOP.id), T_STOP, m);
+const tStopAgain = (m) => taskSame(toolResult(m, T_STOP_AGAIN.id), T_STOP_AGAIN, m);
+const tKillNone = (m) => taskSame(toolResult(m, T_KILL_NONE.id), T_KILL_NONE, m);
+const taskVerdicts = (m) => [[T_CREATE_1, tCreate1(m)], [T_CREATE_2, tCreate2(m)], [T_LIST_1, tList1(m)], [T_GET_1, tGet1(m)],
+  [T_START_1, tStart1(m)], [T_BLOCK_2, tBlock2(m)], [T_GET_2, tGet2(m)], [T_GET_NONE, tGetNone(m)], [T_DONE_1, tDone1(m)],
+  [T_LIST_2, tList2(m)], [T_BG, tBg(m)], [T_STOP, tStop(m)], [T_STOP_AGAIN, tStopAgain(m)], [T_KILL_NONE, tKillNone(m)]];
+
+function taskControls() {
+  assertFailsOnMissingOutput(tCreate1, T_CREATE_1);
+  assertFailsOnMissingOutput(tCreate2, T_CREATE_2);
+  assertFailsOnMissingOutput(tList1, T_LIST_1);
+  assertFailsOnMissingOutput(tGet1, T_GET_1);
+  assertFailsOnMissingOutput(tStart1, T_START_1);
+  assertFailsOnMissingOutput(tBlock2, T_BLOCK_2);
+  assertFailsOnMissingOutput(tGet2, T_GET_2);
+  assertFailsOnMissingOutput(tGetNone, T_GET_NONE);
+  assertFailsOnMissingOutput(tDone1, T_DONE_1);
+  assertFailsOnMissingOutput(tList2, T_LIST_2);
+  assertFailsOnMissingOutput(tBg, T_BG);
+  assertFailsOnMissingOutput(tStop, T_STOP);
+  assertFailsOnMissingOutput(tStopAgain, T_STOP_AGAIN);
+  assertFailsOnMissingOutput(tKillNone, T_KILL_NONE);
+}
+
+function taskFindings(label, side) {
+  const out = [];
+  if (side.status !== 0) out.push(`${label}: the turn exited ${side.status}${side.signal ? ` (${side.signal})` : ''}: ${side.stderr.slice(0, 800)}`);
+  taskTmp = side.tmp;
+  for (const [USE, same] of taskVerdicts(side.raw)) {
+    if (!same) out.push(`${label}: ${USE.id} ${USE.name} sent ${JSON.stringify(side.sent[USE.id])}\n    got: ${JSON.stringify(toolResult(side.raw, USE.id))}`);
+  }
+  return out;
+}
+
+test('TaskCreate, TaskGet, TaskUpdate, TaskList and TaskStop in a built quaude: every tool_result equals native\'s', { skip: SKIP }, async (t) => {
+  const q = builtQuaude();
+  if (q.skip) { t.skip(q.skip); return; }
+  taskControls();
+  const r = await driveTool({ script: TASK_SCRIPT, quaude: q.path,
+    nativeSkip: 'native is judged against the same recorded answers by the next test' });
+  const got = taskFindings('quaude', r.quaude);
+  assert.deepStrictEqual(got, [], `${got.length} finding(s) against native's answers:\n${got.join('\n')}`);
+});
+
+test('native answers the task script as TASK_NATIVE records', { skip: SKIP }, async (t) => {
+  const native = rgOracle(process.env);
+  if (!native) { t.skip(rgOracleSkip(process.env)); return; }
+  taskControls();
+  const r = await driveTool({ script: TASK_SCRIPT, native, quaudeSkip: 'quaude is judged by the test above' });
+  const got = taskFindings('native', r.native);
+  if (got.length) t.diagnostic(`measured:\n${JSON.stringify(r.native.results, null, 1)}`);
   assert.deepStrictEqual(got, [], `native moved:\n${got.join('\n')}`);
 });

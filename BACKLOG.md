@@ -407,16 +407,18 @@ with TJS_HOME unset creates $HOME/.tjs holding localStorage.db only (no cookies.
 Unmeasured. The suite-hermeticity claims (suite home, sentinel HOME byte-untouched, the 18/81 spawn counts) were not
 re-run; test/suite-home-hermetic.test.cjs and a full suite with a sentinel HOME would.
 
-## 15 of the 2166 tool x mode x engine cells are driven (cells 2026-11-18; tools 2026-09-28; Grep and Glob driven 2026-10-05; Read, Write, NotebookEdit 2026-11-19)
+## 25 of the 2166 tool x mode x engine cells are driven (cells 2026-11-18; tools 2026-09-28; Grep and Glob driven 2026-10-05; Read, Write, NotebookEdit, the Task tools and TaskStop 2026-11-19)
 
 Since observability Task 1 (2026-11-18) the gate counts CELLS, tool x mode x engine: 90 tools, 722
 tool x mode pairs (permission modes, sandbox, Bash shells, interactive, unlisted, from the carve where
-it says) over darwin-arm64, linux-x64-musl and netbsd-arm64, 2166 cells. 15 are driven, by four CI
+it says) over darwin-arm64, linux-x64-musl and netbsd-arm64, 2166 cells. 25 are driven, by four CI
 jobs (CELL_JOBS): Bash print (darwin, musl), bypassPermissions, sandbox:on and shell:bash (musl); Edit
 print (darwin, musl); Glob and Grep print (musl); since every-tool Task 2, Read, Write and NotebookEdit
 print (darwin, musl: test/fidelity/tools-local.test.cjs in node-shim-oracle-darwin and linux-x64-pty,
-each installing the pinned native that runs and building a quaude from it). The rest are per-cell exemptions; the undriven cells of the eight driven tools, and
-the 15 Phase A tools still undriven, fall due 2026-12-15 (USER RULING
+each installing the pinned native that runs and building a quaude from it); since every-tool Task 3,
+TaskCreate, TaskGet, TaskUpdate, TaskList and TaskStop print (darwin, musl: the same file and jobs). The
+rest are per-cell exemptions; the undriven cells of the 13 driven tools, and the 10 Phase A tools still
+undriven, fall due 2026-12-15 (USER RULING
 2026-11-18 moved Phase A there from 2026-10-15). The tool-level account below is as of 2026-09-28.
 
 `every-tool-driven` (test/build-gates/tool-coverage-gates.test.cjs; the grep-native plan's task
@@ -490,6 +492,13 @@ file (a macos-latest runner building a quaude from the npm darwin-arm64 native) 
 
 Measured: test/build-gates/tool-coverage-gates.test.cjs with CLODE_PROVIDER_BIN at the darwin-arm64 2.1.283 carve,
 with tools-local also claimed by node-shim-oracle-darwin: 15 driven, 2151 exempted, 0 neither (2026-11-19)
+
+Measured: test/build-gates/tool-coverage-gates.test.cjs with CLODE_PROVIDER_BIN at the darwin-arm64 2.1.283 carve,
+after every-tool Task 3: 25 driven, 2141 exempted, 0 neither (2026-11-19)
+
+Measured: test/fidelity/tools-local.test.cjs's task tests on darwin-arm64: the 14 Task*/TaskStop calls of a quaude
+built from the tree and of native 2.1.283 give the recorded answers (a background task's by shape, its id and
+its sandboxed output path); a target that sends no tool_results fails the quaude test with 15 findings (2026-11-19)
 
 ## The NetBSD spike found three bugs, all fixed; what it left open (2026-09-26)
 
