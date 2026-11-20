@@ -27,7 +27,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { driveTool, MODE_TURNS, modeTurnFinding } = require('../tool-driver.cjs');
+const { driveTool, MODE_TURNS, modeTurnFinding, SCALE } = require('../tool-driver.cjs');
 const { builtQuaude } = require('../built-binary.cjs');
 const { rgOracle, rgOracleSkip } = require('../provider-resolve.cjs');
 const { toolResult, toolResultText, toolFollowUpText, assertFailsOnMissingOutput, answeredLog, assertNotRegistered } = require('../../scripts/lib/tool-result.cjs');
@@ -294,7 +294,8 @@ async function sleepSurvivors(label) {
   const live = () => execFileSync('ps', ['-axo', 'pid=,command='], { encoding: 'utf8' }).split('\n')
     .map((l) => /^\s*(\d+)\s+(.*)$/.exec(l)).filter((x) => x && x[2].trim() === T_BG.input.command).map((x) => Number(x[1]));
   let pids = live();
-  for (let i = 0; pids.length && i < 30; i++) { await new Promise((r) => setTimeout(r, 100)); pids = live(); }
+  // 3 s, times CLODE_TIMEOUT_SCALE: a kill lands later on a slow (TCG) guest
+  for (let i = 0; pids.length && i < 30 * SCALE; i++) { await new Promise((r) => setTimeout(r, 100)); pids = live(); }
   if (!pids.length) return null;
   for (const pid of pids) { try { process.kill(pid, 'SIGKILL'); } catch { /* gone */ } }
   return `${label}: TaskStop answered "stopped" but \`${T_BG.input.command}\` survived (pid ${pids.join(', ')})`;
