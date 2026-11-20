@@ -479,11 +479,11 @@ with TJS_HOME unset creates $HOME/.tjs holding localStorage.db only (no cookies.
 Unmeasured. The suite-hermeticity claims (suite home, sentinel HOME byte-untouched, the 18/81 spawn counts) were not
 re-run; test/suite-home-hermetic.test.cjs and a full suite with a sentinel HOME would.
 
-## 45 of the 2166 tool x mode x engine cells are driven; Phase A's 18 tools all driven (cells 2026-11-18; tools 2026-09-28; Grep and Glob driven 2026-10-05; Read, Write, NotebookEdit, the Task tools and TaskStop 2026-11-19; Skill, the worktree and cron tools, ScheduleWakeup, ReportFindings, Workflow and ListAgents 2026-11-20)
+## 284 of the 2166 tool x mode x engine cells are driven; Phase A's 18 tools all driven, in print, unlisted and every permission mode (cells 2026-11-18; tools 2026-09-28; Grep and Glob driven 2026-10-05; Read, Write, NotebookEdit, the Task tools and TaskStop 2026-11-19; Skill, the worktree and cron tools, ScheduleWakeup, ReportFindings, Workflow and ListAgents 2026-11-20; the -p modes 2026-11-20)
 
 Since observability Task 1 (2026-11-18) the gate counts CELLS, tool x mode x engine: 90 tools, 722
 tool x mode pairs (permission modes, sandbox, Bash shells, interactive, unlisted, from the carve where
-it says) over darwin-arm64, linux-x64-musl and netbsd-arm64, 2166 cells. 45 are driven, by four CI
+it says) over darwin-arm64, linux-x64-musl and netbsd-arm64, 2166 cells. 284 are driven, by four CI
 jobs (CELL_JOBS): Bash print (darwin, musl), bypassPermissions, sandbox:on and shell:bash (musl); Edit
 print (darwin, musl); Glob and Grep print (musl); since every-tool Task 2, Read, Write and NotebookEdit
 print (darwin, musl: test/fidelity/tools-local.test.cjs in node-shim-oracle-darwin and linux-x64-pty,
@@ -493,11 +493,21 @@ every-tool Task 4, Skill, EnterWorktree, ExitWorktree, CronCreate, CronDelete, C
 print (darwin, musl: the same file and jobs); since every-tool Task 5, ReportFindings, Workflow and ListAgents
 print (darwin, musl: the same file and jobs; ListAgents' quaude answer is held as a NAMED divergence, "No reachable
 agents." without native's self-address line, because net.createServer is the shim's throwing stub and so quaude has
-no UDS messaging server: the entry "`net.createServer` is a named throwing stub" below). The rest are per-cell
-exemptions. The undriven cells of the 23 driven tools (every mode but print, and netbsd-arm64) fall due 2026-12-15
-(USER RULING 2026-11-18 moved Phase A there from 2026-10-15), each with the written reason PHASE_A_CELL or
-LOCAL_CELLS in the gate: no driver yet runs these tools interactively, unlisted or in the other permission modes, and
-no CI job runs a quaude on netbsd-arm64. The tool-level account below is as of 2026-09-28.
+no UDS messaging server: the entry "`net.createServer` is a named throwing stub" below). Since Task 5's fix round 1
+(ruling E9), the 21 tools tools-local drives (the 18, Edit, Bash, and TaskStop's KillShell alias) are also driven in
+`unlisted` and in each of the five permission modes, one combined -p turn per mode, every answer equal to native's
+(MEASURED: acceptEdits, auto, bypassPermissions and dontAsk answer as print; plan refuses the writes and the Edit;
+unlisted asks for a grant -p cannot give, turns the Task* list tools off and holds an inline Workflow for review).
+The rest are per-cell exemptions. MEASURED 2026-11-20 (the gate's own table): 274 cells still fall due 2026-12-15
+(USER RULING 2026-11-18 moved Phase A there from 2026-10-15), each with a reason naming its driver path:
+69 interactive (3 per tool for the 23 tools: a pty turn through test/e2e-pty.cjs, blocked because an interactive
+first turn validates credentials with claude.ai and never reaches the mock with a fake key, RECIPE G2); 163
+netbsd-arm64 (a cell job on a NetBSD arm64 host, which CI does not have: it would need a self-hosted NetBSD arm64
+runner, or a qemu NetBSD guest inside a Linux job, building the engine and a quaude there and running
+tools-local with native's recorded answers, since no native runs on NetBSD); and 42 others: Agent 14 (its driver
+runs in no job), Grep 11 and Glob 11 (agentic-grep-glob with --permission-mode), Bash 6 (sandbox:required and
+shell:zsh on both engines, sandbox:on and shell:bash on darwin). Re-dating the netbsd and interactive cells, or splitting them off
+UNTIL_PHASE_A, is the user's call. The tool-level account below is as of 2026-09-28.
 
 `every-tool-driven` (test/build-gates/tool-coverage-gates.test.cjs; the grep-native plan's task
 0c) reads the tool registry from the pinned carve and requires each tool to have a live check
@@ -538,6 +548,10 @@ purpose). Its phases, each tool's `until` in the gate being its phase's constant
   and named one divergence (ListAgents, above). CELL-LEVEL OPEN: the other modes and netbsd-arm64 for these 18 and for
   Agent (no cell in a job), Bash, Edit, Grep and Glob stay per-cell exemptions under UNTIL_PHASE_A, each with its
   written reason; UNTIL_PHASE_A stays for them. Retiring it means driving those cells or a user ruling that moves them.
+- PLANNED, before Phase B's SendMessage (2026-11-20): a real `net.createServer` in the shim (unix-socket and loopback
+  TCP listen, accepted sockets with data/end/close, server close). It is the one prerequisite shared by the sandbox's
+  network proxies (sandboxed Bash under quaude), UDS peer messaging (SendMessage between sessions), and ListAgents'
+  self-address line, which tools-local pins as a named divergence until it lands.
 - Phase B, after the release, 2027-01-15 (moved from 2026-11-30, which fell before Phase A's moved
   date, by USER RULING 2026-11-19): 24 tools needing a local helper, a pty or a default-off flag (WebFetch,
   SendMessage, LSP, ToolSearch, the memory tools, TodoWrite, SubagentHandback, ObserverReport,
