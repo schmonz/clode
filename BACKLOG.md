@@ -479,7 +479,7 @@ with TJS_HOME unset creates $HOME/.tjs holding localStorage.db only (no cookies.
 Unmeasured. The suite-hermeticity claims (suite home, sentinel HOME byte-untouched, the 18/81 spawn counts) were not
 re-run; test/suite-home-hermetic.test.cjs and a full suite with a sentinel HOME would.
 
-## 355 of the 2166 tool x mode x engine cells are driven, 12 are not applicable; Phase A's 18 tools, Agent, Edit and Bash in print, interactive, unlisted and every permission mode (cells 2026-11-18; tools 2026-09-28; Grep and Glob driven 2026-10-05; Read, Write, NotebookEdit, the Task tools and TaskStop 2026-11-19; Skill, the worktree and cron tools, ScheduleWakeup, ReportFindings, Workflow and ListAgents 2026-11-20; the -p modes, interactive, Agent and the Grep/Glob modes 2026-11-20)
+## 532 of the 2166 tool x mode x engine cells are driven (177 of them on netbsd-arm64, by a CI job not yet run), 12 are not applicable; Phase A's 18 tools, Agent, Edit and Bash in print, interactive, unlisted and every permission mode (cells 2026-11-18; tools 2026-09-28; Grep and Glob driven 2026-10-05; Read, Write, NotebookEdit, the Task tools and TaskStop 2026-11-19; Skill, the worktree and cron tools, ScheduleWakeup, ReportFindings, Workflow and ListAgents 2026-11-20; the -p modes, interactive, Agent and the Grep/Glob modes 2026-11-20)
 
 Since observability Task 1 (2026-11-18) the gate counts CELLS, tool x mode x engine: 90 tools, 722
 tool x mode pairs (permission modes, sandbox, Bash shells, interactive, unlisted, from the carve where
@@ -512,16 +512,22 @@ first classifier call through a gateway opens a billing notice that waits for En
 (autoModeClassifierBillingNoticeAcknowledgedAt in the profile shuts it for a day), and the classifier's own request,
 which does not stream (the mock's cannedMessage answers it).
 
+NETBSD-ARM64 (ruling E11b, 2026-11-20): ci.yml's netbsd-arm64-cells job drives the netbsd-arm64 cells of tools-local
+and agentic-grep-glob in a NetBSD/arm64 guest (cross-platform-actions, TCG on an x64 runner), against a quaude built
+there from the engine the netbsd-arm64 leg (now in the ci tier) built that push. Its settings are in
+scripts/tjs-legs.mjs GUEST_CELL_JOBS, with the measurements behind them: on the local HVF guest the two files pass,
+19 tests pass, 18 native tests skip by name, 0 fail, in about 23 minutes (1679fe5); TCG is about 10-18 times slower (the leg's engine build,
+54 minutes in release run 44691559850), so the job runs four lanes and scales every wait by CLODE_TIMEOUT_SCALE.
+NOT YET RUN IN CI: the first push measures it. If it proves impossible or too slow, the fallback is driven-local
+(60865ea, reverted by a77092d): committed evidence from the local VM, with a 30-day window.
+
 What still falls due 2026-12-15 (USER RULING 2026-11-18 moved Phase A there from 2026-10-15), each with a reason
-naming its driver path: 191 cells. 182 netbsd-arm64 (every cell of the 25 driven tools on that engine: a CELL_JOBS
-job on a NetBSD arm64 host, which CI does not have, a self-hosted NetBSD/arm64 runner or a qemu NetBSD/arm64 guest
-inside a Linux job, building the engine and a quaude there and running tools-local and agentic-grep-glob; NetBSD
-has no native Claude Code, so their native tests would skip there by name and quaude would be judged against the
-answers recorded from native on darwin-arm64 and linux-x64); 4 interactive (Grep and Glob on both engines: a Grep
-and a Glob call added to tools-local's interactive turn); 5 Bash, EXEMPT and run by no job today (agentic-sandbox-fail-closed drives only
-sandbox:on, on linux-x64-musl): sandbox:required on both engines needs a failIfUnavailable turn added to that file,
-sandbox:on@darwin a darwin run of it with Seatbelt, and shell:zsh on both a tools-local turn with env { SHELL: zsh }. Re-dating the netbsd cells, or splitting them off UNTIL_PHASE_A, is the
-user's call. The tool-level account below is as of 2026-09-28.
+naming its driver path: 14 cells. 4 interactive Grep/Glob on darwin-arm64 and linux-x64-musl and 2 on netbsd-arm64
+(a Grep and a Glob call added to tools-local's interactive turn); 8 Bash, EXEMPT and run by no job today
+(agentic-sandbox-fail-closed drives only sandbox:on, on linux-x64-musl): sandbox:required on every engine needs a
+failIfUnavailable turn added to that file, sandbox:on@darwin a darwin run of it with Seatbelt, sandbox:on@netbsd the
+fail-closed answer on a host upstream cannot sandbox, and shell:zsh on every engine a tools-local turn with env
+{ SHELL: zsh }. The tool-level account below is as of 2026-09-28.
 
 `every-tool-driven` (test/build-gates/tool-coverage-gates.test.cjs; the grep-native plan's task
 0c) reads the tool registry from the pinned carve and requires each tool to have a live check
