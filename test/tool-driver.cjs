@@ -189,6 +189,15 @@ function keychainShadowFinding(side, calls, platform = process.platform) {
 // turn that takes 125 s here takes tens of minutes, so every wait below is multiplied by it; 1 everywhere else.
 const SCALE = require('../libexec/clode-build.cjs').timeoutScale(process.env);
 const turnTimeout = (opts) => (opts.timeoutMs || 240000) * SCALE;
+// The interactive turn's four settle limits, ALL on that clock. CI 44813971330 (netbsd-arm64-cells, 20x TCG): bootMaxMs was
+// left at tui-screen's 60 s default while bootSettleMs was scaled, so a boot that takes ~25 s natively (hundreds of seconds
+// under TCG) was cut at 60 s and reported `unsettled boot`. Built from tui-screen's own SCRIPT_DEFAULTS, so a limit it adds
+// later is scaled too (test/tool-driver.test.cjs pins that every default is multiplied).
+function interactiveLimits(opts, scale = SCALE) {
+  const D = require('./tui-screen.cjs').SCRIPT_DEFAULTS;
+  return { bootSettleMs: 3000 * scale, bootMaxMs: D.bootMaxMs * scale, settleMs: 1500 * scale,
+    maxSettleMs: (opts.timeoutMs || 240000) * scale, ...Object.fromEntries(Object.keys(D).filter((k) => !['bootSettleMs', 'bootMaxMs', 'settleMs', 'maxSettleMs'].includes(k)).map((k) => [k, D[k] * scale])) };
+}
 
 // Which binary a side runs: { bin }, { absent } (this box has none) or { skipped } (the caller said why).
 function quaudeOf(opts) {
@@ -293,7 +302,7 @@ async function interactiveTurn(bin, flags, work, env, home, opts) {
     const s = await captureSession({ env }, {
       cmd: ['/bin/sh', '-c', 'cd "$1" && shift && exec "$@"', 'sh', work, bin, ...flags],
       script: [{ label: 'type', send: hex(prompt), until: prompt }, { label: 'send', send: hex('\r'), until: DONE }],
-      rows: 50, cols: 200, bootSettleMs: 3000 * SCALE, settleMs: 1500 * SCALE, maxSettleMs: turnTimeout(opts),
+      rows: 50, cols: 200, ...interactiveLimits(opts),
     });
     const unsettled = s.frames.filter((f) => !f.settled).map((f) => f.label);
     const done = s.frames.length === 3 && !unsettled.length;
@@ -416,4 +425,4 @@ function ptyHarnessMissing() {
   } catch (e) { return `no PTY harness here (node-pty): ${e.message.split('\n')[0]}`; }
 }
 
-module.exports = { driveTool, DONE, TOOL_SWITCHES, MODE_TURNS, modeTurnFinding, modeTurnFindingFor, shadowKeychain, keychainShadowFinding, CLASSIFIER_STOP, ptyHarnessMissing, SCALE };
+module.exports = { driveTool, DONE, TOOL_SWITCHES, MODE_TURNS, modeTurnFinding, modeTurnFindingFor, shadowKeychain, keychainShadowFinding, CLASSIFIER_STOP, ptyHarnessMissing, SCALE, interactiveLimits };

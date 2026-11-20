@@ -354,3 +354,17 @@ test('the mock answers a { json } reply as Messages JSON, and an SSE string as a
     assert.match(s.headers.get('content-type'), /text\/event-stream/);
   } finally { await mock.close(); }
 });
+
+test('interactiveLimits: every settle limit of the interactive turn is on the CLODE_TIMEOUT_SCALE clock (CI 44813971330: bootMaxMs was not)', () => {
+  const { interactiveLimits } = require('./tool-driver.cjs');
+  const { SCRIPT_DEFAULTS } = require('./tui-screen.cjs');
+  const one = interactiveLimits({}, 1);
+  const slow = interactiveLimits({}, 20);
+  // every limit tui-screen knows is passed explicitly (an omitted one silently takes its unscaled native default) ...
+  for (const k of Object.keys(SCRIPT_DEFAULTS)) {
+    assert.ok(Number.isInteger(one[k]) && one[k] > 0, `${k} is passed`);
+    assert.strictEqual(slow[k], one[k] * 20, `${k} scales with the slow host's clock`);
+  }
+  // ... and no native boot cap is below what a native boot measured (22.5-23.4 s) times the scale
+  assert.ok(slow.bootMaxMs >= 20 * SCRIPT_DEFAULTS.bootMaxMs);
+});
