@@ -228,7 +228,7 @@ const FILES = {
       'macOS only: it judges the macOS native\'s own record of the RG-MMAP-EVERYWHERE divergence',
   } },
   'test/fidelity/agentic-grep-glob.test.cjs': { jobs: ['linux-x64-pty'] },
-  'test/fidelity/tools-local.test.cjs': { jobs: ['linux-x64-pty'] },
+  'test/fidelity/tools-local.test.cjs': { jobs: ['linux-x64-pty', 'node-shim-oracle-darwin'] },
   'test/build-gates/rg-regex-gates.test.cjs': { jobs: ['linux-x64-pty'] },
   'test/build-gates/rg-types-gates.test.cjs': { jobs: ['linux-x64-pty'] },
   'test/fidelity/lead-scrub-equivalence.test.cjs': { jobs: ['linux-x64-pty'] },

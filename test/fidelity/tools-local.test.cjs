@@ -13,8 +13,10 @@
 // native side (darwin-arm64, 2026-11-19; the quaude built from this tree gave the same, every call and the disk). The
 // second test runs native itself against the same literals wherever it runs (driveTool's default native: the pinned
 // provider when it RUNS here, never PATH's claude), so a native that moved, or another platform's native that
-// differs, is named, not hidden. Where none runs, that test skips by name; linux-x64-pty runs both (test/ci-gates.cjs
-// FILES accepts no skip there).
+// differs, is named, not hidden. Where none runs, that test skips by name. linux-x64-pty and node-shim-oracle-darwin
+// each install the pinned native that runs and build the quaude from it, and run both tests (test/ci-gates.cjs FILES
+// accepts no skip in either). The native test passes driveTool's quaudeSkip, so tool-coverage-gates counts only the
+// first test as driving a quaude cell.
 //
 // MEASURED ALONG THE WAY (2.1.283, both engines): Write over a file the turn never read SUCCEEDS in a -p turn ("has
 // been updated successfully"), as Edit's read-before-edit does not apply to it here; a Read of a missing file is an

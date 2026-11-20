@@ -1675,6 +1675,29 @@ jobs:
           # nowhere.
           # Skips are judged BY NAME, not counted: gates-ran-in-ci holds this job to every file it runs (test/ci-gates.cjs
           # FILES, a skip accepted only by its test name; ci-gate-placement refuses a file a job runs that FILES does not judge).
+      # READ, WRITE AND NOTEBOOKEDIT ON DARWIN (every-tool Task 2/3): test/fidelity/tools-local.test.cjs against a quaude
+      # built from this tree (its first test, judged against native's recorded answers) and against native itself (its
+      # second). The staged provider above is a minimised carve that cannot run, so this step installs UPSTREAM_PIN's
+      # darwin-arm64 platform package on its own, as linux-x64-pty's rg step does for linux: a native that RUNS, which
+      # the quaude is also built from. Both tests must pass; no skip is accepted (test/ci-gates.cjs FILES).
+      - name: Read/Write/NotebookEdit end to end — tools-local against a built quaude and native
+        if: ${{ !cancelled() }}
+        env:
+          CLODE_TJS: ${{ runner.temp }}/tjs/tjs
+        run: |
+          set -euo pipefail
+          V=$(sed -n 's/^claude-code //p' UPSTREAM_PIN)
+          [ -n "$V" ] || { echo "ERROR: UPSTREAM_PIN names no claude-code version" >&2; exit 2; }
+          npm i --prefix "$RUNNER_TEMP/native-darwin" @anthropic-ai/claude-code-darwin-arm64@"$V" 2>&1 | tail -2
+          NATIVE="$RUNNER_TEMP/native-darwin/node_modules/@anthropic-ai/claude-code-darwin-arm64/claude"
+          test -x "$NATIVE" || { echo "ERROR: no native claude at $NATIVE after installing $V" >&2; exit 1; }
+          echo "native: $NATIVE ($V)"
+          mkdir -p "$RUNNER_TEMP/cells"
+          CLODE_PROVIDER_BIN="$NATIVE" CLODE_CLAUDE_BIN="$NATIVE" \
+            node --require ./test/file-watchdog-preload.cjs --test --test-concurrency=1 \
+              --test-reporter=spec --test-reporter-destination=stdout \
+              --test-reporter=./test/cell-reporter.mjs --test-reporter-destination="$RUNNER_TEMP/cells/darwin-tools-local.jsonl" \
+              test/fidelity/tools-local.test.cjs
       # THE CELLS this job drives (test/build-gates/tool-coverage-gates.test.cjs, CELL_JOBS): every test that runs a
       # claimed driver's control PASSED above, on this engine, as test/cell-reporter.mjs recorded it. A skip, a failure or
       # a test that never ran means the tool x mode cell ran nowhere, and this step names it (observability plan Task 1).

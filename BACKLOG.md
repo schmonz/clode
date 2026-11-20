@@ -407,15 +407,15 @@ with TJS_HOME unset creates $HOME/.tjs holding localStorage.db only (no cookies.
 Unmeasured. The suite-hermeticity claims (suite home, sentinel HOME byte-untouched, the 18/81 spawn counts) were not
 re-run; test/suite-home-hermetic.test.cjs and a full suite with a sentinel HOME would.
 
-## 12 of the 2166 tool x mode x engine cells are driven (cells 2026-11-18; tools 2026-09-28; Grep and Glob driven 2026-10-05; Read, Write, NotebookEdit 2026-11-19)
+## 15 of the 2166 tool x mode x engine cells are driven (cells 2026-11-18; tools 2026-09-28; Grep and Glob driven 2026-10-05; Read, Write, NotebookEdit 2026-11-19)
 
 Since observability Task 1 (2026-11-18) the gate counts CELLS, tool x mode x engine: 90 tools, 722
 tool x mode pairs (permission modes, sandbox, Bash shells, interactive, unlisted, from the carve where
-it says) over darwin-arm64, linux-x64-musl and netbsd-arm64, 2166 cells. 12 are driven, by four CI
+it says) over darwin-arm64, linux-x64-musl and netbsd-arm64, 2166 cells. 15 are driven, by four CI
 jobs (CELL_JOBS): Bash print (darwin, musl), bypassPermissions, sandbox:on and shell:bash (musl); Edit
 print (darwin, musl); Glob and Grep print (musl); since every-tool Task 2, Read, Write and NotebookEdit
-print (musl: test/fidelity/tools-local.test.cjs in linux-x64-pty, the one job with a built quaude and a
-native that runs). The rest are per-cell exemptions; the undriven cells of the eight driven tools, and
+print (darwin, musl: test/fidelity/tools-local.test.cjs in node-shim-oracle-darwin and linux-x64-pty,
+each installing the pinned native that runs and building a quaude from it). The rest are per-cell exemptions; the undriven cells of the eight driven tools, and
 the 15 Phase A tools still undriven, fall due 2026-12-15 (USER RULING
 2026-11-18 moved Phase A there from 2026-10-15). The tool-level account below is as of 2026-09-28.
 
@@ -485,6 +485,11 @@ nine tool_results and the tree left equal native's recorded answers, and native 
 
 Unmeasured. native 2.1.283 on Linux answering tools-local's script as the darwin-measured literals say: the
 file's second test in linux-x64-pty is the first run that will say; a difference fails it, naming each call.
+Kept until a green linux-x64-pty run. Likewise unmeasured: the node-shim-oracle-darwin step that runs the
+file (a macos-latest runner building a quaude from the npm darwin-arm64 native) until its first green run.
+
+Measured: test/build-gates/tool-coverage-gates.test.cjs with CLODE_PROVIDER_BIN at the darwin-arm64 2.1.283 carve,
+with tools-local also claimed by node-shim-oracle-darwin: 15 driven, 2151 exempted, 0 neither (2026-11-19)
 
 ## The NetBSD spike found three bugs, all fixed; what it left open (2026-09-26)
 
