@@ -1003,8 +1003,13 @@ export function legsFor(tier) {
   }
   if (tier === 'ci') {
     return LEGS.filter((l) => l.ci).map(({ ci, publish, ciOnly, 'ci-os': ciOs, 'ci-guest-version': ciVer,
-      'macos-min': _mm, 'macos-sdk': _ms, 'macos-arch': _ma, 'cross-image': _ci, ...leg }) => {
+      'macos-min': mm, 'macos-sdk': ms, 'macos-arch': _ma, 'cross-image': ci_, ...leg }) => {
       if (ciOs) leg.os = ciOs;                          // ci rides the newest runner/guest
+      // The floor fields are stripped (29685d8) only for the old floors that need a pinned
+      // SDK or cross toolchain (ppc/i386/x64). A floor that is a plain CMake deployment
+      // target (darwin-arm64's 11.0) stays, so a floor regression goes red on push, not
+      // at the release dry run.
+      if (mm && !ms && !ci_ && !leg['cross-dockerfile']) leg['macos-min'] = mm;
       if (ciVer) leg['guest-version'] = ciVer;
       // House rule: new-to-CI VM legs earn hard status. But a leg we SHIP has
       // already earned it — IF WE PUBLISH IT, CI GATES IT (user, 2026-07-17).

@@ -325,7 +325,10 @@ test('darwin floor: macos-* fields are release-only, on native-darwin or cross l
     // runner literally cannot exec the output, e.g. the darwin-x86 i386
     // floor build) — dropping it in ci would make build-leg's exec-guards
     // misfire and try to EXEC the un-execable binary.
-    assert.ok(!('macos-min' in l) && !('macos-sdk' in l)
+    // EXCEPT a plain deployment-target floor on a native-darwin leg (darwin-arm64's
+    // macos-min 11.0): ci keeps that so the floor gate goes red on push.
+    const plainFloor = l.os.startsWith('macos') && !('cross-dockerfile' in l);
+    assert.ok((plainFloor || !('macos-min' in l)) && !('macos-sdk' in l)
       && !('macos-arch' in l) && !('cross-image' in l),
       `${l.leg}: ci tier must strip the macos-* floor fields, cross-image`);
   }
@@ -758,12 +761,20 @@ test('version policy: ci rides the newest end, release the oldest floor', () => 
   // floor itself is now pinned by macos-min, not inherited from the runner.
   assert.strictEqual(rel('darwin-arm64').os, 'macos-15');
   assert.strictEqual(rel('darwin-arm64')['macos-min'], '11.0');
-  // EVERY darwin RELEASE leg: the floor a leg advertises is the deployment target it pins.
+  // EVERY darwin release leg: the floor a leg advertises is the deployment target it pins.
   // A floor with no macos-min is a label the runner decides (arm64 shipped minos 14.0
-  // under "11.0" that way until a0a2d4e). Release tier only: the ci tier strips the
-  // macos floor fields by design (29685d8) — ci rides the newest runner, floor-free.
+  // under "11.0" that way until a0a2d4e). The ci tier keeps macos-min wherever no old SDK
+  // is pinned (darwin-arm64), so the floor gate goes red on push; it strips it only for
+  // the SDK-pinned old floors (29685d8).
   const darwin = release.filter((l) => /^darwin-/.test(l.leg));
   assert.ok(darwin.length >= 4, `expected the four darwin slices, got ${darwin.length}`);
+  const ciDarwin = ci.filter((l) => /^darwin-/.test(l.leg));
+  assert.ok(ciDarwin.some((l) => l.leg === 'darwin-arm64'), 'darwin-arm64 is a ci leg');
+  for (const l of ciDarwin) {
+    const r = rel(l.leg);
+    if (r && (r['macos-sdk'] || r['cross-image'] || r['cross-dockerfile'])) assert.strictEqual(l['macos-min'], undefined, `${l.leg}: an SDK-pinned floor is release-only`);
+    else assert.strictEqual(l['macos-min'], l.floor, `${l.leg}: ci must carry its plain deployment-target floor`);
+  }
   for (const l of darwin) {
     assert.ok(l.floor, `${l.leg}: no floor`);
     assert.strictEqual(l['macos-min'], l.floor, `${l.leg}: floor ${l.floor} but macos-min ${l['macos-min']} — the floor must be the pinned deployment target`);

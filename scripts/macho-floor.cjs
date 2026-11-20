@@ -11,7 +11,7 @@
 // control: nothing proved it could fail. And the case it exists for is real — the arm64
 // slice of the published clode-0.20260831.1-macos carries minos 14.0 under an 11.0 floor
 // label, because the leg never pinned a deployment target (fixed in a0a2d4e). The rows in
-// test/macho-floor.test.cjs are real `otool -l` captures, that release's among them.
+// test/build-gates/macho-floor-gates.test.cjs are real `otool -l` captures, that release's among them.
 
 const fs = require('node:fs');
 

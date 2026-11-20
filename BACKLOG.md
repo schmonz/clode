@@ -21,9 +21,9 @@ release asset, captured into test/fixtures/macho-floor/ and refused by test/buil
 
 So the shipped release's real arm64 floor is macOS 14.0, and its `macos-11.0-arm64` template tag is a label, not the
 binary's floor. A macOS 11-13 arm64 Mac's dyld refuses that slice. Cause: the darwin-arm64 leg pinned no deployment
-target, so clang took the runner's (macos-14). Fixed by a0a2d4e for the next release (`'macos-min': '11.0'`, the floor
-gate now reads LC_BUILD_VERSION minos via scripts/macho-floor.cjs, and test/tjs-legs.test.cjs holds every darwin
-release leg's floor to its macos-min). Open until a release ships with an arm64 slice measured at minos 11.0, and
+target, so clang took the runner's (macos-14). Fixed by a0a2d4e for the next release (`'macos-min': '11.0'`); 95016d8 added
+the noticing: the floor gate reads LC_BUILD_VERSION minos via scripts/macho-floor.cjs, and test/tjs-legs.test.cjs
+holds every darwin leg's floor to its macos-min. Open until a release ships with an arm64 slice measured at minos 11.0, and
 until the bootstrap manifest is re-pinned to that release (the bootstrap engine runs only on the build host, so its
 14.0 floor limits which Macs can BUILD, not which can run a built quaude).
 
