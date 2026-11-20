@@ -27,9 +27,17 @@ this file, not a test failing; the forced-win32 "reported NO tests" was most lik
 guards in node:vm contexts. 30 runs of the file alone right after were all green: it shows only under a full suite's
 load (two in about eight full suites).
 
-Unmeasured. Where node crashes: no core or report was taken. Next: run the file in a loop under load (or the full suite) with
-`--report-on-signal`/`ulimit -c unlimited` and read the native stack; check whether a vm context or a stand-in
-__tjs_fs_sync is on it.
+Measured: where node crashes (2026-11-20). macOS had kept a crash report for BOTH (~/Library/Logs/DiagnosticReports,
+node-2026-11-20-022615.ips and node-2026-11-20-034404.ips, the forced-win32 one and the main-pass one): the same
+native stack each time. EXC_BAD_ACCESS / SIGSEGV, KERN_INVALID_ADDRESS at 0xe, on the main thread in V8's garbage
+collector: `ClearStaleLeftTrimmedPointerVisitor::VisitRootPointers` < `InternalFrame::Iterate` < `Isolate::Iterate` <
+`Heap::IterateRoots` < `MarkCompactCollector::MarkRoots` < a full MarkCompact GC entered from
+`StackGuard::HandleInterrupts` (`Runtime_StackGuardWithGap`), with `node::contextify::ContextifyScript::RunInContext`
+(a node:vm script) below it, from a microtask. So it is a V8 GC defect in host node 24.21.0 (asdf's official
+darwin-arm64 build) while a vm context's script runs, not this repo's code: no test of ours can make V8 visit a stale
+left-trimmed pointer. test/run-crashes.cjs now keeps such reports (and node's own fatal-error reports) for any file
+that dies of a signal, so the next one needs no luck. Open: whether a newer node 24 fixes it (check the V8 log for
+ClearStaleLeftTrimmedPointerVisitor fixes), and if not, a minimal repro to file upstream.
 
 ## The shipped macOS arm64 floor is 14.0, not the 11.0 it is labelled (2026-11-20)
 
