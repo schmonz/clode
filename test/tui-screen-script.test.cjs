@@ -320,11 +320,13 @@ test('a step that never goes quiet is reported unsettled at its cap, never as se
   if (SKIP) { t.skip(SKIP); return; }
   const s = await captureSession(SBX, {
     cmd: child('chatty', CHATTY_TUI), env: DRIVER_ENV, rows: 4, cols: 20,
-    settleMs: 400, maxSettleMs: 1200, bootSettleMs: 400, bootMaxMs: 1200,
+    // the quiet window is 15 ticks wide: a loaded suite (the full run) can stall the child's 100 ms timer for over
+    // 400 ms, which a 4-tick window read as quiet, so `poke` "settled" (2026-11-20, once in a full run)
+    settleMs: 1500, maxSettleMs: 3000, bootSettleMs: 1500, bootMaxMs: 3000,
     script: [{ label: 'poke', send: hex('a') }],
   });
   assert.deepStrictEqual(s.frames.map((f) => [f.label, f.settled]), [['boot', false], ['poke', false]]);
-  for (const f of s.frames) assert.ok(f.ms >= 1200, `${f.label} gave up after ${f.ms} ms, before its cap`);
+  for (const f of s.frames) assert.ok(f.ms >= 3000, `${f.label} gave up after ${f.ms} ms, before its cap`);
 });
 
 test('a child that exits mid-script ends the session and says during which step', async (t) => {
