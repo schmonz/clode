@@ -256,6 +256,7 @@ test('keychainShadowFinding: on darwin, a turn with no find-generic-password thr
   assert.strictEqual(keychainShadowFinding('native', [], 'linux'), null);
 });
 test('driveTool refuses a darwin native turn whose Keychain read bypassed the stub (planted: an absolute path)', { skip: SKIP || (process.platform !== 'darwin' && 'the Keychain is darwin\'s') }, async () => {
+  assertFailsOnMissingOutput(sawProduct, FAKE);
   const f = fakes();
   try {
     await assert.rejects(driveTool({ tool: FAKE, quaude: f.quaude, native: f.native, env: { FAKE_SECURITY: 'absolute' } }),
