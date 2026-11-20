@@ -19,6 +19,10 @@ require('./suite-home.cjs');   // the suite's own HOME, also for a standalone `n
 //                    judged on SIDE.raw. Both gates read the CALLER's file (a script, a check or a control in this
 //                    file is invisible to them), and `tool: USE` is the mock rule they read as the scripting.
 //   opts.script      instead of tool: several calls, [{ tool: A }, { tool: B }], scripted one per follow-up, in order.
+//                    A rule may add `inputFrom: (log) => input`: the input SENT is computed from the request log so far
+//                    (the turn's earlier tool_results, read with toolResultText), for a call that names what an earlier
+//                    call made at run time (TaskStop names the id a background Bash answered with). The rule's
+//                    tool.input stays what the control is given; SIDE.sent records what was sent.
 //   opts.base        an absolute temp dir the caller made, so a tool_use input can name paths under it before the
 //                    turn (Read's file_path is absolute). The default is a fresh one, removed when both sides are
 //                    done. The caller removes its own.
@@ -51,16 +55,18 @@ require('./suite-home.cjs');   // the suite's own HOME, also for a standalone `n
 //   native treats { absent } as a precondition failure (skip by name, which a CI job then judges), never as the
 //   comparison passing.
 //   opts.timeoutMs   per side (240 s).
-// SIDE = { text, isError, result, results, raw, status, signal, stdout, stderr, timedOut, home, inspected }
+// SIDE = { text, isError, result, results, raw, sent, status, signal, stdout, stderr, timedOut, home, inspected }
 //   text/isError/result  the FIRST scripted call's tool_result (toolResult: { text, isError, content }, or null and
 //                    text '' when the target sent none). Never the tool_use's input.
 //   results          every scripted call's toolResult, by id.
 //   raw              the mock's request log, { requests }: what a check given to assertFailsOnMissingOutput reads.
 //   home             the side's own { HOME, USERPROFILE, CLAUDE_CONFIG_DIR }, under <base>/<side>.
+//   tmp              the side's CLAUDE_CODE_TMPDIR, <base>/<side>/tmp (where a background task's output goes).
 //
-// HERMETIC by construction: each side runs with a HOME and CLAUDE_CONFIG_DIR under <base>/<side>, fresh per run, so no
-// turn reads or writes the caller's ~/.claude (the agentic rows that inherit it are a recorded defect, BACKLOG "Ten
-// agentic rows run the developer's own ~/.claude"). Output is collected on 'close' (test/spawn-collect.cjs).
+// HERMETIC by construction: each side runs with a HOME, CLAUDE_CONFIG_DIR and CLAUDE_CODE_TMPDIR under <base>/<side>,
+// fresh per run, so no turn reads or writes the caller's ~/.claude or the box's shared /tmp/claude-<uid> (the agentic
+// rows that inherit them are a recorded defect, BACKLOG "Ten agentic rows run the developer's own ~/.claude"). Output
+// is collected on 'close' (test/spawn-collect.cjs).
 //
 // WHAT IT DOES NOT DO: judge. It returns what each side's model saw; the caller's check decides, and the caller
 // compares quaude's with native's. It drives the built binary, not the bundle under the dev loader.
@@ -91,6 +97,9 @@ function rulesOf(opts) {
   for (const rule of rules) {
     if (!rule || !isToolUse(rule.tool)) {
       throw new Error(`driveTool: each call must be a tool_use { name, input, id }, got ${JSON.stringify(rule && rule.tool)}`);
+    }
+    if (rule.inputFrom !== undefined && typeof rule.inputFrom !== 'function') {
+      throw new Error(`driveTool: inputFrom (${rule.tool.id}) must be a function of the request log`);
     }
   }
   return rules;
@@ -131,17 +140,26 @@ async function runSide(side, bin, rules, opts, base) {
   fs.mkdirSync(work, { recursive: true });
   if (opts.setup) opts.setup(work, base);
   const home = throwawayHome(path.join(base, side));
+  // Claude Code's per-uid temp dir (background task output, among others) defaults to /tmp/claude-<uid>, shared with
+  // every other run on the box, the developer's own sessions included; CLAUDE_CODE_TMPDIR moves it into the sandbox
+  // (a private 0700 dir, as the product asks).
+  const tmp = path.join(base, side, 'tmp');
+  fs.mkdirSync(tmp, { recursive: true, mode: 0o700 });
+  const sent = {};
   const mock = await startMockAnthropic({
-    respond: (sent) => {
-      const rule = rules.find((r) => !sent.includes(r.tool.id));
-      return rule ? cannedToolUseSSE(rule.tool.name, rule.tool.input, rule.tool.id) : cannedSSE(DONE);
+    respond: (seen) => {
+      const rule = rules.find((r) => !seen.includes(r.tool.id));
+      if (!rule) return cannedSSE(DONE);
+      const input = rule.inputFrom ? rule.inputFrom({ requests: mock.requests.slice() }) : rule.tool.input;
+      sent[rule.tool.id] = input;
+      return cannedToolUseSSE(rule.tool.name, input, rule.tool.id);
     },
   });
   try {
     const names = [...new Set(rules.map((r) => r.tool.name))];
     const allowed = opts.allowedTools === undefined ? names.join(',') : opts.allowedTools;
     const args = ['-p', opts.prompt || 'drive the tool', ...(allowed === null ? [] : ['--allowedTools', allowed]), ...(opts.args || [])];
-    const env = { ...baseEnv(), ...home, ANTHROPIC_BASE_URL: mock.url, ANTHROPIC_API_KEY: 'sk-ant-mock', ...(opts.env || {}),
+    const env = { ...baseEnv(), ...home, CLAUDE_CODE_TMPDIR: tmp, ANTHROPIC_BASE_URL: mock.url, ANTHROPIC_API_KEY: 'sk-ant-mock', ...(opts.env || {}),
       ...(opts.switches || {}) };
     const r = await spawnCollect(bin, args, { cwd: work, env }, { timeoutMs: opts.timeoutMs || 240000 });
     const raw = { requests: mock.requests.slice() };
@@ -150,7 +168,7 @@ async function runSide(side, bin, rules, opts, base) {
     const first = rules[0].tool.id;
     return {
       text: toolResultText(raw, first), isError: !!(results[first] && results[first].isError), result: results[first], results,
-      raw, status: r.status, signal: r.signal, stdout: r.stdout, stderr: r.stderr, timedOut: r.timedOut, home,
+      raw, sent, tmp, status: r.status, signal: r.signal, stdout: r.stdout, stderr: r.stderr, timedOut: r.timedOut, home,
       inspected: opts.inspect ? opts.inspect(work, base) : undefined,
     };
   } finally { await mock.close(); }

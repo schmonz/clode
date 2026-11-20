@@ -189,6 +189,22 @@ test('driveTool passes a listed switch to both sides', { skip: SKIP }, async () 
   } finally { fs.rmSync(f.dir, { recursive: true, force: true }); }
 });
 
+const FAKE_NEXT = { name: 'FakeDriverTool', input: { a: 0, b: 2 }, id: 'toolu_fake_driver_next' };
+const sawNext = (m) => toolResultText(m, FAKE_NEXT.id).includes('PRODUCT-84');
+test('driveTool computes a call\'s input from the log so far (inputFrom), and records what it sent', { skip: SKIP }, async () => {
+  assertFailsOnMissingOutput(sawNext, FAKE_NEXT);
+  const f = fakes();
+  try {
+    const fromFirst = (log) => ({ a: Number(/PRODUCT-(\d+)/.exec(toolResultText(log, FAKE.id))[1]), b: 2 });
+    const r = await driveTool({ script: [{ tool: FAKE }, { tool: FAKE_NEXT, inputFrom: fromFirst }], quaude: f.quaude, nativeSkip: 'fakes' });
+    assert.ok(sawNext(r.quaude.raw), r.quaude.results[FAKE_NEXT.id] && r.quaude.results[FAKE_NEXT.id].text);
+    assert.deepStrictEqual(r.quaude.sent[FAKE_NEXT.id], { a: 42, b: 2 });
+    assert.deepStrictEqual(r.quaude.sent[FAKE.id], FAKE.input);
+    const NOT_FN = 'x';
+    assert.throws(() => driveTool({ script: [{ tool: FAKE, inputFrom: NOT_FN }] }), /inputFrom .* must be a function/);
+  } finally { fs.rmSync(f.dir, { recursive: true, force: true }); }
+});
+
 test('driveTool refuses a call that is not a { name, input, id } tool_use', () => {
   const NAMELESS = { name: 'X' };
   assert.throws(() => driveTool({ tool: NAMELESS }), /\{ name, input, id \}/);
