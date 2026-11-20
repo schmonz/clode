@@ -23,6 +23,16 @@ test('the classifier does NOT flag a test that builds its own inputs', () => {
   assert.strictEqual(classifyTestFile(src).scannerShaped, false);
 });
 
+// A `repo:` OBJECT KEY is not a repo-rooted path (every-tool Task 5 fix round 2): tools-local's
+// { repo: readRepo(work) } snapshot of a git tree the turn made tipped the file into the
+// population, one past the baseline. A `repo` VARIABLE still roots; the `(?!\s*:(?!:))`
+// lookahead after the token is the whole change.
+test('the classifier does NOT read a `repo:` object key as a repo-rooted read', () => {
+  const body = `assert.ok(/x/.test(fs.readFileSync(p, 'utf8')));`;
+  assert.strictEqual(classifyTestFile(`const got = { repo: readRepo(work) }; ${body}`).scannerShaped, false);
+  assert.strictEqual(classifyTestFile(`const p = path.join(repo, 'x'); ${body}`).scannerShaped, true);
+});
+
 // Minor (fix round 2, coordinator, 2026-09-04): isRecordedExclusion's empty-`because`
 // throw path had no direct test. Push a synthetic bad entry, assert the throw, remove it
 // again in `finally` so no other test in this file (which walks the real GUARD_EXCLUSIONS

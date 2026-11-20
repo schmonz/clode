@@ -103,7 +103,10 @@ const READ_CALLS = /readFileSync\s*\(|readdirSync\s*\(|require\.resolve\s*\(/;
 // survives because it genuinely NAMES an artifact PATH (a string used for fs access), which
 // a bare `require(...)` call — used to load and execute a module, not to name a path for
 // later reading — does not.
-const REPO_ROOTED = /__dirname\s*,\s*['"]\.\.|path\.resolve\(\s*__dirname|\bREPO\b|\brepo\b|\bROOT\b|require\.resolve\(\s*['"]\.\./;
+// The `repo` token roots a path as a VARIABLE, never as an object KEY (`{ repo: x }`, every-tool
+// Task 5 fix round 2): measured on 2026-11-20, the population is the same 198 files with and
+// without the lookahead; only a key-shaped `repo:` (tools-local's git snapshot) stops counting.
+const REPO_ROOTED = /__dirname\s*,\s*['"]\.\.|path\.resolve\(\s*__dirname|\bREPO\b|\brepo\b(?!\s*:(?!:))|\bROOT\b|require\.resolve\(\s*['"]\.\./;
 // These stand on their own — no co-located or even whole-file READ_CALLS match required —
 // because they already NAME a real external artifact or the mechanism that stages one (a
 // library helper elsewhere, e.g. oracle-models.cjs's stageProviderCli(), does the actual
