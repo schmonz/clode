@@ -42,7 +42,9 @@ require('./suite-home.cjs');   // the suite's own HOME, also for a standalone `n
 //   opts.args        more CLI arguments, after `-p <prompt>` and --allowedTools (--add-dir, --permission-mode, ...).
 //   opts.allowedTools  the --allowedTools value: the scripted tools' names by default; null passes none (the
 //                    `unlisted` cell).
-//   opts.prompt      the -p prompt ('drive the tool').
+//   opts.prompt      the -p prompt ('drive the tool'), or what an interactive turn types.
+//   opts.interactive  true: no -p; the turn runs in a pty and the prompt is typed (interactiveTurn). Needs the PTY harness
+//                    (node-pty, test/tui-screen.cjs) and a POSIX host.
 //   opts.env         extra environment for both sides (SHELL, say). It may not name HOME, USERPROFILE, or any CLAUDE* or
 //                    ANTHROPIC* key (CLAUDE_CONFIG_DIR, ANTHROPIC_BASE_URL among them): those are the sandbox and the
 //                    mock, and a driver that overrode one would quietly run against the developer's home or a real
@@ -210,12 +212,14 @@ async function runSide(side, bin, rules, opts, base) {
   try {
     const names = [...new Set(rules.map((r) => r.tool.name))];
     const allowed = opts.allowedTools === undefined ? names.join(',') : opts.allowedTools;
-    const args = ['-p', opts.prompt || 'drive the tool', ...(allowed === null ? [] : ['--allowedTools', allowed]), ...(opts.args || [])];
+    const flags = [...(allowed === null ? [] : ['--allowedTools', allowed]), ...(opts.args || [])];
+    const args = ['-p', opts.prompt || 'drive the tool', ...flags];
     const env = { ...baseEnv(), ...home, ANTHROPIC_BASE_URL: mock.url, ANTHROPIC_API_KEY: 'sk-ant-mock', ...(opts.env || {}),
       ...(opts.switches || {}) };
     const kc = shadowKeychain(base, side);
     env.PATH = [kc.dir, env.PATH || ''].join(path.delimiter);
-    const r = await spawnCollect(bin, args, { cwd: work, env }, { timeoutMs: opts.timeoutMs || 240000 });
+    const r = opts.interactive ? await interactiveTurn(bin, flags, work, env, home, opts)
+      : await spawnCollect(bin, args, { cwd: work, env }, { timeoutMs: opts.timeoutMs || 240000 });
     // the log, and the side's own temp dir beside it (a check that judges a path under it reads it here, never from a
     // module-level variable: a synthetic control log has none, so such a check fails there)
     const raw = { requests: mock.requests.slice(), tmp };
@@ -229,6 +233,49 @@ async function runSide(side, bin, rules, opts, base) {
       inspected: opts.inspect ? opts.inspect(work, base) : undefined,
     };
   } finally { await mock.close(); }
+}
+
+// THE INTERACTIVE TURN (opts.interactive, the `interactive` cell; fix round 2). The same mock, home and flags, but no
+// -p: the binary runs in a pty (test/e2e-pty.cjs captureSession, tui-screen.cjs), the prompt is typed and sent, and the
+// turn is over when the mock's closing text (DONE) is on screen. MEASURED 2026-11-20 (native 2.1.283 darwin-arm64): an
+// interactive first turn reaches the mock (HEAD /api/hello, then POST /v1/messages) once the profile is past onboarding,
+// trusts the working directory and approves the API key (the bundle keeps its last 20 characters); nothing is asked
+// of claude.ai. RECIPE G2's "validates credentials with claude.ai" was a synchronous capture freezing the in-process
+// mock, so no request was ever answered (test/e2e-pty.cjs seedClaudeProfile, 2026-09-25).
+// -> spawnCollect's shape: status 0 when every step settled (the prompt echoed, DONE painted), else 1 with why.
+function seedInteractiveProfile(home, work) {
+  const profile = { hasCompletedOnboarding: true, theme: 'dark',
+    projects: { [work]: { hasTrustDialogAccepted: true, hasCompletedProjectOnboarding: true } },
+    customApiKeyResponses: { approved: ['sk-ant-mock'.slice(-20)], rejected: [] },
+    // interactive defaults to auto mode, whose first classifier call through a gateway (the mock is one: its host is not
+    // anthropic.com) opens a billing notice that waits for Enter; acknowledged now, it stays shut for a day (2.1.283)
+    autoModeClassifierBillingNoticeAcknowledgedAt: Date.now() };
+  // CLAUDE_CONFIG_DIR holds the profile when it is set (it is: throwawayHome); HOME's copy is for a target that ignores it
+  for (const d of [home.CLAUDE_CONFIG_DIR, home.HOME]) fs.writeFileSync(path.join(d, '.claude.json'), JSON.stringify(profile));
+}
+async function interactiveTurn(bin, flags, work, env, home, opts) {
+  if (process.platform === 'win32') throw new Error('driveTool: an interactive turn needs a POSIX pty here');
+  seedInteractiveProfile(home, work);
+  const { captureSession } = require('./e2e-pty.cjs');
+  const hex = (t) => Buffer.from(t, 'utf8').toString('hex');
+  const prompt = opts.prompt || 'drive the tool';
+  try {
+    const s = await captureSession({ env }, {
+      cmd: ['/bin/sh', '-c', 'cd "$1" && shift && exec "$@"', 'sh', work, bin, ...flags],
+      script: [{ label: 'type', send: hex(prompt), until: prompt }, { label: 'send', send: hex('\r'), until: DONE }],
+      rows: 50, cols: 200, bootSettleMs: 3000, settleMs: 1500, maxSettleMs: opts.timeoutMs || 240000,
+    });
+    const unsettled = s.frames.filter((f) => !f.settled).map((f) => f.label);
+    const done = s.frames.length === 3 && !unsettled.length;
+    // stdout: the last screen, as text (what a -p turn would print), for diagnostics
+    const { rowText } = require('./frame-diff.cjs');
+    const last = s.frames.length ? s.frames[s.frames.length - 1].frame : null;
+    const screen = last ? Array.from({ length: last.rows }, (_, y) => rowText(last, y).replace(/\s+$/, '')).join('\n').replace(/\n+$/, '') : '';
+    return { status: done ? 0 : 1, signal: null, stdout: screen, timedOut: !done,
+      stderr: done ? '' : `the interactive turn did not finish: ${unsettled.length ? `unsettled ${unsettled.join(', ')}` : `${s.frames.length} frame(s)`}` };
+  } catch (e) {
+    return { status: 1, signal: null, stdout: '', stderr: `the interactive turn could not run: ${e.message.slice(0, 1200)}`, timedOut: false };
+  }
 }
 
 // Validates synchronously (a malformed call throws at the call site), then drives quaude, then native.
@@ -266,4 +313,4 @@ function driveTool(opts = {}) {
   })();
 }
 
-module.exports = { driveTool, DONE, TOOL_SWITCHES };
+module.exports = { driveTool, DONE, TOOL_SWITCHES, shadowKeychain, CLASSIFIER_STOP };
