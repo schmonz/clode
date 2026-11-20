@@ -729,6 +729,18 @@ const tapCopy = path.join(os.tmpdir(), `clode-test-run-${process.pid}.tap`);
 // where it arms a timer that names the file and exits 1 at its limit. A file that never finishes is a named red, never
 // a silent wait (the 9h40m hang of 2026-11-19). Both passes below carry it.
 const WATCHDOG = path.join(HERE, 'file-watchdog-preload.cjs');
+// CRASH EVIDENCE (test/run-crashes.cjs): each test-file process writes node's diagnostic report on a fatal error into
+// the run root, and a file that dies of a signal is named with what evidence exists, kept outside the root.
+const runCrashes = require('./run-crashes.cjs');
+const DIAG_DIR = path.join(RUN_TMP, 'diagnostics');
+const DIAG_ARGS = ['--report-on-fatalerror', `--report-directory=${DIAG_DIR}`, '--report-compact'];
+const keepCrashEvidence = (tap, since) => {
+  let kept = [];
+  try { kept = runCrashes.keepCrashes(tap, { original: ORIGINAL_TMP, diagDir: DIAG_DIR, since, home: (realHome() || {}).HOME }); }
+  catch (e) { console.error(`run: a test file died of a signal, and keeping its evidence failed: ${e.message}`); return 1; }
+  for (const l of runCrashes.crashLines(kept)) console.error(l);
+  return kept.length ? 1 : 0;
+};
 // THE GATE LIST (observability plan Task 5): with CLODE_GATES_REPORT=<dir>, a third reporter
 // (test/cell-reporter.mjs) writes one JSON line per finished test to <dir>/suite.jsonl. CI's suite
 // job uploads that dir, and test/gates-ran-in-ci.test.cjs holds the job to the gates
@@ -740,7 +752,9 @@ const gatesReport = process.env.CLODE_GATES_REPORT
   ['--test-reporter', pathToFileURL(path.join(HERE, 'cell-reporter.mjs')).href,
     '--test-reporter-destination', path.join(process.env.CLODE_GATES_REPORT, 'suite.jsonl')])
   : [];
+const mainSince = Date.now();
 const res = spawnSync(process.execPath, [
+  ...DIAG_ARGS,
   '--require', WATCHDOG,
   '--require', FILE_TMPDIR,
   '--test',
@@ -756,6 +770,7 @@ let fails = res.status === 0 ? 0 : 1;
 let tapText = null;
 try { tapText = fs.readFileSync(tapCopy, 'utf8'); } catch { /* runner never wrote it — handled below */ }
 finally { try { fs.unlinkSync(tapCopy); } catch { /* best-effort cleanup */ } }
+if (tapText && keepCrashEvidence(tapText, mainSince)) fails = 1;
 const testsRan = tapText ? tapText.match(/^# tests (\d+)/m) : null;
 if (!testsRan) {
   console.error('run: could not read a test-run summary at all (no "# tests N" from node:test) — '
@@ -808,7 +823,9 @@ if (tapText) {
     fails = 1;
   } else {
     const winTap = path.join(os.tmpdir(), `clode-test-win32-${process.pid}.tap`);
+    const winSince = Date.now();
     const res2 = spawnSync(process.execPath, [
+      ...DIAG_ARGS,
       '--require', WATCHDOG,
       '--require', FILE_TMPDIR,
       '--test',
@@ -825,6 +842,7 @@ if (tapText) {
     let winTapText = null;
     try { winTapText = fs.readFileSync(winTap, 'utf8'); } catch { /* handled below */ }
     finally { try { fs.unlinkSync(winTap); } catch { /* best-effort */ } }
+    if (winTapText && keepCrashEvidence(winTapText, winSince)) fails = 1;
     const ran = winTapText ? winTapText.match(/^# tests (\d+)/m) : null;
     // A file that reported no tests of its own (it registered none, exited early, or died before reporting) is red BY
     // NAME: node --test counts its stand-in as a passing test, so '# tests N' alone cannot see it (forced-win32.cjs).

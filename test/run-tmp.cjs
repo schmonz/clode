@@ -57,6 +57,7 @@ const STABLE = {
   toolchain: 'CLODE_BUILD_SCRATCH (scripts/build-scratch.cjs): the esbuild/postject tool cache',
   tjs: 'CLODE_BUILD_SCRATCH (scripts/build-scratch.cjs): the scratch engine the suite resolves',
   'clode-tjs-build': 'CLODE_TJS_LOCAL_ROOT (scripts/build-tjs.cjs): the engine build dirs',
+  'clode-test-crashes': 'test/run-crashes.cjs: the evidence of a test file whose process died of a signal, kept for the next look',
 };
 // Where test/run.mjs points the durable-scratch variables (each only when the operator has not set it).
 const DURABLE_ENV = [ORIGINAL_ENV, 'CLODE_BUILD_SCRATCH', 'CLODE_TJS_LOCAL_ROOT'];
