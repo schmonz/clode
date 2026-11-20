@@ -30,7 +30,7 @@ const path = require('node:path');
 const { driveTool } = require('../tool-driver.cjs');
 const { builtQuaude } = require('../built-binary.cjs');
 const { rgOracle, rgOracleSkip } = require('../provider-resolve.cjs');
-const { toolResult, toolResultText, assertFailsOnMissingOutput, answeredLog } = require('../../scripts/lib/tool-result.cjs');
+const { toolResult, toolResultText, toolFollowUpText, assertFailsOnMissingOutput, answeredLog } = require('../../scripts/lib/tool-result.cjs');
 
 // The tree, laid fresh before each side's turn. <B> is a temp dir both sides share, so the absolute paths the tool_use
 // inputs must name are the same for both.
@@ -363,6 +363,8 @@ const C_CREATE = { name: 'CronCreate', input: { cron: '0 3 1 1 *', prompt: 'say 
 const C_LIST_1 = { name: 'CronList', input: {}, id: 'toolu_sc_list1' };
 const C_DELETE = { name: 'CronDelete', input: { id: '<the id CronCreate answered>' }, id: 'toolu_sc_delete' };
 const C_NODELETE = { name: 'CronDelete', input: { id: 'deadbeef' }, id: 'toolu_sc_nodel' };
+// noop: true is the input's flag for "nothing else to do this turn": the tool schedules and the turn may end (the
+// answer says so); without it the schedule is the same, so the flag only names the sentence native answers with.
 const W_SCHED = { name: 'ScheduleWakeup', input: { delaySeconds: 120, reason: 'wait for the build', prompt: '/loop check the build', noop: true }, id: 'toolu_sw_sched' };
 const W_STOP = { name: 'ScheduleWakeup', input: { stop: true }, id: 'toolu_sw_halt' };
 const WT_NOEXIT = { name: 'ExitWorktree', input: { action: 'keep' }, id: 'toolu_sx_outside' };
@@ -403,7 +405,10 @@ const sessionSame = (r, USE, m) => {
   const w = sessionWant(USE, m);
   return !!r && !!w && r.text === w.text && r.isError === w.isError;
 };
-const sSkill = (m) => sessionSame(toolResult(m, S_SKILL.id), S_SKILL, m);
+// Skill answers in two parts: the tool_result, and the skill's body ($ARGUMENTS filled in) as text in the same turn,
+// after "Base directory for this skill: <dir>" (MEASURED, native 2.1.283). Both must reach the model.
+const SKILL_SENT = `Base directory for this skill: ${path.join(S_WORK, '.claude', 'skills', 'greet')}\n\n${SKILL_BODY.replace('$ARGUMENTS', 'Ada')}\n`;
+const sSkill = (m) => sessionSame(toolResult(m, S_SKILL.id), S_SKILL, m) && toolFollowUpText(m, S_SKILL.id) === SKILL_SENT;
 const sNoSkill = (m) => sessionSame(toolResult(m, S_NOSKILL.id), S_NOSKILL, m);
 const cList0 = (m) => sessionSame(toolResult(m, C_LIST_0.id), C_LIST_0, m);
 const cCreate = (m) => sessionSame(toolResult(m, C_CREATE.id), C_CREATE, m);
@@ -423,6 +428,8 @@ const CRON_CONTEXT = [{ use: C_CREATE, content: SESSION_NATIVE[C_CREATE.id].text
 
 function sessionControls() {
   assertFailsOnMissingOutput(sSkill, S_SKILL);
+  assert.ok(!sSkill(answeredLog(S_SKILL, SESSION_NATIVE[S_SKILL.id].text)),
+    'the Skill check fails on the right tool_result when the skill\'s body did not reach the model');
   assertFailsOnMissingOutput(sNoSkill, S_NOSKILL);
   assertFailsOnMissingOutput(cList0, C_LIST_0);
   assertFailsOnMissingOutput(cCreate, C_CREATE);

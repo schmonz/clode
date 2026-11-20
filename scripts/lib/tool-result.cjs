@@ -69,6 +69,23 @@ function toolResultText(source, id) {
   return r ? r.text : '';
 }
 
+// What the target sent the model ALONGSIDE tool_use `id`'s tool_result, in the same last user turn: the text of the
+// blocks other than tool_results, joined, or null when no request carried that tool_result. A tool may answer in two
+// parts: Skill's tool_result says "Launching skill: <name>", and the skill's body, $ARGUMENTS filled in, follows it as a
+// text block of the same turn (measured on native 2.1.283, every-tool Task 4). Like toolResult, it reads the turn that
+// answered the call, never the history and never the tool_use, so a marker only the tool_use input spells is not seen.
+function toolFollowUpText(source, id) {
+  if (typeof id !== 'string' || !id) throw new Error('toolFollowUpText: name the tool_use id whose turn to read');
+  for (const body of bodiesOf(source)) {
+    const turns = body && Array.isArray(body.messages) ? body.messages.filter((m) => m && m.role === 'user') : [];
+    const last = turns[turns.length - 1];
+    if (!last || !Array.isArray(last.content)) continue;
+    if (!last.content.some((b) => b && b.type === 'tool_result' && b.tool_use_id === id)) continue;
+    return last.content.filter((b) => b && b.type === 'text').map((b) => b.text || '').join('');
+  }
+  return null;
+}
+
 // THE RULE, stated once: a live check never reads a logged request's raw body, or the log
 // itself, as text. Returns [{ at, what }] for each read found in `code` (at = index), [] when
 // none. The spellings:
@@ -256,4 +273,4 @@ function assertFailsOnMissingOutput(check, command, modes, context) {
   }
 }
 
-module.exports = { toolResult, toolResultText, rawBodyReads, assertFailsOnMissingOutput, answeredLog };
+module.exports = { toolResult, toolResultText, toolFollowUpText, rawBodyReads, assertFailsOnMissingOutput, answeredLog };

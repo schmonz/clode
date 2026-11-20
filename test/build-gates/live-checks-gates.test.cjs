@@ -152,6 +152,24 @@ test('toolResult over a request log finds the follow-up by parsing, and says whe
     'a log holds many turns: reading one without naming the tool call is ambiguous');
 });
 
+test('toolFollowUpText reads the text sent beside a tool_result in its own turn, not the history or the tool_use', () => {
+  const { toolFollowUpText } = require('../../scripts/lib/tool-result.cjs');
+  const earlier = [
+    { role: 'user', content: [{ type: 'text', text: 'first' }] },
+    { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_A', name: 'Skill', input: { skill: 'x' } }] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_A', content: 'Launching skill: x' }, { type: 'text', text: 'OLD BODY' }] },
+  ];
+  const use = { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_B', name: 'Skill', input: { skill: IN_COMMAND } }] };
+  const turn = { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_B', content: 'Launching skill: y' }, { type: 'text', text: 'NEW BODY' }] };
+  const body = JSON.stringify({ messages: [...earlier, use, turn] });
+  assert.strictEqual(toolFollowUpText(body, 'toolu_B'), 'NEW BODY');
+  assert.strictEqual(toolFollowUpText(body, 'toolu_A'), null, 'toolu_A is history, not this turn');
+  assert.strictEqual(toolFollowUpText({ requests: [post(body)] }, 'toolu_B'), 'NEW BODY', 'a log reads the same');
+  const bare = JSON.stringify({ messages: [...earlier, use, { role: 'user', content: [turn.content[0]] }] });
+  assert.strictEqual(toolFollowUpText(bare, 'toolu_B'), '', 'CONTROL: a turn with the tool_result and nothing beside it');
+  assert.throws(() => toolFollowUpText(body), /name the tool_use id/);
+});
+
 // ==========================================================================
 // THE CONTROL EVERY LIVE CHECK CARRIES
 // ==========================================================================
