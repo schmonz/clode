@@ -87,6 +87,31 @@ test('a killed run\'s root (dead pid) is removed, chmod 0 inside and all; a live
   assert.deepStrictEqual([fs.existsSync(dead), fs.existsSync(live), fs.existsSync(mine)], [false, true, true]);
 });
 
+test('CONTROL: a dead run\'s root whose pid the kernel reused for a LATER process is swept, never counted as a live run', async (t) => {
+  const original = scratch(t);
+  const pending = path.join(original, 'pending');
+  fs.mkdirSync(pending);
+  await new Promise((r) => setTimeout(r, 1100)); // ps reports a start in whole seconds
+  const reused = liveChild(t);
+  const root = path.join(original, `clode-run-${reused}-Rr00Rr`);
+  fs.renameSync(pending, root); // keeps the dir's birth time: before the process now holding that pid
+  assert.strictEqual(RR.ownsRoot(root, reused), false);
+  assert.deepStrictEqual(RR.overlapPids(path.join(original, 'no-log'), [original]), []);
+  assert.deepStrictEqual(RR.removeStaleRoots([original]).map((r) => r.pid), [reused]);
+  assert.strictEqual(fs.existsSync(root), false);
+});
+
+test('a pid running node test/run.mjs owns a root whatever its start time; anything else started later does not', (t) => {
+  const root = scratch(t);
+  const later = Date.now() + 3600000;
+  const owns = (command, started = later) => RR.ownsRoot(root, 1, { alive: () => true, owner: () => ({ started, command }) });
+  assert.strictEqual(owns('/opt/node/bin/node /src/clode/test/run.mjs --offline'), true);
+  assert.strictEqual(owns('C:\\node\\node.exe D:\\a\\clode\\test\\run.mjs'), true);
+  assert.strictEqual(owns('sleep 60'), false);
+  assert.strictEqual(owns('sleep 60', 0), true);
+  assert.strictEqual(RR.ownsRoot(root, 1, { alive: () => false, owner: () => ({ started: 0, command: 'node test/run.mjs' }) }), false);
+});
+
 test('only <prefix of 5+ characters><generated suffix> is judged: short generic prefixes and other shapes are anyone\'s', (t) => {
   const original = scratch(t);
   const before = RT.snapshot(original);

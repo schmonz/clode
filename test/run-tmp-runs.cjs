@@ -12,13 +12,46 @@ const { removeRunRoot, writableDir, snapshotList } = require('./run-tmp.cjs');
 
 const ROOT_NAME = /^clode-run-(\d+)-[A-Za-z0-9]{6}$/;
 
-// The clode-run-<pid>-* roots in `parents`, other than `self`'s: [{ path, pid, alive }].
-function runRoots(parents, { self = process.pid, alive = require('./proc-tree.cjs').pidAlive } = {}) {
+// WHO OWNS A ROOT'S PID NOW: { started (ms since epoch, or null), command (or null) }, from the process table. POSIX:
+// `ps -o lstart=,command=` (lstart is whole seconds, truncated); Windows: the CIM process, CreationDate and CommandLine.
+function pidOwner(pid, { platform = process.platform, run = require('node:child_process').spawnSync } = {}) {
+  if (platform === 'win32') {
+    const ps = `$p = Get-CimInstance Win32_Process -Filter "ProcessId=${Number(pid)}"; if ($p) { "$($p.CreationDate.ToFileTimeUtc())"; $p.CommandLine }`;
+    const r = run('powershell', ['-NoProfile', '-NonInteractive', '-Command', ps], { encoding: 'utf8', timeout: 30000, windowsHide: true });
+    const [ft, ...cmd] = String((r && r.stdout) || '').split(/\r?\n/);
+    const n = Number(ft);
+    return { started: n > 0 ? n / 10000 - 11644473600000 : null, command: cmd.join('\n').trim() || null };
+  }
+  const r = run('ps', ['-o', 'lstart=,command=', '-p', String(pid)], { encoding: 'utf8', timeout: 10000 });
+  const m = /^\s*(\w{3}\s+\w{3}\s+\d+\s+[\d:]+\s+\d{4})\s+(.*)$/.exec(String((r && r.stdout) || '').trim());
+  if (!m) return { started: null, command: null };
+  const t = Date.parse(m[1]);
+  return { started: Number.isNaN(t) ? null : t, command: m[2] };
+}
+
+// A root's pid is that run's only if its process is alive AND either started no later than the root was born (a run
+// makes its root after it starts) or is node running test/run.mjs. A pid the kernel reused for something started
+// later is not the run: its root is a dead run's, swept, never counted as a live overlap. Birth time where the
+// filesystem keeps one; otherwise ctime, which is no earlier (so a doubt counts as live, never as dead).
+const RUNNER_COMMAND = /\bnode(?:\.exe)?\b.*\btest[\\/]run\.mjs\b/;
+function ownsRoot(root, pid, { alive = require('./proc-tree.cjs').pidAlive, owner = pidOwner } = {}) {
+  if (!alive(pid)) return false;
+  const o = owner(pid);
+  if (o.command && RUNNER_COMMAND.test(o.command)) return true;
+  let born;
+  try { const st = fs.statSync(root); born = st.birthtimeMs > 0 ? st.birthtimeMs : st.ctimeMs; } catch { return false; }
+  return o.started !== null && o.started <= born;
+}
+
+// The clode-run-<pid>-* roots in `parents`, other than `self`'s: [{ path, pid, alive }], alive meaning ownsRoot.
+function runRoots(parents, { self = process.pid, ...opts } = {}) {
   const out = [];
   for (const dir of new Set(parents.filter(writableDir).map((d) => fs.realpathSync.native(d)))) {
     for (const name of snapshotList(dir)) {
       const m = ROOT_NAME.exec(name);
-      if (m && Number(m[1]) !== self) out.push({ path: path.join(dir, name), pid: Number(m[1]), alive: alive(Number(m[1])) });
+      if (!m || Number(m[1]) === self) continue;
+      const p = path.join(dir, name);
+      out.push({ path: p, pid: Number(m[1]), alive: ownsRoot(p, Number(m[1]), opts) });
     }
   }
   return out;
@@ -65,7 +98,7 @@ function overlapPids(out, parents) {
   return [...pids].sort((a, b) => a - b);
 }
 
-module.exports = { ROOT_NAME, runRoots, removeStaleRoots, watchOverlap, startOverlapWatch, overlapPids };
+module.exports = { ROOT_NAME, RUNNER_COMMAND, pidOwner, ownsRoot, runRoots, removeStaleRoots, watchOverlap, startOverlapWatch, overlapPids };
 
 if (require.main === module && process.argv[2] === '--watch-overlap') {
   watchOverlap(process.argv[3], Number(process.argv[4]), process.argv.slice(5));
