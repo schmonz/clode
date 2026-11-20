@@ -235,10 +235,14 @@ test('timers: a nonblocking writer\'s unref()d EAGAIN retry drains its queue whi
   if (process.platform === 'win32') { t.skip('no mkfifo(1) on Windows; the unref test above covers the timer itself there'); return; }
   const { spawn, spawnSync } = require('node:child_process');
   const { engineSpawn, LOADER } = require('./node-shim-helper.cjs');
+  // 256 KiB: more than any pipe/FIFO buffer this runs on (macOS 8-64 KiB, Linux 64 KiB), so the first
+  // writes meet EAGAIN; small enough that a reader polling every 2 ms drains it in well under a second
+  // (1 MiB through macOS's 8 KiB FIFO at 20 ms polls took ~3 s per engine).
+  const PAYLOAD = 256 * 1024;
   const writer = prog(`
     const fs = require('fs');
     const fd = fs.openSync(process.argv[2], fs.constants.O_WRONLY | fs.constants.O_NONBLOCK);
-    const queue = [Buffer.concat([Buffer.alloc(1 << 20, 0x61), Buffer.from('END\\n')])];
+    const queue = [Buffer.concat([Buffer.alloc(${PAYLOAD}, 0x61), Buffer.from('END\\n')])];
     const write = (b) => { try { return fs.writeSync(fd, b); } catch (e) { if (e.code === 'EAGAIN') return 0; throw e; } };
     let retries = 0;
     function drain() {
@@ -251,7 +255,9 @@ test('timers: a nonblocking writer\'s unref()d EAGAIN retry drains its queue whi
       process.stderr.write('drained after ' + retries + ' retries\\n');
     }
     drain();
-    setTimeout(() => {}, 5000); // the TUI's stdin: other work keeping the loop alive
+    // the TUI's stdin: other work keeping the loop alive. Only a FAILING run waits it out: a passing one
+    // is killed the moment the reader has END, so its length bounds the failure, not the test's time.
+    setTimeout(() => {}, 10000);
   `);
   const runOne = (cmd, argv) => new Promise((resolve) => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-fifo-'));
@@ -276,18 +282,23 @@ test('timers: a nonblocking writer\'s unref()d EAGAIN retry drains its queue whi
         tail = (tail + buf.toString('latin1', 0, n)).slice(-8);
         if (endAt === null && tail.endsWith('END\n')) endAt = { ms: Date.now() - t0, writerAlive: !exited };
       }
-      if (exited || endAt) {
+      if (exited || (endAt && /drained after/.test(stderr))) { // its retry count, then stop it
         clearInterval(poll);
         child.kill(); // a writer that drained has nothing left to do but wait out its keepalive
-        closed.then(() => { fs.closeSync(rfd); fs.rmSync(dir, { recursive: true, force: true }); resolve({ got, endAt, stderr }); });
+        closed.then(() => { fs.closeSync(rfd); fs.rmSync(dir, { recursive: true, force: true }); resolve({ got, endAt, stderr, closedMs: Date.now() - t0 }); });
       }
-    }, 20);
+    }, 2);
   });
   const node = await runOne(process.execPath, [writer]);
   assert.ok(node.endAt && node.endAt.writerAlive, `reference: node must drain while alive; got ${JSON.stringify(node)}`);
+  const retries = (r) => Number((/drained after (\d+) retries/.exec(r.stderr) || [])[1]);
+  // the instrument: the late reader must really have made the writer meet EAGAIN, or the retry timer was never needed
+  assert.ok(retries(node) > 0, `the writer never met EAGAIN under node, so this proves nothing; stderr=${node.stderr}`);
   const [cmd, argv] = engineSpawn(['run', LOADER, writer]);
   const shim = await runOne(cmd, argv);
+  t.diagnostic(`node ${JSON.stringify(node)} shim ${JSON.stringify(shim)}`);
   assert.ok(shim.endAt && shim.endAt.writerAlive,
-    `every byte (${(1 << 20) + 4}) should reach the reader while the writer is alive, as under node; got ${JSON.stringify(shim)}`);
+    `every byte (${PAYLOAD + 4}) should reach the reader while the writer is alive, as under node; got ${JSON.stringify(shim)}`);
   assert.strictEqual(shim.got, node.got);
+  assert.ok(retries(shim) > 0, `the writer never met EAGAIN under the shim, so its retry timer went untested; stderr=${shim.stderr}`);
 });

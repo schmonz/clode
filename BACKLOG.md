@@ -1402,22 +1402,31 @@ Bash tool instead".
   NetBSD's fstat of a pipe fd reports neither FIFO nor socket, and `/proc/self/fd/N` for it is
   ENOENT (measured with real node). So neither the direct read nor the /proc read applies.
   This is not ours to fix in fs.cjs; it would need the carve's direct read to accept a pipe.
-- **The TUI's nonblocking stdout stalled a turn's paint under this engine; the retry timer was
-  the cause, and Linux does not stall in an unloaded run.** When chunk-14ycq111 installs its
+- **The TUI's nonblocking stdout stalled a turn's paint under this engine; on NetBSD the
+  unref'd retry timer was the cause (measured, below), and Linux does not stall in an unloaded
+  run.** When chunk-14ycq111 installs its
   nonblocking writer (writeSync to a reopened O_NONBLOCK fd, an EAGAIN queue,
   `setTimeout(...).unref()` retries), every write after the first EAGAIN joins the queue, and only
   the retry timer (or a flush) drains it. node-shim's Timeout#unref STOPPED the real timer (the
   engine had no per-timer unref it could call), so the retry never ran and the answer waited for
   the next keystroke. On NetBSD, tui-probe D1 turn=false in 7 of 8 runs with the reopen allowed.
-  FIXED (TIMER-UNREF-STILL-FIRES): txiki-timer-ref-global.patch gives the shim
+  The change (TIMER-UNREF-STILL-FIRES): txiki-timer-ref-global.patch gives the shim
   `__tjs_timer_setref(id, ref)`, a real uv_unref, so an unref'd timer still fires while the loop
   is alive, as in node; test/node-shim-timers-handle.test.cjs drives the bundle's writer shape
-  over a FIFO (red on the old engine, green on the new). On Linux the writer installs (the
+  over a FIFO and asserts it really met EAGAIN (red on the old engine, green on the new), and
+  test/node-shim-fs-watch.test.cjs guards G6 against it (an unref'd interval that fires beside a
+  watchFile poller must still let the process exit; its control re-counts unref'd timers and hangs).
+  Measured 2026-11-20 on the NetBSD 11 arm64 VM, engine built on the guest from this commit's
+  tree, the /proc/self/fd/N write-open ALLOWED in a test-only copy of fs.cjs, scripts/tui-probe.mjs
+  over ssh -tt, two quaudes interleaved: with the fix, D1 PASS 8 of 8 (/quit in 1.7-1.9 s); the
+  same tree with the shim forced onto the old stop-and-re-arm route, turn=false 7 of 8, as before.
+  So with the fix, the TUI writer no longer needs PROC_FD_IS_LINUX_ONLY to hide its reopen on
+  NetBSD for D1. The rule is unchanged this round.
+  On Linux the writer installs (the
   writer installs with CLAUDE_CODE_NONBLOCKING_STDOUT unset too, and the /proc/self/fd/1 reopen
   succeeds), but the pty never answered EAGAIN in the runs measured, so it did not stall.
   NOT FIXED, cause not found: under load on the guest, 4 turns painted late in both arms, the
-  writer installed or forced off (rows below). Not re-measured: NetBSD D1 with the fix; PROC_FD_IS_LINUX_ONLY
-  still hides the reopen there.
+  writer installed or forced off (rows below).
 - **pP, the linux carve's hardened open of a git-written file (chunk-5t3x93y6), refuses every
   file on NetBSD**, before and after F1. It readlinks `/proc/self/fd/N` for a FILE descriptor
   with no fallback, and NetBSD answers EINVAL. What reads through pP, and what degrades,
@@ -1455,7 +1464,11 @@ guest (7 runs, the fixed build among them) and a 300 MB ssh transfer beside the 
 failed, fd 1 blocking) reproduced none (2026-11-20).
 
 Unmeasured. The late paints under load: their cause, and whether the slirp network, the probe or quaude held the
-bytes (the probe records no byte timestamps). NetBSD D1 with TIMER-UNREF-STILL-FIRES and the reopen allowed (`ssh -p 2230`).
+bytes (the probe records no byte timestamps).
+
+Measured. NetBSD 11 arm64 D1, the /proc/self/fd/N write-open allowed (test-only fs.cjs), engine built on the guest
+with TIMER-UNREF-STILL-FIRES, tui-probe over ssh -tt, interleaved: fixed shim PASS 8 of 8; same tree forced onto the
+old stop-and-re-arm unref, turn=false 7 of 8 (2026-11-20).
 
 Unmeasured. Not re-run in observability Task 2: the left-open items here need the NetBSD VM (`ssh -p 2230`) and a
 netbsd-arm64 quaude, or the named rg rows (rg-entry, rg-walk, rg-files, rg-native) per platform.
