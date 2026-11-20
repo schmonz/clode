@@ -37,7 +37,7 @@ const { providerBin, skipReason } = require('../provider-resolve.cjs');
 const { throwawayHome } = require('../throwaway-home.cjs');
 const { startMockAnthropic, cannedSSE, cannedToolUseSSE, cannedMessage } = require('../mock-anthropic-helper.cjs');
 const { toolResult, assertFailsOnMissingOutput } = require('../../scripts/lib/tool-result.cjs');
-const { shadowKeychain, keychainShadowFinding, CLASSIFIER_STOP } = require('../tool-driver.cjs');
+const { shadowKeychain, keychainShadowFinding, CLASSIFIER_STOP, SCALE } = require('../tool-driver.cjs');
 
 // THE TREE: <B>/work is the working directory, <B>/outside is added with --add-dir. Every file gets its own mtime
 // (T0 + dt): files_with_matches and Glob list newest first, and a tie would leave the order to the walk.
@@ -302,7 +302,7 @@ async function judge(bin, mode, perm = null) {
       const kc = shadowKeychain(t.base, 'turn');
       const env = { ...host, ...throwawayHome(t.base), PATH: `${kc.dir}${path.delimiter}${PATH}`, SHELL: bash,
         ANTHROPIC_BASE_URL: mock.url, ANTHROPIC_API_KEY: 'sk-ant-mock' };
-      const r = await runTurn(bin, t.work, env, 240000, perm ? PERMISSION_TURNS[perm] : []);
+      const r = await runTurn(bin, t.work, env, 240000 * SCALE, perm ? PERMISSION_TURNS[perm] : []);   // CLODE_TIMEOUT_SCALE
       const findings = [];
       if (perm) mode = `${mode}, ${perm}`;
       if (bin === providerBin(process.env)) {   // native: its lookup must have reached the stub, not the real Keychain

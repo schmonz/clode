@@ -64,7 +64,7 @@ require('./suite-home.cjs');   // the suite's own HOME, also for a standalone `n
 //   TWO FIELDS ON PURPOSE: `skipped` is the caller's decision, `absent` is this box's. A driver that compares with
 //   native treats { absent } as a precondition failure (skip by name, which a CI job then judges), never as the
 //   comparison passing.
-//   opts.timeoutMs   per side (240 s).
+//   opts.timeoutMs   per side (240 s), times CLODE_TIMEOUT_SCALE on a slow host.
 // SIDE = { text, isError, result, results, raw, sent, status, signal, stdout, stderr, timedOut, home, keychain, inspected }
 //   keychain         the `security` calls the side made, each its argv, answered by the stub (shadowKeychain).
 //   text/isError/result  the FIRST scripted call's tool_result (toolResult: { text, isError, content }, or null and
@@ -176,6 +176,12 @@ function keychainShadowFinding(side, calls, platform = process.platform) {
     + '/usr/bin/security?); shadow it before running native again';
 }
 
+// A SLOW HOST'S CLOCK (CLODE_TIMEOUT_SCALE, the build's own knob: libexec/clode-build.cjs timeoutScale). Under TCG (the
+// netbsd-arm64 cell job's qemu guest on an x64 runner, measured 2026-11-20 at roughly 10-18x the same guest under HVF) a
+// turn that takes 125 s here takes tens of minutes, so every wait below is multiplied by it; 1 everywhere else.
+const SCALE = require('../libexec/clode-build.cjs').timeoutScale(process.env);
+const turnTimeout = (opts) => (opts.timeoutMs || 240000) * SCALE;
+
 // Which binary a side runs: { bin }, { absent } (this box has none) or { skipped } (the caller said why).
 function quaudeOf(opts) {
   if (opts.quaudeSkip !== undefined) return { skipped: opts.quaudeSkip };
@@ -231,7 +237,7 @@ async function runSide(side, bin, rules, opts, base) {
     const kc = shadowKeychain(base, side);
     env.PATH = [kc.dir, env.PATH || ''].join(path.delimiter);
     const r = opts.interactive ? await interactiveTurn(bin, flags, work, env, home, opts)
-      : await spawnCollect(bin, args, { cwd: work, env }, { timeoutMs: opts.timeoutMs || 240000 });
+      : await spawnCollect(bin, args, { cwd: work, env }, { timeoutMs: turnTimeout(opts) });
     // the log, and the side's own temp dir beside it (a check that judges a path under it reads it here, never from a
     // module-level variable: a synthetic control log has none, so such a check fails there)
     const raw = { requests: mock.requests.slice(), tmp };
@@ -275,7 +281,7 @@ async function interactiveTurn(bin, flags, work, env, home, opts) {
     const s = await captureSession({ env }, {
       cmd: ['/bin/sh', '-c', 'cd "$1" && shift && exec "$@"', 'sh', work, bin, ...flags],
       script: [{ label: 'type', send: hex(prompt), until: prompt }, { label: 'send', send: hex('\r'), until: DONE }],
-      rows: 50, cols: 200, bootSettleMs: 3000, settleMs: 1500, maxSettleMs: opts.timeoutMs || 240000,
+      rows: 50, cols: 200, bootSettleMs: 3000 * SCALE, settleMs: 1500 * SCALE, maxSettleMs: turnTimeout(opts),
     });
     const unsettled = s.frames.filter((f) => !f.settled).map((f) => f.label);
     const done = s.frames.length === 3 && !unsettled.length;
@@ -338,4 +344,4 @@ function ptyHarnessMissing() {
   } catch (e) { return `no PTY harness here (node-pty): ${e.message.split('\n')[0]}`; }
 }
 
-module.exports = { driveTool, DONE, TOOL_SWITCHES, shadowKeychain, keychainShadowFinding, CLASSIFIER_STOP, ptyHarnessMissing };
+module.exports = { driveTool, DONE, TOOL_SWITCHES, shadowKeychain, keychainShadowFinding, CLASSIFIER_STOP, ptyHarnessMissing, SCALE };
