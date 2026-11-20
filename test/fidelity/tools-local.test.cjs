@@ -44,7 +44,9 @@ const NOTEBOOK = {
 };
 const TREE = { 'a.txt': 'one\ntwo\nthree\nfour\nfive\n', 'b.txt': 'old\n', 'n.ipynb': JSON.stringify(NOTEBOOK, null, 1) };
 const layTree = (work) => { for (const [f, text] of Object.entries(TREE)) fs.writeFileSync(path.join(work, f), text); };
-const readTree = (work) => Object.fromEntries(fs.readdirSync(work).sort().map((f) => [f, fs.readFileSync(path.join(work, f), 'utf8')]));
+// The tree's files (not a repository's .git, .claude or README, which the permission-mode turn below lays beside them).
+const readTree = (work) => Object.fromEntries(fs.readdirSync(work, { withFileTypes: true })
+  .filter((e) => e.isFile() && e.name !== 'README').map((e) => e.name).sort().map((f) => [f, fs.readFileSync(path.join(work, f), 'utf8')]));
 
 const BASE = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'tools-local-')));
 process.on('exit', () => { try { fs.rmSync(BASE, { recursive: true, force: true }); } catch { /* best effort */ } });
@@ -336,8 +338,9 @@ test('native answers the task script as TASK_NATIVE records', { skip: SKIP }, as
 // defects, both fixed: the shim's readdir/readlink ignored `encoding: 'buffer'`, so quaude's ExitWorktree "could not
 // remove" the worktree native removed (test/node-shim-fs-walk.test.cjs has the differential row); and a mock-id
 // hazard in driveTool (an id inside another read as answered), now refused there.
-const S_BASE = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'tools-session-')));
-process.on('exit', () => { try { fs.rmSync(S_BASE, { recursive: true, force: true }); } catch { /* best effort */ } });
+// The same base as the Read/Write turn's, so the permission-mode turn below can lay both fixtures in one working
+// directory (driveTool lays a fresh <base>/work before each turn).
+const S_BASE = BASE;
 const S_WORK = path.join(S_BASE, 'work');
 const S_WT = path.join(S_WORK, '.claude', 'worktrees', 'wt-drive');
 const SKILL_BODY = 'Say hello to $ARGUMENTS.';
@@ -579,7 +582,10 @@ const readWorkflow = (work, base) => {
   const records = found.filter((p) => /[\\/]workflows[\\/]wf_[0-9a-f-]+\.json$/.test(p)).map((p) => {
     try { const j = JSON.parse(fs.readFileSync(p, 'utf8')); return { status: j.status, result: j.result, agentCount: j.agentCount, workflowName: j.workflowName }; } catch { return 'unreadable'; }
   });
-  return { scripts: script.map((p) => fs.readFileSync(p, 'utf8')), journal: journal.map((p) => fs.readFileSync(p, 'utf8').split('\n')[0]), records };
+  const left = { scripts: script.map((p) => fs.readFileSync(p, 'utf8')), journal: journal.map((p) => fs.readFileSync(p, 'utf8').split('\n')[0]), records };
+  // What was read is removed: the next turn on the same base (the permission-mode turns share one) reads its own run.
+  for (const p of [...script, ...journal, ...found.filter((q) => /[\\/]workflows[\\/]wf_[0-9a-f-]+\.json$/.test(q))]) fs.rmSync(p, { force: true });
+  return left;
 };
 const WORKFLOW_LEFT = { scripts: [WF_SCRIPT], journal: ['{"type":"launched"}'],
   records: [{ status: 'completed', result: { answer: 42 }, agentCount: 0, workflowName: 'noop' }] };
@@ -615,3 +621,138 @@ test('native answers the Task 5 script as T5_NATIVE records', { skip: SKIP }, as
   if (got.length) t.diagnostic(`measured:\n${JSON.stringify(r.native.results, null, 1)}`);
   assert.deepStrictEqual(got, [], `native moved:\n${got.join('\n')}`);
 });
+
+// ==========================================================================
+// THE PERMISSION MODES AND `unlisted` (every-tool Task 5 fix round 1, ruling E9)
+// ==========================================================================
+// The cells beside print: the same calls in -p turns that change ONE thing, --permission-mode <m>, or the tools not
+// named in --allowedTools (`unlisted`). One turn per mode carries every call above plus an Edit and a foreground Bash
+// (measured: a quaude turn costs ~25 s, almost all of it start-up, so four turns per mode would cost four times as
+// much for the same calls). Its working directory holds both fixtures: the Read/Write tree, and the git repository
+// with the greet skill (layRepo commits the tree with it).
+//
+// MEASURED on native 2.1.283 darwin-arm64 (2026-11-20): in acceptEdits, auto, bypassPermissions and dontAsk every
+// answer is print's (every scripted tool is in --allowedTools). In plan, the writes are refused ("Cannot write to
+// <path> while in plan mode."), so the tree stays as laid. Unlisted, the writes ask for a grant -p cannot give
+// ("Claude requested permissions to write to <path>, but you haven't granted it yet."), the Task* list tools are off
+// ("No such tool available: X. X is disabled for this session, in subagents as well as here."; the Edit is refused
+// the same way as the writes, and the foreground Bash runs), and an inline
+// Workflow script waits for review ("Review dynamic workflow before running"), so no run is made.
+const E_EDIT = { name: 'Edit', input: { file_path: W('a.txt'), old_string: 'two', new_string: 'TWO' }, id: 'toolu_m6_edit' };
+const B_ECHO = { name: 'Bash', input: { command: 'echo mode-turn-$((6*7))', description: 'Print a marker' }, id: 'toolu_m6_bash' };
+const MODE_SCRIPT = [...SCRIPT, { tool: E_EDIT }, { tool: B_ECHO }, ...TASK_SCRIPT, ...T5_SCRIPT, ...SESSION_SCRIPT];
+const MODE_ARGS = {
+  'permission:acceptEdits': { args: ['--permission-mode', 'acceptEdits'] },
+  'permission:auto': { args: ['--permission-mode', 'auto'] },
+  'permission:bypassPermissions': { args: ['--permission-mode', 'bypassPermissions'] },
+  'permission:dontAsk': { args: ['--permission-mode', 'dontAsk'] },
+  'permission:plan': { args: ['--permission-mode', 'plan'] },
+  unlisted: { allowedTools: null },
+};
+const layBoth = (work) => { layTree(work); layRepo(work); };
+const readBoth = (work, base) => ({ tree: readTree(work), repo: readRepo(work), workflow: readWorkflow(work, base) });
+// The two calls only this turn makes, as print answers them (Edit's success, unlike Write's, has no file-state note).
+const EDIT_DONE = { text: `The file ${W('a.txt')} has been updated successfully.`, isError: false };
+const ECHO_DONE = { text: 'mode-turn-42', isError: false };
+const mEdit = (m) => t5Same(toolResult(m, E_EDIT.id), EDIT_DONE);
+const mEcho = (m) => t5Same(toolResult(m, B_ECHO.id), ECHO_DONE);
+// What each mode changes, call by call (MEASURED above); every call not named answers as in print.
+const PLAN_REFUSED = (f) => ({ text: `Cannot write to ${W(f)} while in plan mode.`, isError: true });
+const UNGRANTED = (f) => ({ text: `Claude requested permissions to write to ${W(f)}, but you haven't granted it yet.`, isError: true });
+const TASK_OFF = (name) => ({ text: `<tool_use_error>Error: No such tool available: ${name}. ${name} is disabled for this session, in subagents as well as here.</tool_use_error>`, isError: true });
+const B_OLD = { text: '1\told\n2\t', isError: false };
+const modeWant = {
+  'permission:plan': { [WRITE_NEW.id]: PLAN_REFUSED('new.txt'), [WRITE_UNREAD.id]: PLAN_REFUSED('b.txt'), [READ_B.id]: B_OLD,
+    [WRITE_OVER.id]: PLAN_REFUSED('b.txt'), [NB_REPLACE.id]: PLAN_REFUSED('n.ipynb'), [E_EDIT.id]: PLAN_REFUSED('a.txt') },
+  unlisted: { [WRITE_NEW.id]: UNGRANTED('new.txt'), [WRITE_UNREAD.id]: UNGRANTED('b.txt'), [READ_B.id]: B_OLD,
+    [WRITE_OVER.id]: UNGRANTED('b.txt'), [NB_REPLACE.id]: UNGRANTED('n.ipynb'), [E_EDIT.id]: UNGRANTED('a.txt'),
+    ...Object.fromEntries([T_CREATE_1, T_CREATE_2, T_LIST_1, T_GET_1, T_START_1, T_BLOCK_2, T_GET_2, T_GET_NONE, T_DONE_1, T_LIST_2]
+      .map((U) => [U.id, TASK_OFF(U.name)])),
+    [F_RUN.id]: { text: 'Review dynamic workflow before running', isError: true } },
+};
+// The calls' verdicts in `mode`: a call the mode changes is judged on the mode's answer (modeSame), any other by its
+// print check.
+const modeSame = (m, USE, mode) => t5Same(toolResult(m, USE.id), modeWant[mode][USE.id]);
+const modeVerdicts = (m, mode, side) => [...verdicts(m), [E_EDIT, mEdit(m)], [B_ECHO, mEcho(m)], ...taskVerdicts(m),
+  ...t5Verdicts(m, side), ...sessionVerdicts(m)]
+  .map(([USE, same]) => [USE, modeWant[mode] && modeWant[mode][USE.id] ? modeSame(m, USE, mode) : same]);
+// What the turn leaves, by mode: print's, or (plan, unlisted) the tree as laid and, unlisted, no workflow run.
+const LAID = { 'a.txt': TREE['a.txt'], 'b.txt': TREE['b.txt'], 'n.ipynb': TREE['n.ipynb'] };
+const modeLeft = (mode) => {
+  const edited = { ...DISK, 'a.txt': TREE['a.txt'].replace('two', 'TWO') };
+  const tree = mode === 'permission:plan' || mode === 'unlisted' ? LAID : edited;
+  return { tree, repo: REPO_NATIVE, workflow: mode === 'unlisted' ? { scripts: [], journal: [], records: [] } : WORKFLOW_LEFT };
+};
+
+// The controls, with the cells they drive declared: every tool of the turn, in every mode it runs in.
+function modeControls() {
+  // each declares its cells as a literal list, the gate's rule (test/build-gates/tool-coverage-gates.test.cjs)
+  assertFailsOnMissingOutput(readWhole, READ, ['permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted']);
+  assertFailsOnMissingOutput(writeNew, WRITE_NEW, ['permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted']);
+  assertFailsOnMissingOutput(nbReplace, NB_REPLACE, ['permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted']);
+  assertFailsOnMissingOutput(mEdit, E_EDIT, ['permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted']);
+  assertFailsOnMissingOutput(mEcho, B_ECHO, ['permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted']);
+  assertFailsOnMissingOutput(tCreate1, T_CREATE_1, ['permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted']);
+  assertFailsOnMissingOutput(tGetNone, T_GET_NONE, ['permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted']);
+  assertFailsOnMissingOutput(tList1, T_LIST_1, ['permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted']);
+  assertFailsOnMissingOutput(tStart1, T_START_1, ['permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted']);
+  assertFailsOnMissingOutput(tKillNone, T_KILL_NONE, ['permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted']);
+  assertFailsOnMissingOutput(sSkill, S_SKILL, ['permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted']);
+  assertFailsOnMissingOutput(wtEnter, WT_ENTER, ['permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted']);
+  assertFailsOnMissingOutput(wtRemove, WT_REMOVE, ['permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted']);
+  assertFailsOnMissingOutput(cCreate, C_CREATE, ['permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted']);
+  assertFailsOnMissingOutput(cList0, C_LIST_0, ['permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted']);
+  assertFailsOnMissingOutput(cNoDelete, C_NODELETE, ['permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted']);
+  assertFailsOnMissingOutput(cList1, C_LIST_1, ['permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted'], CRON_CONTEXT);
+  assertFailsOnMissingOutput(wSched, W_SCHED, ['permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted']);
+  assertFailsOnMissingOutput(rOne, R_ONE, ['permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted']);
+  assertFailsOnMissingOutput(fName, F_NAME, ['permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted']);
+  assertFailsOnMissingOutput(aListNative, A_LIST, ['permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted']);
+  assertFailsOnMissingOutput(aListQuaude, A_LIST, ['permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted']);
+  assertFailsOnMissingOutput(tBg, T_BG, ['permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted']);
+  assertFailsOnMissingOutput(tStop, T_STOP, ['permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted'], BG_CONTEXT);
+  assertFailsOnMissingOutput(tGet1, T_GET_1, ['permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted']);
+  // a mode's changed answers have controls of their own: each fails on print's answer, and passes on its own
+  for (const mode of ['permission:plan', 'unlisted']) {
+    for (const USE of [WRITE_NEW, NB_REPLACE]) {
+      assert.ok(!modeSame(answeredLog(USE, want(USE).text), USE, mode), `${mode} ${USE.id}: print's answer is not this mode's`);
+      assert.ok(modeSame(answeredLog(USE, modeWant[mode][USE.id].text, [], true), USE, mode), `${mode} ${USE.id}: its own answer passes`);
+    }
+  }
+}
+
+function modeFindings(label, side, mode) {
+  const out = [];
+  if (side.status !== 0) out.push(`${label} ${mode}: the turn exited ${side.status}${side.signal ? ` (${side.signal})` : ''}: ${side.stderr.slice(0, 800)}`);
+  for (const [USE, same] of modeVerdicts(side.raw, mode, label)) {
+    if (!same) out.push(`${label} ${mode}: ${USE.id} ${USE.name} sent ${JSON.stringify(side.sent[USE.id])}\n    got: ${JSON.stringify(toolResult(side.raw, USE.id))}`);
+  }
+  const left = modeLeft(mode);
+  try { assert.deepStrictEqual(side.inspected, left); } catch { out.push(`${label} ${mode}: it left ${JSON.stringify(side.inspected)}\n    native's ${JSON.stringify(left)}`); }
+  return out;
+}
+
+for (const mode of Object.keys(MODE_ARGS)) {
+  test(`every Phase A call in a built quaude in ${mode}: each tool_result, and what the turn left, equal native's`, { skip: SKIP }, async (t) => {
+    const q = builtQuaude();
+    if (q.skip) { t.skip(q.skip); return; }
+    modeControls();
+    const r = await driveTool({ script: MODE_SCRIPT, base: BASE, quaude: q.path, setup: layBoth, inspect: readBoth, ...MODE_ARGS[mode],
+      nativeSkip: 'native is judged against the same recorded answers by its own test' });
+    const got = modeFindings('quaude', r.quaude, mode);
+    const survived = await sleepSurvivors('quaude');
+    if (survived) got.push(survived);
+    assert.deepStrictEqual(got, [], `${got.length} finding(s) against native's answers:\n${got.join('\n')}`);
+  });
+  test(`native answers every Phase A call in ${mode} as recorded`, { skip: SKIP }, async (t) => {
+    const native = rgOracle(process.env);
+    if (!native) { t.skip(rgOracleSkip(process.env)); return; }
+    modeControls();
+    const r = await driveTool({ script: MODE_SCRIPT, base: BASE, native, setup: layBoth, inspect: readBoth, ...MODE_ARGS[mode],
+      quaudeSkip: 'quaude is judged by its own test' });
+    const got = modeFindings('native', r.native, mode);
+    const survived = await sleepSurvivors('native');
+    if (survived) got.push(survived);
+    assert.deepStrictEqual(got, [], `native moved:\n${got.join('\n')}`);
+  });
+}

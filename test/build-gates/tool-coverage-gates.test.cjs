@@ -1416,45 +1416,55 @@ const COMMON_MODES = ['print', 'interactive', 'unlisted', 'permission:acceptEdit
   'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan'];
 const SEARCH_MODES = COMMON_MODES.filter((mo) => mo !== 'unlisted');
 const BASH_MODES = [...COMMON_MODES, 'sandbox:on', 'sandbox:required', 'shell:bash', 'shell:zsh'];
-const PHASE_A_CELL = 'every-tool Phase A (cells): not yet driven in this mode on this engine. The tool is driven '
-  + 'only where CELL_JOBS says (a -p turn in the default mode on linux-x64-musl and darwin-arm64, plus the sandbox, '
-  + 'bash and bypassPermissions rows on musl); no driver yet runs it interactively, unlisted, in the other permission '
-  + 'modes, with sandbox.failIfUnavailable or under zsh, and no CI job runs a quaude on netbsd-arm64';
+const PHASE_A_CELL = 'every-tool Phase A (cells): not yet driven in this mode on this engine. Driver paths: the '
+  + 'permission modes and unlisted for Grep and Glob, test/fidelity/agentic-grep-glob.test.cjs with --permission-mode '
+  + '(driveTool args) in linux-x64-pty, and its darwin twin in node-shim-oracle-darwin; Bash sandbox:required, '
+  + 'test/fidelity/agentic-sandbox-fail-closed.test.cjs, and shell:zsh, a SHELL=zsh row there; interactive, a pty turn '
+  + 'through test/e2e-pty.cjs in linux-x64-pty, blocked on a mock-reachable interactive turn (LOCAL_CELLS says why); '
+  + 'netbsd-arm64, a CELL_JOBS job on a NetBSD arm64 host (CI has none)';
 const PHASE_A_CELLS = (tool, modes, driven, reason = PHASE_A_CELL) => modes.flatMap((mode) => {
   const engines = SHIPPING_ENGINES.filter((en) => !driven.includes(`${mode}@${en}`));
   if (!engines.length) return [];
   return [{ tool, modes: [mode], ...(engines.length < SHIPPING_ENGINES.length ? { engines } : {}), reason,
     date: '2026-11-18', until: UNTIL_PHASE_A }];
 });
-const LOCAL_CELLS = 'every-tool Phase A (cells): driven only in a -p turn in the default mode on linux-x64-musl and '
-  + 'darwin-arm64 (test/fidelity/tools-local.test.cjs, in linux-x64-pty and node-shim-oracle-darwin); no driver yet runs '
-  + 'it interactively, unlisted or in the other permission modes, and no CI job runs a quaude on netbsd-arm64';
+const LOCAL_CELLS = 'every-tool Phase A (cells): driven in -p turns in print, unlisted and every permission mode on '
+  + 'linux-x64-musl and darwin-arm64 (test/fidelity/tools-local.test.cjs, in linux-x64-pty and node-shim-oracle-darwin). '
+  + 'Left: interactive, whose driver path is a pty turn through test/e2e-pty.cjs in linux-x64-pty against the mock; '
+  + 'what is missing is the mock turn itself: an interactive first turn validates its credentials with claude.ai and '
+  + 'never dials ANTHROPIC_BASE_URL with a fake key (RECIPE G2, test/fidelity/interactive-live-turn.test.cjs), and live '
+  + 'credentials are out of bounds for a cell job; and netbsd-arm64, '
+  + 'whose driver path is a CELL_JOBS job that builds a quaude on a NetBSD arm64 runner (none exists: CI has no NetBSD '
+  + 'arm64 host, the qemu VM runs only locally) and runs this file there';
+// The driven cells of a tool driven in every -p mode tools-local runs (print, unlisted, the permission modes).
+const LOCAL_DRIVEN = ['print', 'unlisted', 'permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions',
+  'permission:dontAsk', 'permission:plan'].flatMap((mo) => [`${mo}@linux-x64-musl`, `${mo}@darwin-arm64`]);
 const EXEMPTIONS = [
   // The undriven cells of the five driven tools (USER RULING 2026-11-18).
   ...PHASE_A_CELLS('Agent', COMMON_MODES, [], 'every-tool Phase A (cells): its one driver, '
     + 'test/fidelity/agentic-subagent-diff.test.cjs, runs in no CI job (CELL_JOBS), so no cell of it is driven; Phase A '
     + 'puts it in one, and the other modes and netbsd-arm64 follow as for every tool'),
-  ...PHASE_A_CELLS('Bash', BASH_MODES, ['print@darwin-arm64', 'print@linux-x64-musl', 'permission:bypassPermissions@linux-x64-musl',
+  ...PHASE_A_CELLS('Bash', BASH_MODES, [...LOCAL_DRIVEN, 'permission:bypassPermissions@linux-x64-musl',
     'sandbox:on@linux-x64-musl', 'shell:bash@linux-x64-musl']),
-  ...PHASE_A_CELLS('Edit', COMMON_MODES, ['print@darwin-arm64', 'print@linux-x64-musl']),
+  ...PHASE_A_CELLS('Edit', COMMON_MODES, LOCAL_DRIVEN),
   ...PHASE_A_CELLS('Glob', SEARCH_MODES, ['print@linux-x64-musl']),
   ...PHASE_A_CELLS('Grep', SEARCH_MODES, ['print@linux-x64-musl']),
   // Read, Write and NotebookEdit (and the Task tools below): driven in a -p turn on linux-x64-musl and darwin-arm64 (test/fidelity/tools-local.test.cjs,
   // every-tool Task 2, in linux-x64-pty and node-shim-oracle-darwin, each with a built quaude and a native that runs).
   // Their other cells are the Phase A remainder, as for the five above.
-  ...PHASE_A_CELLS('Read', COMMON_MODES, ['print@linux-x64-musl', 'print@darwin-arm64'], LOCAL_CELLS),
-  ...PHASE_A_CELLS('Write', COMMON_MODES, ['print@linux-x64-musl', 'print@darwin-arm64'], LOCAL_CELLS),
-  ...PHASE_A_CELLS('NotebookEdit', COMMON_MODES, ['print@linux-x64-musl', 'print@darwin-arm64'], LOCAL_CELLS),
+  ...PHASE_A_CELLS('Read', COMMON_MODES, LOCAL_DRIVEN, LOCAL_CELLS),
+  ...PHASE_A_CELLS('Write', COMMON_MODES, LOCAL_DRIVEN, LOCAL_CELLS),
+  ...PHASE_A_CELLS('NotebookEdit', COMMON_MODES, LOCAL_DRIVEN, LOCAL_CELLS),
   // The task list and TaskStop (every-tool Task 3): the same file, the same jobs, the same cells.
   ...['TaskCreate', 'TaskGet', 'TaskUpdate', 'TaskList', 'TaskStop'].flatMap((tool) =>
-    PHASE_A_CELLS(tool, COMMON_MODES, ['print@linux-x64-musl', 'print@darwin-arm64'], LOCAL_CELLS)),
+    PHASE_A_CELLS(tool, COMMON_MODES, LOCAL_DRIVEN, LOCAL_CELLS)),
   // Skill, the worktree tools, the cron tools and ScheduleWakeup (every-tool Task 4): the same file, jobs and cells.
   ...['Skill', 'EnterWorktree', 'ExitWorktree', 'CronCreate', 'CronDelete', 'CronList', 'ScheduleWakeup'].flatMap((tool) =>
-    PHASE_A_CELLS(tool, COMMON_MODES, ['print@linux-x64-musl', 'print@darwin-arm64'], LOCAL_CELLS)),
+    PHASE_A_CELLS(tool, COMMON_MODES, LOCAL_DRIVEN, LOCAL_CELLS)),
   // ReportFindings, Workflow and ListAgents (every-tool Task 5): the same file, jobs and cells. ListAgents' quaude
   // answer is held as a NAMED divergence (no UDS messaging server: net.createServer is the shim's throwing stub).
   ...['ReportFindings', 'Workflow', 'ListAgents'].flatMap((tool) =>
-    PHASE_A_CELLS(tool, COMMON_MODES, ['print@linux-x64-musl', 'print@darwin-arm64'], LOCAL_CELLS)),
+    PHASE_A_CELLS(tool, COMMON_MODES, LOCAL_DRIVEN, LOCAL_CELLS)),
   // Local tools a canned mock could drive today: the to-do list proper.
   { tool: 'TodoWrite', reason: 'deferred, no plan yet: a local tool, but enabled only when the Task* tools are off '
     + '(CLAUDE_CODE_ENABLE_TASKS=false), and no live check turns them off', date: RECORDED, until: UNTIL_PHASE_B },
