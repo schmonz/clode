@@ -150,9 +150,36 @@ test('makeRunRoot points TMPDIR, TMP and TEMP at a clode-run- dir, and the durab
     [original, original, '/operator/set/this']);
 });
 
-test('Windows offers only the original temp dir: node would resolve /tmp to <drive>:\\tmp, which nothing there provides', () => {
-  assert.deepStrictEqual(RT.rootCandidates('C:\\T', 'win32'), ['C:\\T']);
-  assert.deepStrictEqual(RT.rootCandidates('/var/T', 'darwin'), ['/var/T', '/tmp']);
+test('Windows never offers /tmp (node would resolve it to <drive>:\\tmp, which nothing there provides); a runner\'s RUNNER_TEMP is offered everywhere', () => {
+  assert.deepStrictEqual(RT.rootCandidates('C:\\T', 'win32', {}), ['C:\\T']);
+  assert.deepStrictEqual(RT.rootCandidates('C:\\T', 'win32', { RUNNER_TEMP: 'D:\\a\\_temp' }), ['C:\\T', 'D:\\a\\_temp']);
+  assert.deepStrictEqual(RT.rootCandidates('/var/T', 'darwin', {}), ['/var/T', '/tmp']);
+});
+
+// THE 8.3 ALIAS (CI windows-latest on 26149c8): the runner's TEMP is C:\Users\RUNNER~1\AppData\Local\Temp, the real
+// home C:\Users\runneradmin. A textual prefix test called the suite home made there NOT inside the home; by native real
+// path, which is what GetFinalPathNameByHandle gives on Windows (here a fake that knows the one alias), it is.
+const WIN_REAL = (p) => p.replace(/^C:\\Users\\RUNNER~1(?=\\|$)/i, 'C:\\Users\\runneradmin');
+const WIN_HOME = 'C:\\Users\\runneradmin';
+const WIN_SUITE_HOME = 'C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\clode-run-1-abcdef\\clode-test-home-ghijkl';
+test('an 8.3 short name and the long name it aliases compare as contained, both sides by native real path', () => {
+  assert.ok(!WIN_SUITE_HOME.startsWith(WIN_HOME + '\\'), 'CONTROL: the textual prefix test the check used misses it');
+  assert.ok(RT.isInside(WIN_SUITE_HOME, WIN_HOME, { platform: 'win32', real: WIN_REAL }));
+  assert.ok(RT.isInside(WIN_HOME.toUpperCase() + '\\x', WIN_HOME, { platform: 'win32', real: WIN_REAL }), 'Windows compares without case');
+  assert.ok(!RT.isInside('D:\\a\\_temp\\clode-run-1-abcdef', WIN_HOME, { platform: 'win32', real: WIN_REAL }));
+  assert.ok(!RT.isInside('C:\\Users\\runneradminX', WIN_HOME, { platform: 'win32', real: WIN_REAL }), 'a sibling sharing the prefix');
+  assert.ok(!RT.isInside('/Users/A/x', '/Users/a', { platform: 'darwin', real: (p) => p }), 'POSIX keeps case');
+});
+
+test('the root goes outside the real home when a candidate is: a Windows TEMP is inside it, RUNNER_TEMP is not', (t) => {
+  const home = scratch(t);
+  const inHome = path.join(home, 'AppData', 'Local', 'Temp');
+  fs.mkdirSync(inHome, { recursive: true });
+  const outside = path.join(scratch(t), 'a-longer-runner-temp-directory');
+  fs.mkdirSync(outside);
+  assert.strictEqual(RT.rootParent(inHome, { candidates: [inHome, outside], home }), fs.realpathSync.native(outside));
+  assert.strictEqual(RT.rootParent(inHome, { candidates: [inHome, outside] }), fs.realpathSync.native(inHome), 'CONTROL: with no home, the shorter');
+  assert.strictEqual(RT.rootParent(inHome, { candidates: [inHome], home }), fs.realpathSync.native(inHome), 'with nothing outside, still a root');
 });
 
 test('the root goes under the shorter writable candidate, never a missing one', (t) => {

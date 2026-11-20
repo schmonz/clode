@@ -71,22 +71,47 @@ function writableDir(d) {
   try { return fs.statSync(d).isDirectory() && (fs.accessSync(d, fs.constants.W_OK | fs.constants.X_OK), true); } catch { return false; }
 }
 
-// Where a root may go: the original temp dir, and /tmp off Windows (see the header).
-function rootCandidates(original, platform = process.platform) {
-  return platform === 'win32' ? [original] : [original, '/tmp'];
+// Where a root may go: the original temp dir; /tmp off Windows (see the header); and the CI runner's own temp dir when
+// the host names one (RUNNER_TEMP). A Windows TEMP is C:\Users\<user>\AppData\Local\Temp, INSIDE the real home, so
+// the suite home made there was inside the developer's home (test/suite-home-hermetic.test.cjs, "the suite home is
+// not inside the real one"). That check passed only while the root carried the runner's 8.3 alias (C:\Users\RUNNER~1),
+// which a textual prefix test does not see as C:\Users\runneradmin; once rootParent took the long name (fb01301) the
+// containment showed (CI windows-latest on 26149c8). RUNNER_TEMP (D:\a\_temp on a GitHub runner) is outside the home,
+// and test/bun-graph.test.cjs already goes there for room, since C: is the small volume.
+function rootCandidates(original, platform = process.platform, env = process.env) {
+  return [original, ...(platform === 'win32' ? [] : ['/tmp']), ...(env.RUNNER_TEMP ? [env.RUNNER_TEMP] : [])];
 }
 
-// The parent for the root: the shortest writable candidate, by its NATIVE real path: on Windows that is the long
-// name (a runner's TEMP is C:\Users\RUNNER~1\..., an 8.3 short name; GetFinalPathNameByHandle gives the long one),
-// so the root, and every per-file dir and TMPDIR under it, never carries a ~1 name a tool may not expand.
-function rootParent(original, { candidates = rootCandidates(original) } = {}) {
-  const ok = candidates.filter(writableDir).map((d) => fs.realpathSync.native(d));
-  return ok.length ? ok.sort((a, b) => a.length - b.length)[0] : original;
+// A path's NATIVE real path (the long name on Windows, the on-disk case), or its resolved form when it does not exist.
+function nativeReal(p, real = fs.realpathSync.native) {
+  try { return real(p); } catch { return path.resolve(p); }
+}
+
+// Whether `child` is `parent` or lies under it, both normalised the same way (nativeReal), so an 8.3 alias of one and
+// the long name of the other compare as what they are. Windows compares without case, as its file system does.
+function isInside(child, parent, { platform = process.platform, real = fs.realpathSync.native } = {}) {
+  const P = platform === 'win32' ? path.win32 : path.posix;
+  const fold = (x) => (platform === 'win32' ? x.toLowerCase() : x);
+  const c = fold(P.resolve(nativeReal(child, real)));
+  const h = fold(P.resolve(nativeReal(parent, real)));
+  return c === h || c.startsWith(h.endsWith(P.sep) ? h : h + P.sep);
+}
+
+// The parent for the root: a writable candidate by its NATIVE real path, outside the real home if any is (`home`, the
+// developer's, read before the suite home replaces it), the shortest of those. The native real path is the long name
+// on Windows (a runner's TEMP is C:\Users\RUNNER~1\..., an 8.3 short name; GetFinalPathNameByHandle gives the long
+// one), so the root, and every per-file dir and TMPDIR under it, never carries a ~1 name a tool may not expand.
+function rootParent(original, { candidates = rootCandidates(original), home = null, real = fs.realpathSync.native } = {}) {
+  const ok = candidates.filter(writableDir).map((d) => real(d));
+  const outside = home ? ok.filter((d) => !isInside(d, home, { real })) : ok;
+  const pick = outside.length ? outside : ok;
+  return pick.length ? pick.sort((a, b) => a.length - b.length)[0] : original;
 }
 
 // The per-run root, with every temp-dir variable pointed at it and the durable-scratch variables at the original.
 function makeRunRoot(original, env = process.env, opts = {}) {
-  const root = fs.mkdtempSync(path.join(rootParent(original, opts), `${ROOT_PREFIX}${opts.pid || process.pid}-`));
+  const home = opts.home !== undefined ? opts.home : (env.USERPROFILE || env.HOME || null);
+  const root = fs.mkdtempSync(path.join(rootParent(original, { ...opts, home }), `${ROOT_PREFIX}${opts.pid || process.pid}-`));
   env[ROOT_ENV] = root;
   for (const k of DURABLE_ENV) if (!env[k]) env[k] = original;
   redirect(env, root);
@@ -207,7 +232,7 @@ function stableLine(sizes, original) {
 
 module.exports = {
   ROOT_ENV, ORIGINAL_ENV, ROOT_PREFIX, REQUEST_ENV, STABLE, DURABLE_ENV,
-  redirect, rootCandidates, rootParent, makeRunRoot, makeFileDir, openUp, removeRunRoot,
+  redirect, rootCandidates, rootParent, isInside, nativeReal, makeRunRoot, makeFileDir, openUp, removeRunRoot,
   writableDir, snapshot, snapshotList, repoPrefixes, leaks, leakVerdict, stableSizes, stableLine,
 };
 

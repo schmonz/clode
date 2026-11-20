@@ -171,5 +171,7 @@ test('the suite runs under its own home: HOME, USERPROFILE and CLAUDE_CONFIG_DIR
   assert.notStrictEqual(process.env.HOME, real.HOME);
   assert.strictEqual(process.env.USERPROFILE, process.env.HOME);
   assert.strictEqual(process.env.CLAUDE_CONFIG_DIR, path.join(process.env.HOME, '.claude'));
-  assert.ok(!process.env.HOME.startsWith(real.HOME + path.sep), 'the suite home is not inside the real one');
+  // both sides by their native real paths (run-tmp's isInside): a textual prefix test missed the containment on
+  // Windows while the suite home carried the 8.3 alias C:\Users\RUNNER~1 of the real C:\Users\runneradmin
+  assert.ok(!require('./run-tmp.cjs').isInside(process.env.HOME, real.HOME), `the suite home is not inside the real one: ${process.env.HOME} in ${real.HOME}`);
 });
