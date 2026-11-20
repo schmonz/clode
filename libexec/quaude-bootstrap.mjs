@@ -727,6 +727,46 @@ async function pruneGuardSettings(tjs, dir, sep, nowMs) {
   }
 }
 // <<< quaudeGuardDir <<<
+// NODE_EXTRA_CA_CERTS (node's and Bun's: native Claude Code trusts the certificates in that PEM file IN ADDITION to its
+// roots). The engine's fetch, XMLHttpRequest and WebSocket (lws) take ONE CA bundle: the compiled-in one, or the file
+// core.setCABundlePath names, which run-main sets from TJS_CA_BUNDLE/SSL_CERT_FILE only on the `tjs run` path, never
+// for a standalone binary such as this one (and tjs:internal/core is not importable from here). So a built target
+// ignored NODE_EXTRA_CA_CERTS, and every request to a host signed by a private CA (a corporate proxy, a local test
+// server) failed as "Network Error" where native worked. The engine's txiki-ca-bundle-global.patch exposes the setter
+// as globalThis.__tjs_set_ca_bundle_path.
+// extraCaBundle -> the compiled-in roots (the node-shim's tls-cacert.pem member, held byte-identical to the engine's
+// cacert.c by test/tls-cacert-pem.test.cjs) with the extra file's certificates appended, or null when it has none.
+// >>> extraCaBundle (unit-tested under host node: test/quaude-extra-ca-certs.test.cjs) >>>
+const CERT_BLOCK_RE = /-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g;
+function extraCaBundle(rootsPem, extraText) {
+  const blocks = String(extraText || '').match(CERT_BLOCK_RE) || [];
+  if (!blocks.length || !rootsPem) return null;
+  return String(rootsPem).replace(/\s*$/, '\n') + blocks.join('\n') + '\n';
+}
+// <<< extraCaBundle <<<
+export { extraCaBundle };
+// Apply it, once, before any request: the engine reads the bundle when it first builds its client context. The file is
+// written into quaude's private (0700, owner-checked) directory, never a shared temp dir, where another user could swap
+// in a CA of their own. Each failure warns as node does and leaves the compiled-in roots alone.
+async function applyExtraCaCerts(tjs, files, sep, platform) {
+  const extra = tjs.env.NODE_EXTRA_CA_CERTS;
+  if (!extra) return;
+  const warn = (why) => console.error(`Warning: Ignoring extra certs from \`${extra}\`, load failed: ${why}`);
+  if (typeof globalThis.__tjs_set_ca_bundle_path !== 'function') { warn('this engine cannot set its CA bundle'); return; }
+  let text;
+  try { text = new TextDecoder().decode(await tjs.readFile(extra)); } catch (e) { warn((e && e.message) || String(e)); return; }
+  const roots = files.get('node-shim/modules/tls-cacert.pem');
+  const bundle = extraCaBundle(roots ? new TextDecoder().decode(roots) : '', text);
+  if (!bundle) { warn(roots ? 'no PEM certificate in it' : 'this build carries no root certificates to add them to'); return; }
+  const got = await privateGuardDir(tjs, tjs.env, sep, platform);
+  if (got.refusal) { warn(`quaude's private directory is unsafe: ${got.refusal}`); return; }
+  const file = got.dir + sep + 'ca-' + (await sha256hex(new TextEncoder().encode(bundle))).slice(0, 16) + '.pem';
+  try {
+    await writeFileOnce(tjs, file, bundle);
+    globalThis.__tjs_set_ca_bundle_path(file);
+  } catch (e) { warn((e && e.message) || String(e)); }
+}
+
 // Write `text` to `file` unless it already holds exactly that: to a temporary name, then renamed over it, so a session
 // starting meanwhile reads the old bytes or the new, never a torn file.
 async function writeFileOnce(tjs, file, text) {
@@ -1020,6 +1060,7 @@ async function main() {
 
   // 8) mount + boot: the archived loader resolves everything under /quaude/;
   // the manifest rides along so the loader picks the role's entry member.
+  await applyExtraCaCerts(tjs, files, sep, platform);
   globalThis.__quaudeVFS = { files, index, manifest };
   globalThis.__quaudeArgs = rest;
   // Pre-load tjs:sqlite for the node-shim's node:sqlite provider (which bun:sqlite

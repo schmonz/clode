@@ -1,0 +1,55 @@
+# CA-BUNDLE-GLOBAL: __tjs_set_ca_bundle_path(path), core.setCABundlePath as a global a standalone binary can call.
+#
+# WHY. fetch, XMLHttpRequest and WebSocket (lws) trust ONE CA bundle: the compiled-in one (src/cacert.c) or the file
+# core.setCABundlePath names. That setter lives on tjs:internal/core, which only the engine's own tjs: modules may
+# import, and run-main calls it (--tls-ca, TJS_CA_BUNDLE, SSL_CERT_FILE) only on the `tjs run` path, never for a
+# bundled binary. So a built quaude could not trust a private CA at all: NODE_EXTRA_CA_CERTS, which node and native
+# Claude Code honour, did nothing, and WebFetch of a host signed by one (a corporate TLS proxy, a local test server)
+# answered "Network Error" where native fetched the page (measured 2026-11-20, test/fidelity/webfetch.test.cjs).
+# libexec/quaude-bootstrap.mjs applyExtraCaCerts calls it once, before any request. A second call throws a TypeError
+# instead of tripping core.setCABundlePath's CHECK. vm.c only; order-independent.
+#
+diff --git a/src/vm.c b/src/vm.c
+--- a/src/vm.c
++++ b/src/vm.c
+@@ -178,6 +178,24 @@
+     return JS_UNDEFINED;
+ }
+
++/* CLODE: the CA bundle for fetch, XMLHttpRequest and WebSocket, as a global a standalone binary can reach:
++ * __tjs_set_ca_bundle_path(path). core.setCABundlePath lives on tjs:internal/core, which only the engine's own
++ * modules can import, and run-main calls it (from --tls-ca, TJS_CA_BUNDLE, SSL_CERT_FILE) only on the `tjs run`
++ * path, never for a bundled binary. So a built quaude had no way to trust a private CA: NODE_EXTRA_CA_CERTS, which
++ * node and native Claude Code honour, did nothing, and every request to such a host failed as "Network Error".
++ * quaude's bootstrap calls this once, before any request (the bundle is read when the first client context is
++ * built). A second call throws instead of aborting (core.setCABundlePath CHECKs). */
++static JSValue tjs__set_ca_bundle_path_global(JSContext *ctx, JSValue this_val, int argc, JSValue *argv) {
++    TJSRuntime *qrt = TJS_GetRuntime(ctx);
++    CHECK_NOT_NULL(qrt);
++
++    if (qrt->lws.ca_bundle_path != NULL) {
++        return JS_ThrowTypeError(ctx, "the CA bundle path is already set");
++    }
++
++    return tjs__set_ca_bundle_path(ctx, this_val, argc, argv);
++}
++
+ static JSValue tjs__js_drain_microtasks(JSContext *ctx, JSValue this_val, int argc, JSValue *argv) {
+     TJSRuntime *qrt = TJS_GetRuntime(ctx);
+     CHECK_NOT_NULL(qrt);
+@@ -319,6 +337,15 @@
+                               "setCABundlePath",
+                               JS_NewCFunction(ctx, tjs__set_ca_bundle_path, "setCABundlePath", 1),
+                               JS_PROP_C_W_E);
++    {
++        JSValue global = JS_GetGlobalObject(ctx);
++        JS_DefinePropertyValueStr(ctx,
++                                  global,
++                                  "__tjs_set_ca_bundle_path",
++                                  JS_NewCFunction(ctx, tjs__set_ca_bundle_path_global, "__tjs_set_ca_bundle_path", 1),
++                                  JS_PROP_C_W_E);
++        JS_FreeValue(ctx, global);
++    }
+     JS_DefinePropertyValueStr(ctx,
+                               ns,
+                               "syncReadFile",
