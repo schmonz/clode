@@ -8,25 +8,36 @@
 // bytes. Each was a test that made a temp dir and did not remove it, and nothing judged the run on what it left.
 // Asking every test to clean up is the per-test convention that keeps failing here (the security stub and
 // CLODE_STATE_ROOT both moved into test/run.mjs for the same reason), so the fix is in one place:
-//   - test/run.mjs makes one root (clode-run-XXXXXX) and points TMPDIR, TMP and TEMP at it, right after the suite
-//     home; its own dirs (CLODE_STATE_ROOT, the security stub, the TAP copies) land there;
+//   - test/run.mjs asks for one root (clode-run-<pid>-XXXXXX), which test/suite-home.cjs makes as its first act, so
+//     the suite home lives in it too, and points TMPDIR, TMP and TEMP at it; the runner's own dirs
+//     (CLODE_STATE_ROOT, the security stub, the TAP copies) land there; a root whose pid is dead is a killed run's,
+//     named and removed when the next run starts;
 //   - every test-file process gets its own dir under that root (test/file-tmpdir-preload.cjs), so one file's temp
 //     files are never another's;
 //   - at exit the runner removes the root, after making every directory under it u+rwx, because some tests leave
 //     dirs chmod 0 (shim-diff's case dirs) that a plain recursive rm cannot enter;
-//   - the run is JUDGED on the original temp dir: each entry that appeared there during the run under a name this
+//   - the run is JUDGED on the original temp dir: each entry that appeared there during the run in the shape this
 //     repo's code makes temp files with is a named `not ok`, grouped by prefix with a count, and fails the run.
 //
 // WHERE THE ROOT GOES: the shorter of the original temp dir and /tmp. macOS caps a unix socket path at 103 bytes, its
 // $TMPDIR is already 49 (/var/folders/xx/.../T/, 58 once realpath'd), and tests make sockets in their temp dir: two
 // more levels under it pushed rg-native's RG-SPECIAL-FILE socket to 121 bytes (listen EINVAL). /tmp is short on every
-// POSIX box and is the original temp dir on most Linux ones; Windows has no /tmp and keeps the original. A fact about
-// path lengths, not a platform branch: whichever writable candidate is shorter wins, wherever.
+// POSIX box and is the original temp dir on most Linux ones. Whichever writable candidate is shorter wins. Windows
+// does not offer /tmp as a candidate: node resolves it to <drive>:\tmp, a directory nothing on Windows provides or
+// cleans (a writable one would be some other program's, and creating it would be ours to litter), and the cap it
+// exists to dodge is a unix socket fact (Windows pipes do not live in the temp dir).
 //
-// WHICH NAMES ARE JUDGED: only the prefixes this repo's own code spells (repoPrefixes), because the original temp dir
-// is shared with everything else the user runs (macOS daemons, editors, other agents: a run measured 2026-11-20 saw
-// s1, s2, a, b, mm-build and tmp.* appear from another session). A concurrent run of this repo's tests from another
-// checkout still lands names this check counts; the message says so.
+// WHICH NAMES ARE JUDGED: <prefix><suffix>, where the prefix is one this repo's own code spells (repoPrefixes), is at
+// least 5 characters before the separator it ends in, and the suffix is generated (letters and digits, an optional
+// short extension: mkdtemp's six, a pid). The original temp dir is shared with everything else the user runs (macOS
+// daemons, editors, other agents: a run measured 2026-11-20 saw s1, s2, a, b, mm-build and tmp.* appear from another
+// session), and short generic prefixes this repo also spells (work-, cfg-, rm-) are anyone's.
+//
+// ANOTHER RUN AT THE SAME TIME. A second checkout's suite makes the same names in the same dir, and nothing on disk
+// says whose they are. So a watcher (test/run-tmp-runs.cjs, a child of the runner) samples for other LIVE clode-run-<pid>-*
+// roots through the whole run: when one overlapped, each leftover is a named UNATTRIBUTABLE warning naming that pid,
+// never silent and never red; with no overlap a leftover is a not ok. (A concurrent run of code older than this file
+// makes no root, so it cannot be seen; its leftovers stay red here.)
 //
 // KEPT IN THE ORIGINAL TEMP DIR, ON PURPOSE (STABLE): the durable scratch and caches meant to outlive a run, so a run
 // neither rebuilds the engine and PTY harness nor re-extracts the provider. Each is one fixed-name directory, reused,
@@ -37,6 +48,7 @@ const path = require('node:path');
 const ROOT_ENV = 'CLODE_TEST_RUN_TMP';
 const ORIGINAL_ENV = 'CLODE_TEST_ORIGINAL_TMP';
 const ROOT_PREFIX = 'clode-run-';
+const REQUEST_ENV = 'CLODE_TEST_RUN_TMP_REQUEST';
 // name -> how it stays in the original temp dir
 const STABLE = {
   'clode-built-binary-cache': `test/built-binary.cjs reads ${ORIGINAL_ENV}: the provider extraction every quaude build shares`,
@@ -59,15 +71,22 @@ function writableDir(d) {
   try { return fs.statSync(d).isDirectory() && (fs.accessSync(d, fs.constants.W_OK | fs.constants.X_OK), true); } catch { return false; }
 }
 
-// The parent for the root: the shortest writable one of the original temp dir and /tmp (realpath'd lengths).
-function rootParent(original, { candidates = [original, '/tmp'] } = {}) {
-  const ok = candidates.filter(writableDir).map((d) => fs.realpathSync(d));
+// Where a root may go: the original temp dir, and /tmp off Windows (see the header).
+function rootCandidates(original, platform = process.platform) {
+  return platform === 'win32' ? [original] : [original, '/tmp'];
+}
+
+// The parent for the root: the shortest writable candidate, by its NATIVE real path: on Windows that is the long
+// name (a runner's TEMP is C:\Users\RUNNER~1\..., an 8.3 short name; GetFinalPathNameByHandle gives the long one),
+// so the root, and every per-file dir and TMPDIR under it, never carries a ~1 name a tool may not expand.
+function rootParent(original, { candidates = rootCandidates(original) } = {}) {
+  const ok = candidates.filter(writableDir).map((d) => fs.realpathSync.native(d));
   return ok.length ? ok.sort((a, b) => a.length - b.length)[0] : original;
 }
 
 // The per-run root, with every temp-dir variable pointed at it and the durable-scratch variables at the original.
 function makeRunRoot(original, env = process.env, opts = {}) {
-  const root = fs.mkdtempSync(path.join(rootParent(original, opts), ROOT_PREFIX));
+  const root = fs.mkdtempSync(path.join(rootParent(original, opts), `${ROOT_PREFIX}${opts.pid || process.pid}-`));
   env[ROOT_ENV] = root;
   for (const k of DURABLE_ENV) if (!env[k]) env[k] = original;
   redirect(env, root);
@@ -96,6 +115,10 @@ function removeRunRoot(root) {
   const { removeNamingRefusals } = require('./suite-home.cjs');
   openUp(root);
   removeNamingRefusals(root, { what: 'the per-run temp root (test/run-tmp.cjs, at exit)' });
+}
+
+function snapshotList(dir) {
+  try { return fs.readdirSync(dir); } catch { return []; }
 }
 
 function snapshot(dir) {
@@ -129,14 +152,19 @@ function repoPrefixes(repo) {
   return [...out];
 }
 
-// The entries of `after` not in `before` that start with one of `prefixes`, minus `ignore` and STABLE, grouped by
-// the longest such prefix: [{ prefix, count, example }], largest first.
+// A judged prefix: at least 5 characters before its closing separator (work-, cfg-, shim- are anyone's). A generated
+// suffix: letters and digits (mkdtemp's six, a pid), with an optional short extension.
+const JUDGED_PREFIX = /^.{5,}[-_.]$/;
+const GENERATED_SUFFIX = /^[A-Za-z0-9]{3,}(?:\.[A-Za-z0-9]{1,5})?$/;
+
+// The entries of `after` not in `before` shaped <judged prefix><generated suffix>, minus `ignore` and STABLE,
+// grouped by the longest such prefix: [{ prefix, count, example }], largest first.
 function leaks(before, after, { prefixes, ignore = [] }) {
-  const byLength = [...prefixes].sort((a, b) => b.length - a.length);
+  const byLength = [...prefixes].filter((x) => JUDGED_PREFIX.test(x)).sort((a, b) => b.length - a.length);
   const groups = new Map();
   for (const name of after) {
     if (before.has(name) || ignore.includes(name) || Object.hasOwn(STABLE, name)) continue;
-    const p = byLength.find((x) => name.startsWith(x));
+    const p = byLength.find((x) => name.startsWith(x) && GENERATED_SUFFIX.test(name.slice(x.length)));
     if (!p) continue;
     const g = groups.get(p) || { prefix: p, count: 0, example: name };
     g.count++;
@@ -145,14 +173,41 @@ function leaks(before, after, { prefixes, ignore = [] }) {
   return [...groups.values()].sort((a, b) => b.count - a.count || a.prefix.localeCompare(b.prefix));
 }
 
-// The verdict lines for leaks(): one `not ok` per prefix, or none.
-function leakLines(found, original) {
-  return found.map((g) => `not ok - the suite left ${g.count} entr${g.count === 1 ? 'y' : 'ies'} named ${g.prefix}* `
-    + `in ${original} (e.g. ${g.example}); a test's temp files belong under the per-run root (test/run-tmp.cjs). `
-    + 'If another checkout ran these tests at the same time, those runs share this dir: rerun alone to confirm');
+// The verdict on leaks(): one line per prefix. With no overlapping run each is a `not ok` and the run fails; when
+// another live run overlapped (`overlaps`: its pids) each is an UNATTRIBUTABLE warning naming them, and it does not.
+function leakVerdict(found, original, overlaps = []) {
+  const what = (g) => `${g.count} entr${g.count === 1 ? 'y' : 'ies'} named ${g.prefix}* in ${original} (e.g. ${g.example})`;
+  if (!overlaps.length) {
+    return { fail: found.length > 0, lines: found.map((g) => `not ok - the suite left ${what(g)}; a test's temp files `
+      + 'belong under the per-run root (test/run-tmp.cjs)') };
+  }
+  return { fail: false, lines: found.map((g) => `warning - UNATTRIBUTABLE: ${what(g)} appeared while another run `
+    + `(pid ${overlaps.join(', ')}) was live in the same temp dir; either run may have left them. Rerun alone to judge`) };
+}
+
+// The durable scratch kept in the original temp dir, by size: one line, for the verdict (it fails nothing).
+function stableSizes(original) {
+  const size = (p) => {
+    let st;
+    try { st = fs.lstatSync(p); } catch { return 0; }
+    if (!st.isDirectory()) return st.size;
+    let n = 0;
+    for (const e of snapshotList(p)) n += size(path.join(p, e));
+    return n;
+  };
+  return Object.keys(STABLE).filter((n) => fs.existsSync(path.join(original, n)))
+    .map((n) => ({ name: n, bytes: size(path.join(original, n)) }));
+}
+function stableLine(sizes, original) {
+  const mb = (b) => `${Math.round(b / 1048576)} MB`;
+  const total = sizes.reduce((a, x) => a + x.bytes, 0);
+  return `run: durable scratch kept in ${original}: ${sizes.length ? sizes.map((x) => `${x.name} ${mb(x.bytes)}`).join(', ') : 'none'}`
+    + ` (total ${mb(total)}; kept on purpose, test/run-tmp.cjs STABLE)`;
 }
 
 module.exports = {
-  ROOT_ENV, ORIGINAL_ENV, ROOT_PREFIX, STABLE, DURABLE_ENV,
-  redirect, rootParent, makeRunRoot, makeFileDir, openUp, removeRunRoot, snapshot, repoPrefixes, leaks, leakLines,
+  ROOT_ENV, ORIGINAL_ENV, ROOT_PREFIX, REQUEST_ENV, STABLE, DURABLE_ENV,
+  redirect, rootCandidates, rootParent, makeRunRoot, makeFileDir, openUp, removeRunRoot,
+  writableDir, snapshot, snapshotList, repoPrefixes, leaks, leakVerdict, stableSizes, stableLine,
 };
+

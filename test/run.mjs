@@ -21,33 +21,41 @@ process.chdir(ROOT);
 // and every child, the real values kept under one name (test/suite-home.cjs says why, and what the suite still takes
 // from the real home as explicit paths). FIRST, before anything below resolves a path off HOME.
 // It also removes, at exit, the home it made here, and nothing else: this runner deletes nothing by reading HOME.
-const { realHome } = require('./suite-home.cjs');
-
-// THE PER-RUN TEMP ROOT (test/run-tmp.cjs says why and where): right after the suite home (which stays in the original
-// temp dir and removes itself), TMPDIR, TMP and TEMP point at one clode-run-XXXXXX dir, and every test file gets its
-// own dir under it (test/file-tmpdir-preload.cjs, on both passes below). The durable scratch (engine, PTY harness,
-// provider caches) stays in the original temp dir. The root goes at exit; what the run left in the ORIGINAL temp dir
-// is judged at the end, by name. CLODE_STATE_ROOT, the security stub and the TAP copies below were each made with
-// mkdtemp and removed by nothing (CLODE_STATE_ROOT since 108bd50: ~200 MB a run, 49 of them piled up); they now live
-// in the root.
-const runTmp = require('./run-tmp.cjs');
+// THE PER-RUN TEMP ROOT (test/run-tmp.cjs says why and where), asked for here and made by suite-home.cjs as its first
+// act, so the suite home lives in it: TMPDIR, TMP and TEMP point at one clode-run-<pid>-XXXXXX dir, and every test
+// file gets its own dir under it (test/file-tmpdir-preload.cjs, on both passes below). The durable scratch (engine,
+// PTY harness, provider caches) stays in the original temp dir. The root goes at exit; what the run left in the
+// ORIGINAL temp dir is judged at the end. CLODE_STATE_ROOT, the security stub and the TAP copies below were each made
+// with mkdtemp and removed by nothing (CLODE_STATE_ROOT since 108bd50: ~200 MB a run, 49 of them piled up); they now
+// live in the root. The original's listing is taken first, before anything here can add to it.
 const ORIGINAL_TMP = os.tmpdir();
-const ORIGINAL_BEFORE = runTmp.snapshot(ORIGINAL_TMP);
-const SUITE_HOME = process.env.HOME;
-const RUN_TMP = runTmp.makeRunRoot(ORIGINAL_TMP);
+const ORIGINAL_BEFORE = new Set(fs.readdirSync(ORIGINAL_TMP));
+process.env.CLODE_TEST_RUN_TMP_REQUEST = '1';
+const { realHome } = require('./suite-home.cjs');
+const runTmp = require('./run-tmp.cjs');
+const runTmpRuns = require('./run-tmp-runs.cjs');
+const RUN_TMP = process.env[runTmp.ROOT_ENV];
+const ROOT_PARENTS = runTmp.rootCandidates(ORIGINAL_TMP);
 const FILE_TMPDIR = path.join(HERE, 'file-tmpdir-preload.cjs');
 let runTmpRemoved = false;
-// Removes the root and points the temp-dir variables back at the original, where the suite home's own exit hook
-// looks for it (it removes a home only directly under os.tmpdir()).
+// Removes the root (the suite home with it) and points the temp-dir variables back at the original.
 function removeRunTmp() {
   if (runTmpRemoved) return null;
   runTmpRemoved = true;
   runTmp.redirect(process.env, ORIGINAL_TMP);
   try { runTmp.removeRunRoot(RUN_TMP); return null; } catch (e) { return e; }
 }
-// PREPENDED, so it runs before the suite home's exit hook on every earlier process.exit; the end of this file does it
-// itself, and judges a refusal.
+// PREPENDED, so it runs before the suite home's own exit hook on every earlier process.exit; the end of this file
+// does it itself, and judges a refusal.
 process.prependListener('exit', () => { const e = removeRunTmp(); if (e) console.error(`run: ${e.message}`); });
+// A killed run's root (its pid is dead: no exit hook ran) is named and removed now.
+for (const r of runTmpRuns.removeStaleRoots(ROOT_PARENTS)) {
+  console.error(r.error ? `run: could not remove a killed run's temp root (pid ${r.pid}): ${r.error.message}`
+    : `run: removed a killed run's temp root ${r.path} (pid ${r.pid} is gone)`);
+}
+// Another LIVE run in the same temp dir makes leftovers unattributable; a watcher samples for one all run long.
+const OVERLAP_LOG = path.join(RUN_TMP, 'overlapping-runs');
+const overlapWatch = runTmpRuns.startOverlapWatch(OVERLAP_LOG, ROOT_PARENTS);
 
 // Offline gate: the runner is the single source of truth; an ambient CLODE_OFFLINE never leaks in.
 const arg = process.argv[2] || '--offline';
@@ -930,17 +938,20 @@ if (treeChanged.length) {
         .map((k) => [k, process.env[k]])),
   }));
 }
-// THE RUN LEAVES NOTHING BEHIND (test/run-tmp.cjs). The per-run root goes, opened up first; a refusal names each
-// entry. Then each entry that appeared in the ORIGINAL temp dir during the run is a named not ok, by prefix and count.
-// Its control is test/run-tmp.test.cjs's planted leak, judged by these same two functions.
+// THE RUN LEAVES NOTHING BEHIND (test/run-tmp.cjs). The per-run root goes (the suite home with it), opened up first;
+// a refusal names each entry. Then each entry that appeared in the ORIGINAL temp dir during the run is a named not ok
+// by prefix and count, or, when another live run overlapped this one, an UNATTRIBUTABLE warning naming its pid.
+// Its controls are test/run-tmp.test.cjs's planted leaks, judged by these same functions.
 {
+  const overlaps = runTmpRuns.overlapPids(OVERLAP_LOG, ROOT_PARENTS);
+  try { overlapWatch.kill(); } catch { /* already gone */ }
   const e = removeRunTmp();
   if (e) { console.error(`not ok - ${e.message}`); fails = 1; }
-  require('./suite-home.cjs').removeOwnSuiteHome(SUITE_HOME);
-  const found = runTmp.leaks(ORIGINAL_BEFORE, runTmp.snapshot(ORIGINAL_TMP),
-    { prefixes: runTmp.repoPrefixes(ROOT), ignore: [path.basename(RUN_TMP)] });
-  for (const line of runTmp.leakLines(found, ORIGINAL_TMP)) console.error(line);
-  if (found.length) fails = 1;
-  else console.error(`run: the suite left nothing in ${ORIGINAL_TMP} (its temp files were under ${RUN_TMP}, now removed)`);
+  const found = runTmp.leaks(ORIGINAL_BEFORE, runTmp.snapshot(ORIGINAL_TMP), { prefixes: runTmp.repoPrefixes(ROOT) });
+  const verdict = runTmp.leakVerdict(found, ORIGINAL_TMP, overlaps);
+  for (const line of verdict.lines) console.error(line);
+  if (verdict.fail) fails = 1;
+  if (!found.length) console.error(`run: the suite left nothing in ${ORIGINAL_TMP} (its temp files were under ${RUN_TMP}, now removed)`);
+  console.error(runTmp.stableLine(runTmp.stableSizes(ORIGINAL_TMP), ORIGINAL_TMP));
 }
 process.exit(process.exitCode === 2 ? 2 : (fails ? 1 : 0));

@@ -57,6 +57,13 @@ function applySuiteHome(env = process.env) {
   env[`GIT_CONFIG_KEY_${n}`] = 'safe.directory';
   env[`GIT_CONFIG_VALUE_${n}`] = path.resolve(__dirname, '..');
   env.GIT_CONFIG_COUNT = String(n + 1);
+  // THE PER-RUN TEMP ROOT, when test/run.mjs asks for one (it sets CLODE_TEST_RUN_TMP_REQUEST before its first
+  // require): made here, after the paths above and before the home, so the home lives in the root and goes with it
+  // (test/run-tmp.cjs says why). Only the runner asks; a standalone `node --test file` keeps the real temp dir.
+  if (env.CLODE_TEST_RUN_TMP_REQUEST === '1' && env === process.env) {
+    delete env.CLODE_TEST_RUN_TMP_REQUEST;
+    require('./run-tmp.cjs').makeRunRoot(os.tmpdir(), env);
+  }
   const home = fs.mkdtempSync(path.join(os.tmpdir(), PREFIX));
   fs.mkdirSync(path.join(home, '.claude'));
   made = home;
