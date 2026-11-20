@@ -1893,19 +1893,44 @@ jobs:
             node test/harness-preflight.cjs
             echo "harness ready after $(el)"
             export CLODE_QUAUDE="$M/quaude"
-            # FOUR LANES, disjoint by test name, their records unioned for the cell check below: the 8 mode turns
-            # (each ~125 s under HVF) in three lanes, everything else in the fourth.
-            lane() {
+            # FOUR LANES, disjoint by test name, their records unioned for the cell check below. The unit is one
+            # `run`: a node --test process, whose files test/file-watchdog.cjs limits to 1800 s EACH (never raised:
+            # a limit raised for everything is a hang hidden for everything). CI 44782406152 ran tools-local and
+            # agentic-grep-glob in one lane and the watchdog killed agentic-grep-glob at 1800 s: its six heavy turns
+            # took 741 s (print) and ~370-400 s (each permission mode) under TCG, serially, 2750 s in all. So every
+            # heavy turn is its own run, and a lane is a few runs. Measured under TCG: the 8 tools-local mode turns
+            # reached a lane's end at 577 s only because they failed fast (no git); the other tools-local tests took
+            # 98-230 s each. test/ci-lanes.test.cjs proves every test runs exactly once across these runs.
+            run() {
               n=$1; shift
               node --require ./test/file-watchdog-preload.cjs --test --test-concurrency=1 --test-reporter=spec --test-reporter-destination="$M/lane-$n.log" \
                 --test-reporter=./test/cell-reporter.mjs --test-reporter-destination="$M/gates-ran/cells/$n.jsonl" "$@" \
-                || echo "lane $n: a test failed" >> "$M/lanes.failed"
-              echo "lane $n done after $(el)"
+                || echo "run $n: a test failed" >> "$M/lanes.failed"
+              echo "run $n done after $(el)"
             }
-            lane rest --test-skip-pattern='Phase A call in' test/fidelity/tools-local.test.cjs test/fidelity/agentic-grep-glob.test.cjs &
-            lane modes1 --test-name-pattern='Phase A call in (a built quaude in )?(print|permission:acceptEdits|permission:auto)[: ]' test/fidelity/tools-local.test.cjs &
-            lane modes2 --test-name-pattern='Phase A call in (a built quaude in )?(permission:bypassPermissions|permission:dontAsk|permission:plan)[: ]' test/fidelity/tools-local.test.cjs &
-            lane modes3 --test-name-pattern='Phase A call in (a built quaude in )?(unlisted|interactive)[: ]' test/fidelity/tools-local.test.cjs &
+            TL=test/fidelity/tools-local.test.cjs
+            AG=test/fidelity/agentic-grep-glob.test.cjs
+            # agentic-grep-glob's heavy turn for one mode: print is the unnamed one, a permission mode names itself
+            agentic() { run "$1" --test-name-pattern="rg in a built quaude$2: every" $AG; }
+            {
+              run rest-tools --test-skip-pattern='Phase A call in' $TL
+              run rest-agentic --test-skip-pattern='rg in a built quaude' $AG
+              agentic rest-plan ' in permission:plan'
+            } &
+            {
+              run modes1-tools --test-name-pattern='Phase A call in (a built quaude in )?(print|permission:acceptEdits|permission:auto)[: ]' $TL
+              agentic modes1-print ''
+            } &
+            {
+              run modes2-tools --test-name-pattern='Phase A call in (a built quaude in )?(permission:bypassPermissions|permission:dontAsk|permission:plan)[: ]' $TL
+              agentic modes2-acceptEdits ' in permission:acceptEdits'
+              agentic modes2-auto ' in permission:auto'
+            } &
+            {
+              run modes3-tools --test-name-pattern='Phase A call in (a built quaude in )?(unlisted|interactive)[: ]' $TL
+              agentic modes3-bypassPermissions ' in permission:bypassPermissions'
+              agentic modes3-dontAsk ' in permission:dontAsk'
+            } &
             wait
             for f in "$M"/lane-*.log; do echo "==== $f"; cat "$f"; done
             # THE CELLS this job drives (CELL_JOBS), checked HERE: the check reads the host it runs on (netbsd-arm64)

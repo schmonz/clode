@@ -393,6 +393,9 @@ const S_WORK = path.join(S_BASE, 'work');
 const S_WT = path.join(S_WORK, '.claude', 'worktrees', 'wt-drive');
 const SKILL_BODY = 'Say hello to $ARGUMENTS.';
 const layRepo = (work) => {
+  // a host with no git (the NetBSD guest, CI 44782406152) must say so, not die as a bare `spawnSync git ENOENT`
+  const probe = require('node:child_process').spawnSync('git', ['--version'], { encoding: 'utf8' });
+  if (probe.error) throw new Error(`git is not installed on this host (${probe.error.code}): the worktree tools' repository cannot be laid; add git to the job's packages`);
   const skill = path.join(work, '.claude', 'skills', 'greet');
   fs.mkdirSync(skill, { recursive: true });
   fs.writeFileSync(path.join(skill, 'SKILL.md'), `---\nname: greet\ndescription: Greet someone by name\n---\n${SKILL_BODY}\n`);

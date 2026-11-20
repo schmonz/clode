@@ -84,6 +84,12 @@ test('a versioned pkgsrc python (python313) is checked as python3.13, the name i
   assert.match(missing.stderr, /NOT on PATH: python3\.13\(python313\)/);
 });
 
+test('pkgsrc git-base (netbsd-arm64-cells) is checked as `git`', UNIX_ONLY, () => {
+  // ci 44782406152: the cells job had no git, and tools-local died `spawnSync git ENOENT`
+  assert.strictEqual(runWith({ git: OK }, 'git-base').status, 0);
+  // (no missing half: a dev box has /usr/bin/git on the harness's PATH, which no stub dir can hide)
+});
+
 test('a missing tool is still reported as missing (the older half of the check)', UNIX_ONLY, () => {
   const r = runWith({ gmake: OK }, 'cmake gmake');
   assert.notStrictEqual(r.status, 0);

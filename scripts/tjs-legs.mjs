@@ -1030,8 +1030,10 @@ const LEGS = [
 export const GUEST_CELL_JOBS = [
   { job: 'netbsd-arm64-cells', leg: 'netbsd-arm64',
     // the drivers' needs: node (the test runner), bash and zsh (the Bash tool's shells), ugrep and bfs (the search
-    // applets quaude runs for Grep and Glob), python3 and gmake (node-pty's source build: no netbsd-arm64 prebuild)
-    packages: 'nodejs bash zsh ugrep bfs python313 gmake',
+    // applets quaude runs for Grep and Glob), python3 and gmake (node-pty's source build: no netbsd-arm64 prebuild),
+    // git (tools-local lays a real repository for the worktree tools: CI 44782406152 died `spawnSync git ENOENT`;
+    // git-base is pkgsrc's git binary without the docs/gui/perl extras, and the guest action verifies it as `git`)
+    packages: 'nodejs bash zsh ugrep bfs python313 gmake git-base',
     timeoutScale: 20, timeout: 350 },
 ];
 export function guestCellJob(job) {
