@@ -179,7 +179,9 @@ const T_GET_2 = { name: 'TaskGet', input: { taskId: '2' }, id: 'toolu_tk_get_2' 
 const T_GET_NONE = { name: 'TaskGet', input: { taskId: '99' }, id: 'toolu_tk_get_none' };
 const T_DONE_1 = { name: 'TaskUpdate', input: { taskId: '1', status: 'completed' }, id: 'toolu_tk_done_1' };
 const T_LIST_2 = { name: 'TaskList', input: {}, id: 'toolu_tk_list_2' };
-const T_BG = { name: 'Bash', input: { command: 'sleep 37.5', description: 'wait', run_in_background: true }, id: 'toolu_tk_bg' };
+// The background command is this file-process's own (37.<pid> seconds), so the survivor check below can find it by
+// name without touching another run's.
+const T_BG = { name: 'Bash', input: { command: `sleep 37.${process.pid}`, description: 'wait', run_in_background: true }, id: 'toolu_tk_bg' };
 const T_STOP = { name: 'TaskStop', input: { task_id: '<the background id>' }, id: 'toolu_tk_stop' };
 const T_STOP_AGAIN = { name: 'TaskStop', input: { task_id: '<the background id>' }, id: 'toolu_tk_stop_again' };
 const T_KILL_NONE = { name: 'KillShell', input: { shell_id: 'no-such-task' }, id: 'toolu_tk_kill_none' };
@@ -202,7 +204,7 @@ const TASK_NATIVE = {
   toolu_tk_get_none: { text: 'Task not found', isError: false },
   toolu_tk_done_1: { text: 'Updated task #1 status', isError: false },
   toolu_tk_list_2: { text: '#1 [completed] Write the parser\n#2 [pending] Test the parser', isError: false },
-  toolu_tk_stop: { text: '{"message":"Successfully stopped task: <ID> (sleep 37.5)","task_id":"<ID>","task_type":"local_bash","command":"sleep 37.5"}', isError: false },
+  toolu_tk_stop: { text: `{"message":"Successfully stopped task: <ID> (${T_BG.input.command})","task_id":"<ID>","task_type":"local_bash","command":"${T_BG.input.command}"}`, isError: false },
   toolu_tk_stop_again: { text: '<tool_use_error>No task found with ID: <ID></tool_use_error>', isError: true },
   toolu_tk_kill_none: { text: '<tool_use_error>No task found with ID: no-such-task</tool_use_error>', isError: true },
 };
@@ -278,9 +280,13 @@ function taskFindings(label, side) {
   return out;
 }
 
-// TaskStop's answer says the task stopped; this checks the process did: no `sleep 37.5` is left on the box (polled for
-// a few seconds, as a kill lands asynchronously). Survivors are listed and then killed, so a failure here does not
-// leak into the next test. -> a finding, or null.
+// TaskStop's answer says the task stopped; this checks the process did: no process runs T_BG's command (polled for a
+// few seconds, as a kill lands asynchronously). Survivors are listed and then killed, so a failure here does not leak
+// into the next test. -> a finding, or null.
+// SCOPED BY NAME, NOT BY TREE (fix round 2 asked for test/proc-tree.cjs's walk; it cannot see this): the check runs
+// after the CLI has exited, so a surviving sleep has lost its ancestry (its shell's parent is gone; the kernel
+// reparented it to init or a subreaper), and descendants(process.pid) would never list it: a check that cannot fail.
+// The name is this process's own instead (sleep 37.<pid>), so the box-wide table finds only this run's sleep.
 async function sleepSurvivors(label) {
   const { execFileSync } = require('node:child_process');
   const live = () => execFileSync('ps', ['-axo', 'pid=,command='], { encoding: 'utf8' }).split('\n')
