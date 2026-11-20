@@ -8,7 +8,8 @@
 // __tjs_fs_sync.stat(path) -- e.g. {"size":466,"mode":33188,"uid":0,"gid":0,
 // "mtimeMs":1785163703000,"kind":"file"} -- with no dev, ino, nlink, rdev, blksize, blocks, size64
 // or seconds+nanoseconds times (it predates txiki-sync-stat-identity.patch) and no strerror (it
-// predates txiki-strerror.patch). It is NOT derived from the running engine, which grows a binding
+// predates txiki-strerror.patch), and no globalThis.__tjs_timer_setref (it predates
+// txiki-timer-ref-global.patch). It is NOT derived from the running engine, which grows a binding
 // every time a patch lands. test/bootstrap-engine-online.test.cjs asserts on every push that the
 // REAL published slice still answers exactly SHAPE (it parses that line, so keep it one line of JSON).
 //
@@ -35,4 +36,7 @@
   stale.lstat = oldStat(real.lstat);
   stale.fstat = oldStat(real.fstat);
   globalThis.__tjs_fs_sync = stale;
+  // It predates txiki-timer-ref-global.patch too, so node-shim's Timeout#unref takes the old
+  // stop-the-timer route there, and says so in CLODE_ENGINE_FLOOR_LOG.
+  delete globalThis.__tjs_timer_setref;
 })();

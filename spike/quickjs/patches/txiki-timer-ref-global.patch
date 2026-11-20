@@ -1,0 +1,48 @@
+diff --git a/src/timers.c b/src/timers.c
+--- a/src/timers.c
++++ b/src/timers.c
+@@ -214,6 +214,44 @@
+                                                         JS_CFUNC_MAGIC_DEF("unrefTimer", 1, tjs_timer_setref, 0),
+                                                         JS_CFUNC_MAGIC_DEF("refTimer", 1, tjs_timer_setref, 1) };
+ 
++/* CLODE: the same id-keyed uv_ref/uv_unref as a global the node-shim can reach:
++ * __tjs_timer_setref(id, ref). core.unrefTimer/refTimer live on tjs:internal/core,
++ * which only the engine's own polyfills can import, so the shim's Timeout#unref had
++ * nothing to call and STOPPED the timer instead: an unref'd timer never fired, even
++ * while other work kept the loop alive, where node fires it. That held a TUI turn's
++ * answer unpainted: the bundle's nonblocking stdout writer retries an EAGAIN from
++ * `setTimeout(retry, ms).unref()`, and with the retry gone its queue drained only on
++ * the next keystroke. Returns true when the id named a live timer, false otherwise. */
++static JSValue tjs_timer_setref_global(JSContext *ctx, JSValue this_val, int argc, JSValue *argv) {
++    TJSRuntime *qrt = JS_GetContextOpaque(ctx);
++    CHECK_NOT_NULL(qrt);
++    int64_t timer_id;
++    TJSTimer *th = NULL;
++
++    if (JS_ToInt64(ctx, &timer_id, argv[0])) {
++        return JS_EXCEPTION;
++    }
++
++    HASH_FIND_INT64(qrt->timers.timers, &timer_id, th);
++
++    if (th == NULL || uv_is_closing((uv_handle_t *) &th->handle)) {
++        return JS_FALSE;
++    }
++    if (JS_ToBool(ctx, argv[1])) {
++        uv_ref((uv_handle_t *) &th->handle);
++    } else {
++        uv_unref((uv_handle_t *) &th->handle);
++    }
++    return JS_TRUE;
++}
++
+ void tjs__mod_timers_init(JSContext *ctx, JSValue ns) {
+     JS_SetPropertyFunctionList(ctx, ns, tjs_timer_funcs, countof(tjs_timer_funcs));
++    JSValue global = JS_GetGlobalObject(ctx);
++    JS_DefinePropertyValueStr(ctx,
++                              global,
++                              "__tjs_timer_setref",
++                              JS_NewCFunction(ctx, tjs_timer_setref_global, "__tjs_timer_setref", 2),
++                              JS_PROP_C_W_E);
++    JS_FreeValue(ctx, global);
+ }

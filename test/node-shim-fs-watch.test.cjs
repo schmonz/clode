@@ -319,3 +319,53 @@ test('a watchFile poller idle-stops (and the process exits) even with a pile of 
     `expected the poller to actually take its idle-stop branch (not merely exit before the timeout); stderr=${r.stderr}`);
   assert.ok(elapsed < 9000, `expected a prompt exit well under the 10s timeout; took ${elapsed}ms`);
 });
+
+// RECIPE G6, after TIMER-UNREF-STILL-FIRES. unref() used to STOP the real timer; now it leaves it
+// armed and only clears its uv ref (loader.cjs), so an unref'd timer fires while the loop is alive,
+// as in node. That is new risk for G6: an unref'd timer must still never count as work, or the
+// watchFile poller can never idle-stop and the process never exits. This is the bundle's shape with a
+// timer that really FIRES beside the poller: an unref'd 50 ms interval, an unref'd 600 s timeout, and
+// one ref'd 300 ms timer. It must fire the interval AND exit 0 promptly, under node and the shim.
+// `persistent: false` because node's own watcher would keep node alive forever (the shim idle-stops
+// either way). The CONTROL runs the same program with the shim's live-timer count (the one
+// _otherWorkPending reads) still including the two unref'd timers, which is exactly the G6 defect
+// of an unref() that keeps its timer counted: the same check must fail on it.
+test('an unref\'d interval FIRES beside a watchFile poller, and the process still exits (RECIPE G6, matches node)', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const { spawnSync } = require('node:child_process');
+  const { engineSpawn, LOADER } = require('./node-shim-helper.cjs');
+  const body = `
+    const fs = require('node:fs');
+    let fired = 0;
+    setInterval(() => { fired++; }, 50).unref();
+    setTimeout(() => {}, 600000).unref();
+    fs.watchFile(process.argv[2], { interval: 50, persistent: false }, () => {});
+    setTimeout(() => { console.log('fired=' + fired); }, 300);
+  `;
+  const f = prog(body);
+  const target = path.join(path.dirname(f), 'watched.txt');
+  fs.writeFileSync(target, 'x');
+  const BOUND = 5000; // the script's own work ends at 300 ms; a G6 hang runs to the spawn timeout
+  const run = (cmd, argv) => {
+    const t0 = Date.now();
+    const r = spawnSync(cmd, [...argv, target], { encoding: 'utf8', timeout: BOUND });
+    return { status: r.status, stdout: r.stdout || '', stderr: (r.stderr || '').slice(-400), ms: Date.now() - t0 };
+  };
+  const passes = (r) => {
+    const m = /fired=(\d+)/.exec(r.stdout);
+    return r.status === 0 && !!m && Number(m[1]) >= 2 && r.ms < BOUND;
+  };
+  const node = run(process.execPath, [f]);
+  assert.ok(passes(node), `reference: node fires the unref'd interval and exits; got ${JSON.stringify(node)}`);
+  const shim = run(...engineSpawn(['run', LOADER, f]));
+  assert.ok(passes(shim), `the unref'd interval should fire (>= 2 times by 300 ms) and the process exit 0 within ${BOUND} ms; got ${JSON.stringify(shim)}`);
+
+  // CONTROL: the two unref'd timers still counted as live work (the G6 defect) must turn this check red.
+  const recounted = prog(`
+    const live = globalThis.__shimTimerLiveCount;
+    globalThis.__shimTimerLiveCount = () => live() + 2; // the unref'd interval and timeout, counted again
+  ` + body);
+  const control = run(...engineSpawn(['run', LOADER, recounted]));
+  t.diagnostic(`shim ${JSON.stringify(shim)} control ${JSON.stringify(control)}`);
+  assert.ok(!passes(control), `control: an unref that keeps the timer counted must fail this check; got ${JSON.stringify(control)}`);
+});

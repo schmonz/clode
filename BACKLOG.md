@@ -1413,14 +1413,31 @@ Bash tool instead".
   NetBSD's fstat of a pipe fd reports neither FIFO nor socket, and `/proc/self/fd/N` for it is
   ENOENT (measured with real node). So neither the direct read nor the /proc read applies.
   This is not ours to fix in fs.cjs; it would need the carve's direct read to accept a pipe.
-- **The TUI's nonblocking stdout stalls a turn's paint under this engine: suspected on Linux
-  quaude too.** When chunk-14ycq111 installs its nonblocking writer (writeSync to a reopened
-  O_NONBLOCK fd, an EAGAIN queue, `setTimeout(...).unref()` retries), the answer does not paint
-  until the next keystroke. On NetBSD, tui-probe D1 turn=false in 7 of 8 runs with the reopen
-  allowed; the screen captured afterwards holds the answer. PROC_FD_IS_LINUX_ONLY keeps it
-  uninstalled off Linux. On Linux the rule does not fire and the reopen succeeds, so a Linux
-  quaude TUI may stall the same way. Measure D1 on the Ubuntu guest (port 1213) before the
-  release, then find the cause: an EAGAIN from our write path, or the unref'd retry timer.
+- **The TUI's nonblocking stdout stalled a turn's paint under this engine; on NetBSD the
+  unref'd retry timer was the cause (measured, below), and Linux does not stall in an unloaded
+  run.** When chunk-14ycq111 installs its
+  nonblocking writer (writeSync to a reopened O_NONBLOCK fd, an EAGAIN queue,
+  `setTimeout(...).unref()` retries), every write after the first EAGAIN joins the queue, and only
+  the retry timer (or a flush) drains it. node-shim's Timeout#unref STOPPED the real timer (the
+  engine had no per-timer unref it could call), so the retry never ran and the answer waited for
+  the next keystroke. On NetBSD, tui-probe D1 turn=false in 7 of 8 runs with the reopen allowed.
+  The change (TIMER-UNREF-STILL-FIRES): txiki-timer-ref-global.patch gives the shim
+  `__tjs_timer_setref(id, ref)`, a real uv_unref, so an unref'd timer still fires while the loop
+  is alive, as in node; test/node-shim-timers-handle.test.cjs drives the bundle's writer shape
+  over a FIFO and asserts it really met EAGAIN (red on the old engine, green on the new), and
+  test/node-shim-fs-watch.test.cjs guards G6 against it (an unref'd interval that fires beside a
+  watchFile poller must still let the process exit; its control re-counts unref'd timers and hangs).
+  Measured 2026-11-20 on the NetBSD 11 arm64 VM, engine built on the guest from this commit's
+  tree, the /proc/self/fd/N write-open ALLOWED in a test-only copy of fs.cjs, scripts/tui-probe.mjs
+  over ssh -tt, two quaudes interleaved: with the fix, D1 PASS 8 of 8 (/quit in 1.7-1.9 s); the
+  same tree with the shim forced onto the old stop-and-re-arm route, turn=false 7 of 8, as before.
+  So with the fix, the TUI writer no longer needs PROC_FD_IS_LINUX_ONLY to hide its reopen on
+  NetBSD for D1. The rule is unchanged this round.
+  On Linux the writer installs (the
+  writer installs with CLAUDE_CODE_NONBLOCKING_STDOUT unset too, and the /proc/self/fd/1 reopen
+  succeeds), but the pty never answered EAGAIN in the runs measured, so it did not stall.
+  NOT FIXED, cause not found: under load on the guest, 4 turns painted late in both arms, the
+  writer installed or forced off (rows below).
 - **pP, the linux carve's hardened open of a git-written file (chunk-5t3x93y6), refuses every
   file on NetBSD**, before and after F1. It readlinks `/proc/self/fd/N` for a FILE descriptor
   with no fallback, and NetBSD answers EINVAL. What reads through pP, and what degrades,
@@ -1444,6 +1461,25 @@ but a find using -regex, -iregex or -regextype will refuse"), a naude built from
 with only a Read call prints nothing; `find . -name a.txt` answers `./a.txt` on both; `find . -regex ".*a[.]txt"`
 refuses with the fix under quaude, where native's embedded bfs answers `./a.txt`. The written divergence holds as
 written (2026-11-18).
+
+Measured: D1 on Linux, a modified scripts/tui-probe.mjs (the prompt no longer holds the answer's word, the time from
+Enter to the answer on screen recorded, then one keystroke) over `ssh -tt` to the Ubuntu 24.04 arm64 guest, against a
+canned mock on the Mac, with quaude built on the guest from fb46200's tree (2.1.283 linux-arm64 carve, throwaway HOME).
+Unloaded runs: writer installed (`nonBlockingStdout: active` in the --debug-file; with and without
+CLAUDE_CODE_NONBLOCKING_STDOUT=1) turn=true 21 of 21, answer at 3.9-4.3 s; writer forced off (the shim built to
+refuse the /proc/self/fd/1 write-open on Linux too: `not installed (open_failed, ENOENT)`) 14 of 14, 3.9-4.3 s;
+native 6 of 6, 0.5-0.7 s. In the two rounds that ran beside other load (host builds, a 59 MB scp off the guest)
+turns painted at 17 s and 23 s (installed) and at 40 s and 45 s, after the keystroke and /quit (forced off, and
+installed with the env var unset; native in those rounds 1.7-1.8 s), though the --debug-file says each turn ended 5-10 s after Enter. A CPU hog on the
+guest (7 runs, the fixed build among them) and a 300 MB ssh transfer beside the turn (4 runs, under strace: no write
+failed, fd 1 blocking) reproduced none (2026-11-20).
+
+Unmeasured. The late paints under load: their cause, and whether the slirp network, the probe or quaude held the
+bytes (the probe records no byte timestamps).
+
+Measured. NetBSD 11 arm64 D1, the /proc/self/fd/N write-open allowed (test-only fs.cjs), engine built on the guest
+with TIMER-UNREF-STILL-FIRES, tui-probe over ssh -tt, interleaved: fixed shim PASS 8 of 8; same tree forced onto the
+old stop-and-re-arm unref, turn=false 7 of 8 (2026-11-20).
 
 Unmeasured. Not re-run in observability Task 2: the left-open items here need the NetBSD VM (`ssh -p 2230`) and a
 netbsd-arm64 quaude, or the named rg rows (rg-entry, rg-walk, rg-files, rg-native) per platform.
@@ -1542,8 +1578,16 @@ new pin had 26 failures, from three upstream changes a carve cannot see, and the
   sessions step, green through run 36253515217). The resize and scroll send steps now wait
   `until` their reply is on screen, which is right for a paint gate and blind to the time it
   took. On macOS (observability Task 2, 2026-11-18) a canned-mock `-p` turn takes 8.4-8.9 s under
-  quaude and 0.7-1.1 s under native: about 8x. Not yet measured: where the time goes, and whether it
-  is the `[event-loop-stall]` line above (logged every turn).
+  quaude and 0.7-1.1 s under native: about 8x. On the Ubuntu arm64 guest (2026-11-20) a TUI turn
+  answers at 3.9-4.3 s against native's 0.5-0.7 s, and the nonblocking-stdout stall is NOT the
+  cause: forced off, the turn takes the same time. Where it goes, from --debug-file timestamps
+  (one run): Enter to `turn 1 start` 0.62 s (native 0.10), to the request 1.31 s (native 0.10),
+  first byte 0.24 s (native 0.05), first byte to `turn 1 end` 1.31 s (native 0.11). A perf profile
+  of the Enter-to-turn-end window (one run, 2.38 s) has the engine ON the CPU for 1.18 s of it:
+  22% the interpreter loop, about 20% building RegExp character classes (libregexp's cr_op,
+  cr_compress, unicode_case1, unicode_general_category1), about 12% mimalloc. The other 1.2 s it
+  is off the CPU, and what it waits on is not measured. Whether it is the `[event-loop-stall]`
+  line above is not measured.
 - **Image processing is unavailable under quaude** and now fails through `new Bun.Image(...)`,
   three of whose six call sites have no catch of their own (reviewed in
   test/shim-surface/golden.json's Bun.Image note; callers not verified). Standing since before
@@ -1576,6 +1620,12 @@ U+FFFD U+FFFD (node U+FFFD U+00DF) and the shim's Buffer toString gives U+FFFD U
 
 Measured: wall time of a `-p` turn against a canned mock (the slower bullet above), a quaude built from b4eb2f5
 (darwin-arm64, the 2.1.283 carve; throwaway HOME, canned mock): 8.4-8.9 s; native 0.7-1.1 s (2026-11-18).
+
+Measured: a TUI turn on the Ubuntu 24.04 arm64 guest (the tui-probe D1 runs in "The NetBSD spike found three bugs"
+above): Enter to the answer on screen 3.9-4.3 s for quaude with the nonblocking writer installed (21 runs) and forced
+off (14 runs), 0.5-0.7 s for native (6 runs); phases from one quaude and one native --debug-file; `perf record -F 999
+-g -k CLOCK_REALTIME` of one quaude TUI session, samples cut to the Enter-to-`turn 1 end` window from the same run's
+--debug-file (2026-11-20).
 
 Measured: `$CLAUDE_CONFIG_DIR/debug/*.txt` after a `--debug` Bash-tool turn of a quaude built from b4eb2f5 (darwin-arm64, the 2.1.283 carve; throwaway HOME, canned mock): `1P event logging: 9 events
 failed to export (node-shim: zlib.gzipSync not implemented ...)` and `116 events failed to export` at exit; the
