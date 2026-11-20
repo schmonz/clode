@@ -75,7 +75,38 @@ function applySuiteHome(env = process.env) {
   if (!(env.PATH || '').split(path.delimiter).includes(nodeDir)) env.PATH = [nodeDir, env.PATH || ''].join(path.delimiter);
   for (const k of ['GIT_AUTHOR_NAME', 'GIT_COMMITTER_NAME']) if (!env[k]) env[k] = 'clode-test';
   for (const k of ['GIT_AUTHOR_EMAIL', 'GIT_COMMITTER_EMAIL']) if (!env[k]) env[k] = 'clode-test@example.invalid';
+  if (env === process.env) shadowSecurity(env);
   return real;
+}
+
+// THE KEYCHAIN SHADOW, here since every-tool Task 5 fix round 2 (it was test/run.mjs's alone). Claude Code reads the
+// macOS Keychain on every turn, -p and interactive, native and quaude alike, through the `security` on PATH (measured
+// 2026-11-20, 2.1.283 darwin-arm64: `find-generic-password -a <user> -w -s "Claude Code-credentials-<hash>"`), and
+// writes it with `security -i`. Under a test home there is no login keychain to answer, and the OS can pop a modal on
+// the operator's screen. Only test/run.mjs put a stub first on PATH, so a standalone `node --test <file>` (how a
+// fidelity file is run by hand, and in its CI job) sent every native turn, and every `clode build` that ran the
+// provider, to the developer's real Keychain. Now the first process to apply the suite home makes the stub and
+// prepends its directory (an empty one off darwin, where there is no `security`); children inherit both. Every branch
+// answers without touching the real binary: a read is "not found" (exit 44 with the exact stderr real `security`
+// prints for errSecItemNotFound), a write (-i on stdin, or the argv add/delete fallbacks) quietly succeeds. Prepended,
+// never substituted: every other tool on PATH resolves as before (an EMPTY decoy dir shadows nothing).
+// test/central-security-stub.test.cjs proves `security` resolves into it.
+const SECURITY_STUB = '#!/bin/sh\n'
+  + 'case "$1" in\n'
+  + '  find-generic-password) echo "security: SecKeychainSearchCopyNext: The specified item could not be found in the keychain." 1>&2; exit 44 ;;\n'
+  + '  -i) cat >/dev/null; exit 0 ;;\n'
+  + '  add-generic-password) exit 0 ;;\n'
+  + '  delete-generic-password) exit 0 ;;\n'
+  + '  *) exit 1 ;;\n'
+  + 'esac\n';
+function shadowSecurity(env) {
+  if (env.CLODE_TEST_SECURITY_STUB_DIR) return env.CLODE_TEST_SECURITY_STUB_DIR;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-security-stub-'));
+  if (process.platform === 'darwin') fs.writeFileSync(path.join(dir, 'security'), SECURITY_STUB, { mode: 0o755 });
+  env.PATH = [dir, env.PATH || ''].join(path.delimiter);
+  env.CLODE_TEST_SECURITY_STUB_DIR = dir;
+  process.once('exit', () => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ } });
+  return dir;
 }
 
 // The real values, for the run that exists to use them (and test/run.mjs, which watches the real dirs).

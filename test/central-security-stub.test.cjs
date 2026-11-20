@@ -1,5 +1,5 @@
 'use strict';
-// Positive-control proof that test/run.mjs's central `security`-shadow stub is
+// Positive-control proof that the suite's central `security`-shadow stub (test/suite-home.cjs) is
 // actually reachable from a spawned child — not merely that PATH changed.
 //
 // WHY this file exists: the keychain EMULATION was deleted (BACKLOG.md,
@@ -7,8 +7,9 @@
 // on its own. Deleting the emulation does NOT stop the bundle's own `security`
 // calls from reaching the REAL binary — under a test-redirected HOME that pops a
 // modal on the operator's screen ("Could not find a keychain to store
-// <account>"). test/run.mjs now prepends a directory holding a stub `security`
-// script to PATH before spawning the suite, so every child inherits the shadow.
+// <account>"). test/suite-home.cjs (once test/run.mjs's) prepends a directory holding a stub `security`
+// script to PATH in the first process of a run, the runner or a standalone `node --test`, so every child inherits the
+// shadow.
 //
 // This project has been misled TWICE by an instrument reporting "zero security
 // calls" when it simply was not being consulted (see child_process.cjs's git
@@ -27,9 +28,12 @@ const assert = require('node:assert');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
+// test/suite-home.cjs makes the shadow (every-tool Task 5 fix round 2): required here, a standalone `node --test` of
+// this file is shadowed exactly as the suite is, and judges the same stub.
+require('./suite-home.cjs');
 const STUB_DIR = process.env.CLODE_TEST_SECURITY_STUB_DIR;
 
-test('central security stub: test/run.mjs wired CLODE_TEST_SECURITY_STUB_DIR into PATH', (t) => {
+test('central security stub: test/suite-home.cjs wired CLODE_TEST_SECURITY_STUB_DIR into PATH', (t) => {
   if (!STUB_DIR) {
     t.skip('CLODE_TEST_SECURITY_STUB_DIR not set — this file must run through test/run.mjs, ' +
       'not a standalone `node --test` of just this file');
