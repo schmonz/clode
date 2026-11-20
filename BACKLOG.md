@@ -2160,7 +2160,11 @@ spread argument and runs, with the style check, against upstream's `next` in ups
     closed by 75) reads 2 differing.
   - **joinsSpace is held to the clusterer.** A test checks that joinsSpace(cp) equals "space +
     cp is one bun-cell cluster" for every code point. The one exception is the lone surrogates,
-    where native sums (measured; WRAP-ROW-WIDTH's U+DC00 literal). joinRows' redundant
+    where native sums (measured; WRAP-ROW-WIDTH's U+DC00 literal). OPEN (final re-review
+    2026-11-20): only the LOW half is native-measured; the exception covers D800-DFFF. Add one
+    native-literal row with a lone U+D800 at a word's start. Also OPEN: time the quadratic case
+    above under tjs on the slow boxes (phase 6), and confirm floor 18 (text-probe-wrap-options)
+    on the Windows carve from its first CI run. joinRows' redundant
     `code !== 0` check is gone; the ESC[m literal in WRAP-SGR's test pins sgrCloseCode(0) === 0.
 - **Next candidate: `Bun.stripANSI` is still npm `strip-ansi`** (bun-shim's `_stripAnsiFn`), and
   nothing judges it against native. The 2.1.283 carve calls it once. To measure it: add a
