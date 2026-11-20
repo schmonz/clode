@@ -27,7 +27,7 @@ this file, not a test failing; the forced-win32 "reported NO tests" was most lik
 guards in node:vm contexts. 30 runs of the file alone right after were all green: it shows only under a full suite's
 load (two in about eight full suites).
 
-Unmeasured: where node crashes. Next: run the file in a loop under load (or the full suite) with
+Unmeasured. Where node crashes: no core or report was taken. Next: run the file in a loop under load (or the full suite) with
 `--report-on-signal`/`ulimit -c unlimited` and read the native stack; check whether a vm context or a stand-in
 __tjs_fs_sync is on it.
 
