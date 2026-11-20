@@ -176,12 +176,20 @@ test('tarPlan hands a Windows archive and dir to GNU tar in a shape it reads: ba
   const plan = tarPlan('-xf', WIN_ARCHIVE, WIN_DIR, path.win32);
   assert.deepStrictEqual(plan, {
     cwd: 'C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\clode-run-n2gbTv\\naude-sea-9gxkv1',
-    args: ['-xf', 'clode-kat-tar-3824.tar', '-C', 'C:/Users/RUNNER~1/AppData/Local/Temp/clode-run-n2gbTv/naude-sea-9gxkv1/clode-kat-tar-3824.dst'],
+    args: ['-xf', './clode-kat-tar-3824.tar', '-C', 'C:/Users/RUNNER~1/AppData/Local/Temp/clode-run-n2gbTv/naude-sea-9gxkv1/clode-kat-tar-3824.dst'],
   });
   const r = gnuTarModel(plan.args);
   assert.strictEqual(r.status, 0, r.stderr);
   // and on POSIX the plan is the paths themselves
-  assert.deepStrictEqual(tarPlan('-xzf', '/t/n/a.tar.gz', '/t/n/out', path.posix), { cwd: '/t/n', args: ['-xzf', 'a.tar.gz', '-C', '/t/n/out'] });
+  assert.deepStrictEqual(tarPlan('-xzf', '/t/n/a.tar.gz', '/t/n/out', path.posix), { cwd: '/t/n', args: ['-xzf', './a.tar.gz', '-C', '/t/n/out'] });
+});
+
+test('tarPlan: a colon in the archive\'s own name cannot read as a remote host either (./ puts a slash before it)', () => {
+  const { tarPlan } = require('../libexec/host-provision.cjs');
+  assert.strictEqual(gnuTarModel(['-xf', 'node-v24:x.tar', '-C', 'out']).status, 2); // control: a bare basename would
+  const plan = tarPlan('-xf', 'C:\\dl\\node-v24:x.tar', 'C:\\out', path.win32);
+  assert.strictEqual(plan.args[1], './node-v24:x.tar');
+  assert.strictEqual(gnuTarModel(plan.args).status, 0);
 });
 
 // --- tar: real-host integration (create + extract round-trip KAT) ---------

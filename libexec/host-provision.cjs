@@ -94,11 +94,12 @@ const ZSTD_KAT = {
 //     ...\clode-run-n2gbTv\naude-sea-9gxkv1 reached tar as "...clode-run-n2gbTv<newline>aude-sea-9gxkv1" and every
 //     materializeDeps row failed "Cannot open" (CI 9c655b7, windows-latest). Any user whose path has a segment
 //     starting n, t, r, ... hits the same.
-// So tar runs in the archive's dir with the archive by basename (no colon), and -C gets the directory with forward
-// slashes (no escapes; GNU tar, bsdtar and Windows' own tar all take C:/x). Not --force-local: only GNU tar has it.
+// So tar runs in the archive's dir with the archive as ./<basename> (a slash before any colon in the name, so GNU
+// tar never reads a host out of it), and -C gets the directory with forward slashes (no escapes; GNU tar, bsdtar and
+// Windows' own tar all take C:/x). Not --force-local: only GNU tar has it.
 // On POSIX the slash form is the path itself. `p` is injectable so a row can hand it Windows paths anywhere.
 function tarPlan(flag, archive, dir, p = path) {
-  return { cwd: p.dirname(archive), args: [flag, p.basename(archive), '-C', dir.split(p.sep).join('/')] };
+  return { cwd: p.dirname(archive), args: [flag, `./${p.basename(archive)}`, '-C', dir.split(p.sep).join('/')] };
 }
 
 const REGISTRY = {
