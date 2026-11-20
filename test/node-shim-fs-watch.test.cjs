@@ -327,48 +327,45 @@ test('a watchFile poller idle-stops (and the process exits) even with a pile of 
 // timer that really FIRES beside the poller: an unref'd 50 ms interval, an unref'd 600 s timeout, and
 // one ref'd 300 ms timer. It must fire the interval AND exit 0 promptly, under node and the shim.
 // `persistent: false` because node's own watcher would keep node alive forever (the shim idle-stops
-// either way). The CONTROL is a copy of node-shim whose unref() keeps the timer counted, which is
-// exactly the G6 defect: the same check must fail on it.
+// either way). The CONTROL runs the same program with the shim's live-timer count (the one
+// _otherWorkPending reads) still including the two unref'd timers, which is exactly the G6 defect
+// of an unref() that keeps its timer counted: the same check must fail on it.
 test('an unref\'d interval FIRES beside a watchFile poller, and the process still exits (RECIPE G6, matches node)', (t) => {
   if (skipUnlessTjs(t)) return;
   const { spawnSync } = require('node:child_process');
-  const { engineSpawn, LOADER, REPO } = require('./node-shim-helper.cjs');
-  const f = prog(`
+  const { engineSpawn, LOADER } = require('./node-shim-helper.cjs');
+  const body = `
     const fs = require('node:fs');
     let fired = 0;
     setInterval(() => { fired++; }, 50).unref();
     setTimeout(() => {}, 600000).unref();
     fs.watchFile(process.argv[2], { interval: 50, persistent: false }, () => {});
     setTimeout(() => { console.log('fired=' + fired); }, 300);
-  `);
+  `;
+  const f = prog(body);
   const target = path.join(path.dirname(f), 'watched.txt');
   fs.writeFileSync(target, 'x');
   const BOUND = 5000; // the script's own work ends at 300 ms; a G6 hang runs to the spawn timeout
   const run = (cmd, argv) => {
     const t0 = Date.now();
-    const r = spawnSync(cmd, [...argv, f, target], { encoding: 'utf8', timeout: BOUND });
+    const r = spawnSync(cmd, [...argv, target], { encoding: 'utf8', timeout: BOUND });
     return { status: r.status, stdout: r.stdout || '', stderr: (r.stderr || '').slice(-400), ms: Date.now() - t0 };
   };
   const passes = (r) => {
     const m = /fired=(\d+)/.exec(r.stdout);
     return r.status === 0 && !!m && Number(m[1]) >= 2 && r.ms < BOUND;
   };
-  const node = run(process.execPath, []);
+  const node = run(process.execPath, [f]);
   assert.ok(passes(node), `reference: node fires the unref'd interval and exits; got ${JSON.stringify(node)}`);
-  const shim = run(...engineSpawn(['run', LOADER]));
+  const shim = run(...engineSpawn(['run', LOADER, f]));
   assert.ok(passes(shim), `the unref'd interval should fire (>= 2 times by 300 ms) and the process exit 0 within ${BOUND} ms; got ${JSON.stringify(shim)}`);
 
-  // CONTROL: an unref() that keeps the timer counted (the G6 defect) must turn this check red.
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-g6-control-'));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  fs.cpSync(path.join(REPO, 'libexec'), path.join(dir, 'libexec'), { recursive: true });
-  fs.symlinkSync(path.join(REPO, 'deps'), path.join(dir, 'deps'));
-  const loader = path.join(dir, 'libexec', 'node-shim', 'loader.cjs');
-  const src = fs.readFileSync(loader, 'utf8');
-  const uncount = 'That is RECIPE G6.\n          if (live) { live = false; liveTimerCount--; }';
-  assert.ok(src.includes(uncount), 'loader.cjs unref() no longer uncounts where this control expects; re-derive the control');
-  fs.writeFileSync(loader, src.replace(uncount, 'That is RECIPE G6.\n          /* CONTROL: still counted */'));
-  const control = run(...engineSpawn(['run', loader]));
+  // CONTROL: the two unref'd timers still counted as live work (the G6 defect) must turn this check red.
+  const recounted = prog(`
+    const live = globalThis.__shimTimerLiveCount;
+    globalThis.__shimTimerLiveCount = () => live() + 2; // the unref'd interval and timeout, counted again
+  ` + body);
+  const control = run(...engineSpawn(['run', LOADER, recounted]));
   t.diagnostic(`shim ${JSON.stringify(shim)} control ${JSON.stringify(control)}`);
   assert.ok(!passes(control), `control: an unref that keeps the timer counted must fail this check; got ${JSON.stringify(control)}`);
 });
