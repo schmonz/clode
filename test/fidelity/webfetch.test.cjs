@@ -26,7 +26,6 @@
 // answered "Network Error", and the target saw no request.
 const test = require('node:test');
 const assert = require('node:assert');
-const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -37,7 +36,9 @@ const { builtQuaude } = require('../built-binary.cjs');
 const { rgOracle, rgOracleSkip } = require('../provider-resolve.cjs');
 const { toolResultText, assertFailsOnMissingOutput } = require('../../scripts/lib/tool-result.cjs');
 
-const NONCE = crypto.randomBytes(6).toString('hex');
+// The page's token: 12 hex digits from this run's clock and pid. Not random (nothing here has a shape to census); it
+// only has to be in no tool_use input, and differ from run to run.
+const NONCE = `${Date.now().toString(16)}${process.pid.toString(16)}`.slice(-12).padStart(12, '0');
 const PAGE_TOKEN = `WF-PAGE-${NONCE}`;
 const ASK = 'WF-SUMMARIZE-7';
 const REPLY = `the page says ${PAGE_TOKEN}`;
