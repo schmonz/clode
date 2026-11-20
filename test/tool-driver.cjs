@@ -59,9 +59,10 @@ require('./suite-home.cjs');   // the suite's own HOME, also for a standalone `n
 //   text/isError/result  the FIRST scripted call's tool_result (toolResult: { text, isError, content }, or null and
 //                    text '' when the target sent none). Never the tool_use's input.
 //   results          every scripted call's toolResult, by id.
-//   raw              the mock's request log, { requests }: what a check given to assertFailsOnMissingOutput reads.
-//   home             the side's own { HOME, USERPROFILE, CLAUDE_CONFIG_DIR }, under <base>/<side>.
-//   tmp              the side's CLAUDE_CODE_TMPDIR, <base>/<side>/tmp (where a background task's output goes).
+//   raw              the mock's request log, { requests, tmp }: what a check given to assertFailsOnMissingOutput reads.
+//   home             the side's own { HOME, USERPROFILE, CLAUDE_CONFIG_DIR, CLAUDE_CODE_TMPDIR }, under <base>/<side>
+//                    (test/throwaway-home.cjs).
+//   tmp              the side's CLAUDE_CODE_TMPDIR (where a background task's output goes); also raw.tmp.
 //
 // HERMETIC by construction: each side runs with a HOME, CLAUDE_CONFIG_DIR and CLAUDE_CODE_TMPDIR under <base>/<side>,
 // fresh per run, so no turn reads or writes the caller's ~/.claude or the box's shared /tmp/claude-<uid> (the agentic
@@ -140,11 +141,8 @@ async function runSide(side, bin, rules, opts, base) {
   fs.mkdirSync(work, { recursive: true });
   if (opts.setup) opts.setup(work, base);
   const home = throwawayHome(path.join(base, side));
-  // Claude Code's per-uid temp dir (background task output, among others) defaults to /tmp/claude-<uid>, shared with
-  // every other run on the box, the developer's own sessions included; CLAUDE_CODE_TMPDIR moves it into the sandbox
-  // (a private 0700 dir, as the product asks).
-  const tmp = path.join(base, side, 'tmp');
-  fs.mkdirSync(tmp, { recursive: true, mode: 0o700 });
+  // Claude Code's per-uid temp dir (background task output, among others): throwawayHome's CLAUDE_CODE_TMPDIR.
+  const tmp = home.CLAUDE_CODE_TMPDIR;
   const sent = {};
   const mock = await startMockAnthropic({
     respond: (seen) => {
@@ -159,10 +157,12 @@ async function runSide(side, bin, rules, opts, base) {
     const names = [...new Set(rules.map((r) => r.tool.name))];
     const allowed = opts.allowedTools === undefined ? names.join(',') : opts.allowedTools;
     const args = ['-p', opts.prompt || 'drive the tool', ...(allowed === null ? [] : ['--allowedTools', allowed]), ...(opts.args || [])];
-    const env = { ...baseEnv(), ...home, CLAUDE_CODE_TMPDIR: tmp, ANTHROPIC_BASE_URL: mock.url, ANTHROPIC_API_KEY: 'sk-ant-mock', ...(opts.env || {}),
+    const env = { ...baseEnv(), ...home, ANTHROPIC_BASE_URL: mock.url, ANTHROPIC_API_KEY: 'sk-ant-mock', ...(opts.env || {}),
       ...(opts.switches || {}) };
     const r = await spawnCollect(bin, args, { cwd: work, env }, { timeoutMs: opts.timeoutMs || 240000 });
-    const raw = { requests: mock.requests.slice() };
+    // the log, and the side's own temp dir beside it (a check that judges a path under it reads it here, never from a
+    // module-level variable: a synthetic control log has none, so such a check fails there)
+    const raw = { requests: mock.requests.slice(), tmp };
     const results = {};
     for (const rule of rules) results[rule.tool.id] = toolResult(raw, rule.tool.id);
     const first = rules[0].tool.id;

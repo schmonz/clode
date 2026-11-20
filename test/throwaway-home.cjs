@@ -6,6 +6,11 @@
 // test/suite-home-hermetic.test.cjs), so nothing reaches the developer's ~/.claude by default. This is for runs that
 // must not share even that: two sides of a differential, a run whose home is inspected afterwards, a bundle turn
 // whose session state must not leak into the next. USERPROFILE too: HOME's spelling on Windows.
+//
+// CLAUDE_CODE_TMPDIR too (every-tool Task 3 fix round): Claude Code's per-uid temp dir defaults to /tmp/claude-<uid>,
+// shared by every run on the box, the developer's own sessions included. A turn whose Bash tool runs makes a
+// directory there named for its cwd, and nothing removed it, so every agentic row left one behind (measured
+// 2026-11-19 on this box: 1110 dirs named for a temp cwd, 35 of them agentic-tools' `...-T-agtool-*`). It is a private 0700 dir under the test's own, as the product asks.
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -15,7 +20,9 @@ function throwawayHome(dir) {
   const home = path.join(dir, 'home');
   const cfg = path.join(home, '.claude');
   fs.mkdirSync(cfg, { recursive: true });
-  return { HOME: home, USERPROFILE: home, CLAUDE_CONFIG_DIR: cfg };
+  const tmp = path.join(dir, 'claude-tmp');
+  fs.mkdirSync(tmp, { recursive: true, mode: 0o700 });
+  return { HOME: home, USERPROFILE: home, CLAUDE_CONFIG_DIR: cfg, CLAUDE_CODE_TMPDIR: tmp };
 }
 
 // freshHome(prefix): throwawayHome under a new temp dir of its own, for a run with no temp dir at hand.

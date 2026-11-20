@@ -343,6 +343,22 @@ Unmeasured. The `-U` stdin EAGAIN error, a terminal, dev-mode bundles and Window
 needs a non-blocking empty stdin under `rg -U`, the last a Windows box. The Tiger startup cost needs the Tiger PPC VM.
 The CI rg-unit-row claims need a linux-x64-pty run.
 
+## Every agentic row left a directory in the box's shared /tmp/claude-<uid>: FIXED (2026-11-19)
+
+Claude Code's per-uid temp dir defaults to /tmp/claude-<uid>, shared by every run on the box, the developer's
+own sessions included. A turn whose Bash tool runs makes a directory there named for its working directory,
+and nothing removed it. test/throwaway-home.cjs's env spread (the G30 spread every agentic row uses: agentic-tools,
+node-shim-agentic, agentic-subagent-diff, agentic-grep-glob, clode-native acceptance 3, regexp-census and the rest)
+set HOME and CLAUDE_CONFIG_DIR but not CLAUDE_CODE_TMPDIR, so every row left one: this box held 1110 dirs named for
+a temp cwd, 35 of them agentic-tools' `-T-agtool-*`. A background task's output went there too. Found by the
+every-tool plan's Task 3 (driveTool's TaskStop row), fixed in its fix round: throwawayHome now also returns
+CLAUDE_CODE_TMPDIR, a private 0700 dir under the test's own, and test/tool-driver.cjs takes it from there. The
+dirs already on this box were left as they are (they are the developer's to remove).
+
+Measured: test/throwaway-home.test.cjs, a quaude built from the tree and native 2.1.283 on darwin-arm64: a
+Bash turn with the spread leaves nothing in /tmp/claude-<uid> and its dir under the throwaway tmp; with
+CLAUDE_CODE_TMPDIR taken out it leaves one there (the control) (2026-11-19)
+
 ## Ten agentic rows run the developer's own ~/.claude, hooks included (2026-10-04)
 
 Measured during grep-native Task 10b's full suite (RC 1, 10 failures, every one at its cap with empty
