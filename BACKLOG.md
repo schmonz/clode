@@ -479,35 +479,49 @@ with TJS_HOME unset creates $HOME/.tjs holding localStorage.db only (no cookies.
 Unmeasured. The suite-hermeticity claims (suite home, sentinel HOME byte-untouched, the 18/81 spawn counts) were not
 re-run; test/suite-home-hermetic.test.cjs and a full suite with a sentinel HOME would.
 
-## 284 of the 2166 tool x mode x engine cells are driven; Phase A's 18 tools all driven, in print, unlisted and every permission mode (cells 2026-11-18; tools 2026-09-28; Grep and Glob driven 2026-10-05; Read, Write, NotebookEdit, the Task tools and TaskStop 2026-11-19; Skill, the worktree and cron tools, ScheduleWakeup, ReportFindings, Workflow and ListAgents 2026-11-20; the -p modes 2026-11-20)
+## 355 of the 2166 tool x mode x engine cells are driven, 12 are not applicable; Phase A's 18 tools, Agent, Edit and Bash in print, interactive, unlisted and every permission mode (cells 2026-11-18; tools 2026-09-28; Grep and Glob driven 2026-10-05; Read, Write, NotebookEdit, the Task tools and TaskStop 2026-11-19; Skill, the worktree and cron tools, ScheduleWakeup, ReportFindings, Workflow and ListAgents 2026-11-20; the -p modes, interactive, Agent and the Grep/Glob modes 2026-11-20)
 
 Since observability Task 1 (2026-11-18) the gate counts CELLS, tool x mode x engine: 90 tools, 722
 tool x mode pairs (permission modes, sandbox, Bash shells, interactive, unlisted, from the carve where
-it says) over darwin-arm64, linux-x64-musl and netbsd-arm64, 2166 cells. 284 are driven, by four CI
-jobs (CELL_JOBS): Bash print (darwin, musl), bypassPermissions, sandbox:on and shell:bash (musl); Edit
-print (darwin, musl); Glob and Grep print (musl); since every-tool Task 2, Read, Write and NotebookEdit
-print (darwin, musl: test/fidelity/tools-local.test.cjs in node-shim-oracle-darwin and linux-x64-pty,
-each installing the pinned native that runs and building a quaude from it); since every-tool Task 3,
-TaskCreate, TaskGet, TaskUpdate, TaskList and TaskStop print (darwin, musl: the same file and jobs); since
-every-tool Task 4, Skill, EnterWorktree, ExitWorktree, CronCreate, CronDelete, CronList and ScheduleWakeup
-print (darwin, musl: the same file and jobs); since every-tool Task 5, ReportFindings, Workflow and ListAgents
-print (darwin, musl: the same file and jobs; ListAgents' quaude answer is held as a NAMED divergence, "No reachable
-agents." without native's self-address line, because net.createServer is the shim's throwing stub and so quaude has
-no UDS messaging server: the entry "`net.createServer` is a named throwing stub" below). Since Task 5's fix round 1
-(ruling E9), the 21 tools tools-local drives (the 18, Edit, Bash, and TaskStop's KillShell alias) are also driven in
-`unlisted` and in each of the five permission modes, one combined -p turn per mode, every answer equal to native's
-(MEASURED: acceptEdits, auto, bypassPermissions and dontAsk answer as print; plan refuses the writes and the Edit;
-unlisted asks for a grant -p cannot give, turns the Task* list tools off and holds an inline Workflow for review).
-The rest are per-cell exemptions. MEASURED 2026-11-20 (the gate's own table): 274 cells still fall due 2026-12-15
-(USER RULING 2026-11-18 moved Phase A there from 2026-10-15), each with a reason naming its driver path:
-69 interactive (3 per tool for the 23 tools: a pty turn through test/e2e-pty.cjs, blocked because an interactive
-first turn validates credentials with claude.ai and never reaches the mock with a fake key, RECIPE G2); 163
-netbsd-arm64 (a cell job on a NetBSD arm64 host, which CI does not have: it would need a self-hosted NetBSD arm64
-runner, or a qemu NetBSD guest inside a Linux job, building the engine and a quaude there and running
-tools-local with native's recorded answers, since no native runs on NetBSD); and 42 others: Agent 14 (its driver
-runs in no job), Grep 11 and Glob 11 (agentic-grep-glob with --permission-mode), Bash 6 (sandbox:required and
-shell:zsh on both engines, sandbox:on and shell:bash on darwin). Re-dating the netbsd and interactive cells, or splitting them off
-UNTIL_PHASE_A, is the user's call. The tool-level account below is as of 2026-09-28.
+it says) over darwin-arm64, linux-x64-musl and netbsd-arm64, 2166 cells. Measured: the every-tool-driven
+gate's verdict over the 2.1.283 darwin-arm64 carve (test/build-gates/tool-coverage-gates.test.cjs, 2026-11-20):
+355 driven, 1799 exempted, 12 not applicable, 0 neither, by four CI jobs (CELL_JOBS).
+
+What is driven. test/fidelity/tools-local.test.cjs (node-shim-oracle-darwin and linux-x64-pty, each installing the
+pinned native that runs and building a quaude from it) drives 23 tools (Read, Write, NotebookEdit, Edit, Bash, Agent,
+the Task* tools, TaskStop, Skill, the worktree, cron and ScheduleWakeup tools, ReportFindings, Workflow, ListAgents)
+in print, `interactive`, `unlisted` and each of the five permission modes, on darwin-arm64 and linux-x64-musl, every
+answer equal to native's. ListAgents' quaude answer is held as a NAMED divergence ("No reachable agents." without
+native's self-address line: net.createServer is the shim's throwing stub, the entry "`net.createServer` is a named
+throwing stub" below). Per mode (MEASURED on native): acceptEdits, bypassPermissions and dontAsk answer as print;
+plan refuses the writes and the Edit; unlisted asks for a grant -p cannot give and holds an inline Workflow for
+review; in plan and auto an Agent call is first put to the auto-mode safety classifier (the mock answers it), and in
+auto a subagent must hand back through SubagentHandback; interactive (a typed pty turn, test/tool-driver.cjs
+interactiveTurn) runs in auto mode and backgrounds Agent. Ruling E10: a refusal that is the mode's own behaviour
+drives its cell, judged by a check and control of its own; a tool the mode does not REGISTER is not applicable
+(NOT_APPLICABLE: the Task list tools when unlisted, 4 tools x 3 engines, proven in both jobs by assertNotRegistered).
+test/fidelity/agentic-grep-glob.test.cjs drives Grep and Glob in print and every permission mode in both jobs.
+Bash is also driven in bypassPermissions, sandbox:on and shell:bash on musl, and shell:bash on darwin.
+
+RECIPE G2's premise was wrong (MEASURED 2026-11-20, native 2.1.283 darwin-arm64): an interactive first turn does
+not validate credentials with claude.ai. It sends HEAD /api/hello, then POST /v1/messages to ANTHROPIC_BASE_URL, once
+the profile is past onboarding, trusts the working directory and approves the key (test/e2e-pty.cjs seedClaudeProfile
+had recorded this on 2026-09-25: the old hang was a synchronous capture freezing the in-process mock). Two more
+things a mock-driven interactive turn needs, both seeded by interactiveTurn: interactive defaults to auto mode, whose
+first classifier call through a gateway opens a billing notice that waits for Enter
+(autoModeClassifierBillingNoticeAcknowledgedAt in the profile shuts it for a day), and the classifier's own request,
+which does not stream (the mock's cannedMessage answers it).
+
+What still falls due 2026-12-15 (USER RULING 2026-11-18 moved Phase A there from 2026-10-15), each with a reason
+naming its driver path: 191 cells. 182 netbsd-arm64 (every cell of the 25 driven tools on that engine: a CELL_JOBS
+job on a NetBSD arm64 host, which CI does not have, a self-hosted NetBSD/arm64 runner or a qemu NetBSD/arm64 guest
+inside a Linux job, building the engine and a quaude there and running tools-local and agentic-grep-glob; NetBSD
+has no native Claude Code, so their native tests would skip there by name and quaude would be judged against the
+answers recorded from native on darwin-arm64 and linux-x64); 4 interactive (Grep and Glob on both engines: a Grep
+and a Glob call added to tools-local's interactive turn); 5 Bash (sandbox:required on both engines and sandbox:on on
+darwin, agentic-sandbox-fail-closed in linux-x64-pty and a darwin run of it with Seatbelt; shell:zsh on both, a
+tools-local turn with env { SHELL: zsh }). Re-dating the netbsd cells, or splitting them off UNTIL_PHASE_A, is the
+user's call. The tool-level account below is as of 2026-09-28.
 
 `every-tool-driven` (test/build-gates/tool-coverage-gates.test.cjs; the grep-native plan's task
 0c) reads the tool registry from the pinned carve and requires each tool to have a live check
