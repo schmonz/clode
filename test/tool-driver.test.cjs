@@ -15,7 +15,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { driveTool, TOOL_SWITCHES, ptyHarnessMissing, keychainShadowFinding, MODE_TURNS, modeTurnFinding } = require('./tool-driver.cjs');   // first: it applies the suite home, standalone too
+const { driveTool, TOOL_SWITCHES, ptyHarnessMissing, keychainShadowFinding, MODE_TURNS, modeTurnFinding, modeTurnFindingFor } = require('./tool-driver.cjs');   // first: it applies the suite home, standalone too
 const { toolResultText, assertFailsOnMissingOutput } = require('../scripts/lib/tool-result.cjs');
 
 const SKIP = process.platform === 'win32' ? 'the fake targets are #!/bin/sh wrappers' : false;
@@ -281,8 +281,8 @@ test('modeTurnFinding: only a turn that ran exactly its MODE_TURNS entry is the 
       const r = await run(mode);
       assert.strictEqual(r.quaude.status, 0, r.quaude.stderr);
       assert.ok(sawProduct(r.quaude.raw), `${mode}: the turn ran`);
-      assert.strictEqual(modeTurnFinding('quaude', r.quaude, mode), null, `${mode} is its own turn`);
-      if (mode !== 'unlisted') assert.match(modeTurnFinding('quaude', r.quaude, 'unlisted'), /--allowedTools "FakeDriverTool", not null/);
+      assert.strictEqual(modeTurnFindingFor('quaude', r.quaude, mode, f.quaude), null, `${mode} is its own turn`);
+      if (mode !== 'unlisted') assert.match(modeTurnFindingFor('quaude', r.quaude, 'unlisted', f.quaude), /--allowedTools "FakeDriverTool", not null/);
     }
     const planted = [
       ['--disallowed-tools', 'unlisted', { args: ['--disallowed-tools', 'FakeDriverTool'] }, /args \["--disallowed-tools","FakeDriverTool"\], not \[\]/],
@@ -294,16 +294,21 @@ test('modeTurnFinding: only a turn that ran exactly its MODE_TURNS entry is the 
       ['an extra arg', 'permission:plan', { args: ['--permission-mode', 'plan', '--add-dir', f.dir] }, /args \["--permission-mode","plan","--add-dir",.*\], not \["--permission-mode","plan"\]/],
       ['a switch', 'unlisted', { switches: { CLAUDE_CODE_ENABLE_TASKS: 'false' } }, /switches \{"CLAUDE_CODE_ENABLE_TASKS":"false"\}/],
       ['extra env', 'unlisted', { env: { ENABLE_TOOL_SEARCH: 'false' } }, /env ENABLE_TOOL_SEARCH/],
+      ['another binary', 'unlisted', { quaude: f.native }, /binary ".*native", not ".*quaude"/],
     ];
     for (const [what, mode, over, why] of planted) {
       const r = await run(mode, over);
       assert.strictEqual(r.quaude.status, 0, `${what}: ${r.quaude.stderr}`);
-      const finding = modeTurnFinding('quaude', r.quaude, mode);
+      const finding = modeTurnFindingFor('quaude', r.quaude, mode, f.quaude);
       assert.ok(finding && finding.startsWith(`quaude ${mode}: not the mode's own turn (ruling E12)`), `${what}: ${finding}`);
       assert.match(finding, why, what);
     }
-    assert.match(modeTurnFinding('quaude', {}, 'unlisted'), /records no turn/);
-    assert.match(modeTurnFinding('quaude', {}, 'permission:yolo'), /is not a mode turn/);
+    assert.match(modeTurnFindingFor('quaude', {}, 'unlisted', f.quaude), /records no turn/);
+    assert.match(modeTurnFindingFor('quaude', {}, 'permission:yolo', f.quaude), /is not a mode turn/);
+    assert.match(modeTurnFinding('fake', {}, 'unlisted'), /a mode turn is quaude's or native's/);
+    // the default judge names the real binaries (native's: the pinned provider, or none here): a fake is never native's
+    const r = await run('unlisted');
+    assert.match(modeTurnFinding('native', r.quaude, 'unlisted'), /binary ".*quaude", not /);
   } finally { fs.rmSync(f.dir, { recursive: true, force: true }); }
 });
 

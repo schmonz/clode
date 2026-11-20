@@ -66,7 +66,7 @@ require('./suite-home.cjs');   // the suite's own HOME, also for a standalone `n
 //   comparison passing.
 //   opts.timeoutMs   per side (240 s), times CLODE_TIMEOUT_SCALE on a slow host.
 // SIDE = { text, isError, result, results, raw, sent, status, signal, stdout, stderr, timedOut, home, keychain, turn, inspected }
-//   turn             what the turn ran: { args, allowedTools, scripted, interactive, switches, env (its keys), settings
+//   turn             what the turn ran: { bin, args, allowedTools, scripted, interactive, switches, env (its keys), settings
 //                    (files setup wrote that are settings) }; modeTurnFinding judges it against MODE_TURNS.
 //   keychain         the `security` calls the side made, each its argv, answered by the stub (shadowKeychain).
 //   text/isError/result  the FIRST scripted call's tool_result (toolResult: { text, isError, content }, or null and
@@ -252,7 +252,7 @@ async function runSide(side, bin, rules, opts, base) {
       text: toolResultText(raw, first), isError: !!(results[first] && results[first].isError), result: results[first], results,
       raw, sent, tmp, status: r.status, signal: r.signal, stdout: r.stdout, stderr: r.stderr, timedOut: r.timedOut, home,
       keychain: fs.existsSync(kc.log) ? fs.readFileSync(kc.log, 'utf8').split('\n').filter(Boolean) : [],
-      turn: { args: [...(opts.args || [])], allowedTools: allowed, scripted: names.join(','), interactive: !!opts.interactive,
+      turn: { bin, args: [...(opts.args || [])], allowedTools: allowed, scripted: names.join(','), interactive: !!opts.interactive,
         switches: { ...(opts.switches || {}) }, env: Object.keys(opts.env || {}).sort(), settings },
       inspected: opts.inspect ? opts.inspect(work, base) : undefined,
     };
@@ -331,13 +331,25 @@ function filesUnder(dir) {
   walk(dir, '');
   return out;
 }
-// -> null when SIDE ran exactly MODE_TURNS[mode], else a finding naming every difference.
+// -> null when SIDE ran exactly MODE_TURNS[mode] on the binary the cell names, else a finding naming every difference.
+// The binary (M2): quaude's is the one built from this tree (builtQuaude, memoized), native's the pinned provider that
+// runs here (rgOracle); any other (a stale build, a `claude` from PATH) proves nothing about either.
 function modeTurnFinding(label, side, mode) {
+  let bin;
+  if (label === 'quaude') { const q = require('./built-binary.cjs').builtQuaude(); bin = q.skip ? null : q.path; }
+  else if (label === 'native') bin = require('./provider-resolve.cjs').rgOracle(process.env) || null;
+  else return `${label}: a mode turn is quaude's or native's, never ${JSON.stringify(label)}`;
+  return modeTurnFindingFor(label, side, mode, bin);
+}
+// The same judgement against a binary the caller names: test/tool-driver.test.cjs's fakes. The coverage gate counts a
+// not-applicable proof only in a file that calls modeTurnFinding itself, never this.
+function modeTurnFindingFor(label, side, mode, wantBin) {
   const want = MODE_TURNS[mode];
   if (!want) return `${label}: ${JSON.stringify(mode)} is not a mode turn (MODE_TURNS: ${Object.keys(MODE_TURNS).join(', ')})`;
   const t = side && side.turn;
   if (!t) return `${label} ${mode}: the side records no turn (SIDE.turn), so what it ran cannot be judged`;
   const diff = [];
+  if (!wantBin || t.bin !== wantBin) diff.push(`binary ${JSON.stringify(t.bin)}, not ${wantBin ? JSON.stringify(wantBin) : `${label}'s (none here)`}`);
   const wantArgs = want.args || [];
   if (JSON.stringify(t.args) !== JSON.stringify(wantArgs)) diff.push(`args ${JSON.stringify(t.args)}, not ${JSON.stringify(wantArgs)}`);
   const wantAllowed = want.allowedTools === null ? null : t.scripted;
@@ -398,4 +410,4 @@ function ptyHarnessMissing() {
   } catch (e) { return `no PTY harness here (node-pty): ${e.message.split('\n')[0]}`; }
 }
 
-module.exports = { driveTool, DONE, TOOL_SWITCHES, MODE_TURNS, modeTurnFinding, shadowKeychain, keychainShadowFinding, CLASSIFIER_STOP, ptyHarnessMissing, SCALE };
+module.exports = { driveTool, DONE, TOOL_SWITCHES, MODE_TURNS, modeTurnFinding, modeTurnFindingFor, shadowKeychain, keychainShadowFinding, CLASSIFIER_STOP, ptyHarnessMissing, SCALE };
