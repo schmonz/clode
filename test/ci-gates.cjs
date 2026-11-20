@@ -249,6 +249,9 @@ const FILES = {
       'native answers the session script as SESSION_NATIVE records', 'native answers the Task 5 script as T5_NATIVE records',
       'native answers the zsh Bash turn as ZSH_DONE records',
       ...LOCAL_MODE_TURNS.map((m) => `native answers every Phase A call in ${m} as recorded`)]) } },
+  // tjs-tls-trust: its built-quaude test (CA globals gone, an Ed25519 extra cert dropped end to end) skips without a
+  // built quaude, which the suite rows lack; these jobs build one, so a skip there is a finding.
+  'test/tjs-tls-trust.test.cjs': { jobs: ['linux-x64-pty', 'node-shim-oracle-darwin'] },
   'test/fidelity/webfetch.test.cjs': { jobs: ['linux-x64-pty', 'node-shim-oracle-darwin', 'netbsd-arm64-cells'],
     jobSkips: { 'netbsd-arm64-cells': NO_NATIVE(['native fetches the same page and answers as recorded']) } },
   'test/build-gates/rg-regex-gates.test.cjs': { jobs: ['linux-x64-pty'] },

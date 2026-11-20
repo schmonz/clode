@@ -3,7 +3,7 @@
 // engine trusts ONE bundle, so the extra file's certificates are appended to the compiled-in roots, never put in their
 // place (node's and Bun's NODE_EXTRA_CA_CERTS ADD to the roots). Each block must pass the engine's own parser first:
 // the engine's fetch client refuses the WHOLE bundle when any block fails, which would end every HTTPS request
-// (security review, 2026-11-20). The rows here inject the parser; test/tjs-ca-bundle-engine.test.cjs runs the real
+// (security review, 2026-11-20). The rows here inject the parser; test/tjs-tls-trust.test.cjs runs the real
 // one in the built engine, and test/fidelity/webfetch.test.cjs drives the whole path, whose target only
 // NODE_EXTRA_CA_CERTS makes trusted.
 const test = require('node:test');

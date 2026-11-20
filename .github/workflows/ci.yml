@@ -1459,6 +1459,8 @@ jobs:
       #   webfetch            WebFetch's print cell: one -p turn to a local TLS 1.2, rsa_pss_rsae_sha256 target (the
       #                       shape that made WebFetch answer "Network Error" on a NetBSD release candidate), in a built
       #                       quaude and in native, each answered by the mock with the fetched page's own token.
+      #   tjs-tls-trust       the engine's TLS trust (security review 2026-11-20): a forged TLS 1.2 PSS handshake refused,
+      #                       the CA globals gone from a built quaude and an unparseable NODE_EXTRA_CA_CERTS block dropped.
       #   rg-regex-gates, rg-types-gates   the generated rg tables are what their generators make from THIS native
       #                       run as rg (the suite's minimised provider does not run as rg, so they skipped there).
       #   lead-scrub-equivalence, rg-spawn  need the engine AND a provider that runs here, or a POSIX shell for a
@@ -1500,6 +1502,7 @@ jobs:
               test/fidelity/agentic-grep-glob.test.cjs \
               test/fidelity/tools-local.test.cjs \
               test/fidelity/webfetch.test.cjs \
+              test/tjs-tls-trust.test.cjs \
               test/build-gates/rg-regex-gates.test.cjs \
               test/build-gates/rg-types-gates.test.cjs \
               test/fidelity/lead-scrub-equivalence.test.cjs \
@@ -1701,7 +1704,7 @@ jobs:
       # test/fidelity/tools-local.test.cjs against a quaude built from this tree (judged against native's recorded
       # answers) and against native itself, in print, interactive, unlisted and every permission mode; and
       # test/fidelity/agentic-grep-glob.test.cjs (Grep, Glob and the Bash tool's rg, in print and every permission mode),
-      # with CLODE_E2E_NATIVE=1 so its native instrument runs too; and test/fidelity/webfetch.test.cjs (WebFetch, print). The staged provider above is a minimised carve that cannot run, so this step installs UPSTREAM_PIN's
+      # with CLODE_E2E_NATIVE=1 so its native instrument runs too; and test/fidelity/webfetch.test.cjs (WebFetch, print); and test/tjs-tls-trust.test.cjs (the engine's TLS trust, in a built quaude too). The staged provider above is a minimised carve that cannot run, so this step installs UPSTREAM_PIN's
       # darwin-arm64 platform package on its own, as linux-x64-pty's rg step does for linux: a native that RUNS, which
       # the quaude is also built from. Both tests must pass; no skip is accepted (test/ci-gates.cjs FILES).
       - name: Local tools end to end — tools-local and agentic-grep-glob against a built quaude and native
@@ -1722,7 +1725,8 @@ jobs:
             node --require ./test/file-watchdog-preload.cjs --test --test-concurrency=1 \
               --test-reporter=spec --test-reporter-destination=stdout \
               --test-reporter=./test/cell-reporter.mjs --test-reporter-destination="$RUNNER_TEMP/cells/darwin-tools-local.jsonl" \
-              test/fidelity/tools-local.test.cjs test/fidelity/agentic-grep-glob.test.cjs test/fidelity/webfetch.test.cjs
+              test/fidelity/tools-local.test.cjs test/fidelity/agentic-grep-glob.test.cjs test/fidelity/webfetch.test.cjs \
+              test/tjs-tls-trust.test.cjs
       # THE CELLS this job drives (test/build-gates/tool-coverage-gates.test.cjs, CELL_JOBS): every test that runs a
       # claimed driver's control PASSED above, on this engine, as test/cell-reporter.mjs recorded it. A skip, a failure or
       # a test that never ran means the tool x mode cell ran nowhere, and this step names it (observability plan Task 1).
