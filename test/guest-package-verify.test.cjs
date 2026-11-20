@@ -121,3 +121,57 @@ const pkgUpgradeGuard = defineGuard({
   }),
 });
 guardTests(pkgUpgradeGuard);
+
+// THE PACKAGE-STEP METER (run 44718991403: freebsd-amd64 spent 12 minutes in `pkg install`
+// on a slow mirror, then died at its job timeout saying only "The operation was canceled").
+// Runs the REAL block — meter preamble, the install case, the closing meter — with a stub
+// `pkg` that drops a 2 MB download into a throwaway cache dir.
+function meterBlock(platform, cacheDir) {
+  const src = fs.readFileSync(ACTION, 'utf8');
+  const start = src.indexOf('        # METER THE PACKAGE STEP.');
+  const endMark = '        pkg_meter "done"\n';
+  const end = src.indexOf(endMark, start);
+  assert.ok(start > 0 && end > start, 'the package-step meter moved — this extractor is blind');
+  return src.slice(start, end + endMark.length)
+    .replaceAll('${{ inputs.platform }}', platform)
+    .replaceAll('/var/cache/pkg', cacheDir)
+    .split('\n').map((l) => l.replace(/^ {8}/, '')).join('\n');
+}
+
+function runMeter(pkgExit) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'guest-meter-'));
+  const bin = path.join(dir, 'bin');
+  const cache = path.join(dir, 'cache');
+  fs.mkdirSync(bin);
+  const stub = (name, body) => fs.writeFileSync(path.join(bin, name), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+  stub('sudo', 'exec "$@"');
+  stub('pkg', [
+    'case "$1" in',
+    '  -vv) echo "Repositories:"; echo "  FreeBSD-ports: {"; echo \'    url             : "pkg+https://pkg.FreeBSD.org/${ABI}/quarterly",\' ;;',
+    `  install) mkdir -p "${cache}/All" && dd if=/dev/zero of="${cache}/All/big.pkg" bs=1024 count=2048 2>/dev/null; exit ${pkgExit} ;;`,
+    'esac',
+  ].join('\n'));
+  const script = path.join(dir, 'meter.sh');
+  fs.writeFileSync(script, `set -e\nPKGS="cmake"\nGUEST_RUNTIME_TOOLS=''\n${meterBlock('freebsd', cache)}\necho REACHED_THE_VERIFY\n`);
+  const t0 = Date.now();
+  const r = spawnSync('/bin/sh', [script], { encoding: 'utf8', env: { PATH: `${bin}:/usr/bin:/bin`, HOME: dir }, timeout: 30000 });
+  return { ...r, ms: Date.now() - t0 };
+}
+
+test('the package step reports its duration, what it fetched, and the mirror', UNIX_ONLY, () => {
+  const r = runMeter(0);
+  assert.strictEqual(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /guest: package step done after 0m\d+s; fetched 2 MB in 1 files into \S+cache; mirror: pkg\+https:\/\/pkg\.FreeBSD\.org\/\$\{ABI\}\/quarterly/);
+  assert.match(r.stdout, /REACHED_THE_VERIFY/);
+  // The heartbeat's sleep must not hold stdout open: spawnSync (like cpa's ssh) waits for
+  // every writer, so a leaked `sleep 60` shows up as a ~60 s run.
+  assert.ok(r.ms < 20000, `the meter held the step open for ${r.ms} ms`);
+});
+
+test('a failing install still reports what the package step did, with its exit status', UNIX_ONLY, () => {
+  const r = runMeter(3);
+  assert.notStrictEqual(r.status, 0);
+  assert.match(r.stdout, /guest: package step ended \(exit 3\) after 0m\d+s; fetched 2 MB in 1 files/);
+  assert.doesNotMatch(r.stdout, /REACHED_THE_VERIFY/);
+  assert.ok(r.ms < 20000, `the meter held the step open for ${r.ms} ms`);
+});
