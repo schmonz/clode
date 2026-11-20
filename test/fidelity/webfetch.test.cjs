@@ -81,7 +81,8 @@ async function deadPort() {
   return port;
 }
 
-async function turn(side, bin) {
+// `which`: the side to run, as driveTool takes it ({ quaude, nativeSkip } or { native, quaudeSkip }), spelled in the test.
+async function turn(side, which) {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'webfetch-')));
   const target = await startTarget(dir);
   USE.input.url = target.url;
@@ -92,8 +93,7 @@ async function turn(side, bin) {
       args: ['--settings', JSON.stringify({ skipWebFetchPreflight: true })],
       env: { NODE_EXTRA_CA_CERTS: target.cert, HTTPS_PROXY: proxy, https_proxy: proxy, HTTP_PROXY: proxy, http_proxy: proxy,
         ALL_PROXY: '', all_proxy: '', NO_PROXY: '127.0.0.1', no_proxy: '127.0.0.1' },
-      ...(side === 'quaude' ? { quaude: bin, nativeSkip: 'native is judged against the same answer by the next test' }
-        : { native: bin, quaudeSkip: 'quaude is judged by the test above' }),
+      ...which,
     });
     return { side: r[side], seen: target.seen.slice() };
   } finally {
@@ -116,7 +116,8 @@ test('WebFetch in a built quaude fetches a TLS 1.2, rsa_pss_rsae_sha256 page as 
   const q = builtQuaude();
   if (q.skip) { t.skip(q.skip); return; }
   assertFailsOnMissingOutput(fetched, USE);
-  const got = findings('quaude', await turn('quaude', q.path));
+  const got = findings('quaude', await turn('quaude', { quaude: q.path,
+    nativeSkip: 'native is judged against the same answer by the next test' }));
   assert.deepStrictEqual(got, [], got.join('\n'));
 });
 
@@ -124,6 +125,7 @@ test('WebFetch in a built quaude fetches a TLS 1.2, rsa_pss_rsae_sha256 page as 
 test('native fetches the same page and answers as recorded', { skip: SKIP }, async (t) => {
   const native = rgOracle(process.env);
   if (!native) { t.skip(rgOracleSkip(process.env)); return; }
-  const got = findings('native', await turn('native', native));
+  assertFailsOnMissingOutput(fetched, USE);
+  const got = findings('native', await turn('native', { native, quaudeSkip: 'quaude is judged by the test above' }));
   assert.deepStrictEqual(got, [], `native moved:\n${got.join('\n')}`);
 });
