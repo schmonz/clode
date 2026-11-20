@@ -1347,6 +1347,41 @@ function fixupMbedtlsMsTimeOldDarwin(dir) {
   console.log('fixup mbedtls-ms-time-old-darwin: applied');
 }
 
+function fixupMbedtlsTls12RsaPss(dir) {
+  // EVERY leg (not a portability fixup): the TLS 1.2 client rejected the very signature algorithm it offered.
+  // mbedtls 3.6's hybrid ClientHello (TLS 1.2 + 1.3 both on) lists rsa_pss_rsae_sha256/384/512 in
+  // signature_algorithms, because TLS 1.3 needs them. A TLS-1.2-only server that picks one for its
+  // ServerKeyExchange (RFC 8446 4.2.3 allows it in 1.2) then fails ssl_parse_signature_algorithm's
+  // mbedtls_ssl_sig_alg_is_supported(), whose TLS 1.2 table knows only pkcs1/ecdsa hashes, and the client
+  // sends a fatal illegal_parameter alert (47). MEASURED 2026-11-20 against www.netbsd.org and cdn.netbsd.org
+  // (Fastly, TLS 1.2 only, rsa_pss_rsae_sha256): every fetch and XMLHttpRequest failed with
+  // "mbedtls connect -1 5 0", so quaude's WebFetch answered "Network Error" where curl and native fetched the
+  // page. The verifier already has the PSS branch (ssl_parse_server_key_exchange, MBEDTLS_X509_RSASSA_PSS_SUPPORT,
+  // pk_alg == MBEDTLS_PK_RSASSA_PSS), so the only change is to let an OFFERED rsa_pss_rsae_* through the
+  // support check; the offered check right after it still applies. Driven by test/fidelity/webfetch.test.cjs
+  // (a TLS-1.2-only local target that signs with rsa_pss_rsae_sha256). mbedtls upstream candidate.
+  const f = path.join(dir, 'deps/mbedtls/library/ssl_tls12_client.c');
+  const src = fs.readFileSync(f, 'utf8');
+  const marker = 'clode: rsa_pss_rsae_* in TLS 1.2';
+  if (src.includes(marker)) {
+    console.log('fixup mbedtls-tls12-rsa-pss: already applied');
+    return;
+  }
+  const anchor = '    if (!mbedtls_ssl_sig_alg_is_supported(ssl, sig_alg)) {\n';
+  if (src.split(anchor).length !== 2) {
+    throw new Error('fixup mbedtls-tls12-rsa-pss: anchor not found exactly once (mbedtls changed under the pin — re-derive the fixup)');
+  }
+  const fixed = '    if (!mbedtls_ssl_sig_alg_is_supported(ssl, sig_alg)\n'
+    + '#if defined(MBEDTLS_X509_RSASSA_PSS_SUPPORT)\n'
+    + `        /* ${marker} (RFC 8446 4.2.3): offered in the hybrid ClientHello,\n`
+    + '         * verified by the PSS branch of ssl_parse_server_key_exchange */\n'
+    + '        && *pk_alg != MBEDTLS_PK_RSASSA_PSS\n'
+    + '#endif\n'
+    + '        ) {\n';
+  fs.writeFileSync(f, src.replace(anchor, fixed));
+  console.log('fixup mbedtls-tls12-rsa-pss: applied');
+}
+
 function fixupLibuvUdpSsmOldDarwin(dir) {
   // libuv's source-specific-multicast support (struct ip_mreq_source,
   // IP_ADD_SOURCE_MEMBERSHIP, MCAST_JOIN_SOURCE_GROUP...) is guarded by a
@@ -3469,6 +3504,7 @@ if (buildOnly) {
   fixupHttpclientAsyncDns(tjsDir);
   fixupLwsScandirOldDarwin(tjsDir);
   fixupMbedtlsMsTimeOldDarwin(tjsDir);
+  fixupMbedtlsTls12RsaPss(tjsDir);
   fixupQjsHrtimeOldDarwin(tjsDir);
   fixupQjsX87FpcwI386Darwin(tjsDir);
   fixupQjsX87FpcwLabelStmt(tjsDir);     // netbsd-i386: label + declaration
