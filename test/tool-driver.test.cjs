@@ -272,6 +272,7 @@ const sawSubagent = (m) => toolResultText(m, FAKE_AGENT.id).includes('SUBAGENT-S
 // (SIDE.turn) and judged; each planted turn below is the unlisted (or plan) turn plus one way to switch a tool off that
 // the old list of spellings missed, or one extra arg, and each is a finding. The mode's own turns are not.
 test('modeTurnFinding: only a turn that ran exactly its MODE_TURNS entry is the mode\'s own (planted: every way round it)', { skip: SKIP }, async () => {
+  assertFailsOnMissingOutput(sawProduct, FAKE);
   const f = fakes();
   const deny = { permissions: { deny: ['FakeDriverTool'] } };
   const run = (mode, over = {}) => driveTool({ tool: FAKE, quaude: f.quaude, nativeSkip: 'judged on quaude alone', ...MODE_TURNS[mode], ...over });

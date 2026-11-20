@@ -674,12 +674,22 @@ test('native answers the Task 5 script as T5_NATIVE records', { skip: SKIP }, as
 const E_EDIT = { name: 'Edit', input: { file_path: W('a.txt'), old_string: 'two', new_string: 'TWO' }, id: 'toolu_m6_edit' };
 const B_ECHO = { name: 'Bash', input: { command: 'echo mode-turn-$((6*7))', description: 'Print a marker' }, id: 'toolu_m6_bash' };
 const MODE_SCRIPT = [...SCRIPT, { tool: E_EDIT }, { tool: B_ECHO }, ...TASK_SCRIPT, ...T5_SCRIPT, ...SESSION_SCRIPT];
-// The mode turns are test/tool-driver.cjs's MODE_TURNS (ruling E12), never a local copy: print (every tool named in
-// --allowedTools, as the print tests run; the one call only this turn makes in print is Edit's, its print cell on
-// netbsd-arm64, where node-shim-agentic cannot build a quaude), the five --permission-mode turns, unlisted (no
-// --allowedTools) and interactive. modeFindings holds every turn to exactly its entry (modeTurnFinding), which is what
-// lets the unlisted turn's "No such tool available" prove the Task list tools not registered.
-const MODE_ARGS = MODE_TURNS;
+// The mode turns, spelled here because the coverage gate reads each mode's flag in this file, and held equal to
+// test/tool-driver.cjs's MODE_TURNS (ruling E12; modeControls asserts it). modeFindings holds every turn to exactly its
+// entry (modeTurnFinding), which is what lets the unlisted turn's "No such tool available" prove the Task list tools
+// not registered.
+const MODE_ARGS = {
+  // print: the same combined turn with every tool named in --allowedTools, as the print tests run; the one call only
+  // this turn makes in print is Edit's (its print cell on netbsd-arm64, where node-shim-agentic cannot build a quaude)
+  print: {},
+  'permission:acceptEdits': { args: ['--permission-mode', 'acceptEdits'] },
+  'permission:auto': { args: ['--permission-mode', 'auto'] },
+  'permission:bypassPermissions': { args: ['--permission-mode', 'bypassPermissions'] },
+  'permission:dontAsk': { args: ['--permission-mode', 'dontAsk'] },
+  'permission:plan': { args: ['--permission-mode', 'plan'] },
+  unlisted: { allowedTools: null },
+  interactive: { interactive: true },
+};
 const layBoth = (work) => { layTree(work); layRepo(work); };
 const readBoth = (work, base) => ({ tree: readTree(work), gitState: readRepo(work), workflow: readWorkflow(work, base) });
 // The two calls only this turn makes, as print answers them (Edit's success, unlike Write's, has no file-state note).
@@ -767,6 +777,7 @@ const printAnswer = (USE) => (USE === E_EDIT ? EDIT_DONE : USE === A_AGENT ? { t
 // The controls, with the cells they drive declared. A print check declares only the modes where its call answers as
 // in print; a mode's changed answer declares its mode through its own check.
 function modeControls() {
+  assert.deepStrictEqual(MODE_ARGS, JSON.parse(JSON.stringify(MODE_TURNS)), 'MODE_ARGS is MODE_TURNS (test/tool-driver.cjs, ruling E12)');
   // each declares its cells as a literal list, the gate's rule (test/build-gates/tool-coverage-gates.test.cjs)
   assertFailsOnMissingOutput(readWhole, READ, ['interactive', 'permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted']);
   assertFailsOnMissingOutput(writeNew, WRITE_NEW, ['interactive', 'permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk']);
