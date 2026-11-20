@@ -87,6 +87,14 @@ const ENCODING_BODY = `
         plink: show(await fs.promises.readlink(path.join(root, 'ln'), { encoding: enc })),
       };
     }
+    for (const enc of ['buffer', 'hex']) {
+      // recursive with a non-utf8 encoding is NOT compared: node 24 itself breaks there (BACKLOG.md, DIFF-ENCODINGS)
+      const dir = fs.opendirSync(root, { encoding: enc });  // opendir's Dir names its entries in the encoding
+      const names = [];
+      for (let d; (d = dir.readSync()) !== null;) names.push(show(d.name));
+      dir.closeSync();
+      out['opendir-' + enc] = names.sort(byName);
+    }
     out.equals = Buffer.from('a.txt').equals(fs.readdirSync(root, 'buffer').find((b) => b.toString() === 'a.txt'));
     console.log(JSON.stringify(out));
   })();

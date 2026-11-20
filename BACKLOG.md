@@ -232,7 +232,10 @@ shapes cut to the driver's argument count.
   `, read`/`, link 'a' -> 'b'` tail.
 - DIFF-SCANDIR: readdir and opendir errors say syscall `readdir`; node says `scandir` (`opendir` for opendir).
 - DIFF-ENCODINGS: `readFileSync(p, {encoding: "ascii"})` answers a Buffer where node answers a string. (readlink and
-  readdir with `encoding: "buffer"` answer Buffers since c61f4a9, 2026-11-20.)
+  readdir with `encoding: "buffer"` answer Buffers since c61f4a9, 2026-11-20; opendir's entries too since its fix
+  round.) Not compared, on purpose: readdir `recursive` with a non-utf8 encoding, because node 24.21.0 itself breaks
+  there (measured 2026-11-20: 'buffer' throws ERR_INVALID_ARG_TYPE from path.join, 'hex' lists the top level only,
+  'hex' with withFileTypes throws ENOENT), so no caller can depend on it; the shim answers the encoded relative paths.
 - DIFF-FD-PRIMITIVES: `fs.fchmod` (callback) is absent; `fchmodSync`, `fsyncSync` and `ftruncateSync` on a bad or
   read-only descriptor do not throw node's EBADF/EINVAL (`ftruncateSync` is absent, as the gap map says).
 - DIFF-READSYNC-RANGE: `readSync` with a length past the buffer reads first and fails in the engine; node throws

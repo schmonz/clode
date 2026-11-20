@@ -901,12 +901,13 @@ const fsMod = {
   utimesSync,
   readlinkSync: (p, opts) => encodeName(FSS.readlink(p), nameEncoding(opts)),
   readdirSync: (p, opts) => readdirCore(p, opts),
-  opendirSync: (p) => {
+  opendirSync: (p, opts) => {
     // A Dir over an eager Dirent list in the OS's readdir order (the engine's readdir does not sort,
     // as node's Dir does not: test/node-shim-fs-opendir.test.cjs): readSync()/read() hand over the next
     // entry or null, an async iterator, and closeSync()/close(), after which a read is node's
     // ERR_DIR_CLOSED.
-    const ents = readdirCore(p, { withFileTypes: true });
+    // `encoding` names the entries as readdir's does (a Dirent's name a Buffer for 'buffer'), as node's Dir does.
+    const ents = readdirCore(p, { withFileTypes: true, encoding: nameEncoding(opts) });
     let i = 0, closed = false;
     const next = () => {
       if (closed) { const e = new Error('Directory handle was closed'); e.code = 'ERR_DIR_CLOSED'; throw e; }
@@ -1101,7 +1102,7 @@ const promises = {
   fstat: async (fd, opts) => fsMod.fstatSync(fd, opts),
   mkdir: async (p, opts) => mkdirSync(p, opts),
   readdir: async (p, opts) => readdirCore(p, opts),
-  opendir: async (p) => fsMod.opendirSync(p),
+  opendir: async (p, opts) => fsMod.opendirSync(p, opts),
   access: async (p, m) => FSS.access(p, m ?? constants.F_OK),
   realpath: async (p) => FSS.realpath(p),
   readlink: async (p, opts) => encodeName(FSS.readlink(p), nameEncoding(opts)),
