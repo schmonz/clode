@@ -674,6 +674,9 @@ const E_EDIT = { name: 'Edit', input: { file_path: W('a.txt'), old_string: 'two'
 const B_ECHO = { name: 'Bash', input: { command: 'echo mode-turn-$((6*7))', description: 'Print a marker' }, id: 'toolu_m6_bash' };
 const MODE_SCRIPT = [...SCRIPT, { tool: E_EDIT }, { tool: B_ECHO }, ...TASK_SCRIPT, ...T5_SCRIPT, ...SESSION_SCRIPT];
 const MODE_ARGS = {
+  // print: the same combined turn with every tool named in --allowedTools, as the print tests run; the one call only
+  // this turn makes in print is Edit's (its print cell on netbsd-arm64, where node-shim-agentic cannot build a quaude)
+  print: {},
   'permission:acceptEdits': { args: ['--permission-mode', 'acceptEdits'] },
   'permission:auto': { args: ['--permission-mode', 'auto'] },
   'permission:bypassPermissions': { args: ['--permission-mode', 'bypassPermissions'] },
@@ -773,7 +776,7 @@ function modeControls() {
   assertFailsOnMissingOutput(readWhole, READ, ['interactive', 'permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted']);
   assertFailsOnMissingOutput(writeNew, WRITE_NEW, ['interactive', 'permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk']);
   assertFailsOnMissingOutput(nbReplace, NB_REPLACE, ['interactive', 'permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk']);
-  assertFailsOnMissingOutput(mEdit, E_EDIT, ['interactive', 'permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk']);
+  assertFailsOnMissingOutput(mEdit, E_EDIT, ['print', 'interactive', 'permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk']);
   assertFailsOnMissingOutput(mEcho, B_ECHO, ['interactive', 'permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted']);
   assertFailsOnMissingOutput(tCreate1, T_CREATE_1, ['interactive', 'permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan']);
   assertFailsOnMissingOutput(tGetNone, T_GET_NONE, ['interactive', 'permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan']);

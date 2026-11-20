@@ -353,6 +353,10 @@ test('Grep, Glob and the Bash tool\'s rg in a built quaude: every tool_result eq
 test('native answers this script as NATIVE records (CLODE_E2E_NATIVE=1)', { skip: SKIP || (process.env.CLODE_E2E_NATIVE !== '1' && 'opt-in: CLODE_E2E_NATIVE=1 re-measures native') }, async (t) => {
   const bin = providerBin(process.env);
   if (!bin) { t.skip(skipReason(process.env)); return; }
+  // native alone: quaude is judged by the test above (tool-coverage-gates reads quaudeSkip as "this test runs no
+  // quaude", so a box with no native, NetBSD, skipping it leaves the quaude test's cells driven)
+  const quaudeSkip = 'quaude is judged by the test above';
+  t.diagnostic(quaudeSkip);
   controls();
   const findings = [], measured = {};
   for (const mode of PATH_MODES) {
@@ -377,6 +381,8 @@ for (const perm of Object.keys(PERMISSION_TURNS)) {
   test(`native answers this script in ${perm} as NATIVE records (CLODE_E2E_NATIVE=1)`, { skip: SKIP || (process.env.CLODE_E2E_NATIVE !== '1' && 'opt-in: CLODE_E2E_NATIVE=1 re-measures native') }, async (t) => {
     const bin = providerBin(process.env);
     if (!bin) { t.skip(skipReason(process.env)); return; }
+    const quaudeSkip = 'quaude is judged by the test above';   // native alone (see the print test's native twin)
+    t.diagnostic(quaudeSkip);
     controls();
     modeControls();
     const r = await judge(bin, PATH_MODES[0], perm);
