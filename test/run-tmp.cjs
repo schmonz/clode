@@ -78,8 +78,11 @@ function writableDir(d) {
 // which a textual prefix test does not see as C:\Users\runneradmin; once rootParent took the long name (fb01301) the
 // containment showed (CI windows-latest on 26149c8). RUNNER_TEMP (D:\a\_temp on a GitHub runner) is outside the home,
 // and test/bun-graph.test.cjs already goes there for room, since C: is the small volume.
+// An operator on a box with no RUNNER_TEMP (a Windows dev box, whose TEMP is in the home) names one with
+// CLODE_TEST_TMP_PARENT: a directory outside the home, offered before RUNNER_TEMP.
+const TMP_PARENT_ENV = 'CLODE_TEST_TMP_PARENT';
 function rootCandidates(original, platform = process.platform, env = process.env) {
-  return [original, ...(platform === 'win32' ? [] : ['/tmp']), ...(env.RUNNER_TEMP ? [env.RUNNER_TEMP] : [])];
+  return [original, ...(platform === 'win32' ? [] : ['/tmp']), ...[env[TMP_PARENT_ENV], env.RUNNER_TEMP].filter(Boolean)];
 }
 
 // A path's NATIVE real path (the long name on Windows, the on-disk case), or its resolved form when it does not exist.
@@ -232,7 +235,7 @@ function stableLine(sizes, original) {
 
 module.exports = {
   ROOT_ENV, ORIGINAL_ENV, ROOT_PREFIX, REQUEST_ENV, STABLE, DURABLE_ENV,
-  redirect, rootCandidates, rootParent, isInside, nativeReal, makeRunRoot, makeFileDir, openUp, removeRunRoot,
+  redirect, rootCandidates, rootParent, isInside, nativeReal, TMP_PARENT_ENV, makeRunRoot, makeFileDir, openUp, removeRunRoot,
   writableDir, snapshot, snapshotList, repoPrefixes, leaks, leakVerdict, stableSizes, stableLine,
 };
 

@@ -198,6 +198,8 @@ test('makeRunRoot points TMPDIR, TMP and TEMP at a clode-run- dir, and the durab
 test('Windows never offers /tmp (node would resolve it to <drive>:\\tmp, which nothing there provides); a runner\'s RUNNER_TEMP is offered everywhere', () => {
   assert.deepStrictEqual(RT.rootCandidates('C:\\T', 'win32', {}), ['C:\\T']);
   assert.deepStrictEqual(RT.rootCandidates('C:\\T', 'win32', { RUNNER_TEMP: 'D:\\a\\_temp' }), ['C:\\T', 'D:\\a\\_temp']);
+  assert.deepStrictEqual(RT.rootCandidates('C:\\T', 'win32', { RUNNER_TEMP: 'D:\\a\\_temp', CLODE_TEST_TMP_PARENT: 'E:\\t' }),
+    ['C:\\T', 'E:\\t', 'D:\\a\\_temp'], 'the operator\'s parent comes before the runner\'s');
   assert.deepStrictEqual(RT.rootCandidates('/var/T', 'darwin', {}), ['/var/T', '/tmp']);
 });
 

@@ -173,5 +173,5 @@ test('the suite runs under its own home: HOME, USERPROFILE and CLAUDE_CONFIG_DIR
   assert.strictEqual(process.env.CLAUDE_CONFIG_DIR, path.join(process.env.HOME, '.claude'));
   // both sides by their native real paths (run-tmp's isInside): a textual prefix test missed the containment on
   // Windows while the suite home carried the 8.3 alias C:\Users\RUNNER~1 of the real C:\Users\runneradmin
-  assert.ok(!require('./run-tmp.cjs').isInside(process.env.HOME, real.HOME), `the suite home is not inside the real one: ${process.env.HOME} in ${real.HOME}`);
+  assert.ok(!require('./run-tmp.cjs').isInside(process.env.HOME, real.HOME), `the suite home is not inside the real one: ${process.env.HOME} in ${real.HOME}. The run root goes outside the home when a candidate is: on a box whose temp dir is in the home (Windows), name a writable directory outside it in CLODE_TEST_TMP_PARENT (test/run-tmp.cjs rootCandidates)`);
 });
