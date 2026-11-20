@@ -8,6 +8,20 @@ Concrete clode-under-Node divergences from native Claude Code, to triage and fix
 That page is GENERATED from `scripts/build-graph.cjs` — the one declaration of the build — so it
 cannot drift from it; it is also where the honest answer to "does this need node?" lives.
 
+## The forced-win32 pass once said test/procfs-linux-only.test.cjs "reported NO tests" (2026-11-20, seen once)
+
+One full suite on this box (darwin-arm64, during the every-tool plan's Task 3 fix round 2, with the temp-root
+ratchet's code in the tree) ended RC=1 on the forced-win32 pass alone: `run: forced-win32:
+test/procfs-linux-only.test.cjs reported NO tests of its own`, `not ok 12 - test/procfs-linux-only.test.cjs`,
+320 tests where the same set ran 355. The file died or exited before reporting; its stderr went to the TAP copy,
+which the runner deletes, so the cause was not kept. It did not come back: the file alone under the forced
+preload, the whole forced set with the runner's env, and the next full suite (same code) were all green. The log
+was kept outside the repo, in the session scratchpad, as tools/t3-fix2-suite.log. If it repeats, keep the forced
+pass's TAP (run.mjs unlinks winTap) and rerun the file with `node test/forced-win32.cjs --run
+test/procfs-linux-only.test.cjs`.
+
+Unmeasured. The cause: the TAP that would show it was deleted, and it has not recurred (one in about six full suites that day).
+
 ## The shipped macOS arm64 floor is 14.0, not the 11.0 it is labelled (2026-11-20)
 
 Measured: HTTP range reads of the fat header and the arm64 slice's load commands, and otool -l of the downloaded
