@@ -518,9 +518,9 @@ job on a NetBSD arm64 host, which CI does not have, a self-hosted NetBSD/arm64 r
 inside a Linux job, building the engine and a quaude there and running tools-local and agentic-grep-glob; NetBSD
 has no native Claude Code, so their native tests would skip there by name and quaude would be judged against the
 answers recorded from native on darwin-arm64 and linux-x64); 4 interactive (Grep and Glob on both engines: a Grep
-and a Glob call added to tools-local's interactive turn); 5 Bash (sandbox:required on both engines and sandbox:on on
-darwin, agentic-sandbox-fail-closed in linux-x64-pty and a darwin run of it with Seatbelt; shell:zsh on both, a
-tools-local turn with env { SHELL: zsh }). Re-dating the netbsd cells, or splitting them off UNTIL_PHASE_A, is the
+and a Glob call added to tools-local's interactive turn); 5 Bash, EXEMPT and run by no job today (agentic-sandbox-fail-closed drives only
+sandbox:on, on linux-x64-musl): sandbox:required on both engines needs a failIfUnavailable turn added to that file,
+sandbox:on@darwin a darwin run of it with Seatbelt, and shell:zsh on both a tools-local turn with env { SHELL: zsh }. Re-dating the netbsd cells, or splitting them off UNTIL_PHASE_A, is the
 user's call. The tool-level account below is as of 2026-09-28.
 
 `every-tool-driven` (test/build-gates/tool-coverage-gates.test.cjs; the grep-native plan's task
