@@ -608,10 +608,12 @@ function mapConnectError(e, host, port) {
  *
  * An https:// PROXY URL (TLS to the proxy itself) IS supported for an http
  * origin — but its certificate can only be trusted through a caller-supplied
- * `ca`: measured, neither SSL_CERT_FILE nor TJS_CA_BUNDLE reaches
- * tjs.connect('tls', ...), so there is no environment knob for a private CA on
- * a client socket here (node has NODE_EXTRA_CA_CERTS). Untrusted means a
- * VISIBLE failure — never a direct connection.
+ * `ca`, or through NODE_EXTRA_CA_CERTS in a built quaude: measured, neither
+ * SSL_CERT_FILE nor TJS_CA_BUNDLE reaches tjs.connect('tls', ...), but the
+ * bootstrap's applyExtraCaCerts sets the engine's bundle for tjs.connect('tls')
+ * as well as fetch (txiki-ca-bundle-global.patch), the roots plus the extra
+ * certificates, as node adds them. Untrusted means a VISIBLE failure — never a
+ * direct connection.
  *
  * WHAT IS NOT COVERED, loudly: an HTTPS origin through a proxy needs TLS
  * started over the socket the CONNECT tunnel returns, and this engine cannot do

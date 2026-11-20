@@ -596,13 +596,16 @@ function guardDirRefusal(dir, st, parent, uid, platform) {
 }
 // The merged settings hold a copy of the user's --settings, which may carry secrets. They are removed once older than
 // a week. tjs.exit runs no exit handlers, so a quaude session cannot remove its own copy, and a session still running
-// after a week read its settings long ago. `entries` is [{ name, mtimeMs }]; returns the names to remove.
+// after a week read its settings long ago. The NODE_EXTRA_CA_CERTS bundles (`ca-[hex].pem`, applyExtraCaCerts) are
+// written the same way and go on the same clock, for the same reason: a session reads its bundle at its first
+// connection, so a week-old one was read long ago. `entries` is [{ name, mtimeMs }]; returns the names to remove.
 const GUARD_SETTINGS_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 // A quaude uid probe (`.uid-probe-*`, an empty directory) its session failed to remove goes once an hour old: never
 // sooner, so a probe another session is judging right now is never taken from under it.
 const GUARD_PROBE_MAX_AGE_MS = 60 * 60 * 1000;
 function guardSettingsToPrune(entries, nowMs) {
-  return entries.filter((e) => (/^settings-[0-9a-f]+\.json$/.test(e.name) && nowMs - e.mtimeMs > GUARD_SETTINGS_MAX_AGE_MS)
+  return entries.filter((e) => (/^(settings-[0-9a-f]+\.json|ca-[0-9a-f]+\.pem)$/.test(e.name)
+      && nowMs - e.mtimeMs > GUARD_SETTINGS_MAX_AGE_MS)
     || (/^\.uid-probe-[0-9a-z]+$/.test(e.name) && nowMs - e.mtimeMs > GUARD_PROBE_MAX_AGE_MS))
     .map((e) => e.name);
 }
@@ -728,42 +731,66 @@ async function pruneGuardSettings(tjs, dir, sep, nowMs) {
 }
 // <<< quaudeGuardDir <<<
 // NODE_EXTRA_CA_CERTS (node's and Bun's: native Claude Code trusts the certificates in that PEM file IN ADDITION to its
-// roots). The engine's fetch, XMLHttpRequest and WebSocket (lws) take ONE CA bundle: the compiled-in one, or the file
-// core.setCABundlePath names, which run-main sets from TJS_CA_BUNDLE/SSL_CERT_FILE only on the `tjs run` path, never
-// for a standalone binary such as this one (and tjs:internal/core is not importable from here). So a built target
-// ignored NODE_EXTRA_CA_CERTS, and every request to a host signed by a private CA (a corporate proxy, a local test
-// server) failed as "Network Error" where native worked. The engine's txiki-ca-bundle-global.patch exposes the setter
-// as globalThis.__tjs_set_ca_bundle_path.
-// extraCaBundle -> the compiled-in roots (the node-shim's tls-cacert.pem member, held byte-identical to the engine's
-// cacert.c by test/tls-cacert-pem.test.cjs) with the extra file's certificates appended, or null when it has none.
+// roots). The engine's clients take ONE CA bundle: the compiled-in one, or the file core.setCABundlePath names, which
+// run-main sets from TJS_CA_BUNDLE/SSL_CERT_FILE only on the `tjs run` path, never for a standalone binary such as this
+// one (and tjs:internal/core is not importable from here). So a built target ignored NODE_EXTRA_CA_CERTS, and every
+// request to a host signed by a private CA (a corporate proxy, a local test server) failed as "Network Error" where
+// native worked. The engine's txiki-ca-bundle-global.patch exposes the setter (for fetch, XMLHttpRequest, WebSocket AND
+// tjs.connect('tls'), so node:https too) and the engine's own certificate parser as two globals. They are taken off
+// globalThis HERE, at module evaluation, before main() and before any other code runs, whether NODE_EXTRA_CA_CERTS is
+// set or not: nothing loaded later (the bundle, a plugin, a probe) can swap the trust store.
+const ENGINE_CA = Object.freeze({
+  setBundlePath: typeof globalThis.__tjs_set_ca_bundle_path === 'function' ? globalThis.__tjs_set_ca_bundle_path : null,
+  parseError: typeof globalThis.__tjs_x509_parse_error === 'function' ? globalThis.__tjs_x509_parse_error : null,
+});
+delete globalThis.__tjs_set_ca_bundle_path;
+delete globalThis.__tjs_x509_parse_error;
+// extraCaBundle -> { bundle, dropped }: the compiled-in roots (the node-shim's tls-cacert.pem member, held
+// byte-identical to the engine's cacert.c by test/tls-cacert-pem.test.cjs) with the extra file's certificates
+// appended (bundle null when none is kept), and why each dropped block was dropped. `parseError(block)` is the
+// engine's own parser (undefined: accepted). EVERY block must pass it: the engine's fetch client hands the whole bundle
+// to mbedtls_x509_crt_parse and refuses it if ANY block fails, so one Ed25519 CA or one corrupt block would end every
+// HTTPS request, api.anthropic.com included (security review, 2026-11-20). Node keeps its roots and the good
+// certificates and warns; so does this.
 // >>> extraCaBundle (unit-tested under host node: test/quaude-extra-ca-certs.test.cjs) >>>
 const CERT_BLOCK_RE = /-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g;
-function extraCaBundle(rootsPem, extraText) {
+function extraCaBundle(rootsPem, extraText, parseError) {
   const blocks = String(extraText || '').match(CERT_BLOCK_RE) || [];
-  if (!blocks.length || !rootsPem) return null;
-  return String(rootsPem).replace(/\s*$/, '\n') + blocks.join('\n') + '\n';
+  const kept = [];
+  const dropped = [];
+  for (const block of blocks) {
+    let why;
+    try { why = parseError(block); } catch (e) { why = (e && e.message) || String(e); }
+    if (why === undefined || why === null) kept.push(block); else dropped.push(String(why));
+  }
+  if (!kept.length || !rootsPem) return { bundle: null, dropped };
+  return { bundle: String(rootsPem).replace(/\s*$/, '\n') + kept.join('\n') + '\n', dropped };
 }
 // <<< extraCaBundle <<<
 export { extraCaBundle };
-// Apply it, once, before any request: the engine reads the bundle when it first builds its client context. The file is
+// Apply it, once, before any request: the engine reads the bundle when it first builds a client context. The file is
 // written into quaude's private (0700, owner-checked) directory, never a shared temp dir, where another user could swap
-// in a CA of their own. Each failure warns as node does and leaves the compiled-in roots alone.
+// in a CA of their own. Each failure warns in node's words and leaves the compiled-in roots alone.
 async function applyExtraCaCerts(tjs, files, sep, platform) {
   const extra = tjs.env.NODE_EXTRA_CA_CERTS;
   if (!extra) return;
   const warn = (why) => console.error(`Warning: Ignoring extra certs from \`${extra}\`, load failed: ${why}`);
-  if (typeof globalThis.__tjs_set_ca_bundle_path !== 'function') { warn('this engine cannot set its CA bundle'); return; }
+  if (!ENGINE_CA.setBundlePath || !ENGINE_CA.parseError) { warn('this engine cannot set its CA bundle'); return; }
   let text;
   try { text = new TextDecoder().decode(await tjs.readFile(extra)); } catch (e) { warn((e && e.message) || String(e)); return; }
   const roots = files.get('node-shim/modules/tls-cacert.pem');
-  const bundle = extraCaBundle(roots ? new TextDecoder().decode(roots) : '', text);
-  if (!bundle) { warn(roots ? 'no PEM certificate in it' : 'this build carries no root certificates to add them to'); return; }
+  const { bundle, dropped } = extraCaBundle(roots ? new TextDecoder().decode(roots) : '', text, ENGINE_CA.parseError);
+  for (const why of dropped) warn(why);
+  if (!bundle) {
+    if (!dropped.length) warn(roots ? 'no PEM certificate in it' : 'this build carries no root certificates to add them to');
+    return;
+  }
   const got = await privateGuardDir(tjs, tjs.env, sep, platform);
   if (got.refusal) { warn(`quaude's private directory is unsafe: ${got.refusal}`); return; }
   const file = got.dir + sep + 'ca-' + (await sha256hex(new TextEncoder().encode(bundle))).slice(0, 16) + '.pem';
   try {
     await writeFileOnce(tjs, file, bundle);
-    globalThis.__tjs_set_ca_bundle_path(file);
+    ENGINE_CA.setBundlePath(file);
   } catch (e) { warn((e && e.message) || String(e)); }
 }
 

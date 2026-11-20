@@ -72,6 +72,15 @@ test('guardSettingsToPrune: a uid probe left behind goes once an hour old, never
   ], now), ['.uid-probe-abc123']);
 });
 
+test('guardSettingsToPrune: a NODE_EXTRA_CA_CERTS bundle (ca-[hex].pem) goes on the settings clock, a week old', () => {
+  const now = 10 * GUARD_SETTINGS_MAX_AGE_MS;
+  assert.deepStrictEqual(guardSettingsToPrune([
+    { name: 'ca-0123456789abcdef.pem', mtimeMs: now - GUARD_SETTINGS_MAX_AGE_MS - 1 },
+    { name: 'ca-fedcba9876543210.pem', mtimeMs: now - 1000 },
+    { name: 'ca-.pem', mtimeMs: 0 }, { name: 'ca-0123.pem.x1y2.tmp', mtimeMs: 0 }, { name: 'xca-01.pem', mtimeMs: 0 },
+  ], now), ['ca-0123456789abcdef.pem']);
+});
+
 test('quaude: the prune removes a stale uid probe directory for real (naude: test/naude-entry.test.cjs)', async () => {
   const { privateGuardDir, pruneGuardSettings } = loadQuaudeGuardDir();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qguard-'));

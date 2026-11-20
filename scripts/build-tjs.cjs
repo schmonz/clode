@@ -1364,11 +1364,24 @@ function fixupMbedtlsTls12RsaPss(dir) {
   const f = path.join(dir, 'deps/mbedtls/library/ssl_tls12_client.c');
   const src = fs.readFileSync(f, 'utf8');
   const marker = 'clode: rsa_pss_rsae_* in TLS 1.2';
+  // The relaxation is safe ONLY because the offered check right after it still refuses a sig_alg the client did not
+  // put in its ClientHello. Refuse to build if that check no longer follows (before the function's `return 0;`),
+  // applied or not: a reshuffled upstream must be re-derived, never relaxed blind (security review, 2026-11-20).
+  const offered = '    if (!mbedtls_ssl_sig_alg_is_offered(ssl, sig_alg)) {\n'
+    + '        MBEDTLS_SSL_DEBUG_MSG(1, ("Server used SigAlg value 0x%04x that was not offered", sig_alg));\n'
+    + '        return MBEDTLS_SSL_ALERT_MSG_ILLEGAL_PARAMETER;\n'
+    + '    }\n';
+  const anchor = '    if (!mbedtls_ssl_sig_alg_is_supported(ssl, sig_alg)) {\n';
+  const at = src.includes(marker) ? src.indexOf(marker) : src.indexOf(anchor);
+  const end = at < 0 ? -1 : src.indexOf('\n    return 0;\n', at);
+  if (at < 0 || end < 0 || !src.slice(at, end).includes(offered)) {
+    throw new Error('fixup mbedtls-tls12-rsa-pss: the sig_alg offered check no longer follows the support check '
+      + '(mbedtls changed under the pin — re-derive the fixup; relaxing the support check is unsafe without it)');
+  }
   if (src.includes(marker)) {
     console.log('fixup mbedtls-tls12-rsa-pss: already applied');
     return;
   }
-  const anchor = '    if (!mbedtls_ssl_sig_alg_is_supported(ssl, sig_alg)) {\n';
   if (src.split(anchor).length !== 2) {
     throw new Error('fixup mbedtls-tls12-rsa-pss: anchor not found exactly once (mbedtls changed under the pin — re-derive the fixup)');
   }

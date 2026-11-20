@@ -246,6 +246,13 @@ function discoverTestFiles(dir) {
 // convention for `skip` reasons, which this mirrors).
 const GUARD_EXCLUSIONS = [
   {
+    file: 'tjs-tls-trust.test.cjs',
+    because: 'live engine runs, not a scan: it drives the BUILT engine against local TLS servers (a tamper proxy, '
+      + 'tjs.connect) and a built quaude, asserting on what each run printed. READS_ARTIFACT fires on '
+      + 'scripts/build-tjs.cjs, which it reads only to EXTRACT fixupMbedtlsTls12RsaPss and run it on fixtures '
+      + '(the function is the subject, executed; no pattern is searched for in the repo).',
+  },
+  {
     file: 'build-host-stale-engine.test.cjs',
     because: 'a live ACCEPTANCE run, not a scan: it copies libexec into a mkdtemp stale build host '
       + '(test/stale-build-host.cjs), runs ./build.sh --only engine.source / engine.bytecode / '

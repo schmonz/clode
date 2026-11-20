@@ -1032,7 +1032,9 @@ export const GUEST_CELL_JOBS = [
     // the drivers' needs: node (the test runner), bash and zsh (the Bash tool's shells), ugrep and bfs (the search
     // applets quaude runs for Grep and Glob), python3 and gmake (node-pty's source build: no netbsd-arm64 prebuild),
     // git (tools-local lays a real repository for the worktree tools: CI 44782406152 died `spawnSync git ENOENT`;
-    // git-base is pkgsrc's git binary without the docs/gui/perl extras, and the guest action verifies it as `git`)
+    // git-base is pkgsrc's git binary without the docs/gui/perl extras, and the guest action verifies it as `git`).
+    // webfetch (test/fidelity/webfetch.test.cjs, one -p turn in the first lane) needs only openssl, which NetBSD's base
+    // system carries, for its throwaway certificate.
     packages: 'nodejs bash zsh ugrep bfs python313 gmake git-base',
     timeoutScale: 20, timeout: 350 },
 ];

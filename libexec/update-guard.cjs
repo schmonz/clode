@@ -443,13 +443,16 @@ function guardDirRefusal(dir, st, parent, uid, platform) {
 }
 // The merged settings hold a copy of the user's --settings, which may carry secrets. They are removed once older than
 // a week. tjs.exit runs no exit handlers, so a quaude session cannot remove its own copy, and a session still running
-// after a week read its settings long ago. `entries` is [{ name, mtimeMs }]; returns the names to remove.
+// after a week read its settings long ago. The NODE_EXTRA_CA_CERTS bundles (`ca-[hex].pem`, applyExtraCaCerts) are
+// written the same way and go on the same clock, for the same reason: a session reads its bundle at its first
+// connection, so a week-old one was read long ago. `entries` is [{ name, mtimeMs }]; returns the names to remove.
 const GUARD_SETTINGS_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 // A quaude uid probe (`.uid-probe-*`, an empty directory) its session failed to remove goes once an hour old: never
 // sooner, so a probe another session is judging right now is never taken from under it.
 const GUARD_PROBE_MAX_AGE_MS = 60 * 60 * 1000;
 function guardSettingsToPrune(entries, nowMs) {
-  return entries.filter((e) => (/^settings-[0-9a-f]+\.json$/.test(e.name) && nowMs - e.mtimeMs > GUARD_SETTINGS_MAX_AGE_MS)
+  return entries.filter((e) => (/^(settings-[0-9a-f]+\.json|ca-[0-9a-f]+\.pem)$/.test(e.name)
+      && nowMs - e.mtimeMs > GUARD_SETTINGS_MAX_AGE_MS)
     || (/^\.uid-probe-[0-9a-z]+$/.test(e.name) && nowMs - e.mtimeMs > GUARD_PROBE_MAX_AGE_MS))
     .map((e) => e.name);
 }

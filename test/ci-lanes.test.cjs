@@ -51,7 +51,7 @@ function listTests(files) {
   return r.stdout.split('\n').filter((l) => l.startsWith('{')).map((l) => JSON.parse(l)).filter((x) => x.nesting === 0 && x.line && !/\.test\.cjs$/.test(x.name));
 }
 
-const FILES = ['test/fidelity/agentic-grep-glob.test.cjs', 'test/fidelity/tools-local.test.cjs'];
+const FILES = ['test/fidelity/agentic-grep-glob.test.cjs', 'test/fidelity/tools-local.test.cjs', 'test/fidelity/webfetch.test.cjs'];
 // the reporter's file is the OS's own spelling (D:\\a\\clode\\test\\fidelity\\x.test.cjs on Windows, CI 44810612058), the run's is the
 // yml's POSIX one: compare them in one spelling
 const slashed = (f) => String(f).replace(/\\/g, '/');
@@ -60,7 +60,7 @@ const selects = (run, t) => run.files.some((f) => slashed(t.file).endsWith(f))
   && !run.skips.some((p) => new RegExp(p).test(t.name));
 
 const lanesGuard = defineGuard({
-  name: 'ci-lanes: netbsd-arm64-cells selects every test of its two files exactly once',
+  name: 'ci-lanes: netbsd-arm64-cells selects every test of its files exactly once',
   read() {
     const runs = laneRuns();
     return { runs, tests: listTests(FILES) };

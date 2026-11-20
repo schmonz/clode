@@ -8,6 +8,20 @@ Concrete clode-under-Node divergences from native Claude Code, to triage and fix
 That page is GENERATED from `scripts/build-graph.cjs` — the one declaration of the build — so it
 cannot drift from it; it is also where the honest answer to "does this need node?" lives.
 
+## The engine's fetch and XMLHttpRequest send `Host` without the port, and an XHR to `http://h:p/` asks for `//` (2026-11-20)
+
+Seen while driving WebFetch against a local target (test/fidelity/webfetch.test.cjs; the security review of that fix
+asked for these lines). (1) fetch and XHR under tjs send `Host: 127.0.0.1` for `https://127.0.0.1:<port>/page`, where
+native (and RFC 9110 7.2, for a non-default port) sends `Host: 127.0.0.1:<port>`: a name-based virtual host, or a
+reverse proxy that routes on Host, on a non-default port can misroute or refuse WebFetch's request, or any API call
+through ANTHROPIC_BASE_URL at such a host. (2) An XMLHttpRequest to the bare origin `http://h:p/` requested the path
+`//` rather than `/`, so a server that does not fold slashes answers a different resource (404, or a redirect). Both
+look like the engine's client (src/httpclient.c or the XHR polyfill; not yet located), not the shim. Neither was on WebFetch's failing
+path (the TLS 1.2 rsa_pss_rsae_* rejection was), and the webfetch test's target accepts both; the fix is an engine
+patch plus a row in that test asserting the target saw `Host: 127.0.0.1:<port>` and `GET /` for a bare origin.
+
+Measured: the webfetch target's request log on darwin-arm64 (2026-11-20); not yet a test.
+
 ## A fresh worktree on the NFS share arrives with a `._*` AppleDouble sidecar beside every file (2026-11-20)
 
 A new git worktree under `.claude/worktrees/` on this NFS-mounted checkout held 999 `._*` files
@@ -6258,12 +6272,14 @@ Unmeasured. A matrix-wide tracker; each leg's state is its latest CI run, not re
   Two smaller residues, both named where they bite: (1) `ALL_PROXY` is honoured here even though
   node ignores it — a DELIBERATE divergence, because the engine honours it for fetch/XHR and a
   client that did not would be the same bypass one env var over; (2) an `https://` PROXY URL
-  works, but its certificate can only be trusted via a caller-supplied `ca` — measured, neither
-  `SSL_CERT_FILE` nor `TJS_CA_BUNDLE` reaches `tjs.connect('tls', ...)`, so there is no
-  environment knob for a private CA on a client socket (node has `NODE_EXTRA_CA_CERTS`). An
-  untrusted proxy cert fails visibly; it never falls back to a direct connection.
+  works, and its certificate is trusted through a caller-supplied `ca` or, in a built quaude,
+  `NODE_EXTRA_CA_CERTS` (since 2026-11-20: the bootstrap's applyExtraCaCerts sets the engine's
+  bundle for `tjs.connect('tls', ...)` as well as fetch, txiki-ca-bundle-global.patch; neither
+  `SSL_CERT_FILE` nor `TJS_CA_BUNDLE` reaches it). An untrusted proxy cert fails visibly; it never
+  falls back to a direct connection.
 
-  **Shape of the fix, and two rejected alternatives (2026-08-27).** The knob to build is
+  **Shape of the fix, and two rejected alternatives (2026-08-27; the append knob BUILT 2026-11-20 for a built
+  quaude, fetch/XHR/WebSocket and `tjs.connect('tls')` alike).** The knob to build is
   `NODE_EXTRA_CA_CERTS`, which **appends** to the bundled store rather than replacing it —
   that is exactly what node does (it bundles Mozilla's store AND honours the env var), so
   it is the match-upstream answer, and it needs no platform branches. The wall is unchanged:

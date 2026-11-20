@@ -1464,7 +1464,8 @@ jobs:
       #   lead-scrub-equivalence, rg-spawn  need the engine AND a provider that runs here, or a POSIX shell for a
       #                       ugrep stub as a non-root user; both skipped in the suite rows and ran in no job (observability
       #                       Task 5). Measured before adding all four, on ubuntu:24.04 as a non-root user with this native,
-      #                       ugrep 5.0.0 and the musl engine: 43 tests, 43 pass, 0 skipped.
+      #                       ugrep 5.0.0 and the musl engine: 43 tests, 43 pass, 0 skipped. That count is history: the step
+      #                       has since grown (tools-local, webfetch), and what holds it now is the by-name skip rule below.
       # postject into deps/clode because the gate builds a naude (test/built-binary.cjs builtNaude), which also
       # fetches the pinned Node. The gate's named normalizations (compareRg: walk order, --json elapsed times, and
       # on THIS x86_64 runner the CPU-read simd(runtime) line of `rg --version`) are the only differences forgiven.
@@ -1822,7 +1823,7 @@ jobs:
   # judges FINISHES, whatever its conclusion: a red job's list still says what ran, and a missing list is the finding.
   # THE NETBSD/ARM64 TOOL CELLS (every-tool ruling E11b, 2026-11-20). netbsd-arm64 is a shipping engine with no native
   # runner, so its tool x mode cells are driven in a NetBSD/arm64 guest: the engine the netbsd-arm64 leg built this push
-  # (tjs-slow), a quaude built from it IN the guest, tools-local and agentic-grep-glob run against that quaude, judged by
+  # (tjs-slow), a quaude built from it IN the guest, tools-local, agentic-grep-glob and webfetch run against that quaude, judged by
   # the answers recorded from native (NetBSD has no native Claude Code: every native test skips there by name, accepted
   # for this job alone in test/ci-gates.cjs). Every setting comes from the manifest (scripts/tjs-legs.mjs
   # GUEST_CELL_JOBS, which also records why it is TCG on an x64 runner and how long that was measured to take).
@@ -1914,12 +1915,14 @@ jobs:
             }
             TL=test/fidelity/tools-local.test.cjs
             AG=test/fidelity/agentic-grep-glob.test.cjs
+            WF=test/fidelity/webfetch.test.cjs
             # agentic-grep-glob's heavy turn for one mode: print is the unnamed one, a permission mode names itself
             agentic() { run "$1" --test-name-pattern="rg in a built quaude$2: every" $AG; }
             {
               run rest-tools --test-skip-pattern='Phase A call in' $TL
               run rest-agentic --test-skip-pattern='rg in a built quaude' $AG
               agentic rest-plan ' in permission:plan'
+              run webfetch $WF
             } &
             {
               run modes1-tools --test-name-pattern='Phase A call in (a built quaude in )?(print|permission:acceptEdits|permission:auto)[: ]' $TL

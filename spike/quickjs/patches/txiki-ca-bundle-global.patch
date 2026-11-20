@@ -1,4 +1,4 @@
-# CA-BUNDLE-GLOBAL: __tjs_set_ca_bundle_path(path), core.setCABundlePath as a global a standalone binary can call.
+# CA-BUNDLE-GLOBAL: __tjs_set_ca_bundle_path(path) and __tjs_x509_parse_error(pem), globals a standalone binary can call.
 #
 # WHY. fetch, XMLHttpRequest and WebSocket (lws) trust ONE CA bundle: the compiled-in one (src/cacert.c) or the file
 # core.setCABundlePath names. That setter lives on tjs:internal/core, which only the engine's own tjs: modules may
@@ -6,38 +6,102 @@
 # bundled binary. So a built quaude could not trust a private CA at all: NODE_EXTRA_CA_CERTS, which node and native
 # Claude Code honour, did nothing, and WebFetch of a host signed by one (a corporate TLS proxy, a local test server)
 # answered "Network Error" where native fetched the page (measured 2026-11-20, test/fidelity/webfetch.test.cjs).
-# libexec/quaude-bootstrap.mjs applyExtraCaCerts calls it once, before any request. A second call throws a TypeError
-# instead of tripping core.setCABundlePath's CHECK. vm.c only; order-independent.
+# The path also reaches tjs.connect('tls') (mod_tls, which nothing set before), so node:https and node:tls honour it;
+# mod_tls.c read that file without the NUL mbedtls_x509_crt_parse needs to see PEM, so it added nothing: fixed here.
+# lws refuses the WHOLE file if any one block fails mbedtls_x509_crt_parse (an Ed25519 CA, a corrupt block), which
+# would end every HTTPS request, api.anthropic.com included; __tjs_x509_parse_error runs that parser on one block so
+# the caller keeps only the blocks the engine accepts (security review, 2026-11-20).
+# libexec/quaude-bootstrap.mjs takes both off globalThis first thing and calls the setter once, before any request.
+# A late or second call throws instead of silently not applying (or tripping core.setCABundlePath's CHECK).
+# vm.c and mod_tls.c; order-independent.
 #
 diff --git a/src/vm.c b/src/vm.c
 --- a/src/vm.c
 +++ b/src/vm.c
-@@ -178,6 +178,24 @@
+@@ -26,6 +26,8 @@
+ #include "private.h"
+ #include "tjs.h"
+ 
++#include <mbedtls/error.h>
++#include <mbedtls/x509_crt.h>
+ #include <assert.h>
+ #include <signal.h>
+ #include <stdatomic.h>
+@@ -178,6 +180,73 @@
      return JS_UNDEFINED;
  }
-
-+/* CLODE: the CA bundle for fetch, XMLHttpRequest and WebSocket, as a global a standalone binary can reach:
-+ * __tjs_set_ca_bundle_path(path). core.setCABundlePath lives on tjs:internal/core, which only the engine's own
-+ * modules can import, and run-main calls it (from --tls-ca, TJS_CA_BUNDLE, SSL_CERT_FILE) only on the `tjs run`
-+ * path, never for a bundled binary. So a built quaude had no way to trust a private CA: NODE_EXTRA_CA_CERTS, which
-+ * node and native Claude Code honour, did nothing, and every request to such a host failed as "Network Error".
-+ * quaude's bootstrap calls this once, before any request (the bundle is read when the first client context is
-+ * built). A second call throws instead of aborting (core.setCABundlePath CHECKs). */
+ 
++/* CLODE: the CA bundle every client trusts, settable by a standalone binary: __tjs_set_ca_bundle_path(path) and
++ * __tjs_x509_parse_error(pem). core.setCABundlePath lives on tjs:internal/core, which only the engine's own modules
++ * can import, and run-main calls it (from --tls-ca, TJS_CA_BUNDLE, SSL_CERT_FILE) only on the `tjs run` path, never
++ * for a bundled binary. So a built quaude had no way to trust a private CA: NODE_EXTRA_CA_CERTS, which node and
++ * native Claude Code honour, did nothing, and every request to such a host failed as "Network Error".
++ *
++ * The path reaches BOTH clients: fetch, XMLHttpRequest and WebSocket (lws, qrt->lws) and tjs.connect('tls') (mod_tls,
++ * qrt->tls, which also always adds the embedded roots). Each reads it lazily, when its first connection is made, so
++ * a call after that would silently not apply: it throws instead, as does a second call (core.setCABundlePath CHECKs).
++ *
++ * lws hands the whole file to mbedtls_x509_crt_parse and refuses it if ANY block fails, which would end every HTTPS
++ * request. __tjs_x509_parse_error runs that same parser on one PEM block, so the caller keeps only blocks it accepts:
++ * it returns undefined for exactly one parseable certificate, else why not.
++ * quaude's bootstrap takes both off globalThis before any other code runs. */
 +static JSValue tjs__set_ca_bundle_path_global(JSContext *ctx, JSValue this_val, int argc, JSValue *argv) {
 +    TJSRuntime *qrt = TJS_GetRuntime(ctx);
 +    CHECK_NOT_NULL(qrt);
 +
-+    if (qrt->lws.ca_bundle_path != NULL) {
-+        return JS_ThrowTypeError(ctx, "the CA bundle path is already set");
++    if (qrt->lws.ca_bundle_path != NULL || qrt->lws.ca_bundle_data != NULL || qrt->tls.ca_bundle_path != NULL ||
++        qrt->tls.initialized) {
++        return JS_ThrowTypeError(ctx, "the CA bundle path is already set, or a connection already read the bundle");
 +    }
 +
-+    return tjs__set_ca_bundle_path(ctx, this_val, argc, argv);
++    const char *path = JS_ToCString(ctx, argv[0]);
++    if (!path) {
++        return JS_EXCEPTION;
++    }
++
++    qrt->lws.ca_bundle_path = js_strdup(ctx, path);
++    qrt->tls.ca_bundle_path = tjs__strdup(path); /* mod_tls frees it with tjs__free */
++    JS_FreeCString(ctx, path);
++
++    return JS_UNDEFINED;
++}
++
++static JSValue tjs__x509_parse_error_global(JSContext *ctx, JSValue this_val, int argc, JSValue *argv) {
++    size_t len;
++    const char *pem = JS_ToCStringLen(ctx, &len, argv[0]);
++    if (!pem) {
++        return JS_EXCEPTION;
++    }
++
++    mbedtls_x509_crt crt;
++    mbedtls_x509_crt_init(&crt);
++    int r = mbedtls_x509_crt_parse(&crt, (const unsigned char *) pem, len + 1);
++    JS_FreeCString(ctx, pem);
++    int n = 0;
++    for (mbedtls_x509_crt *c = &crt; c != NULL && c->raw.len > 0; c = c->next) {
++        n++;
++    }
++    mbedtls_x509_crt_free(&crt);
++
++    char why[200];
++    if (r == 0 && n == 1) {
++        return JS_UNDEFINED;
++    } else if (r < 0) {
++        char err[160];
++        mbedtls_strerror(r, err, sizeof(err));
++        snprintf(why, sizeof(why), "mbedtls -0x%04x: %s", (unsigned int) -r, err);
++    } else if (r > 0) {
++        snprintf(why, sizeof(why), "%d certificate(s) failed to parse", r);
++    } else {
++        snprintf(why, sizeof(why), "expected one certificate, found %d", n);
++    }
++    return JS_NewString(ctx, why);
 +}
 +
  static JSValue tjs__js_drain_microtasks(JSContext *ctx, JSValue this_val, int argc, JSValue *argv) {
      TJSRuntime *qrt = TJS_GetRuntime(ctx);
      CHECK_NOT_NULL(qrt);
-@@ -319,6 +337,15 @@
+@@ -319,6 +388,20 @@
                                "setCABundlePath",
                                JS_NewCFunction(ctx, tjs__set_ca_bundle_path, "setCABundlePath", 1),
                                JS_PROP_C_W_E);
@@ -48,8 +112,27 @@ diff --git a/src/vm.c b/src/vm.c
 +                                  "__tjs_set_ca_bundle_path",
 +                                  JS_NewCFunction(ctx, tjs__set_ca_bundle_path_global, "__tjs_set_ca_bundle_path", 1),
 +                                  JS_PROP_C_W_E);
++        JS_DefinePropertyValueStr(ctx,
++                                  global,
++                                  "__tjs_x509_parse_error",
++                                  JS_NewCFunction(ctx, tjs__x509_parse_error_global, "__tjs_x509_parse_error", 1),
++                                  JS_PROP_C_W_E);
 +        JS_FreeValue(ctx, global);
 +    }
      JS_DefinePropertyValueStr(ctx,
                                ns,
                                "syncReadFile",
+diff --git a/src/mod_tls.c b/src/mod_tls.c
+--- a/src/mod_tls.c
++++ b/src/mod_tls.c
+@@ -189,7 +189,9 @@
+     if (qrt->tls.ca_bundle_path) {
+         TBuf dbuf;
+         tbuf_init(ctx, &dbuf);
+-        if (tjs__load_file(ctx, &dbuf, qrt->tls.ca_bundle_path) == 0 && dbuf.size > 0) {
++        /* CLODE: NUL-terminated, as mbedtls_x509_crt_parse needs to read PEM (it counts the NUL in the length);
++         * without it a PEM bundle was parsed as DER, failed, and the custom path silently added nothing. */
++        if (tjs__load_file(ctx, &dbuf, qrt->tls.ca_bundle_path) == 0 && dbuf.size > 0 && tbuf_putc(&dbuf, 0) == 0) {
+             mbedtls_x509_crt_parse(&qrt->tls.cacert, dbuf.buf, dbuf.size);
+         }
+         tbuf_free(&dbuf);
