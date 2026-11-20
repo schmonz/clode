@@ -37,6 +37,8 @@ require('./suite-home.cjs');   // the suite's own HOME, also for a standalone `n
 //                    API. Refused, as a bad nativeSkip is. Nothing of the caller's own CLAUDE*/ANTHROPIC* environment
 //                    reaches the turn either: a run from inside a Claude Code session carries CLAUDE_CODE_ENTRYPOINT
 //                    and friends, which change which tools register.
+//   opts.switches    Claude Code switches for both sides, ONLY the keys TOOL_SWITCHES lists (each with its reason);
+//                    any other key is refused. RESERVED_ENV stays as strict: a switch is not a way round it.
 //   opts.quaude      the quaude binary; default the one built from this tree (test/built-binary.cjs builtQuaude()).
 //                    When there is none, quaude is { absent: <why> } and nothing is run.
 //   opts.quaudeSkip  a one-line reason not to run quaude this time (a test that measures native alone): { skipped }.
@@ -73,6 +75,12 @@ const { toolResult, toolResultText } = require('../scripts/lib/tool-result.cjs')
 const DONE = 'TOOL-DRIVER-DONE';
 // Keys opts.env may not set: the sandbox (HOME, USERPROFILE, CLAUDE*) and the mock (ANTHROPIC*).
 const RESERVED_ENV = /^(?:HOME|USERPROFILE|CLAUDE.*|ANTHROPIC.*)$/i;
+// THE ONLY Claude Code switches a driver may set (opts.switches), each with why a driver needs it. Never the sandbox
+// or the mock: a key here is a product switch that changes which tools register, nothing else.
+const TOOL_SWITCHES = Object.freeze({
+  CLAUDE_CODE_ENABLE_TASKS: 'the Task* tools register unless it is "false" (then TodoWrite does): every-tool Phase B '
+    + 'drives TodoWrite with it off, and a Task* driver may pin it on',
+});
 const isToolUse = (u) => !!u && typeof u.name === 'string' && !!u.name && typeof u.id === 'string' && !!u.id
   && !!u.input && typeof u.input === 'object';
 
@@ -105,6 +113,7 @@ function quaudeOf(opts) {
   return q.skip ? { absent: q.skip } : { bin: q.path };
 }
 function nativeOf(opts) {
+  // "Runs as rg" (rgOracle) stands in for "a full, runnable carve": a minimised or foreign carve does neither.
   if (opts.nativeSkip !== undefined) return { skipped: opts.nativeSkip };
   if (opts.native !== undefined) {
     return opts.native && fs.existsSync(String(opts.native)) ? { bin: opts.native }
@@ -132,7 +141,8 @@ async function runSide(side, bin, rules, opts, base) {
     const names = [...new Set(rules.map((r) => r.tool.name))];
     const allowed = opts.allowedTools === undefined ? names.join(',') : opts.allowedTools;
     const args = ['-p', opts.prompt || 'drive the tool', ...(allowed === null ? [] : ['--allowedTools', allowed]), ...(opts.args || [])];
-    const env = { ...baseEnv(), ...home, ANTHROPIC_BASE_URL: mock.url, ANTHROPIC_API_KEY: 'sk-ant-mock', ...(opts.env || {}) };
+    const env = { ...baseEnv(), ...home, ANTHROPIC_BASE_URL: mock.url, ANTHROPIC_API_KEY: 'sk-ant-mock', ...(opts.env || {}),
+      ...(opts.switches || {}) };
     const r = await spawnCollect(bin, args, { cwd: work, env }, { timeoutMs: opts.timeoutMs || 240000 });
     const raw = { requests: mock.requests.slice() };
     const results = {};
@@ -159,6 +169,11 @@ function driveTool(opts = {}) {
     throw new Error(`driveTool: env may not set ${reserved.join(', ')}: HOME, USERPROFILE and CLAUDE* are the sandbox, `
       + 'ANTHROPIC* the mock');
   }
+  const unlisted = Object.keys(opts.switches || {}).filter((k) => !Object.prototype.hasOwnProperty.call(TOOL_SWITCHES, k));
+  if (unlisted.length) {
+    throw new Error(`driveTool: switches may set only ${Object.keys(TOOL_SWITCHES).join(', ')} (TOOL_SWITCHES, each with `
+      + `its reason), not ${unlisted.join(', ')}`);
+  }
   if (opts.base !== undefined && !(typeof opts.base === 'string' && path.isAbsolute(opts.base))) {
     throw new Error(`driveTool: base must be an absolute temp dir, got ${JSON.stringify(opts.base)}`);
   }
@@ -176,4 +191,4 @@ function driveTool(opts = {}) {
   })();
 }
 
-module.exports = { driveTool, DONE };
+module.exports = { driveTool, DONE, TOOL_SWITCHES };

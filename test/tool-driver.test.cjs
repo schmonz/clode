@@ -15,7 +15,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { driveTool } = require('./tool-driver.cjs');   // first: it applies the suite home, standalone too
+const { driveTool, TOOL_SWITCHES } = require('./tool-driver.cjs');   // first: it applies the suite home, standalone too
 const { toolResultText, assertFailsOnMissingOutput } = require('../scripts/lib/tool-result.cjs');
 
 const SKIP = process.platform === 'win32' ? 'the fake targets are #!/bin/sh wrappers' : false;
@@ -52,7 +52,7 @@ function parse(sse) {
     messages.push({ role: 'assistant', content: turn.uses.map((u) => ({ type: 'tool_use', id: u.id, name: u.name, input: u.input })) });
     if (process.env.FAKE_MODE === 'silent') { messages.push({ role: 'user', content: [{ type: 'text', text: 'continue' }] }); continue; }
     messages.push({ role: 'user', content: turn.uses.map((u) => ({ type: 'tool_result', tool_use_id: u.id,
-      content: [{ type: 'text', text: LABEL + ' PRODUCT-' + (u.input.a * u.input.b) + ' home=' + process.env.HOME + ' cfg=' + cfg }] })) });
+      content: [{ type: 'text', text: LABEL + ' PRODUCT-' + (u.input.a * u.input.b) + ' tasks=' + process.env.CLAUDE_CODE_ENABLE_TASKS + ' home=' + process.env.HOME + ' cfg=' + cfg }] })) });
   }
   process.exit(3);
 })();
@@ -176,10 +176,26 @@ test('driveTool answers a script of several calls in order, and lays the fixture
   } finally { fs.rmSync(f.dir, { recursive: true, force: true }); }
 });
 
+test('driveTool passes a listed switch to both sides', { skip: SKIP }, async () => {
+  assertFailsOnMissingOutput(sawProduct, FAKE);
+  assert.deepStrictEqual(Object.keys(TOOL_SWITCHES), ['CLAUDE_CODE_ENABLE_TASKS']);
+  const f = fakes();
+  try {
+    const r = await driveTool({ tool: FAKE, quaude: f.quaude, native: f.native, switches: { CLAUDE_CODE_ENABLE_TASKS: 'false' } });
+    for (const side of ['quaude', 'native']) {
+      assert.ok(sawProduct(r[side].raw));
+      assert.match(r[side].text, / tasks=false /, side);
+    }
+  } finally { fs.rmSync(f.dir, { recursive: true, force: true }); }
+});
+
 test('driveTool refuses a call that is not a { name, input, id } tool_use', () => {
   const NAMELESS = { name: 'X' };
   assert.throws(() => driveTool({ tool: NAMELESS }), /\{ name, input, id \}/);
   assert.throws(() => driveTool({}), /tool_use/);
+  assert.throws(() => driveTool({ tool: FAKE, switches: { CLAUDE_CODE_ENTRYPOINT: 'cli' } }),
+    /switches may set only CLAUDE_CODE_ENABLE_TASKS .*not CLAUDE_CODE_ENTRYPOINT/, 'an unlisted switch');
+  assert.throws(() => driveTool({ tool: FAKE, switches: { HOME: '/x' } }), /not HOME/, 'a switch is no way round the sandbox');
   for (const k of ['HOME', 'USERPROFILE', 'CLAUDE_CONFIG_DIR', 'CLAUDE_CODE_ENTRYPOINT', 'ANTHROPIC_BASE_URL', 'ANTHROPIC_API_KEY']) {
     assert.throws(() => driveTool({ tool: FAKE, env: { [k]: '/x' } }), new RegExp(`env may not set ${k}`), k);
   }
