@@ -479,21 +479,25 @@ with TJS_HOME unset creates $HOME/.tjs holding localStorage.db only (no cookies.
 Unmeasured. The suite-hermeticity claims (suite home, sentinel HOME byte-untouched, the 18/81 spawn counts) were not
 re-run; test/suite-home-hermetic.test.cjs and a full suite with a sentinel HOME would.
 
-## 39 of the 2166 tool x mode x engine cells are driven (cells 2026-11-18; tools 2026-09-28; Grep and Glob driven 2026-10-05; Read, Write, NotebookEdit, the Task tools and TaskStop 2026-11-19; Skill, the worktree and cron tools and ScheduleWakeup 2026-11-20)
+## 45 of the 2166 tool x mode x engine cells are driven; Phase A's 18 tools all driven (cells 2026-11-18; tools 2026-09-28; Grep and Glob driven 2026-10-05; Read, Write, NotebookEdit, the Task tools and TaskStop 2026-11-19; Skill, the worktree and cron tools, ScheduleWakeup, ReportFindings, Workflow and ListAgents 2026-11-20)
 
 Since observability Task 1 (2026-11-18) the gate counts CELLS, tool x mode x engine: 90 tools, 722
 tool x mode pairs (permission modes, sandbox, Bash shells, interactive, unlisted, from the carve where
-it says) over darwin-arm64, linux-x64-musl and netbsd-arm64, 2166 cells. 39 are driven, by four CI
+it says) over darwin-arm64, linux-x64-musl and netbsd-arm64, 2166 cells. 45 are driven, by four CI
 jobs (CELL_JOBS): Bash print (darwin, musl), bypassPermissions, sandbox:on and shell:bash (musl); Edit
 print (darwin, musl); Glob and Grep print (musl); since every-tool Task 2, Read, Write and NotebookEdit
 print (darwin, musl: test/fidelity/tools-local.test.cjs in node-shim-oracle-darwin and linux-x64-pty,
 each installing the pinned native that runs and building a quaude from it); since every-tool Task 3,
 TaskCreate, TaskGet, TaskUpdate, TaskList and TaskStop print (darwin, musl: the same file and jobs); since
 every-tool Task 4, Skill, EnterWorktree, ExitWorktree, CronCreate, CronDelete, CronList and ScheduleWakeup
-print (darwin, musl: the same file and jobs). The
-rest are per-cell exemptions; the undriven cells of the 20 driven tools, and the 3 Phase A tools still
-undriven, fall due 2026-12-15 (USER RULING
-2026-11-18 moved Phase A there from 2026-10-15). The tool-level account below is as of 2026-09-28.
+print (darwin, musl: the same file and jobs); since every-tool Task 5, ReportFindings, Workflow and ListAgents
+print (darwin, musl: the same file and jobs; ListAgents' quaude answer is held as a NAMED divergence, "No reachable
+agents." without native's self-address line, because net.createServer is the shim's throwing stub and so quaude has
+no UDS messaging server: the entry "`net.createServer` is a named throwing stub" below). The rest are per-cell
+exemptions. The undriven cells of the 23 driven tools (every mode but print, and netbsd-arm64) fall due 2026-12-15
+(USER RULING 2026-11-18 moved Phase A there from 2026-10-15), each with the written reason PHASE_A_CELL or
+LOCAL_CELLS in the gate: no driver yet runs these tools interactively, unlisted or in the other permission modes, and
+no CI job runs a quaude on netbsd-arm64. The tool-level account below is as of 2026-09-28.
 
 `every-tool-driven` (test/build-gates/tool-coverage-gates.test.cjs; the grep-native plan's task
 0c) reads the tool registry from the pinned carve and requires each tool to have a live check
@@ -527,7 +531,13 @@ purpose). Its phases, each tool's `until` in the gate being its phase's constant
 - Phase A, before the release, 2026-12-15 (release-blocking): the 18 local tools Read, Write,
   NotebookEdit, TaskCreate, TaskGet, TaskUpdate, TaskList, TaskStop, Skill, EnterWorktree,
   ExitWorktree, CronCreate, CronDelete, CronList, ScheduleWakeup, ReportFindings, Workflow,
-  ListAgents; and the undriven cells of Agent, Bash, Edit, Grep and Glob.
+  ListAgents; and the undriven cells of Agent, Bash, Edit, Grep and Glob. STATE (2026-11-20, every-tool Task 5):
+  TOOL-LEVEL DONE: all 18 are driven in a -p turn against native (print, darwin-arm64 and linux-x64-musl), no tool
+  exemption is left with UNTIL_PHASE_A, and driving them found and fixed shim defects (each in its task's report;
+  among them readdir/readlink/opendir ignoring `encoding`, which kept quaude's ExitWorktree from removing a worktree)
+  and named one divergence (ListAgents, above). CELL-LEVEL OPEN: the other modes and netbsd-arm64 for these 18 and for
+  Agent (no cell in a job), Bash, Edit, Grep and Glob stay per-cell exemptions under UNTIL_PHASE_A, each with its
+  written reason; UNTIL_PHASE_A stays for them. Retiring it means driving those cells or a user ruling that moves them.
 - Phase B, after the release, 2027-01-15 (moved from 2026-11-30, which fell before Phase A's moved
   date, by USER RULING 2026-11-19): 24 tools needing a local helper, a pty or a default-off flag (WebFetch,
   SendMessage, LSP, ToolSearch, the memory tools, TodoWrite, SubagentHandback, ObserverReport,

@@ -479,3 +479,125 @@ test('native answers the session script as SESSION_NATIVE records', { skip: SKIP
   if (got.length) t.diagnostic(`measured:\n${JSON.stringify(r.native.results, null, 1)}`);
   assert.deepStrictEqual(got, [], `native moved:\n${got.join('\n')}`);
 });
+
+// ==========================================================================
+// ReportFindings, Workflow AND ListAgents (every-tool Task 5)
+// ==========================================================================
+// One turn: ReportFindings with no findings, with one, and without `findings` (a validation error); Workflow with no
+// script, name, scriptPath or runId (a validation error), a saved name that does not exist, and the smallest honest
+// inline script (a meta literal and `return { answer: 42 }`: it calls no agent(), so nothing reaches the mock or any
+// API; Workflow returns at once with the run's task id, and the run is in the background); ListAgents, with no other
+// session on the box's sandboxed home.
+//
+// MEASURED on native 2.1.283 darwin-arm64 and a quaude built from this tree (2026-11-20). Every answer is native's,
+// with ONE NAMED DIVERGENCE: ListAgents. Native starts its UDS peer-messaging server at startup (the debug log:
+// "[uds-messaging] Listening: /tmp/cc-socks-<uid>/<pid>.sock") and so names this session ("This session is
+// work-NN [ref] ...") above "No reachable agents ...". Under quaude net.createServer is the named throwing stub
+// (libexec/node-shim/modules/net.cjs; BACKLOG.md, "`net.createServer` is a named throwing stub"), the debug log says
+// "[uds-messaging] Failed to create server: Error: quaude does not support the sandbox yet: net.createServer", so the
+// session has no address and ListAgents answers "No reachable agents." alone. The quaude test holds THAT answer, so a
+// shim that grows a server turns it red and this pin is updated to native's on purpose, never left behind.
+const R_NONE = { name: 'ReportFindings', input: { findings: [] }, id: 'toolu_r5_none' };
+const R_ONE = { name: 'ReportFindings', input: { level: 'low', findings: [{ file: 'a.js', line: 3, summary: 'Off by one in the loop bound.',
+  failure_scenario: 'n=0 reads index -1', category: 'correctness', verdict: 'CONFIRMED' }] }, id: 'toolu_r5_one' };
+const R_BAD = { name: 'ReportFindings', input: {}, id: 'toolu_r5_bad' };
+const F_NONE = { name: 'Workflow', input: {}, id: 'toolu_w5_noinput' };
+const F_NAME = { name: 'Workflow', input: { name: 'no-such-workflow' }, id: 'toolu_w5_unknown' };
+const WF_SCRIPT = "export const meta = { name: 'noop', description: 'returns a constant, spawns nothing' }\nreturn { answer: 42 }";
+const F_RUN = { name: 'Workflow', input: { script: WF_SCRIPT }, id: 'toolu_w5_run' };
+const A_LIST = { name: 'ListAgents', input: {}, id: 'toolu_a5_list' };
+const T5_SCRIPT = [{ tool: R_NONE }, { tool: R_ONE }, { tool: R_BAD }, { tool: F_NONE }, { tool: F_NAME }, { tool: F_RUN },
+  { tool: A_LIST }];
+const EM = String.fromCodePoint(0x2014);
+const T5_NATIVE = {
+  toolu_r5_none: { text: 'No findings reported.', isError: false },
+  toolu_r5_one: { text: '1 finding reported.', isError: false },
+  toolu_r5_bad: { text: '<tool_use_error>InputValidationError: ReportFindings failed due to the following issue:\nThe parameter `findings` type is expected as `array` but provided as `unknown`</tool_use_error>', isError: true },
+  toolu_w5_noinput: { text: '<tool_use_error>InputValidationError: [\n  {\n    "code": "custom",\n    "path": [],\n    "message": "Must provide script, name, scriptPath, or runId"\n  }\n]</tool_use_error>', isError: true },
+  toolu_w5_unknown: { text: '<tool_use_error>Workflow "no-such-workflow" not found. Available: deep-research</tool_use_error>', isError: true },
+};
+// Workflow's launch answer, by shape: native's text around the run's task id, run id and the session's project dir
+// (each the same everywhere it recurs: the backreferences).
+const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const F_RUN_SHAPE = new RegExp('^' + [
+  'Workflow launched in background\\. Task ID: (\\w+)',
+  'Summary: returns a constant, spawns nothing',
+  'Transcript dir: (/[^\\s"]+/\\.claude/projects/[^/\\s"]+/[0-9a-f-]{36})/subagents/workflows/(wf_[0-9a-f]{8}-[0-9a-f]{3})',
+  'Script file: \\2/workflows/scripts/noop-\\3\\.js',
+  esc('(Edit this file with Write/Edit and re-invoke Workflow with {scriptPath: "') + '\\2/workflows/scripts/noop-\\3\\.js' + esc('"} to iterate without resending the script.)'),
+  'Run ID: \\3',
+  esc('To resume after editing the script: Workflow({scriptPath: "') + '\\2/workflows/scripts/noop-\\3\\.js' + esc('", resumeFromRunId: "')
+    + '\\3' + esc(`"}) ${EM} completed agents return cached results (cached results may themselves be empty ${EM} inspect journal.jsonl before assuming there is something to recover).`),
+  '',
+  'You will be notified when it completes\\. Use /workflows to watch live progress\\.',
+].join('\\n') + '$');
+// ListAgents: native names the session (work-<id> [<6 hex>]); quaude, with no messaging server, does not (above).
+const A_NATIVE_SHAPE = new RegExp(`^This session is work-[0-9a-z]+ \\[[0-9a-f]{6}\\] ${EM} the name other sessions use to message it \\(it is not listed below; a message to it would be a message to yourself\\)\\.\\n\\nNo reachable agents ${EM} no other Claude session is running on this machine right now \\(peer messaging itself is available; a session appears here once it is started\\)\\.$`);
+const A_QUAUDE = { text: 'No reachable agents.', isError: false };
+const t5Same = (r, w) => !!r && !!w && r.text === w.text && r.isError === w.isError;
+const rNone = (m) => t5Same(toolResult(m, R_NONE.id), T5_NATIVE[R_NONE.id]);
+const rOne = (m) => t5Same(toolResult(m, R_ONE.id), T5_NATIVE[R_ONE.id]);
+const rBad = (m) => t5Same(toolResult(m, R_BAD.id), T5_NATIVE[R_BAD.id]);
+const fNone = (m) => t5Same(toolResult(m, F_NONE.id), T5_NATIVE[F_NONE.id]);
+const fName = (m) => t5Same(toolResult(m, F_NAME.id), T5_NATIVE[F_NAME.id]);
+const fRun = (m) => { const r = toolResult(m, F_RUN.id); return !!r && !r.isError && F_RUN_SHAPE.test(r.text); };
+const aListNative = (m) => { const r = toolResult(m, A_LIST.id); return !!r && !r.isError && A_NATIVE_SHAPE.test(r.text); };
+const aListQuaude = (m) => t5Same(toolResult(m, A_LIST.id), A_QUAUDE);
+const t5Verdicts = (m, side) => [[R_NONE, rNone(m)], [R_ONE, rOne(m)], [R_BAD, rBad(m)], [F_NONE, fNone(m)], [F_NAME, fName(m)],
+  [F_RUN, fRun(m)], [A_LIST, side === 'native' ? aListNative(m) : aListQuaude(m)]];
+
+function t5Controls() {
+  assertFailsOnMissingOutput(rNone, R_NONE);
+  assertFailsOnMissingOutput(rOne, R_ONE);
+  assertFailsOnMissingOutput(rBad, R_BAD);
+  assertFailsOnMissingOutput(fNone, F_NONE);
+  assertFailsOnMissingOutput(fName, F_NAME);
+  assertFailsOnMissingOutput(fRun, F_RUN);
+  assertFailsOnMissingOutput(aListNative, A_LIST);
+  assertFailsOnMissingOutput(aListQuaude, A_LIST);
+  // the two ListAgents judgments are not each other: native's answer is not quaude's pin, nor the reverse
+  const nativeAnswer = `This session is work-01 [744172] ${EM} the name other sessions use to message it (it is not listed below; a message to it would be a message to yourself).\n\nNo reachable agents ${EM} no other Claude session is running on this machine right now (peer messaging itself is available; a session appears here once it is started).`;
+  assert.ok(aListNative(answeredLog(A_LIST, nativeAnswer)) && !aListQuaude(answeredLog(A_LIST, nativeAnswer)));
+  assert.ok(aListQuaude(answeredLog(A_LIST, A_QUAUDE.text)) && !aListNative(answeredLog(A_LIST, A_QUAUDE.text)));
+}
+
+// What the launch left: the run's script file, byte for byte the script sent, and its journal's first entry.
+const readWorkflow = (work, base) => {
+  const found = [];
+  const walk = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, e.name); if (e.isDirectory()) walk(p); else found.push(p); } };
+  walk(base);
+  const script = found.filter((p) => /[\\/]workflows[\\/]scripts[\\/]noop-wf_[0-9a-f-]+\.js$/.test(p));
+  const journal = found.filter((p) => /[\\/]subagents[\\/]workflows[\\/]wf_[0-9a-f-]+[\\/]journal\.jsonl$/.test(p));
+  return { scripts: script.map((p) => fs.readFileSync(p, 'utf8')), journal: journal.map((p) => fs.readFileSync(p, 'utf8').split('\n')[0]) };
+};
+const WORKFLOW_LEFT = { scripts: [WF_SCRIPT], journal: ['{"type":"launched"}'] };
+
+function t5Findings(label, side) {
+  const out = [];
+  if (side.status !== 0) out.push(`${label}: the turn exited ${side.status}${side.signal ? ` (${side.signal})` : ''}: ${side.stderr.slice(0, 800)}`);
+  for (const [USE, same] of t5Verdicts(side.raw, label)) {
+    if (!same) out.push(`${label}: ${USE.id} ${USE.name} sent ${JSON.stringify(side.sent[USE.id])}\n    got: ${JSON.stringify(toolResult(side.raw, USE.id))}`);
+  }
+  try { assert.deepStrictEqual(side.inspected, WORKFLOW_LEFT); } catch { out.push(`${label}: the workflow left ${JSON.stringify(side.inspected)}, native's ${JSON.stringify(WORKFLOW_LEFT)}`); }
+  return out;
+}
+
+test('ReportFindings, Workflow and ListAgents in a built quaude: every tool_result equals native\'s (ListAgents: the named divergence)', { skip: SKIP }, async (t) => {
+  const q = builtQuaude();
+  if (q.skip) { t.skip(q.skip); return; }
+  t5Controls();
+  const r = await driveTool({ script: T5_SCRIPT, quaude: q.path, inspect: readWorkflow,
+    nativeSkip: 'native is judged against the same recorded answers by the next test' });
+  const got = t5Findings('quaude', r.quaude);
+  assert.deepStrictEqual(got, [], `${got.length} finding(s) against native's answers:\n${got.join('\n')}`);
+});
+
+test('native answers the Task 5 script as T5_NATIVE records', { skip: SKIP }, async (t) => {
+  const native = rgOracle(process.env);
+  if (!native) { t.skip(rgOracleSkip(process.env)); return; }
+  t5Controls();
+  const r = await driveTool({ script: T5_SCRIPT, native, inspect: readWorkflow, quaudeSkip: 'quaude is judged by the test above' });
+  const got = t5Findings('native', r.native);
+  if (got.length) t.diagnostic(`measured:\n${JSON.stringify(r.native.results, null, 1)}`);
+  assert.deepStrictEqual(got, [], `native moved:\n${got.join('\n')}`);
+});

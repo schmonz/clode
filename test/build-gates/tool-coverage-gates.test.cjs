@@ -1451,13 +1451,13 @@ const EXEMPTIONS = [
   // Skill, the worktree tools, the cron tools and ScheduleWakeup (every-tool Task 4): the same file, jobs and cells.
   ...['Skill', 'EnterWorktree', 'ExitWorktree', 'CronCreate', 'CronDelete', 'CronList', 'ScheduleWakeup'].flatMap((tool) =>
     PHASE_A_CELLS(tool, COMMON_MODES, ['print@linux-x64-musl', 'print@darwin-arm64'], LOCAL_CELLS)),
+  // ReportFindings, Workflow and ListAgents (every-tool Task 5): the same file, jobs and cells. ListAgents' quaude
+  // answer is held as a NAMED divergence (no UDS messaging server: net.createServer is the shim's throwing stub).
+  ...['ReportFindings', 'Workflow', 'ListAgents'].flatMap((tool) =>
+    PHASE_A_CELLS(tool, COMMON_MODES, ['print@linux-x64-musl', 'print@darwin-arm64'], LOCAL_CELLS)),
   // Local tools a canned mock could drive today: the to-do list proper.
   { tool: 'TodoWrite', reason: 'deferred, no plan yet: a local tool, but enabled only when the Task* tools are off '
     + '(CLAUDE_CODE_ENABLE_TASKS=false), and no live check turns them off', date: RECORDED, until: UNTIL_PHASE_B },
-  { tool: 'ReportFindings', reason: `${LOCAL} (structured code-review findings)`, date: RECORDED, until: UNTIL_PHASE_A },
-  { tool: 'Workflow', reason: `${LOCAL} (alias RunWorkflow)`, date: RECORDED, until: UNTIL_PHASE_A },
-  { tool: 'ListAgents', reason: `${LOCAL} (agent teams, on by default; an empty list is still a tool_result; alias `
-    + 'ListPeers)', date: RECORDED, until: UNTIL_PHASE_A },
   { tool: 'SendMessage', reason: 'deferred, no plan yet: agent teams; a driver needs a teammate session to address',
     date: RECORDED, until: UNTIL_PHASE_B },
   { tool: 'SubagentHandback', reason: 'deferred, no plan yet: registered outside getAllBaseTools, for a subagent to '

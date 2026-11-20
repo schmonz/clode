@@ -1447,8 +1447,9 @@ jobs:
       #                       own turn here must still give those recorded answers, so a Linux native that moved
       #                       is named, not hidden.
       #   tools-local         Read, Write and NotebookEdit (one -p turn of 9 calls, every-tool Task 2), the Task*
-      #                       tools and TaskStop (14 calls, Task 3), and Skill, the worktree and cron tools and
-      #                       ScheduleWakeup (12 calls, Task 4) in a built quaude, every tool_result (and the tree
+      #                       tools and TaskStop (14 calls, Task 3), Skill, the worktree and cron tools and
+      #                       ScheduleWakeup (12 calls, Task 4), and ReportFindings, Workflow and ListAgents (7 calls,
+      #                       Task 5) in a built quaude, every tool_result (and the tree
       #                       left) equal to native's recorded answer; its native tests run this native against the
       #                       same answers. This is the one job with both a built quaude
       #                       and a native that RUNS, so it drives those tools' print cell on linux-x64-musl.
@@ -1677,7 +1678,7 @@ jobs:
           # nowhere.
           # Skips are judged BY NAME, not counted: gates-ran-in-ci holds this job to every file it runs (test/ci-gates.cjs
           # FILES, a skip accepted only by its test name; ci-gate-placement refuses a file a job runs that FILES does not judge).
-      # THE LOCAL TOOLS ON DARWIN (every-tool Tasks 2-4: Read, Write, NotebookEdit, the Task* tools, TaskStop, Skill, the worktree and cron tools, ScheduleWakeup):
+      # THE LOCAL TOOLS ON DARWIN (every-tool Tasks 2-5: all 18 Phase A tools, Read through ListAgents):
       # test/fidelity/tools-local.test.cjs against a quaude built from this tree (judged against native's recorded
       # answers) and against native itself. The staged provider above is a minimised carve that cannot run, so this step installs UPSTREAM_PIN's
       # darwin-arm64 platform package on its own, as linux-x64-pty's rg step does for linux: a native that RUNS, which
