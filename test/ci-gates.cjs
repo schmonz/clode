@@ -249,6 +249,7 @@ const FILES = {
       'native answers the session script as SESSION_NATIVE records', 'native answers the Task 5 script as T5_NATIVE records',
       'native answers the zsh Bash turn as ZSH_DONE records',
       ...LOCAL_MODE_TURNS.map((m) => `native answers every Phase A call in ${m} as recorded`)]) } },
+  'test/fidelity/webfetch.test.cjs': { jobs: ['linux-x64-pty', 'node-shim-oracle-darwin'] },
   'test/build-gates/rg-regex-gates.test.cjs': { jobs: ['linux-x64-pty'] },
   'test/build-gates/rg-types-gates.test.cjs': { jobs: ['linux-x64-pty'] },
   'test/fidelity/lead-scrub-equivalence.test.cjs': { jobs: ['linux-x64-pty'] },

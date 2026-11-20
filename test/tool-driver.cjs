@@ -26,6 +26,9 @@ require('./suite-home.cjs');   // the suite's own HOME, also for a standalone `n
 //                    An Agent rule may add `subagent: { prompt, reply }`: the subagent's own conversation (a request
 //                    that spells `prompt`, the token the Agent input hands it, and not yet the Agent call's id) is
 //                    answered with the text `reply`, never with the next scripted call (agentic-subagent-diff's shape).
+//                    A WebFetch rule uses the same: the page goes to a second model request (the one that spells the
+//                    WebFetch input's prompt), and `reply` may be a function of that request's body, so the answer
+//                    can carry what only the fetched page holds (test/fidelity/webfetch.test.cjs).
 //   opts.base        an absolute temp dir the caller made, so a tool_use input can name paths under it before the
 //                    turn (Read's file_path is absolute). The default is a fresh one, removed when both sides are
 //                    done. The caller removes its own.
@@ -123,7 +126,8 @@ function rulesOf(opts) {
       throw new Error(`driveTool: inputFrom (${rule.tool.id}) must be a function of the request log`);
     }
     if (rule.subagent !== undefined && !(rule.subagent && typeof rule.subagent.prompt === 'string' && rule.subagent.prompt
-      && typeof rule.subagent.reply === 'string' && rule.tool.input && String(rule.tool.input.prompt || '').includes(rule.subagent.prompt))) {
+      && (typeof rule.subagent.reply === 'string' || typeof rule.subagent.reply === 'function')
+      && rule.tool.input && String(rule.tool.input.prompt || '').includes(rule.subagent.prompt))) {
       throw new Error(`driveTool: subagent (${rule.tool.id}) must be { prompt, reply }, with prompt a token of the Agent input's prompt`);
     }
   }
@@ -225,7 +229,7 @@ async function runSide(side, bin, rules, opts, base) {
       const classifier = seen.includes(CLASSIFIER_STOP);
       if (classifier && opts.autoModeSeverity !== undefined) return cannedMessage(`<severity>${opts.autoModeSeverity}`, '</severity>');
       const sub = !classifier && rules.find((r) => r.subagent && seen.includes(r.subagent.prompt) && !seen.includes(r.tool.id));
-      if (sub) return cannedSSE(sub.subagent.reply);
+      if (sub) return cannedSSE(typeof sub.subagent.reply === 'function' ? String(sub.subagent.reply(seen)) : sub.subagent.reply);
       const rule = rules.find((r) => !seen.includes(r.tool.id));
       if (!rule) return cannedSSE(DONE);
       const input = rule.inputFrom ? rule.inputFrom({ requests: mock.requests.slice() }) : rule.tool.input;

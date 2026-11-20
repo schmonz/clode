@@ -1518,11 +1518,11 @@ const OTHER_ENGINES_EXEMPTION = { engines: ['*'], reason: 'not a shipping engine
 const CELL_JOBS = [
   { job: 'node-shim-oracle', engine: 'linux-x64-musl', files: ['test/node-shim-agentic.test.cjs'] },
   { job: 'node-shim-oracle-darwin', engine: 'darwin-arm64', files: ['test/node-shim-agentic.test.cjs',
-    'test/fidelity/tools-local.test.cjs', 'test/fidelity/agentic-grep-glob.test.cjs'] },
+    'test/fidelity/tools-local.test.cjs', 'test/fidelity/agentic-grep-glob.test.cjs', 'test/fidelity/webfetch.test.cjs'] },
   { job: 'native-builder-oracle', engine: 'linux-x64-musl', files: ['test/clode-native.test.cjs'] },
   { job: 'linux-x64-pty', engine: 'linux-x64-musl', files: ['test/quaude-build.test.cjs',
     'test/fidelity/agentic-grep-glob.test.cjs', 'test/fidelity/agentic-sandbox-fail-closed.test.cjs',
-    'test/fidelity/tools-local.test.cjs'] },
+    'test/fidelity/tools-local.test.cjs', 'test/fidelity/webfetch.test.cjs'] },
   // netbsd-arm64 has no native runner: its cells run in a NetBSD/arm64 guest (ruling E11b; scripts/tjs-legs.mjs
   // GUEST_CELL_JOBS), against the answers recorded from native, whose own tests skip there by name.
   // `placed` until its first green run (then delete the key): the verdict counts its cells as placed, not observed.
@@ -1645,8 +1645,14 @@ const EXEMPTIONS = [
   { tool: 'PowerShell', reason: 'deferred, no plan yet: registered on Windows (without Git Bash, or by the GrowthBook flag '
     + 'tengu_cobalt_ridge) or by CLAUDE_CODE_USE_POWERSHELL_TOOL, and needs PowerShell; no live check runs on the Windows '
     + 'legs', date: RECORDED, until: UNTIL_PHASE_B },
-  { tool: 'WebFetch', reason: 'deferred, no plan yet: it fetches a URL and asks the model to read the page, so a driver '
-    + 'needs a local HTTP server and a mock that answers that second request', date: RECORDED, until: UNTIL_PHASE_B },
+  // WebFetch: its print cell is driven on linux-x64-musl and darwin-arm64 (test/fidelity/webfetch.test.cjs, in linux-x64-pty
+  // and node-shim-oracle-darwin: a local TLS 1.2 rsa_pss_rsae_sha256 target and a mock that answers the page's second
+  // request, 2026-11-20, after WebFetch answered "Network Error" on a NetBSD release candidate).
+  { tool: 'WebFetch', modes: COMMON_MODES.filter((mo) => mo !== 'print'), reason: 'deferred: only the print cell is driven '
+    + '(test/fidelity/webfetch.test.cjs); the other modes need that turn with the mode\'s flag', date: '2026-11-20', until: UNTIL_PHASE_B },
+  { tool: 'WebFetch', modes: ['print'], engines: ['netbsd-arm64'], reason: 'deferred: test/fidelity/webfetch.test.cjs is not yet '
+    + 'in netbsd-arm64-cells (its guest lanes, scripts/tjs-legs.mjs GUEST_CELL_JOBS); its quaude test needs no native, so it can '
+    + 'run there as is', date: '2026-11-20', until: UNTIL_PHASE_B },
   { tool: 'WebSearch', reason: "deferred, no plan yet: the search runs server-side (the API's web_search tool, for "
     + 'first-party and some cloud providers), so a canned mock would have to answer as that server tool',
     date: RECORDED, until: UNTIL_PHASE_C },
