@@ -164,17 +164,36 @@ function commandText(input) {
 // shapes a check must FAIL on. The command rides in the prompt and in the tool_use on every
 // one; the last two put it in the tool_result itself, as an error or a shell that echoes a
 // command it could not run would.
-function missingOutputLogs(toolUse) {
+// `context` (optional): the earlier calls of the turn, each { use, content[, isError] } (a tool_use and the
+// tool_result it really got), so a check that reads an earlier call's answer (TaskStop reads the id a background
+// Bash answered with) sees it, and fails only because THIS call's output is missing. Each earlier call gets the
+// follow-up request that answered it, as a real turn sends it.
+function turnShape(toolUse, context = []) {
   const cmd = commandText(toolUse.input);
   const prompt = { role: 'user', content: [{ type: 'text', text: `run this: ${cmd}` }] };
-  const use = { role: 'assistant', content: [{ type: 'tool_use', id: toolUse.id, name: toolUse.name, input: toolUse.input }] };
+  const useOf = (u) => ({ role: 'assistant', content: [{ type: 'tool_use', id: u.id, name: u.name, input: u.input }] });
+  const history = [prompt];
+  const bodies = [{ model: 'claude-synthetic', system: cmd, messages: [prompt] }];
+  for (const c of context) {
+    history.push(useOf(c.use), { role: 'user', content: [{ type: 'tool_result', tool_use_id: c.use.id, content: c.content, ...(c.isError ? { is_error: true } : {}) }] });
+    bodies.push({ model: 'claude-synthetic', system: cmd, messages: history.slice() });
+  }
+  const use = useOf(toolUse);
   const log = (last) => ({
-    requests: [
-      { model: 'claude-synthetic', system: cmd, messages: [prompt] },
-      { model: 'claude-synthetic', system: cmd, messages: [prompt, use, last] },
-    ].map((b) => ({ method: 'POST', url: '/v1/messages', body: JSON.stringify(b) })),
+    requests: [...bodies, { model: 'claude-synthetic', system: cmd, messages: [...history, use, last] }]
+      .map((b) => ({ method: 'POST', url: '/v1/messages', body: JSON.stringify(b) })),
   });
   const result = (extra) => ({ role: 'user', content: [{ type: 'tool_result', tool_use_id: toolUse.id, ...extra }] });
+  return { cmd, log, result };
+}
+// The turn with this call ANSWERED by `content`: the positive side of a control, for a check that also reads the
+// context (it must PASS here, so its failures on the missing-output logs are about this call's output).
+function answeredLog(toolUse, content, context = [], isError = false) {
+  const { log, result } = turnShape(toolUse, context);
+  return log(result({ content, ...(isError ? { is_error: true } : {}) }));
+}
+function missingOutputLogs(toolUse, context = []) {
+  const { cmd, log, result } = turnShape(toolUse, context);
   return [
     { why: 'no tool_result at all', log: log({ role: 'user', content: [{ type: 'text', text: 'continue' }] }) },
     { why: 'an empty tool_result', log: log(result({ content: '' })) },
@@ -195,7 +214,10 @@ function missingOutputLogs(toolUse) {
 // ('print' when absent): test/build-gates/tool-coverage-gates.test.cjs reads it from the source,
 // as string literals, and counts the tool x mode cells where a CI job runs this test. Here it is
 // only checked for shape: the control proves the judgment, not the mode.
-function assertFailsOnMissingOutput(check, command, modes) {
+// `context` (optional, after modes): the earlier calls the check reads, [{ use, content[, isError] }], each with the
+// answer it really got (missingOutputLogs). Without it, a check that also needs an earlier call's answer fails on
+// every missing-output log for the wrong reason (that answer is missing too) and proves nothing about its own call.
+function assertFailsOnMissingOutput(check, command, modes, context) {
   if (modes !== undefined && !(typeof modes === 'string' && modes)
     && !(Array.isArray(modes) && modes.length && modes.every((m) => typeof m === 'string' && m))) {
     throw new Error(`assertFailsOnMissingOutput: modes must be a mode name or an array of them, got ${JSON.stringify(modes)}`);
@@ -215,7 +237,12 @@ function assertFailsOnMissingOutput(check, command, modes) {
       + 'Every follow-up also carries the tool_use, i.e. the command, so the check can pass on the command '
       + 'text alone. Judge toolResult()/toolResultText() instead.');
   }
-  for (const v of missingOutputLogs(use)) {
+  if (context !== undefined && !(Array.isArray(context) && context.every((c) => c && c.use && typeof c.use.id === 'string'
+    && typeof c.use.name === 'string' && c.use.input && typeof c.use.input === 'object'
+    && (typeof c.content === 'string' || Array.isArray(c.content))))) {
+    throw new Error('assertFailsOnMissingOutput: context must be the earlier calls, [{ use: { name, input, id }, content[, isError] }]');
+  }
+  for (const v of missingOutputLogs(use, context || [])) {
     const verdict = check(v.log);
     if (typeof verdict !== 'boolean') {
       throw new Error(`assertFailsOnMissingOutput: the check must return a boolean verdict; it returned ${typeof verdict}`);
@@ -229,4 +256,4 @@ function assertFailsOnMissingOutput(check, command, modes) {
   }
 }
 
-module.exports = { toolResult, toolResultText, rawBodyReads, assertFailsOnMissingOutput };
+module.exports = { toolResult, toolResultText, rawBodyReads, assertFailsOnMissingOutput, answeredLog };

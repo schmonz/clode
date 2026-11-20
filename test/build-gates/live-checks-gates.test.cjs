@@ -86,7 +86,7 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
-const { toolResult, toolResultText, assertFailsOnMissingOutput, rawBodyReads } = require('../../scripts/lib/tool-result.cjs');
+const { toolResult, toolResultText, assertFailsOnMissingOutput, rawBodyReads, answeredLog } = require('../../scripts/lib/tool-result.cjs');
 const { defineGuard, guardTests, checkGate, BROKEN } = require('../guard.cjs');
 const { throwsAsFindings } = require('../throws-as-findings.cjs');
 const { discoverFilesByExt } = require('../source-scan.cjs');
@@ -203,6 +203,23 @@ test('assertFailsOnMissingOutput refuses a check that returns no boolean verdict
   assert.throws(() => assertFailsOnMissingOutput(() => undefined, TOOL), /must return a boolean/);
   assert.throws(() => assertFailsOnMissingOutput(() => false, { name: 'Bash', input: { command: 'x' } }),
     /needs the tool_use \{ name, input, id \}/);
+});
+
+test('assertFailsOnMissingOutput with a context: the earlier call\'s real answer is present, so only this call\'s output is missing', () => {
+  const BG = { name: 'Bash', input: { command: 'sleep 9', run_in_background: true }, id: 'toolu_ctx_bg' };
+  const STOP = { name: 'TaskStop', input: { task_id: '<bg>' }, id: 'toolu_ctx_stop' };
+  const context = [{ use: BG, content: 'Command running in background with ID: bctx01. Output is being written to: /t/x.' }];
+  const idOf = (m) => { const x = /with ID: (\w+)\./.exec(toolResultText(m, BG.id)); return x ? x[1] : null; };
+  // the right check: this call's answer names the id the earlier call gave
+  const stopped = (m) => { const id = idOf(m); return !!id && toolResultText(m, STOP.id) === `stopped ${id}`; };
+  assert.doesNotThrow(() => assertFailsOnMissingOutput(stopped, STOP, 'print', context));
+  assert.ok(stopped(answeredLog(STOP, 'stopped bctx01', context)), 'it passes when this call is answered: its failures are about this call');
+  // a check that judges only the context passes with this call's output missing: refused, though without the context
+  // it would have failed every log (for the wrong reason: the earlier answer was missing too) and been accepted
+  const contextOnly = (m) => idOf(m) === 'bctx01';
+  assert.doesNotThrow(() => assertFailsOnMissingOutput(contextOnly, STOP));
+  assert.throws(() => assertFailsOnMissingOutput(contextOnly, STOP, 'print', context), /PASSES when the tool's output is missing/);
+  assert.throws(() => assertFailsOnMissingOutput(stopped, STOP, 'print', [{ use: BG }]), /context must be the earlier calls/);
 });
 
 test('assertFailsOnMissingOutput takes the cells a driver declares, a mode or modes, and refuses any other shape', () => {

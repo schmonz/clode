@@ -96,7 +96,7 @@
 //   exempted. The dates are the every-tool plan's phases (UNTIL_PHASE_A/B/C), carried as set.
 //
 // A DRIVER (test/**/*.cjs|mjs and scripts/**/*.cjs|mjs|js; two files skipped by name,
-// DRIVER_SCAN_SKIP) is a call `assertFailsOnMissingOutput(check, USE[, MODES])` (Task 1's control,
+// DRIVER_SCAN_SKIP) is a call `assertFailsOnMissingOutput(check, USE[, MODES[, CONTEXT]])` (Task 1's control,
 // MODES a mode or an array of modes as string literals, `print` when absent) where
 //   - USE is declared in that file as an object literal whose `name:` is a string literal: the
 //     tool it drives, or an alias of it ('Task' drives Agent);
@@ -844,17 +844,27 @@ function findDrivers(sources) {
       return end < 0 ? null : { start, end };
     };
     const slice = (d) => text.slice(d.start, d.end).trim();
+    // quaudeSkip spelled OUTSIDE every test(...)/it(...) (a shared options object spread into a call, a helper) hides
+    // which tests run quaude: fail closed, every control in the file is refused.
+    const testRanges = code(/(?<![\w$.])(?:test|it)(?:\.\w+)?\s*\(/g)
+      .map((t) => [t.index, closeOf(m, t.index + t[0].length - 1)]).filter(([, e]) => e > 0);
+    const looseSkip = code(/(?<![\w$.])quaudeSkip\b/g).find((q) => !testRanges.some(([a, b]) => a < q.index && q.index < b));
     for (const x of code(/(?<![\w$.])assertFailsOnMissingOutput\s*\(/g)) {
       if (/function\s*$/.test(text.slice(Math.max(0, x.index - 16), x.index))) continue;
       const at = { file, line: lineOf(x.index) };
+      if (looseSkip) {
+        rejected.push({ ...at, why: `the file spells quaudeSkip outside a test (line ${lineOf(looseSkip.index)}), so which `
+          + 'of its tests run quaude cannot be read; spell it inside the test that runs native alone' });
+        continue;
+      }
       const open = x.index + x[0].length - 1;
       const close = closeOf(m, open);
       const args = close < 0 ? null : splitTop(text.slice(open + 1, close - 1));
-      if (!args || (args.length !== 2 && args.length !== 3)) {
-        rejected.push({ ...at, why: 'the control is not called as (check, toolUse[, modes])' });
+      if (!args || args.length < 2 || args.length > 4) {
+        rejected.push({ ...at, why: 'the control is not called as (check, toolUse[, modes[, context]])' });
         continue;
       }
-      const [check, use, modesText] = args;
+      const [check, use, modesText] = args;   // a 4th, the context of earlier calls, does not change what is driven
       const modes = modesText === undefined ? ['print'] : literalModes(modesText);
       if (!modes) {
         rejected.push({ ...at, why: `the modes (${modesText}) are not a string literal or an array of string literals` });
@@ -2015,6 +2025,12 @@ test('a test that spells quaudeSkip drives no quaude cell (control): only its si
     "test('native alone', async () => {", '  controls();',
     "  const r = await driveTool({ tool: READ, quaudeSkip: 'native alone' });", '  assert.ok(read(r.native.raw));', '});',
   ) }];
+  // fail closed: quaudeSkip spelled outside a test (a spread options object) refuses every control in the file
+  const spread = [{ ...src(true)[0], text: src(true)[0].text.replace("quaudeSkip: 'native alone' }", '...NATIVE_ONLY }')
+    + "\nconst NATIVE_ONLY = { quaudeSkip: 'native alone' };\n" }];
+  const sd = findDrivers(spread);
+  assert.deepStrictEqual(sd.drivers, [], 'no driver is read from a file that hides quaudeSkip');
+  assert.match(sd.rejected.map((x) => x.why).join('\n'), /spells quaudeSkip outside a test \(line 16\)/);
   const only = findDrivers(src(false)).drivers[0];
   assert.deepStrictEqual(only.tests, [], 'a quaudeSkip-only driver has no test that drives quaude');
   assert.deepStrictEqual(only.nativeOnly.map((t) => t.name), ['native alone']);
