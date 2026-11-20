@@ -185,6 +185,63 @@ runs:
         set -e
         PKGS="${{ inputs.packages }}"
         GUEST_RUNTIME_TOOLS=''
+        # METER THE PACKAGE STEP. Run 44718991403's freebsd-amd64 leg died at its job timeout
+        # with only "The operation was canceled": `pkg install` had spent 10:29:57-10:41:37
+        # fetching 43 packages (118 MiB) from a slow mirror, and nothing said so. Every
+        # minute this prints elapsed time, what landed in the package cache (MB, files) and
+        # the mirror; once more when the step ends, however it ends. A cancel mid-fetch
+        # leaves "package step still running after 12m0s; fetched 96 MB ...; mirror: X" as
+        # the last line, not a bare timeout. The cache dir and the mirror lookup are the
+        # only per-manager facts; the meter is one implementation.
+        case "${{ inputs.platform }}" in
+          freebsd|dragonflybsd)
+            PKG_CACHE=/var/cache/pkg
+            # `pkg -N` first: on an image where pkg(8) is not bootstrapped yet, any other pkg
+            # command offers to bootstrap and reads the answer from stdin. -N only reports.
+            if pkg -N >/dev/null 2>&1 </dev/null; then
+              PKG_MIRROR=$(pkg -vv 2>/dev/null </dev/null | awk '/url[[:space:]]*:/ {gsub(/[",]/, "", $3); printf "%s ", $3}' || true)
+            else
+              PKG_MIRROR='not read (pkg not bootstrapped yet)'
+            fi ;;
+          netbsd)
+            PKG_CACHE=/var/db/pkgin/cache
+            PKG_MIRROR=$(grep -v '^#' /usr/pkg/etc/pkgin/repositories.conf 2>/dev/null | tr '\n' ' ' || true) ;;
+          midnightbsd)
+            PKG_CACHE=/var/db/mport/downloads; PKG_MIRROR='' ;;
+          openbsd)
+            PKG_CACHE=''; PKG_MIRROR=$(cat /etc/installurl 2>/dev/null || true) ;;
+          *)
+            PKG_CACHE=''; PKG_MIRROR=$(pkg publisher 2>/dev/null | awk 'NR > 1 {printf "%s ", $NF}' || true) ;;
+        esac
+        pkg_size() { # "<KB> <files>" under $PKG_CACHE, "0 0" when it does not exist (yet)
+          if [ -n "$PKG_CACHE" ] && [ -d "$PKG_CACHE" ]; then
+            echo "$(du -sk "$PKG_CACHE" 2>/dev/null | awk '{print $1}') $(find "$PKG_CACHE" -type f 2>/dev/null | wc -l | tr -d ' ')"
+          else echo "0 0"; fi
+        }
+        pkg_meter() {
+          el=$(( $(date +%s) - pkg_t0 ))
+          if [ -z "$PKG_CACHE" ]; then
+            dl="size not measured (this package manager keeps no download cache)"
+          elif [ ! -d "$PKG_CACHE" ]; then
+            dl="size not measured (no $PKG_CACHE: not created yet, or not this guest's cache path)"
+          else
+            set -- "$1" $(pkg_size)
+            dl="$(( ($2 - pkg_kb0) / 1024 )) MB in $(( $3 - pkg_n0 )) files into $PKG_CACHE"
+            # A finished install that landed NOTHING in the cache says nothing about the
+            # download: everything was already cached, or this is not where this guest's
+            # manager caches. Say so rather than report a confident "0 MB".
+            if [ "$1" = done ] && [ "$(( $3 - pkg_n0 ))" -eq 0 ]; then
+              dl="0 files in $PKG_CACHE: cache path unverified (already cached, or not this guest's cache)"
+            fi
+          fi
+          echo "guest: package step $1 after $((el / 60))m$((el % 60))s; fetched $dl; mirror: ${PKG_MIRROR:-not reported}"
+        }
+        pkg_t0=$(date +%s)
+        set -- $(pkg_size); pkg_kb0=$1; pkg_n0=$2
+        # sleep must not hold the step's stdout open: cpa's ssh waits for every writer.
+        ( while sleep 60 >/dev/null 2>&1; do pkg_meter "still running"; done ) &
+        pkg_hb=$!
+        trap 'rc=$?; kill $pkg_hb 2>/dev/null || true; pkg_meter "ended (exit $rc)"' EXIT
         case "${{ inputs.platform }}" in
           netbsd)
             # UNPINNED (2026-09-24). This used to pin the 2026Q1 quarterly repo
@@ -317,6 +374,9 @@ runs:
             # ooce packages land outside the default PATH
             PATH="/opt/ooce/bin:$PATH"; export PATH ;;
         esac
+        trap - EXIT
+        kill $pkg_hb 2>/dev/null || true
+        pkg_meter "done"
         # VERIFY WHAT WE ASKED FOR IS ACTUALLY THERE, on every platform, right here where
         # the cause is knowable. Three legs failed today because a package step reported
         # success (or was told to ignore failure) and the absence surfaced later as a bare

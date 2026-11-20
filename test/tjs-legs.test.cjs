@@ -1220,3 +1220,24 @@ test('zstd-row accounting mechanism: the "minimised" check fires when the row is
     'the accounting check must go red on a same-function-different-argument near-miss — '
     + 'a pattern that matches this too is not precise enough to trust as "still decompressing"');
 });
+
+// GUEST-VM TIMEOUTS ARE DERIVED (ci 44718991403: freebsd-amd64 was cancelled at a flat 20
+// minutes by a 14.4-minute package step on a slow mirror, with no hang anywhere). Every
+// cross-platform-actions guest leg must take its timeout from GUEST_JOB_MINUTES, and that
+// derivation must leave the measured slow-mirror window on top of the worst success.
+test('guest-VM leg timeouts are derived from measured history plus the package-mirror budget', () => {
+  const { GUEST_JOB_MINUTES, PKG_MIRROR_BUDGET_MIN, guestTimeout } = require('../scripts/tjs-legs.mjs');
+  const CPA = ['netbsd', 'freebsd', 'openbsd', 'dragonflybsd', 'omnios', 'midnightbsd'];
+  // KVM guests (amd64). The arm64 cpa guests run under TCG emulation with 300-minute
+  // ceilings: a different regime, not derived here (their builds dwarf any package step).
+  const guests = [...legsFor('ci'), ...legsFor('release')].filter((l) => CPA.includes(l['guest-platform']) && l.leg.endsWith('-amd64'));
+  assert.ok(guests.length >= 6, `expected the cpa guest legs, got ${guests.length}`);
+  for (const l of guests) {
+    const m = GUEST_JOB_MINUTES[l.leg];
+    assert.ok(m, `${l.leg}: a cpa guest leg with no measured row in GUEST_JOB_MINUTES (timeout ${l.timeout})`);
+    assert.strictEqual(l.timeout, guestTimeout(l.leg), `${l.leg}: timeout is not the derived value`);
+    assert.ok(l.timeout >= m.worstSuccessMin + PKG_MIRROR_BUDGET_MIN, `${l.leg}: timeout leaves no mirror budget`);
+    assert.ok(PKG_MIRROR_BUDGET_MIN >= m.pkgMaxMin, `${l.leg}: its own package step exceeds the shared budget`);
+  }
+  assert.throws(() => guestTimeout('no-such-leg'), /no measurement/);
+});

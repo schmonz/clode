@@ -36,6 +36,38 @@ const VM = (leg) => leg['guest-platform'] && !['native', 'alpine'].includes(leg[
 // re-partitions itself with no YAML edit.
 export const SLOW_CI_LEG = (leg) => VM(leg) || Boolean(leg.tier2);
 
+// GUEST-VM LEG TIMEOUTS ARE DERIVED, NOT CHOSEN. Each was a flat 20 minutes, which
+// ci 44718991403 (freebsd-amd64, 2026-11-20) crossed with no hang anywhere: its package
+// step ran 14.4 minutes (10:27:25-10:41:50: pkg 2.7.5->2.9.2 self-upgrade, catalogue
+// re-fetched, then 43 packages / 118 MiB at ~0.17 MB/s) against a measured p50 of 0.3.
+//   timeout = ceil5(worst successful job + PKG_MIRROR_BUDGET_MIN)
+// worstSuccessMin: the slowest SUCCESSFUL job (whole job, its normal package step
+// included) over every ci.yml + release.yml run 2026-09-25..2026-11-20 (77-79 successes
+// per leg; `gh api .../runs/<id>/jobs`). pkgP50Min / pkgMaxMin: the package step alone
+// (guest script start -> "guest: verified on PATH and runnable"), from the 10 newest
+// successful job logs per leg. Each row names the run and job its worst success came from.
+// Five of the six worst successes fall on 2026-09-25/26 (cause not investigated); the
+// Aug-era "2.3-5.6 minute" spans counted ~14 runs before that and are superseded. freebsd's and midnightbsd's identical 12.92 are two different jobs (checked).
+// PKG_MIRROR_BUDGET_MIN is the worst package step measured
+// on ANY leg — the slow-mirror window above — because a mirror stall is not leg-specific,
+// and the routine package step is ~1 minute everywhere, so it cannot be the budget.
+// The guest action now prints the package step's elapsed time, MB fetched and mirror
+// every minute, so the next overrun names its cause. Re-measure; never just bump.
+export const PKG_MIRROR_BUDGET_MIN = 14.4;   // ci 44718991403, freebsd-amd64, 2026-11-20
+export const GUEST_JOB_MINUTES = {
+  'netbsd-amd64':       { worstSuccessMin: 14.82, pkgP50Min: 0.61, pkgMaxMin: 0.94 },  // ci 36234851168 job 108384985815 (2026-09-26)
+  'freebsd-amd64':      { worstSuccessMin: 12.92, pkgP50Min: 0.32, pkgMaxMin: 0.40 },  // ci 44597568635 job 135820354552 (2026-11-19)
+  'openbsd-amd64':      { worstSuccessMin: 15.67, pkgP50Min: 0.96, pkgMaxMin: 1.19 },  // ci 36234851168 job 108384985791 (2026-09-26)
+  'dragonflybsd-amd64': { worstSuccessMin: 10.82, pkgP50Min: 0.89, pkgMaxMin: 1.15 },  // ci 36253553370 job 108436593844 (2026-09-26)
+  'omnios-amd64':       { worstSuccessMin: 13.98, pkgP50Min: 0.54, pkgMaxMin: 0.65 },  // ci 36172348016 job 108195810287 (2026-09-25)
+  'midnightbsd-amd64':  { worstSuccessMin: 12.92, pkgP50Min: 0.31, pkgMaxMin: 0.38 },  // ci 36160689449 job 108156317949 (2026-09-25)
+};
+export function guestTimeout(leg) {
+  const m = GUEST_JOB_MINUTES[leg];
+  if (!m) throw new Error(`guestTimeout: no measurement for ${leg} in GUEST_JOB_MINUTES`);
+  return Math.ceil((m.worstSuccessMin + PKG_MIRROR_BUDGET_MIN) / 5) * 5;
+}
+
 // Version policy (user decision 2026-07-11): CI builds the NEWEST available
 // version of each OS (early warning on the front edge); release builds — and
 // publishes from — the OLDEST version that can still build (the compat
@@ -338,14 +370,14 @@ const LEGS = [
     // renovate: datasource=custom.cpa-netbsd-x86-64 depName=netbsd-x86-64-guest versioning=loose
     'ci-guest-version': '10.1',
     'guest-packages': 'cmake gmake nodejs git-base bash', floor: '10.1',
-    // MEASURED, not guessed: successful runs span 2.3-5.6 minutes (last ~14 runs).
+    // MEASURED: GUEST_JOB_MINUTES (above) holds this leg's numbers and the derivation.
     // It carried the 90-minute default, and on 2026-08-26 netbsd-amd64 HUNG for 54+
     // minutes with every other job green — the second such hang that day, after
     // dragonfly. A ceiling an order of magnitude above the measured runtime does not
     // report a hang, it postpones the report, and everything `needs:`-ing the matrix
     // waits. All of these legs install guest packages from third-party repos, which
     // is the suspected common cause — see the package-pinning item in BACKLOG.
-    timeout: 20,
+    timeout: guestTimeout('netbsd-amd64'),   // derived: see GUEST_JOB_MINUTES
     wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, ci: true,  // cpa, KVM
     // DEMOTED to tier 0 (2026-08-04 audit): the amd64 rung was explicitly
     // ABANDONED for local fidelity work on 2026-07-06 in favor of aarch64
@@ -372,14 +404,14 @@ const LEGS = [
     // renovate: datasource=custom.cpa-freebsd-x86-64 depName=freebsd-x86-64-guest versioning=loose
     'ci-guest-version': '15.1',
     'guest-packages': 'cmake gmake node git bash', floor: '14.0',
-    // MEASURED, not guessed: successful runs span 2.2-2.8 minutes (last ~14 runs).
+    // MEASURED: GUEST_JOB_MINUTES (above) holds this leg's numbers and the derivation.
     // It carried the 90-minute default, and on 2026-08-26 netbsd-amd64 HUNG for 54+
     // minutes with every other job green — the second such hang that day, after
     // dragonfly. A ceiling an order of magnitude above the measured runtime does not
     // report a hang, it postpones the report, and everything `needs:`-ing the matrix
     // waits. All of these legs install guest packages from third-party repos, which
     // is the suspected common cause — see the package-pinning item in BACKLOG.
-    timeout: 20,
+    timeout: guestTimeout('freebsd-amd64'),   // derived: see GUEST_JOB_MINUTES
     wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, ci: true,  // cpa, KVM
     fidelity: { tier: 0, date: '2026-08-02', how: 'ci',
                 note: 'floor 1/6 green (G7 — the build-pipeline PONG smoke, run in-guest); A1,B1,B4,C1,D1 not driven — see RESULTS.md' } },
@@ -392,23 +424,22 @@ const LEGS = [
   // be useless to 7.9 users.
   { leg: 'openbsd-amd64', os: 'ubuntu-latest', 'guest-platform': 'openbsd', 'guest-version': '7.9',
     'guest-packages': 'cmake gmake node git bash', floor: '7.9',
-    // MEASURED, not guessed: successful runs span 3.1-4.6 minutes (last ~14 runs).
+    // MEASURED: GUEST_JOB_MINUTES (above) holds this leg's numbers and the derivation.
     // It carried the 90-minute default, and on 2026-08-26 netbsd-amd64 HUNG for 54+
     // minutes with every other job green — the second such hang that day, after
     // dragonfly. A ceiling an order of magnitude above the measured runtime does not
     // report a hang, it postpones the report, and everything `needs:`-ing the matrix
     // waits. All of these legs install guest packages from third-party repos, which
     // is the suspected common cause — see the package-pinning item in BACKLOG.
-    timeout: 20,
+    timeout: guestTimeout('openbsd-amd64'),   // derived: see GUEST_JOB_MINUTES
     wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, ci: true,  // cpa, KVM
     fidelity: { tier: 0, date: '2026-08-02', how: 'ci',
                 note: 'floor 1/6 green (G7 — the build-pipeline PONG smoke, run in-guest); A1,B1,B4,C1,D1 not driven — see RESULTS.md' } },
   { leg: 'dragonflybsd-amd64', os: 'ubuntu-latest', 'guest-platform': 'dragonflybsd', 'guest-version': '6.4.2',
     'guest-packages': 'cmake gmake node git bash', floor: '6.4.2',
     wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, ci: true,  // cpa, KVM
-    // MEASURED, not guessed: 9 successes over 25 runs span 2.8-5.9 minutes, and a real
-    // failure lands in ~1.4. One of those successes ran mostly cold (2 cache restores, 4
-    // misses) and still finished inside the band, so this covers a cold build too.
+    // MEASURED: GUEST_JOB_MINUTES (above) holds this leg's numbers and the derivation. A real
+    // failure lands in ~1.4 minutes (Aug measurement), so the ceiling only ever times hangs.
     //
     // It had no timeout and inherited the 90-minute default, which on 2026-08-25 meant a
     // hung `pkg` fetch held the whole release-gate run for 68+ minutes with every other
@@ -416,7 +447,7 @@ const LEGS = [
     // even been created. A 90-minute ceiling on a 6-minute job does not report a hang, it
     // postpones the report by 84 minutes. See BACKLOG: this leg hangs talking to the
     // Avalon package repo, and the durable fix is pinning what we install.
-    timeout: 20,
+    timeout: guestTimeout('dragonflybsd-amd64'),   // derived: see GUEST_JOB_MINUTES
     fidelity: { tier: 0, date: '2026-08-02', how: 'ci',
                 note: 'floor 1/6 green (G7 — the build-pipeline PONG smoke, run in-guest); A1,B1,B4,C1,D1 not driven — see RESULTS.md' } },
   { leg: 'omnios-amd64', os: 'ubuntu-latest', 'guest-platform': 'omnios',
@@ -424,14 +455,14 @@ const LEGS = [
     // renovate: datasource=custom.cpa-omnios-x86-64 depName=omnios-x86-64-guest versioning=loose
     'ci-guest-version': 'r151058',
     'guest-packages': 'developer/gcc14 developer/build/gnu-make ooce/developer/cmake ooce/runtime/node-22 developer/versioning/git shell/bash',
-    // MEASURED, not guessed: successful runs span 3.7-4.7 minutes (last ~14 runs).
+    // MEASURED: GUEST_JOB_MINUTES (above) holds this leg's numbers and the derivation.
     // It carried the 90-minute default, and on 2026-08-26 netbsd-amd64 HUNG for 54+
     // minutes with every other job green — the second such hang that day, after
     // dragonfly. A ceiling an order of magnitude above the measured runtime does not
     // report a hang, it postpones the report, and everything `needs:`-ing the matrix
     // waits. All of these legs install guest packages from third-party repos, which
     // is the suspected common cause — see the package-pinning item in BACKLOG.
-    timeout: 20,
+    timeout: guestTimeout('omnios-amd64'),   // derived: see GUEST_JOB_MINUTES
     floor: 'r151056',
     wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, ci: true,  // cpa, KVM (illumos rung)
     fidelity: { tier: 0, date: '2026-08-02', how: 'ci',
@@ -510,14 +541,14 @@ const LEGS = [
     // wants perl >= 5.40.3, image ships 5.38.5 — dispatch #14); every cmake
     // git usage is if(GIT_EXECUTABLE)-guarded, so the build does not need it.
     'guest-packages': 'cmake gmake node bash', floor: '4.0.4',
-    // MEASURED, not guessed: successful runs span 1.8-4.4 minutes (last ~14 runs).
+    // MEASURED: GUEST_JOB_MINUTES (above) holds this leg's numbers and the derivation.
     // It carried the 90-minute default, and on 2026-08-26 netbsd-amd64 HUNG for 54+
     // minutes with every other job green — the second such hang that day, after
     // dragonfly. A ceiling an order of magnitude above the measured runtime does not
     // report a hang, it postpones the report, and everything `needs:`-ing the matrix
     // waits. All of these legs install guest packages from third-party repos, which
     // is the suspected common cause — see the package-pinning item in BACKLOG.
-    timeout: 20,
+    timeout: guestTimeout('midnightbsd-amd64'),   // derived: see GUEST_JOB_MINUTES
     wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, 'soft-fail': true, ci: true,  // cpa, KVM (mport packages)
     fidelity: { tier: 0, date: '2026-08-02', how: 'ci',
                 note: 'floor 1/6 green (G7 — the build-pipeline PONG smoke, run in-guest); A1,B1,B4,C1,D1 not driven — see RESULTS.md' } },
