@@ -196,7 +196,13 @@ runs:
         case "${{ inputs.platform }}" in
           freebsd|dragonflybsd)
             PKG_CACHE=/var/cache/pkg
-            PKG_MIRROR=$(pkg -vv 2>/dev/null | awk '/url[[:space:]]*:/ {gsub(/[",]/, "", $3); printf "%s ", $3}' || true) ;;
+            # `pkg -N` first: on an image where pkg(8) is not bootstrapped yet, any other pkg
+            # command offers to bootstrap and reads the answer from stdin. -N only reports.
+            if pkg -N >/dev/null 2>&1 </dev/null; then
+              PKG_MIRROR=$(pkg -vv 2>/dev/null </dev/null | awk '/url[[:space:]]*:/ {gsub(/[",]/, "", $3); printf "%s ", $3}' || true)
+            else
+              PKG_MIRROR='not read (pkg not bootstrapped yet)'
+            fi ;;
           netbsd)
             PKG_CACHE=/var/db/pkgin/cache
             PKG_MIRROR=$(grep -v '^#' /usr/pkg/etc/pkgin/repositories.conf 2>/dev/null | tr '\n' ' ' || true) ;;
@@ -221,6 +227,12 @@ runs:
           else
             set -- "$1" $(pkg_size)
             dl="$(( ($2 - pkg_kb0) / 1024 )) MB in $(( $3 - pkg_n0 )) files into $PKG_CACHE"
+            # A finished install that landed NOTHING in the cache says nothing about the
+            # download: everything was already cached, or this is not where this guest's
+            # manager caches. Say so rather than report a confident "0 MB".
+            if [ "$1" = done ] && [ "$(( $3 - pkg_n0 ))" -eq 0 ]; then
+              dl="0 files in $PKG_CACHE: cache path unverified (already cached, or not this guest's cache)"
+            fi
           fi
           echo "guest: package step $1 after $((el / 60))m$((el % 60))s; fetched $dl; mirror: ${PKG_MIRROR:-not reported}"
         }

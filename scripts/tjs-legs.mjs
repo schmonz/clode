@@ -45,19 +45,22 @@ export const SLOW_CI_LEG = (leg) => VM(leg) || Boolean(leg.tier2);
 // included) over every ci.yml + release.yml run 2026-09-25..2026-11-20 (77-79 successes
 // per leg; `gh api .../runs/<id>/jobs`). pkgP50Min / pkgMaxMin: the package step alone
 // (guest script start -> "guest: verified on PATH and runnable"), from the 10 newest
-// successful job logs per leg. PKG_MIRROR_BUDGET_MIN is the worst package step measured
+// successful job logs per leg. Each row names the run and job its worst success came from.
+// Five of the six worst successes fall on 2026-09-25/26 (cause not investigated); the
+// Aug-era "2.3-5.6 minute" spans counted ~14 runs before that and are superseded. freebsd's and midnightbsd's identical 12.92 are two different jobs (checked).
+// PKG_MIRROR_BUDGET_MIN is the worst package step measured
 // on ANY leg — the slow-mirror window above — because a mirror stall is not leg-specific,
 // and the routine package step is ~1 minute everywhere, so it cannot be the budget.
 // The guest action now prints the package step's elapsed time, MB fetched and mirror
 // every minute, so the next overrun names its cause. Re-measure; never just bump.
 export const PKG_MIRROR_BUDGET_MIN = 14.4;   // ci 44718991403, freebsd-amd64, 2026-11-20
 export const GUEST_JOB_MINUTES = {
-  'netbsd-amd64':       { worstSuccessMin: 14.82, pkgP50Min: 0.61, pkgMaxMin: 0.94 },
-  'freebsd-amd64':      { worstSuccessMin: 12.92, pkgP50Min: 0.32, pkgMaxMin: 0.40 },
-  'openbsd-amd64':      { worstSuccessMin: 15.67, pkgP50Min: 0.96, pkgMaxMin: 1.19 },
-  'dragonflybsd-amd64': { worstSuccessMin: 10.82, pkgP50Min: 0.89, pkgMaxMin: 1.15 },
-  'omnios-amd64':       { worstSuccessMin: 13.98, pkgP50Min: 0.54, pkgMaxMin: 0.65 },
-  'midnightbsd-amd64':  { worstSuccessMin: 12.92, pkgP50Min: 0.31, pkgMaxMin: 0.38 },
+  'netbsd-amd64':       { worstSuccessMin: 14.82, pkgP50Min: 0.61, pkgMaxMin: 0.94 },  // ci 36234851168 job 108384985815 (2026-09-26)
+  'freebsd-amd64':      { worstSuccessMin: 12.92, pkgP50Min: 0.32, pkgMaxMin: 0.40 },  // ci 44597568635 job 135820354552 (2026-11-19)
+  'openbsd-amd64':      { worstSuccessMin: 15.67, pkgP50Min: 0.96, pkgMaxMin: 1.19 },  // ci 36234851168 job 108384985791 (2026-09-26)
+  'dragonflybsd-amd64': { worstSuccessMin: 10.82, pkgP50Min: 0.89, pkgMaxMin: 1.15 },  // ci 36253553370 job 108436593844 (2026-09-26)
+  'omnios-amd64':       { worstSuccessMin: 13.98, pkgP50Min: 0.54, pkgMaxMin: 0.65 },  // ci 36172348016 job 108195810287 (2026-09-25)
+  'midnightbsd-amd64':  { worstSuccessMin: 12.92, pkgP50Min: 0.31, pkgMaxMin: 0.38 },  // ci 36160689449 job 108156317949 (2026-09-25)
 };
 export function guestTimeout(leg) {
   const m = GUEST_JOB_MINUTES[leg];
