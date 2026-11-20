@@ -139,8 +139,9 @@ function stageCli(bin, opts = {}) {
   const cli = path.join(dir, 'cli.cjs');
   const { cacheKey } = require(path.join(REPO, 'libexec/clode-resolve.cjs'));
   const { extractIfNeeded } = require(path.join(REPO, 'libexec/clode-extract.cjs'));
+  // the ORIGINAL temp dir under test/run.mjs, whose per-run root goes at exit (test/run-tmp.cjs STABLE)
   const root = process.env.CLODE_ORACLE_STAGE_ROOT
-    || path.join(os.tmpdir(), 'clode-oracle-stage');
+    || path.join(process.env.CLODE_TEST_ORIGINAL_TMP || os.tmpdir(), 'clode-oracle-stage');
   const cacheDir = path.join(root, cacheKey(bin));
   extractIfNeeded({
     bin,

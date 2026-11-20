@@ -57,7 +57,9 @@ const { stateRoot } = require('./state-root-helper.cjs');
 let memo = null; // { path } | { skip } — set at most once per process, by build()
 
 // The STABLE extraction cache every build here shares (see CLODE_CACHE in build() below).
-const STABLE_CACHE = path.join(os.tmpdir(), 'clode-built-binary-cache');
+// Kept in the ORIGINAL temp dir under test/run.mjs (its per-run root is removed at exit; test/run-tmp.cjs STABLE), so a
+// run reuses the last run's extraction.
+const STABLE_CACHE = path.join(process.env.CLODE_TEST_ORIGINAL_TMP || os.tmpdir(), 'clode-built-binary-cache');
 
 // Every build's private scratch dir, so exit-cleanup can remove exactly what THIS
 // process created and nothing another concurrent process is still using.
