@@ -15,7 +15,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { driveTool, TOOL_SWITCHES } = require('./tool-driver.cjs');   // first: it applies the suite home, standalone too
+const { driveTool, TOOL_SWITCHES, ptyHarnessMissing } = require('./tool-driver.cjs');   // first: it applies the suite home, standalone too
 const { toolResultText, assertFailsOnMissingOutput } = require('../scripts/lib/tool-result.cjs');
 
 const SKIP = process.platform === 'win32' ? 'the fake targets are #!/bin/sh wrappers' : false;
@@ -65,7 +65,7 @@ function parse(sse) {
     // A use with a prompt is a fake Agent: its subagent is a fresh conversation, and its answer is the tool_result.
     const answers = [];
     for (const u of turn.uses) {
-      if (typeof u.input.prompt !== 'string') { answers.push(LABEL + ' PRODUCT-' + (u.input.a * u.input.b) + ' tasks=' + process.env.CLAUDE_CODE_ENABLE_TASKS + ' home=' + process.env.HOME + ' cfg=' + cfg); continue; }
+      if (typeof u.input.prompt !== 'string') { answers.push(LABEL + ' PRODUCT-' + (u.input.a * u.input.b) + ' tasks=' + process.env.CLAUDE_CODE_ENABLE_TASKS + ' home=' + process.env.HOME + ' cfg=' + cfg + ' typed=' + prompt); continue; }
       const sub = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model: 'fake', messages: [{ role: 'user', content: [{ type: 'text', text: u.input.prompt }] }] }) });
       answers.push(LABEL + ' SUBAGENT-SAID ' + parse(await sub.text()).text);
     }
@@ -134,7 +134,7 @@ test('driveTool sandboxes HOME and CLAUDE_CONFIG_DIR per side; the caller\'s ~/.
     const r = await driveTool({ tool: FAKE, base, quaude: f.quaude, native: f.native });
     assert.ok(sawProduct(r.quaude.raw) && sawProduct(r.native.raw));
     for (const side of ['quaude', 'native']) {
-      const said = /home=(\S+) cfg=(\S+)$/.exec(r[side].text);
+      const said = /home=(\S+) cfg=(\S+) typed=/.exec(r[side].text);
       assert.ok(said, `${side}: ${r[side].text}`);
       const [, home, cfg] = said;
       assert.strictEqual(home, r[side].home.HOME);
@@ -226,20 +226,19 @@ test('driveTool computes a call\'s input from the log so far (inputFrom), and re
 });
 
 // THE INTERACTIVE TURN (opts.interactive): the prompt is typed into a pty, and the turn is over when the closing text is
-// on screen. Needs the PTY harness (node-pty, test/tui-screen.cjs); a box without one skips by name.
-const ptyHarness = () => { try { require('./tui-screen.cjs'); const { harnessDir } = require('../scripts/platform-tag.cjs');
-  try { require(path.join(harnessDir(path.resolve(__dirname, '..')), 'node_modules', 'node-pty')); } catch { require('node-pty'); } return null; }
-catch (e) { return `no PTY harness here (node-pty): ${e.message.split('\n')[0]}`; } };
+// on screen. Needs the PTY harness (node-pty); a box without one skips by name (ptyHarnessMissing says why).
+const sawTyped = (m) => toolResultText(m, FAKE.id).endsWith(' typed=type me');
 test('driveTool types the prompt into a pty for an interactive turn, and judges the same tool_result', { skip: SKIP }, async (t) => {
-  const why = ptyHarness();
+  const why = ptyHarnessMissing();
   if (why) { t.skip(why); return; }
   assertFailsOnMissingOutput(sawProduct, FAKE, 'interactive');
+  assertFailsOnMissingOutput(sawTyped, FAKE, 'interactive');
   const f = fakes();
   try {
     const r = await driveTool({ tool: FAKE, quaude: f.quaude, nativeSkip: 'fakes', interactive: true, prompt: 'type me', timeoutMs: 30000 });
     assert.strictEqual(r.quaude.status, 0, r.quaude.stderr);
     assert.ok(sawProduct(r.quaude.raw), r.quaude.text);
-    assert.ok(r.quaude.raw.requests.some((q) => q.body.includes('type me')), 'the typed prompt reached the mock');
+    assert.ok(sawTyped(r.quaude.raw), 'the typed prompt is the one the target read: ' + r.quaude.text);
     assert.match(r.quaude.stdout, /TOOL-DRIVER-DONE/, 'the last screen shows the closing text');
   } finally { fs.rmSync(f.dir, { recursive: true, force: true }); }
 });

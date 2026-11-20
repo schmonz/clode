@@ -313,4 +313,15 @@ function driveTool(opts = {}) {
   })();
 }
 
-module.exports = { driveTool, DONE, TOOL_SWITCHES, shadowKeychain, CLASSIFIER_STOP };
+// Why an interactive turn cannot run here (no PTY harness: node-pty in the platform harness dir or on the module path),
+// or null when it can. A test skips by this name rather than failing on a box without the harness.
+function ptyHarnessMissing() {
+  try {
+    require('./tui-screen.cjs');
+    const { harnessDir } = require('../scripts/platform-tag.cjs');
+    try { require(path.join(harnessDir(path.resolve(__dirname, '..')), 'node_modules', 'node-pty')); } catch { require('node-pty'); }
+    return null;
+  } catch (e) { return `no PTY harness here (node-pty): ${e.message.split('\n')[0]}`; }
+}
+
+module.exports = { driveTool, DONE, TOOL_SWITCHES, shadowKeychain, CLASSIFIER_STOP, ptyHarnessMissing };
