@@ -51,7 +51,7 @@ process.on('exit', () => { try { fs.rmSync(BASE, { recursive: true, force: true 
 const W = (f) => path.join(BASE, 'work', f);
 
 // THE CALLS, in the order the mock asks for them.
-const READ = { name: 'Read', input: { file_path: W('a.txt') }, id: 'toolu_tl_read' };
+const READ = { name: 'Read', input: { file_path: W('a.txt') }, id: 'toolu_tl_read_a' };
 const READ_RANGE = { name: 'Read', input: { file_path: W('a.txt'), offset: 2, limit: 2 }, id: 'toolu_tl_read_range' };
 const READ_MISSING = { name: 'Read', input: { file_path: W('nope.txt') }, id: 'toolu_tl_read_missing' };
 const WRITE_NEW = { name: 'Write', input: { file_path: W('new.txt'), content: 'fresh\n' }, id: 'toolu_tl_write_new' };
@@ -67,7 +67,7 @@ const SCRIPT = [{ tool: READ }, { tool: READ_RANGE }, { tool: READ_MISSING }, { 
 // from its code point (memory: tool-hazard-unicode-escapes).
 const STATE_CURRENT = `(file state is current in your context ${String.fromCodePoint(0x2014)} no need to Read it back)`;
 const NATIVE = {
-  toolu_tl_read: { text: '1\tone\n2\ttwo\n3\tthree\n4\tfour\n5\tfive\n6\t', isError: false },
+  toolu_tl_read_a: { text: '1\tone\n2\ttwo\n3\tthree\n4\tfour\n5\tfive\n6\t', isError: false },
   toolu_tl_read_range: { text: '2\ttwo\n3\tthree', isError: false },
   toolu_tl_read_missing: { text: 'File does not exist. Note: your current working directory is <B>/work.', isError: true },
   toolu_tl_write_new: { text: `File created successfully at: <B>/work/new.txt ${STATE_CURRENT}`, isError: false },
@@ -183,7 +183,7 @@ const T_LIST_2 = { name: 'TaskList', input: {}, id: 'toolu_tk_list_2' };
 // name without touching another run's.
 const T_BG = { name: 'Bash', input: { command: `sleep 37.${process.pid}`, description: 'wait', run_in_background: true }, id: 'toolu_tk_bg' };
 const T_STOP = { name: 'TaskStop', input: { task_id: '<the background id>' }, id: 'toolu_tk_stop' };
-const T_STOP_AGAIN = { name: 'TaskStop', input: { task_id: '<the background id>' }, id: 'toolu_tk_stop_again' };
+const T_STOP_AGAIN = { name: 'TaskStop', input: { task_id: '<the background id>' }, id: 'toolu_tk_restop' };
 const T_KILL_NONE = { name: 'KillShell', input: { shell_id: 'no-such-task' }, id: 'toolu_tk_kill_none' };
 // The background id, read from the Bash call's tool_result (null when it sent none).
 const bgIdOf = (m) => { const x = /^Command running in background with ID: (\w+)\./.exec(toolResultText(m, T_BG.id)); return x ? x[1] : null; };
@@ -205,7 +205,7 @@ const TASK_NATIVE = {
   toolu_tk_done_1: { text: 'Updated task #1 status', isError: false },
   toolu_tk_list_2: { text: '#1 [completed] Write the parser\n#2 [pending] Test the parser', isError: false },
   toolu_tk_stop: { text: `{"message":"Successfully stopped task: <ID> (${T_BG.input.command})","task_id":"<ID>","task_type":"local_bash","command":"${T_BG.input.command}"}`, isError: false },
-  toolu_tk_stop_again: { text: '<tool_use_error>No task found with ID: <ID></tool_use_error>', isError: true },
+  toolu_tk_restop: { text: '<tool_use_error>No task found with ID: <ID></tool_use_error>', isError: true },
   toolu_tk_kill_none: { text: '<tool_use_error>No task found with ID: no-such-task</tool_use_error>', isError: true },
 };
 // What the background call really answers (its shape, as measured), for the TaskStop controls' context: with it in

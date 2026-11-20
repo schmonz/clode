@@ -209,6 +209,8 @@ test('driveTool refuses a call that is not a { name, input, id } tool_use', () =
   const NAMELESS = { name: 'X' };
   assert.throws(() => driveTool({ tool: NAMELESS }), /\{ name, input, id \}/);
   assert.throws(() => driveTool({}), /tool_use/);
+  assert.throws(() => driveTool({ script: [{ tool: { name: 'X', input: {}, id: 't_exit' } }, { tool: { name: 'X', input: {}, id: 't_exit_none' } }] }),
+    /call id t_exit is inside t_exit_none/, 'an id inside another reads as answered');
   assert.throws(() => driveTool({ tool: FAKE, switches: { CLAUDE_CODE_ENTRYPOINT: 'cli' } }),
     /switches may set only CLAUDE_CODE_ENABLE_TASKS .*not CLAUDE_CODE_ENTRYPOINT/, 'an unlisted switch');
   assert.throws(() => driveTool({ tool: FAKE, switches: { HOME: '/x' } }), /not HOME/, 'a switch is no way round the sandbox');

@@ -103,6 +103,14 @@ function rulesOf(opts) {
       throw new Error(`driveTool: inputFrom (${rule.tool.id}) must be a function of the request log`);
     }
   }
+  // The mock knows a call was answered by finding its id in the request body, as a substring. An id inside another
+  // (t_exit in t_exit_none) reads as answered the moment the longer one is, and the mock skips the call: the turn ends
+  // without it and its result is missing (every-tool Task 4: ExitWorktree "had no tool_result" for this reason).
+  const ids = rules.map((r) => r.tool.id);
+  for (const a of ids) {
+    const inside = ids.find((b) => b !== a && b.includes(a));
+    if (inside) throw new Error(`driveTool: call id ${a} is inside ${inside}; the mock would take it as answered. Make the ids distinct`);
+  }
   return rules;
 }
 
