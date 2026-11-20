@@ -559,18 +559,32 @@ function t5Controls() {
   const nativeAnswer = `This session is work-01 [744172] ${EM} the name other sessions use to message it (it is not listed below; a message to it would be a message to yourself).\n\nNo reachable agents ${EM} no other Claude session is running on this machine right now (peer messaging itself is available; a session appears here once it is started).`;
   assert.ok(aListNative(answeredLog(A_LIST, nativeAnswer)) && !aListQuaude(answeredLog(A_LIST, nativeAnswer)));
   assert.ok(aListQuaude(answeredLog(A_LIST, A_QUAUDE.text)) && !aListNative(answeredLog(A_LIST, A_QUAUDE.text)));
+  // the run's CONTROL: launched but never completed, completed with another result, or no record, each fails
+  assert.ok(workflowRan(WORKFLOW_LEFT));
+  for (const records of [[{ ...WORKFLOW_LEFT.records[0], status: 'running', result: undefined }], [{ ...WORKFLOW_LEFT.records[0], result: { answer: 41 } }], []]) {
+    assert.ok(!workflowRan({ ...WORKFLOW_LEFT, records }), `a run record ${JSON.stringify(records)} is not a run that returned 42`);
+  }
 }
 
-// What the launch left: the run's script file, byte for byte the script sent, and its journal's first entry.
+// What the run left: the run's script file, byte for byte the script sent; its journal's first entry; and its run
+// record's verdict, which shows the script RAN in the workflow runtime (node:vm under quaude, the path where host node
+// once segfaulted) and returned { answer: 42 }: status "completed", the result, no agents. Native writes the record
+// within the turn (durationMs 6 measured), so a runtime that never ran the script, or returned something else, differs.
 const readWorkflow = (work, base) => {
   const found = [];
   const walk = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, e.name); if (e.isDirectory()) walk(p); else found.push(p); } };
   walk(base);
   const script = found.filter((p) => /[\\/]workflows[\\/]scripts[\\/]noop-wf_[0-9a-f-]+\.js$/.test(p));
   const journal = found.filter((p) => /[\\/]subagents[\\/]workflows[\\/]wf_[0-9a-f-]+[\\/]journal\.jsonl$/.test(p));
-  return { scripts: script.map((p) => fs.readFileSync(p, 'utf8')), journal: journal.map((p) => fs.readFileSync(p, 'utf8').split('\n')[0]) };
+  const records = found.filter((p) => /[\\/]workflows[\\/]wf_[0-9a-f-]+\.json$/.test(p)).map((p) => {
+    try { const j = JSON.parse(fs.readFileSync(p, 'utf8')); return { status: j.status, result: j.result, agentCount: j.agentCount, workflowName: j.workflowName }; } catch { return 'unreadable'; }
+  });
+  return { scripts: script.map((p) => fs.readFileSync(p, 'utf8')), journal: journal.map((p) => fs.readFileSync(p, 'utf8').split('\n')[0]), records };
 };
-const WORKFLOW_LEFT = { scripts: [WF_SCRIPT], journal: ['{"type":"launched"}'] };
+const WORKFLOW_LEFT = { scripts: [WF_SCRIPT], journal: ['{"type":"launched"}'],
+  records: [{ status: 'completed', result: { answer: 42 }, agentCount: 0, workflowName: 'noop' }] };
+// The run's judgment, and its control: a launch whose script never completed (or returned anything but 42) is a finding.
+const workflowRan = (inspected) => { try { assert.deepStrictEqual(inspected, WORKFLOW_LEFT); return true; } catch { return false; } };
 
 function t5Findings(label, side) {
   const out = [];
@@ -578,7 +592,7 @@ function t5Findings(label, side) {
   for (const [USE, same] of t5Verdicts(side.raw, label)) {
     if (!same) out.push(`${label}: ${USE.id} ${USE.name} sent ${JSON.stringify(side.sent[USE.id])}\n    got: ${JSON.stringify(toolResult(side.raw, USE.id))}`);
   }
-  try { assert.deepStrictEqual(side.inspected, WORKFLOW_LEFT); } catch { out.push(`${label}: the workflow left ${JSON.stringify(side.inspected)}, native's ${JSON.stringify(WORKFLOW_LEFT)}`); }
+  if (!workflowRan(side.inspected)) out.push(`${label}: the workflow left ${JSON.stringify(side.inspected)}, native's ${JSON.stringify(WORKFLOW_LEFT)}`);
   return out;
 }
 
