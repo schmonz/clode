@@ -709,22 +709,40 @@ function direntFor(parentPath, name) {
   return new Dirent(name, mode, parentPath);
 }
 
-// Shared readdir core: honours { withFileTypes, recursive } like host node.
+// A NAME in the caller's encoding (readdir's entries, readlink's target), as node answers: the options' `encoding`
+// (a string, or { encoding }), 'utf8' by default; 'buffer' gives a Buffer of the name's bytes; any other Buffer
+// encoding re-encodes them. The engine hands names back as strings, so the bytes are the name's UTF-8. Before this,
+// encoding was ignored and 'buffer' still got strings: the carve's ExitWorktree vets each registration name with
+// `Buffer.from(n.toString('utf8')).equals(n)` and threw on the string, so `action: "remove"` kept the worktree where
+// native removed it (every-tool Task 4, 2026-11-20).
+function nameEncoding(opts) {
+  const enc = typeof opts === 'string' ? opts : opts && opts.encoding;
+  return enc === undefined || enc === null ? 'utf8' : enc;
+}
+function encodeName(name, enc) {
+  if (enc === 'utf8' || enc === 'utf-8') return name;
+  const b = Buffer.from(name, 'utf8');
+  return enc === 'buffer' ? b : b.toString(enc);
+}
+
+// Shared readdir core: honours { withFileTypes, recursive, encoding } like host node.
 // recursive descends real directories only (lstat kind, no symlink follow);
 // without withFileTypes it yields path strings relative to `p` (node's shape).
 function readdirCore(p, opts) {
   const wft = !!(opts && opts.withFileTypes);
   const recursive = !!(opts && opts.recursive);
+  const enc = nameEncoding(opts);
+  const named = (d, n) => { if (enc !== 'utf8' && enc !== 'utf-8') d.name = encodeName(n, enc); return d; };
   if (!recursive) {
     const names = FSS.readdir(p);
-    return wft ? names.map((n) => direntFor(p, n)) : names;
+    return wft ? names.map((n) => named(direntFor(p, n), n)) : names.map((n) => encodeName(n, enc));
   }
   const out = [];
   const walk = (dir, relBase) => {
     for (const n of FSS.readdir(dir)) {
       const rel = relBase ? path.join(relBase, n) : n;
       const d = direntFor(dir, n);
-      out.push(wft ? d : rel);
+      out.push(wft ? named(d, n) : encodeName(rel, enc));
       if (d.isDirectory()) walk(path.join(dir, n), rel);
     }
   };
@@ -881,7 +899,7 @@ const fsMod = {
   createWriteStream,
   cpSync,
   utimesSync,
-  readlinkSync: (p) => FSS.readlink(p),
+  readlinkSync: (p, opts) => encodeName(FSS.readlink(p), nameEncoding(opts)),
   readdirSync: (p, opts) => readdirCore(p, opts),
   opendirSync: (p) => {
     // A Dir over an eager Dirent list in the OS's readdir order (the engine's readdir does not sort,
@@ -1086,7 +1104,7 @@ const promises = {
   opendir: async (p) => fsMod.opendirSync(p),
   access: async (p, m) => FSS.access(p, m ?? constants.F_OK),
   realpath: async (p) => FSS.realpath(p),
-  readlink: async (p) => FSS.readlink(p),
+  readlink: async (p, opts) => encodeName(FSS.readlink(p), nameEncoding(opts)),
   unlink: async (p) => FSS.unlink(p),
   rename: async (a, b) => renameReplace(a, b),
   // fs.promises.truncate(path, len): the bundle shrinks large Bash-output files

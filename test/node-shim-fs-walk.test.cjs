@@ -63,3 +63,44 @@ test('fs walk surface (readdir withFileTypes/recursive + cb family) matches node
   assert.strictEqual(r.status, 0, r.stderr);
   assert.deepStrictEqual(JSON.parse(r.stdout.trim()), node);
 });
+
+// THE NAME'S ENCODING (every-tool Task 4, 2026-11-20): readdir and readlink honour `encoding`, 'buffer' included,
+// as node does. The shim ignored it and answered strings, and the carve's ExitWorktree, which vets each worktree
+// registration name with `Buffer.from(n.toString('utf8')).equals(n)`, threw on them: `action: "remove"` kept the
+// worktree where native removed it (test/fidelity/tools-local.test.cjs drives that turn).
+const ENCODING_BODY = `
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const root = process.argv[2];
+  const show = (v) => (Buffer.isBuffer(v) ? { buffer: v.toString('hex') } : v);
+  const byName = (a, b) => (JSON.stringify(a) < JSON.stringify(b) ? -1 : 1);
+  (async () => {
+    const out = {};
+    for (const enc of ['buffer', 'hex', 'utf8', undefined]) {
+      const key = String(enc);
+      out[key] = {
+        sync: fs.readdirSync(root, enc && { encoding: enc }).map(show).sort(byName),
+        str: enc ? fs.readdirSync(root, enc).map(show).sort(byName) : null,
+        prom: (await fs.promises.readdir(root, { encoding: enc })).map(show).sort(byName),
+        wft: fs.readdirSync(root, { withFileTypes: true, encoding: enc }).map((d) => [show(d.name), d.isDirectory()]).sort(byName),
+        link: show(fs.readlinkSync(path.join(root, 'ln'), enc && { encoding: enc })),
+        plink: show(await fs.promises.readlink(path.join(root, 'ln'), { encoding: enc })),
+      };
+    }
+    out.equals = Buffer.from('a.txt').equals(fs.readdirSync(root, 'buffer').find((b) => b.toString() === 'a.txt'));
+    console.log(JSON.stringify(out));
+  })();
+`;
+
+test('readdir and readlink answer in the caller\'s encoding (buffer, hex, utf8, default) as node does', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const root = fixtureTree();
+  fs.symlinkSync('sub/c.txt', path.join(root, 'ln'));
+  const f = prog(ENCODING_BODY);
+  const node = JSON.parse(
+    require('node:child_process').execFileSync(process.execPath, [f, root], { encoding: 'utf8' }).trim());
+  assert.deepStrictEqual(node.buffer.link, { buffer: Buffer.from('sub/c.txt').toString('hex') }); // the oracle's shape
+  const r = runLoader(f, [root]);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.deepStrictEqual(JSON.parse(r.stdout.trim()), node);
+});
