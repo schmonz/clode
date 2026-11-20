@@ -489,7 +489,10 @@ runs:
     # The package list is UNCHANGED and was already correct: `cmd:` is pkgman's
     # provides-syntax (bare `nodejs` reports "Name not found"), and beta6 carries every
     # one — checked against HaikuDepot: gcc 13.3, make 4.4, cmake 4.1, git 2.54,
-    # bash 5.3, nodejs20 20.15.
+    # bash 5.3, nodejs20 20.15. (HaikuPorts moved gcc to 15.3 by 2026-11-20, ci 44730690506.
+    # Unlike netbsd's host tools, which needed HOST_CFLAGS=-std=gnu17 under gcc 15, every C
+    # target in the tjs tree sets C_STANDARD 11 or 99, so gcc 15's C23 default never applies,
+    # and the same tree already builds under gcc 15.2 on the ubuntu-26.04 glibc legs.)
     #
     # Failure policy matches the rest of the matrix after the phase-0 work: a failed
     # install fails HERE, naming itself, instead of deferring to a later
@@ -500,12 +503,37 @@ runs:
       with:
         release: ${{ inputs.version }}
         usesh: true
+        # BOUNDED, LOGGED RETRY ON DOWNLOAD ERRORS ONLY. CI 44730690506: pkgman died on
+        # "*** Failed to download package libuv: Interrupted system call" one package into
+        # the transaction, a transient EINTR. Up to 3 tries, each failure printed with its
+        # attempt number. Only pkgman's "Failed to download" is retried; anything else
+        # (e.g. "... not available") is a resolution answer and fails on the first try.
+        # pkgman commits a transaction only after every download, so a retry starts from a
+        # clean state. If all 3 fail, every attempt's error is printed.
         prepare: |
-          if [ -n "${{ inputs.packages }}" ]; then
-            pkgman install -y ${{ inputs.packages }} || {
-              echo "guest(haiku): pkgman install FAILED for: ${{ inputs.packages }}" >&2
-              exit 1
-            }
+          PKGS="${{ inputs.packages }}"
+          if [ -n "$PKGS" ]; then
+            haiku_errs=''
+            attempt=1
+            while :; do
+              out=$(pkgman install -y $PKGS 2>&1) && rc=0 || rc=$?
+              printf '%s\n' "$out"
+              [ "$rc" -eq 0 ] && break
+              err=$(printf '%s\n' "$out" | grep -E '\*\*\*|[Ff]ailed|not available|not found' | tr '\n' ' ')
+              haiku_errs="$haiku_errs
+            attempt $attempt (exit $rc): ${err:-no error text}"
+              if ! printf '%s\n' "$out" | grep -q 'Failed to download'; then
+                echo "guest(haiku): pkgman install FAILED (not a download error, not retried) for: $PKGS$haiku_errs" >&2
+                exit 1
+              fi
+              if [ "$attempt" -ge 3 ]; then
+                echo "guest(haiku): pkgman install FAILED after $attempt download attempts for: $PKGS$haiku_errs" >&2
+                exit 1
+              fi
+              echo "guest(haiku): download failed on attempt $attempt of 3 (exit $rc): $err-- retrying"
+              attempt=$((attempt + 1))
+              sleep 5
+            done
           fi
         run: |
           set -e

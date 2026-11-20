@@ -194,3 +194,61 @@ test('a successful install that cached nothing says the cache path is unverified
   assert.match(r.stdout, /package step done after 0m\d+s; fetched 0 files in \S+: cache path unverified/);
   assert.doesNotMatch(r.stdout, /package step done[^\n]*0 MB in 0 files/);
 });
+
+// HAIKU PKGMAN RETRY (ci 44730690506: "*** Failed to download package libuv: Interrupted
+// system call"). Runs the REAL vmactions `prepare:` block against a stub pkgman that
+// plays a scripted sequence of outcomes, one per call, and a no-op sleep.
+function haikuPrepare() {
+  const src = fs.readFileSync(ACTION, 'utf8');
+  const step = src.indexOf('uses: vmactions/haiku-vm@');
+  const start = src.indexOf('        prepare: |\n', step);
+  const end = src.indexOf('        run: |\n', start);
+  assert.ok(step > 0 && start > step && end > start, 'the haiku prepare block moved — this extractor is blind');
+  return src.slice(start + '        prepare: |\n'.length, end).split('\n')
+    .filter((l) => !/^\s*#/.test(l)).map((l) => l.replace(/^ {10}/, '')).join('\n')
+    .replaceAll('${{ inputs.packages }}', 'cmd:cmake nodejs20');
+}
+
+const HAIKU_OUTCOMES = {
+  ok: 'echo "  100% libuv-1.52.1-1-x86_64.hpkg"; exit 0',
+  eintr: 'echo "*** Failed to download package libuv: Interrupted system call"; exit 1',
+  unavailable: 'echo "*** Failed to find a match for \\"nodejs20\\": Name not available"; exit 1',
+};
+function runHaiku(seq) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'guest-haiku-'));
+  const bin = path.join(dir, 'bin');
+  fs.mkdirSync(bin);
+  const calls = path.join(dir, 'calls');
+  const body = ['n=$(( $(cat "' + calls + '" 2>/dev/null || echo 0) + 1 ))', `echo $n > "${calls}"`, 'case $n in']
+    .concat(seq.map((o, i) => `  ${i + 1}) ${HAIKU_OUTCOMES[o]} ;;`), '  *) echo "stub: called too often"; exit 99 ;;', 'esac');
+  fs.writeFileSync(path.join(bin, 'pkgman'), `#!/bin/sh\n${body.join('\n')}\n`, { mode: 0o755 });
+  fs.writeFileSync(path.join(bin, 'sleep'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  const script = path.join(dir, 'prepare.sh');
+  fs.writeFileSync(script, `${haikuPrepare()}\necho REACHED_THE_RUN\n`);
+  const r = spawnSync('/bin/sh', [script], { encoding: 'utf8', env: { PATH: `${bin}:/usr/bin:/bin`, HOME: dir } });
+  return { ...r, calls: Number(fs.readFileSync(calls, 'utf8')) };
+}
+
+test('haiku: a transient download error is retried, logged with its attempt, and then passes', UNIX_ONLY, () => {
+  const r = runHaiku(['eintr', 'ok']);
+  assert.strictEqual(r.status, 0, r.stdout + r.stderr);
+  assert.strictEqual(r.calls, 2);
+  assert.match(r.stdout, /guest\(haiku\): download failed on attempt 1 of 3 \(exit 1\): \*\*\* Failed to download package libuv: Interrupted system call/);
+  assert.match(r.stdout, /REACHED_THE_RUN/);
+});
+
+test('haiku: three download failures fail the step, naming every attempt', UNIX_ONLY, () => {
+  const r = runHaiku(['eintr', 'eintr', 'eintr']);
+  assert.strictEqual(r.status, 1, r.stdout + r.stderr);
+  assert.strictEqual(r.calls, 3, 'bounded: no fourth try');
+  assert.match(r.stderr, /pkgman install FAILED after 3 download attempts/);
+  for (const n of [1, 2, 3]) assert.match(r.stderr, new RegExp(`attempt ${n} \\(exit 1\\): \\*\\*\\* Failed to download package libuv`));
+  assert.doesNotMatch(r.stdout, /REACHED_THE_RUN/);
+});
+
+test('haiku: a resolution error ("not available") fails at once, not retried', UNIX_ONLY, () => {
+  const r = runHaiku(['unavailable', 'ok']);
+  assert.strictEqual(r.status, 1, r.stdout + r.stderr);
+  assert.strictEqual(r.calls, 1);
+  assert.match(r.stderr, /not a download error, not retried[\s\S]*attempt 1 \(exit 1\): \*\*\* Failed to find a match for "nodejs20": Name not available/);
+});
