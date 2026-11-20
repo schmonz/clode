@@ -15,7 +15,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { driveTool } = require('./tool-driver.cjs');
+const { driveTool } = require('./tool-driver.cjs');   // first: it applies the suite home, standalone too
 const { toolResultText, assertFailsOnMissingOutput } = require('../scripts/lib/tool-result.cjs');
 
 const SKIP = process.platform === 'win32' ? 'the fake targets are #!/bin/sh wrappers' : false;
@@ -106,7 +106,10 @@ test('driveTool never reads the tool_use: a target that sends no tool_result yie
 test('driveTool sandboxes HOME and CLAUDE_CONFIG_DIR per side; the caller\'s ~/.claude is untouched', { skip: SKIP }, async () => {
   const f = fakes();
   const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'tool-driver-base-')));
-  const callerDirs = [process.env.CLAUDE_CONFIG_DIR, process.env.HOME && path.join(process.env.HOME, '.claude')].filter(Boolean);
+  // The caller's home is the SUITE's throwaway one (tool-driver.cjs applies test/suite-home.cjs, standalone too), never the
+  // developer's: this compares listings of a home the run may read, and must not read the real one.
+  assert.ok(path.basename(process.env.HOME).startsWith('clode-test-home-'), `HOME ${process.env.HOME} is the suite home`);
+  const callerDirs = [process.env.CLAUDE_CONFIG_DIR, path.join(process.env.HOME, '.claude')].filter(Boolean);
   const before = callerDirs.map((d) => [d, fs.existsSync(d) ? fs.readdirSync(d).sort() : null]);
   assertFailsOnMissingOutput(sawProduct, FAKE);
   try {
@@ -134,7 +137,7 @@ test('driveTool sandboxes HOME and CLAUDE_CONFIG_DIR per side; the caller\'s ~/.
   }
 });
 
-test('driveTool reports a native skip with its reason', { skip: SKIP }, async () => {
+test('driveTool reports a native skip with its reason, and a native this box lacks as absent, never as skipped', { skip: SKIP }, async () => {
   assertFailsOnMissingOutput(sawProduct, FAKE);
   const f = fakes();
   try {
@@ -143,7 +146,8 @@ test('driveTool reports a native skip with its reason', { skip: SKIP }, async ()
     assert.ok(sawProduct(named.quaude.raw));
     const gone = path.join(f.dir, 'no-such-native');
     const missing = await driveTool({ tool: FAKE, quaude: f.quaude, native: gone });
-    assert.match(missing.native.skipped, /no-such-native/);
+    assert.match(missing.native.absent, /no-such-native/);
+    assert.strictEqual(missing.native.skipped, undefined, 'absent is the box\'s answer, skipped the caller\'s');
     assert.throws(() => driveTool({ tool: FAKE, quaude: f.quaude, nativeSkip: '' }), /one-line reason/);
   } finally { fs.rmSync(f.dir, { recursive: true, force: true }); }
 });
@@ -172,4 +176,7 @@ test('driveTool refuses a call that is not a { name, input, id } tool_use', () =
   const NAMELESS = { name: 'X' };
   assert.throws(() => driveTool({ tool: NAMELESS }), /\{ name, input, id \}/);
   assert.throws(() => driveTool({}), /tool_use/);
+  for (const k of ['HOME', 'USERPROFILE', 'CLAUDE_CONFIG_DIR', 'CLAUDE_CODE_ENTRYPOINT', 'ANTHROPIC_BASE_URL', 'ANTHROPIC_API_KEY']) {
+    assert.throws(() => driveTool({ tool: FAKE, env: { [k]: '/x' } }), new RegExp(`env may not set ${k}`), k);
+  }
 });

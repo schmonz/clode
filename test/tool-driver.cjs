@@ -1,4 +1,5 @@
 'use strict';
+require('./suite-home.cjs');   // the suite's own HOME, also for a standalone `node --test` (ruling G33)
 // tool-driver.cjs: THE ONE HARNESS a tool driver runs its turn through (every-tool plan, Task 1).
 //
 // THE SHAPE the drivers already shared (agentic-grep-glob, agentic-tools, node-shim-agentic, agentic-subagent-diff):
@@ -8,7 +9,11 @@
 // the target's exit status; and the tool_result read through scripts/lib/tool-result.cjs, by the call's id. Then the
 // same turn by native Claude Code, over the same tree, compared (the fidelity doctrine). Each file wrote that by hand.
 //
-// driveTool(opts) -> Promise<{ base, quaude: SIDE | { skipped }, native: SIDE | { skipped } }>
+// driveTool(opts) -> Promise<{ base, quaude: SIDE | { absent }, native: SIDE | { skipped } | { absent } }>
+//
+// THE VERDICT is the caller's controlled check on the request log: `assert.ok(check(r.quaude.raw))`, the same `check`
+// it handed assertFailsOnMissingOutput. SIDE.text is for diagnostics and for comparing quaude with native, never the
+// verdict: a judgment on .text is a judgment no control was run over.
 //   opts.tool        the tool_use { name, input, id } the mock scripts. Spell it `tool: USE` in the caller, and keep the
 //                    control there: assertFailsOnMissingOutput(check, USE) with check reading toolResultText(m, USE.id),
 //                    judged on SIDE.raw. Both gates read the CALLER's file (a script, a check or a control in this
@@ -26,15 +31,22 @@
 //   opts.allowedTools  the --allowedTools value: the scripted tools' names by default; null passes none (the
 //                    `unlisted` cell).
 //   opts.prompt      the -p prompt ('drive the tool').
-//   opts.env         extra environment for both sides (SHELL, a CLAUDE_CODE_* switch). Nothing else of the caller's
-//                    CLAUDE*/ANTHROPIC* environment reaches the turn: a run from inside a Claude Code session carries
-//                    CLAUDE_CODE_ENTRYPOINT and friends, which change which tools register.
+//   opts.env         extra environment for both sides (SHELL, say). It may not name HOME, USERPROFILE, or any CLAUDE* or
+//                    ANTHROPIC* key (CLAUDE_CONFIG_DIR, ANTHROPIC_BASE_URL among them): those are the sandbox and the
+//                    mock, and a driver that overrode one would quietly run against the developer's home or a real
+//                    API. Refused, as a bad nativeSkip is. Nothing of the caller's own CLAUDE*/ANTHROPIC* environment
+//                    reaches the turn either: a run from inside a Claude Code session carries CLAUDE_CODE_ENTRYPOINT
+//                    and friends, which change which tools register.
 //   opts.quaude      the quaude binary; default the one built from this tree (test/built-binary.cjs builtQuaude()).
-//                    When there is none, quaude is { skipped: <why> } and nothing is run.
-//   opts.native      the native binary; default the pinned provider (test/provider-resolve.cjs providerBin, never a
-//                    `claude` from PATH). One that is not there is { skipped: <why> }.
+//                    When there is none, quaude is { absent: <why> } and nothing is run.
+//   opts.native      the native binary; default the pinned provider WHEN IT RUNS here (test/provider-resolve.cjs
+//                    rgOracle: CI's suite rows hold a minimised carve that cannot run; never a `claude` from PATH).
+//                    One that is not there, or does not run, is { absent: <why> }.
 //   opts.nativeSkip  a one-line reason native CANNOT run this turn (a credential-bound path): native is
 //                    { skipped: reason } and is not run. The fidelity doctrine asks for the reason, so '' is refused.
+//   TWO FIELDS ON PURPOSE: `skipped` is the caller's decision, `absent` is this box's. A driver that compares with
+//   native treats { absent } as a precondition failure (skip by name, which a CI job then judges), never as the
+//   comparison passing.
 //   opts.timeoutMs   per side (240 s).
 // SIDE = { text, isError, result, results, raw, status, signal, stdout, stderr, timedOut, home, inspected }
 //   text/isError/result  the FIRST scripted call's tool_result (toolResult: { text, isError, content }, or null and
@@ -58,6 +70,8 @@ const { startMockAnthropic, cannedSSE, cannedToolUseSSE } = require('./mock-anth
 const { toolResult, toolResultText } = require('../scripts/lib/tool-result.cjs');
 
 const DONE = 'TOOL-DRIVER-DONE';
+// Keys opts.env may not set: the sandbox (HOME, USERPROFILE, CLAUDE*) and the mock (ANTHROPIC*).
+const RESERVED_ENV = /^(?:HOME|USERPROFILE|CLAUDE.*|ANTHROPIC.*)$/i;
 const isToolUse = (u) => !!u && typeof u.name === 'string' && !!u.name && typeof u.id === 'string' && !!u.id
   && !!u.input && typeof u.input === 'object';
 
@@ -80,23 +94,23 @@ function baseEnv() {
   return env;
 }
 
-// Which binary a side runs: { bin } or { skipped }.
+// Which binary a side runs: { bin }, { absent } (this box has none) or { skipped } (the caller said why).
 function quaudeOf(opts) {
   if (opts.quaude !== undefined) {
-    return fs.existsSync(String(opts.quaude)) ? { bin: opts.quaude } : { skipped: `quaude ${opts.quaude} does not exist` };
+    return fs.existsSync(String(opts.quaude)) ? { bin: opts.quaude } : { absent: `quaude ${opts.quaude} does not exist` };
   }
   const q = require('./built-binary.cjs').builtQuaude();
-  return q.skip ? { skipped: q.skip } : { bin: q.path };
+  return q.skip ? { absent: q.skip } : { bin: q.path };
 }
 function nativeOf(opts) {
   if (opts.nativeSkip !== undefined) return { skipped: opts.nativeSkip };
   if (opts.native !== undefined) {
     return opts.native && fs.existsSync(String(opts.native)) ? { bin: opts.native }
-      : { skipped: `native ${opts.native} does not exist` };
+      : { absent: `native ${opts.native} does not exist` };
   }
-  const { providerBin, skipReason } = require('./provider-resolve.cjs');
-  const bin = providerBin(process.env);
-  return bin ? { bin } : { skipped: skipReason(process.env) };
+  const { rgOracle, rgOracleSkip } = require('./provider-resolve.cjs');
+  const bin = rgOracle(process.env);
+  return bin ? { bin } : { absent: rgOracleSkip(process.env) };
 }
 
 async function runSide(side, bin, rules, opts, base) {
@@ -136,6 +150,11 @@ function driveTool(opts = {}) {
   if (opts.nativeSkip !== undefined && !(typeof opts.nativeSkip === 'string' && opts.nativeSkip.trim() && !/\n/.test(opts.nativeSkip))) {
     throw new Error('driveTool: nativeSkip must be a one-line reason native cannot run this turn');
   }
+  const reserved = Object.keys(opts.env || {}).filter((k) => RESERVED_ENV.test(k));
+  if (reserved.length) {
+    throw new Error(`driveTool: env may not set ${reserved.join(', ')}: HOME, USERPROFILE and CLAUDE* are the sandbox, `
+      + 'ANTHROPIC* the mock');
+  }
   if (opts.base !== undefined && !(typeof opts.base === 'string' && path.isAbsolute(opts.base))) {
     throw new Error(`driveTool: base must be an absolute temp dir, got ${JSON.stringify(opts.base)}`);
   }
@@ -145,7 +164,8 @@ function driveTool(opts = {}) {
     try {
       const out = { base };
       for (const [side, which] of [['quaude', quaudeOf(opts)], ['native', nativeOf(opts)]]) {
-        out[side] = which.skipped !== undefined ? { skipped: which.skipped } : await runSide(side, which.bin, rules, opts, base);
+        out[side] = which.bin === undefined ? (which.absent !== undefined ? { absent: which.absent } : { skipped: which.skipped })
+          : await runSide(side, which.bin, rules, opts, base);
       }
       return out;
     } finally { if (own) fs.rmSync(base, { recursive: true, force: true }); }
