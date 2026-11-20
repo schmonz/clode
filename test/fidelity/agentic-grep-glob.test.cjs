@@ -37,7 +37,7 @@ const { providerBin, skipReason } = require('../provider-resolve.cjs');
 const { throwawayHome } = require('../throwaway-home.cjs');
 const { startMockAnthropic, cannedSSE, cannedToolUseSSE, cannedMessage } = require('../mock-anthropic-helper.cjs');
 const { toolResult, assertFailsOnMissingOutput } = require('../../scripts/lib/tool-result.cjs');
-const { shadowKeychain, CLASSIFIER_STOP } = require('../tool-driver.cjs');
+const { shadowKeychain, keychainShadowFinding, CLASSIFIER_STOP } = require('../tool-driver.cjs');
 
 // THE TREE: <B>/work is the working directory, <B>/outside is added with --add-dir. Every file gets its own mtime
 // (T0 + dt): files_with_matches and Glob list newest first, and a tie would leave the order to the walk.
@@ -305,6 +305,10 @@ async function judge(bin, mode, perm = null) {
       const r = await runTurn(bin, t.work, env, 240000, perm ? PERMISSION_TURNS[perm] : []);
       const findings = [];
       if (perm) mode = `${mode}, ${perm}`;
+      if (bin === providerBin(process.env)) {   // native: its lookup must have reached the stub, not the real Keychain
+        const unshadowed = keychainShadowFinding('native', fs.existsSync(kc.log) ? fs.readFileSync(kc.log, 'utf8').split('\n').filter(Boolean) : []);
+        if (unshadowed) findings.push(`${mode}: ${unshadowed}`);
+      }
       if (r.status !== 0) findings.push(`${mode}: the turn exited ${r.status}${r.signal ? ` (${r.signal})` : ''}: ${r.stderr.slice(0, 800)}`);
       judged = { mode: perm ? PATH_MODES[0] : mode, base: t.base };
       const measured = {};

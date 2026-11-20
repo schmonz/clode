@@ -164,6 +164,18 @@ function shadowKeychain(base, side) {
   return { dir, log };
 }
 
+// THE SHADOW, PROVEN (Task 5 approval, 2026-11-20). On darwin, native looks up its credentials through `security
+// find-generic-password` on every turn; a turn that logged none to the stub did not use the stub, so it would have read
+// the REAL Keychain (an upstream switch to an absolute /usr/bin/security, a PATH the stub is not first on). That is a
+// finding, never a silent pass. null when shadowed, or off darwin (no Keychain there).
+function keychainShadowFinding(side, calls, platform = process.platform) {
+  if (platform !== 'darwin') return null;
+  if ((calls || []).some((c) => /^find-generic-password\b/.test(c))) return null;
+  return `${side}'s turn on darwin logged no \`security find-generic-password\` to the Keychain stub (calls: `
+    + `${JSON.stringify(calls || [])}): the stub was not used, so the turn could read the real Keychain (an absolute `
+    + '/usr/bin/security?); shadow it before running native again';
+}
+
 // Which binary a side runs: { bin }, { absent } (this box has none) or { skipped } (the caller said why).
 function quaudeOf(opts) {
   if (opts.quaudeSkip !== undefined) return { skipped: opts.quaudeSkip };
@@ -308,6 +320,8 @@ function driveTool(opts = {}) {
         out[side] = which.bin === undefined ? (which.absent !== undefined ? { absent: which.absent } : { skipped: which.skipped })
           : await runSide(side, which.bin, rules, opts, base);
       }
+      const unshadowed = out.native.keychain && keychainShadowFinding('native', out.native.keychain);
+      if (unshadowed) throw new Error(`driveTool: ${unshadowed}`);
       return out;
     } finally { if (own) fs.rmSync(base, { recursive: true, force: true }); }
   })();
@@ -324,4 +338,4 @@ function ptyHarnessMissing() {
   } catch (e) { return `no PTY harness here (node-pty): ${e.message.split('\n')[0]}`; }
 }
 
-module.exports = { driveTool, DONE, TOOL_SWITCHES, shadowKeychain, CLASSIFIER_STOP, ptyHarnessMissing };
+module.exports = { driveTool, DONE, TOOL_SWITCHES, shadowKeychain, keychainShadowFinding, CLASSIFIER_STOP, ptyHarnessMissing };

@@ -15,7 +15,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { driveTool, TOOL_SWITCHES, ptyHarnessMissing } = require('./tool-driver.cjs');   // first: it applies the suite home, standalone too
+const { driveTool, TOOL_SWITCHES, ptyHarnessMissing, keychainShadowFinding } = require('./tool-driver.cjs');   // first: it applies the suite home, standalone too
 const { toolResultText, assertFailsOnMissingOutput } = require('../scripts/lib/tool-result.cjs');
 
 const SKIP = process.platform === 'win32' ? 'the fake targets are #!/bin/sh wrappers' : false;
@@ -47,7 +47,10 @@ function parse(sse) {
   if (interactive) process.stdout.write('fake> ');   // a TUI paints at boot (the boot frame waits for output)
   const prompt = interactive ? await typed() : args[args.indexOf('-p') + 1];
   // as native does on every turn: ask the Keychain for credentials, by the \`security\` on PATH
-  require('node:child_process').spawnSync('security', ['find-generic-password', '-w', '-s', 'fake-credentials'], { stdio: 'ignore' });
+  // FAKE_SECURITY=absolute: an absolute path, as an upstream that stopped using PATH would (/usr/bin/true, never the
+  // real security), so the stub sees nothing
+  require('node:child_process').spawnSync(process.env.FAKE_SECURITY === 'absolute' ? '/usr/bin/true' : 'security',
+    ['find-generic-password', '-w', '-s', 'fake-credentials'], { stdio: 'ignore' });
   const cfg = process.env.CLAUDE_CONFIG_DIR;
   fs.mkdirSync(cfg, { recursive: true });
   fs.writeFileSync(path.join(cfg, 'fake-target-was-here'), LABEL);
@@ -240,6 +243,25 @@ test('driveTool types the prompt into a pty for an interactive turn, and judges 
     assert.ok(sawProduct(r.quaude.raw), r.quaude.text);
     assert.ok(sawTyped(r.quaude.raw), 'the typed prompt is the one the target read: ' + r.quaude.text);
     assert.match(r.quaude.stdout, /TOOL-DRIVER-DONE/, 'the last screen shows the closing text');
+  } finally { fs.rmSync(f.dir, { recursive: true, force: true }); }
+});
+
+// THE SHADOW, PROVEN: on darwin a native turn that logged no find-generic-password to the stub is a finding, so a
+// native that reads its Keychain by an absolute path goes red instead of reading the real one.
+test('keychainShadowFinding: on darwin, a turn with no find-generic-password through the stub is a finding; off darwin none', () => {
+  assert.strictEqual(keychainShadowFinding('native', ['find-generic-password -a u -w -s x'], 'darwin'), null);
+  assert.match(keychainShadowFinding('native', [], 'darwin'), /^native's turn on darwin logged no `security find-generic-password`/);
+  assert.match(keychainShadowFinding('native', ['add-generic-password -s x'], 'darwin'), /logged no/);
+  assert.match(keychainShadowFinding('native', undefined, 'darwin'), /logged no/);
+  assert.strictEqual(keychainShadowFinding('native', [], 'linux'), null);
+});
+test('driveTool refuses a darwin native turn whose Keychain read bypassed the stub (planted: an absolute path)', { skip: SKIP || (process.platform !== 'darwin' && 'the Keychain is darwin\'s') }, async () => {
+  const f = fakes();
+  try {
+    await assert.rejects(driveTool({ tool: FAKE, quaude: f.quaude, native: f.native, env: { FAKE_SECURITY: 'absolute' } }),
+      /^Error: driveTool: native's turn on darwin logged no `security find-generic-password` to the Keychain stub \(calls: \[\]\)/);
+    const ok = await driveTool({ tool: FAKE, quaude: f.quaude, native: f.native });
+    assert.ok(sawProduct(ok.native.raw), 'the same turn through the stub passes');
   } finally { fs.rmSync(f.dir, { recursive: true, force: true }); }
 });
 
