@@ -94,7 +94,9 @@ const { toolResult, toolResultText } = require('../scripts/lib/tool-result.cjs')
 
 const DONE = 'TOOL-DRIVER-DONE';
 // Keys opts.env may not set: the sandbox (HOME, USERPROFILE, CLAUDE*) and the mock (ANTHROPIC*).
-const RESERVED_ENV = /^(?:HOME|USERPROFILE|CLAUDE.*|ANTHROPIC.*)$/i;
+// BUN_OPTIONS and NODE_OPTIONS too: either preloads code into the target (BUN_OPTIONS="--preload x.js" runs JS inside
+// native Bun), so a driver could change what registers without spelling a switch.
+const RESERVED_ENV = /^(?:HOME|USERPROFILE|CLAUDE.*|ANTHROPIC.*|BUN_OPTIONS|NODE_OPTIONS)$/i;
 // THE ONLY Claude Code switches a driver may set (opts.switches), each with why a driver needs it. Never the sandbox
 // or the mock: a key here is a product switch that changes which tools register, nothing else.
 const TOOL_SWITCHES = Object.freeze({
@@ -373,7 +375,7 @@ function driveTool(opts = {}) {
   const reserved = Object.keys(opts.env || {}).filter((k) => RESERVED_ENV.test(k));
   if (reserved.length) {
     throw new Error(`driveTool: env may not set ${reserved.join(', ')}: HOME, USERPROFILE and CLAUDE* are the sandbox, `
-      + 'ANTHROPIC* the mock');
+      + 'ANTHROPIC* the mock, BUN_OPTIONS and NODE_OPTIONS preload code into the target');
   }
   const unlisted = Object.keys(opts.switches || {}).filter((k) => !Object.prototype.hasOwnProperty.call(TOOL_SWITCHES, k));
   if (unlisted.length) {
