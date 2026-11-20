@@ -74,6 +74,16 @@ test('a copyback tool the upgrade broke (rsync) fails the package step by name',
   assert.strictEqual(ok.status, 0, ok.stderr);
 });
 
+test('a versioned pkgsrc python (python313) is checked as python3.13, the name it installs', UNIX_ONLY, () => {
+  // ci 44762976850: netbsd-arm64-cells' package step installed python313, and this check
+  // looked for a `python313` command, which pkgsrc never installs, and failed the job.
+  const ok = runWith({ 'python3.13': OK, gmake: OK }, 'python313 gmake');
+  assert.strictEqual(ok.status, 0, ok.stderr);
+  const missing = runWith({ gmake: OK }, 'python313 gmake');
+  assert.notStrictEqual(missing.status, 0);
+  assert.match(missing.stderr, /NOT on PATH: python3\.13\(python313\)/);
+});
+
 test('a missing tool is still reported as missing (the older half of the check)', UNIX_ONLY, () => {
   const r = runWith({ gmake: OK }, 'cmake gmake');
   assert.notStrictEqual(r.status, 0);

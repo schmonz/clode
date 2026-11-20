@@ -406,6 +406,10 @@ runs:
               *git*)                  cmd=git ;;
               *node*)                 cmd=node ;;
               gcc*)                   cmd=gcc ;;
+              # pkgsrc's versioned pythons install python3.NN, never the package
+              # name (ci 44762976850 netbsd-arm64-cells: python313 installed, and this
+              # check called it missing). python3 itself falls through to *).
+              python3[0-9]*)          cmd="python3.${base#python3}" ;;
               *)                      cmd=$base ;;
             esac
             if ! command -v "$cmd" >/dev/null 2>&1; then
