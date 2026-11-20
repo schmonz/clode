@@ -51,8 +51,15 @@ function parse(sse) {
     if (!turn.uses.length) { process.stdout.write(turn.text + '\\n'); return; }
     messages.push({ role: 'assistant', content: turn.uses.map((u) => ({ type: 'tool_use', id: u.id, name: u.name, input: u.input })) });
     if (process.env.FAKE_MODE === 'silent') { messages.push({ role: 'user', content: [{ type: 'text', text: 'continue' }] }); continue; }
-    messages.push({ role: 'user', content: turn.uses.map((u) => ({ type: 'tool_result', tool_use_id: u.id,
-      content: [{ type: 'text', text: LABEL + ' PRODUCT-' + (u.input.a * u.input.b) + ' tasks=' + process.env.CLAUDE_CODE_ENABLE_TASKS + ' home=' + process.env.HOME + ' cfg=' + cfg }] })) });
+    // A use with a prompt is a fake Agent: its subagent is a fresh conversation, and its answer is the tool_result.
+    const answers = [];
+    for (const u of turn.uses) {
+      if (typeof u.input.prompt !== 'string') { answers.push(LABEL + ' PRODUCT-' + (u.input.a * u.input.b) + ' tasks=' + process.env.CLAUDE_CODE_ENABLE_TASKS + ' home=' + process.env.HOME + ' cfg=' + cfg); continue; }
+      const sub = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model: 'fake', messages: [{ role: 'user', content: [{ type: 'text', text: u.input.prompt }] }] }) });
+      answers.push(LABEL + ' SUBAGENT-SAID ' + parse(await sub.text()).text);
+    }
+    messages.push({ role: 'user', content: turn.uses.map((u, k) => ({ type: 'tool_result', tool_use_id: u.id,
+      content: [{ type: 'text', text: answers[k] }] })) });
   }
   process.exit(3);
 })();
@@ -205,6 +212,22 @@ test('driveTool computes a call\'s input from the log so far (inputFrom), and re
   } finally { fs.rmSync(f.dir, { recursive: true, force: true }); }
 });
 
+const FAKE_AGENT = { name: 'FakeDriverTool', input: { prompt: 'answer with SUB-TOKEN-9' }, id: 'toolu_fake_agent_1' };
+const sawSubagent = (m) => toolResultText(m, FAKE_AGENT.id).includes('SUBAGENT-SAID SUB-ANSWER-9');
+test('driveTool answers an Agent call\'s subagent with its reply, not with the next scripted call', { skip: SKIP }, async () => {
+  assertFailsOnMissingOutput(sawSubagent, FAKE_AGENT);
+  const f = fakes();
+  try {
+    const r = await driveTool({ script: [{ tool: FAKE_AGENT, subagent: { prompt: 'SUB-TOKEN-9', reply: 'SUB-ANSWER-9' } }, { tool: FAKE }],
+      quaude: f.quaude, nativeSkip: 'fakes' });
+    assert.ok(sawSubagent(r.quaude.raw), r.quaude.results[FAKE_AGENT.id] && r.quaude.results[FAKE_AGENT.id].text);
+    assert.ok(sawProduct(r.quaude.raw), 'the next scripted call still runs after the subagent');
+    assert.throws(() => driveTool({ script: [{ tool: FAKE_AGENT, subagent: { prompt: 'NOT-IN-THE-PROMPT', reply: 'x' } }] }),
+      /subagent .* must be \{ prompt, reply \}/);
+    assert.throws(() => driveTool({ tool: FAKE, autoModeSeverity: 50.5 }), /autoModeSeverity must be an integer 0-100/);
+  } finally { fs.rmSync(f.dir, { recursive: true, force: true }); }
+});
+
 test('driveTool refuses a call that is not a { name, input, id } tool_use', () => {
   const NAMELESS = { name: 'X' };
   assert.throws(() => driveTool({ tool: NAMELESS }), /\{ name, input, id \}/);
@@ -217,4 +240,19 @@ test('driveTool refuses a call that is not a { name, input, id } tool_use', () =
   for (const k of ['HOME', 'USERPROFILE', 'CLAUDE_CONFIG_DIR', 'CLAUDE_CODE_ENTRYPOINT', 'ANTHROPIC_BASE_URL', 'ANTHROPIC_API_KEY']) {
     assert.throws(() => driveTool({ tool: FAKE, env: { [k]: '/x' } }), new RegExp(`env may not set ${k}`), k);
   }
+});
+
+// The auto-mode classifier's request does not stream: the mock answers it as Messages JSON (cannedMessage), the shape
+// 2.1.283 parses `<severity>N` from; measured against native 2026-11-20 (an Agent call in plan mode ran its subagent).
+test('the mock answers a { json } reply as Messages JSON, and an SSE string as a stream', async () => {
+  const { startMockAnthropic, cannedMessage } = require('./mock-anthropic-helper.cjs');
+  const mock = await startMockAnthropic({ respond: (body) => (body.includes('classify') ? cannedMessage('<severity>10', '</severity>') : 'event: x\ndata: {}\n\n') });
+  try {
+    const post = (text) => fetch(`${mock.url}/v1/messages`, { method: 'POST', body: JSON.stringify({ text }) });
+    const j = await post('classify');
+    assert.match(j.headers.get('content-type'), /application\/json/);
+    assert.deepStrictEqual((await j.json()).content, [{ type: 'text', text: '<severity>10' }]);
+    const s = await post('stream');
+    assert.match(s.headers.get('content-type'), /text\/event-stream/);
+  } finally { await mock.close(); }
 });

@@ -54,6 +54,14 @@ function cannedToolUseSSE(name, input, id = 'toolu_mock_1') {
   );
 }
 
+// A NON-streaming text turn: the Messages JSON for a request that does not ask to stream (2.1.283's auto-mode safety
+// classifier, which stops at `</severity>`). opts.respond returns it as { json } and the mock sends it as JSON.
+function cannedMessage(text, stopSequence = null) {
+  return { json: { id: 'msg_mock_text', type: 'message', role: 'assistant', model: 'claude-opus-4-8',
+    content: [{ type: 'text', text }], stop_reason: stopSequence ? 'stop_sequence' : 'end_turn', stop_sequence: stopSequence,
+    usage: { input_tokens: 8, output_tokens: 1 } } };
+}
+
 // Minimal self-signed cert for the https fallback, generated once per process so
 // no cert material is committed. Requires `openssl` on PATH; only used when
 // opts.tls is set (the wall-walk decides whether it is needed).
@@ -83,8 +91,14 @@ function startMockAnthropic(opts = {}) {
       // keying the reply off the request content; default stays the single
       // canned text turn.
       if (req.method === 'POST' && /\/messages$/.test(req.url.split('?')[0])) {
+        const reply = opts.respond ? opts.respond(body) : cannedSSE(text);
+        if (reply && typeof reply === 'object' && reply.json) {
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify(reply.json));
+          return;
+        }
         res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
-        res.end(opts.respond ? opts.respond(body) : cannedSSE(text));
+        res.end(reply);
         return;
       }
       // Any other request (model list, config probe the wall-walk may reveal):
@@ -111,4 +125,4 @@ function startMockAnthropic(opts = {}) {
   });
 }
 
-module.exports = { startMockAnthropic, cannedSSE, cannedToolUseSSE };
+module.exports = { startMockAnthropic, cannedSSE, cannedToolUseSSE, cannedMessage };

@@ -23,6 +23,9 @@ require('./suite-home.cjs');   // the suite's own HOME, also for a standalone `n
 //                    (the turn's earlier tool_results, read with toolResultText), for a call that names what an earlier
 //                    call made at run time (TaskStop names the id a background Bash answered with). The rule's
 //                    tool.input stays what the control is given; SIDE.sent records what was sent.
+//                    An Agent rule may add `subagent: { prompt, reply }`: the subagent's own conversation (a request
+//                    that spells `prompt`, the token the Agent input hands it, and not yet the Agent call's id) is
+//                    answered with the text `reply`, never with the next scripted call (agentic-subagent-diff's shape).
 //   opts.base        an absolute temp dir the caller made, so a tool_use input can name paths under it before the
 //                    turn (Read's file_path is absolute). The default is a fresh one, removed when both sides are
 //                    done. The caller removes its own.
@@ -31,6 +34,11 @@ require('./suite-home.cjs');   // the suite's own HOME, also for a standalone `n
 //                    tool_result needs no path rewriting to compare.
 //   opts.inspect     (work, base) => any: run after each side's turn, before the next side wipes the tree (what a
 //                    Write left on disk); its value is SIDE.inspected.
+//   opts.autoModeSeverity  an integer 0-100: the auto-mode safety classifier's answer, `<severity>N` (below 50
+//                    allows). Asked in plan and auto mode for a call such as Agent; a request is the classifier's when
+//                    it stops at `</severity>` (2.1.283's stop_sequences). Without it the classifier gets the next
+//                    scripted call, cannot parse it, and the call is refused as "temporarily unavailable". Never answered
+//                    as a subagent either way.
 //   opts.args        more CLI arguments, after `-p <prompt>` and --allowedTools (--add-dir, --permission-mode, ...).
 //   opts.allowedTools  the --allowedTools value: the scripted tools' names by default; null passes none (the
 //                    `unlisted` cell).
@@ -76,7 +84,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnCollect } = require('./spawn-collect.cjs');
 const { throwawayHome } = require('./throwaway-home.cjs');
-const { startMockAnthropic, cannedSSE, cannedToolUseSSE } = require('./mock-anthropic-helper.cjs');
+const { startMockAnthropic, cannedSSE, cannedToolUseSSE, cannedMessage } = require('./mock-anthropic-helper.cjs');
 const { toolResult, toolResultText } = require('../scripts/lib/tool-result.cjs');
 
 const DONE = 'TOOL-DRIVER-DONE';
@@ -92,7 +100,12 @@ const isToolUse = (u) => !!u && typeof u.name === 'string' && !!u.name && typeof
   && !!u.input && typeof u.input === 'object';
 
 // The rules the mock walks, each { tool }: opts.script, or opts itself for a single opts.tool.
+// The auto-mode safety classifier's requests stop at its closing tag (2.1.283, measured 2026-11-20).
+const CLASSIFIER_STOP = '"stop_sequences":["</severity>"]';
 function rulesOf(opts) {
+  if (opts.autoModeSeverity !== undefined && !(Number.isInteger(opts.autoModeSeverity) && opts.autoModeSeverity >= 0 && opts.autoModeSeverity <= 100)) {
+    throw new Error('driveTool: autoModeSeverity must be an integer 0-100');
+  }
   const rules = Array.isArray(opts.script) ? opts.script : (opts.tool ? [opts] : []);
   if (!rules.length) throw new Error('driveTool: give the tool_use to script (tool) or several (script: [{ tool }, ...])');
   for (const rule of rules) {
@@ -101,6 +114,10 @@ function rulesOf(opts) {
     }
     if (rule.inputFrom !== undefined && typeof rule.inputFrom !== 'function') {
       throw new Error(`driveTool: inputFrom (${rule.tool.id}) must be a function of the request log`);
+    }
+    if (rule.subagent !== undefined && !(rule.subagent && typeof rule.subagent.prompt === 'string' && rule.subagent.prompt
+      && typeof rule.subagent.reply === 'string' && rule.tool.input && String(rule.tool.input.prompt || '').includes(rule.subagent.prompt))) {
+      throw new Error(`driveTool: subagent (${rule.tool.id}) must be { prompt, reply }, with prompt a token of the Agent input's prompt`);
     }
   }
   // The mock knows a call was answered by finding its id in the request body, as a substring. An id inside another
@@ -154,6 +171,10 @@ async function runSide(side, bin, rules, opts, base) {
   const sent = {};
   const mock = await startMockAnthropic({
     respond: (seen) => {
+      const classifier = seen.includes(CLASSIFIER_STOP);
+      if (classifier && opts.autoModeSeverity !== undefined) return cannedMessage(`<severity>${opts.autoModeSeverity}`, '</severity>');
+      const sub = !classifier && rules.find((r) => r.subagent && seen.includes(r.subagent.prompt) && !seen.includes(r.tool.id));
+      if (sub) return cannedSSE(sub.subagent.reply);
       const rule = rules.find((r) => !seen.includes(r.tool.id));
       if (!rule) return cannedSSE(DONE);
       const input = rule.inputFrom ? rule.inputFrom({ requests: mock.requests.slice() }) : rule.tool.input;
