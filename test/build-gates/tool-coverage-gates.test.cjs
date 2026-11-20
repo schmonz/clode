@@ -1118,6 +1118,9 @@ function checkJobs({ workflow, jobs, sources, engines }) {
     seen.add(j.job);
     const why = [];
     if (!engines.includes(j.engine)) why.push(`its engine ${j.engine} is not a shipping engine (${engines.join(', ')})`);
+    if (j.placed !== undefined && !(typeof j.placed === 'string' && j.placed.trim() && !/\n/.test(j.placed))) {
+      why.push('its `placed` is not a one-line reason it has not run yet');
+    }
     const b = blocks.get(j.job);
     if (!b) why.push('ci.yml has no such job');
     else {
@@ -1208,6 +1211,10 @@ function scanCoverage({ carve, what, sources, exemptions, notApplicable = [], to
   // The drivers, and the jobs that run them.
   const d = findDrivers(sources);
   const jb = checkJobs({ workflow, jobs, sources, engines });
+  // A job with `placed` is in ci.yml but has no green run yet: its cells count as driven, and the verdict says how
+  // many are OBSERVED (some job that has run drives them) and how many are only PLACED.
+  const placedJobs = new Set(jb.valid.filter((j) => j.placed !== undefined).map((j) => j.job));
+  let nPlaced = 0;
   findings.push(...jb.findings);
   const driven = new Map();                      // cellKey -> [{ driver, job }]
   const foreign = [];
@@ -1339,6 +1346,7 @@ function scanCoverage({ carve, what, sources, exemptions, notApplicable = [], to
           if (e) findings.push(`${name} x ${mo} @ ${en}: not applicable (${n.reason}) and exempted (${e.date}, until ${e.until}); remove the exemption`);
         } else if (dv) {
           nDriven++;
+          if (dv.every((x) => placedJobs.has(x.job))) nPlaced++;
           states.push(`${en} DRIVEN (${[...new Set(dv.map((x) => x.job))].join(', ')})`);
           if (e) findings.push(`${name} x ${mo} @ ${en}: exempted (${e.date}, until ${e.until}) but driven by ${where(dv)}; narrow the exemption`);
         } else if (e) {
@@ -1362,9 +1370,10 @@ function scanCoverage({ carve, what, sources, exemptions, notApplicable = [], to
   }
   const files = new Set(d.drivers.map((x) => x.file)).size;
   return { findings, examined: cells, tools, drivers: d, declared, driven, foreign, matrix, jobs: jb.valid, notRegistered,
-    counts: { driven: nDriven, exempted: nExempt, notApplicable: nNa, neither: nNone },
+    counts: { driven: nDriven, exempted: nExempt, notApplicable: nNa, neither: nNone, ...(placedJobs.size ? { placed: nPlaced } : {}) },
     note: `${what}: ${reg.note}; ${md.note}; ${cells} cell(s) over ${engines.join(', ')} (${others.length} other published `
-      + `engine(s) exempted as one): ${nDriven} driven, ${nExempt} exempted, ${nNa} not applicable, ${nNone} neither; ${jb.valid.length} CI job(s) `
+      + `engine(s) exempted as one): ${nDriven} driven${placedJobs.size ? ` (${nDriven - nPlaced} observed + ${nPlaced} placed (not yet run): `
+        + `${[...placedJobs].join(', ')})` : ''}, ${nExempt} exempted, ${nNa} not applicable, ${nNone} neither; ${jb.valid.length} CI job(s) `
       + `report cells; ${d.drivers.length} driver(s) in ${files} file(s), ${d.scanned + d.skipped} file(s) scanned, `
       + `${d.skipped} of them skipped by name` };
 }
@@ -1475,8 +1484,9 @@ const CELL_JOBS = [
     'test/fidelity/tools-local.test.cjs'] },
   // netbsd-arm64 has no native runner: its cells run in a NetBSD/arm64 guest (ruling E11b; scripts/tjs-legs.mjs
   // GUEST_CELL_JOBS), against the answers recorded from native, whose own tests skip there by name.
+  // `placed` until its first green run (then delete the key): the verdict counts its cells as placed, not observed.
   { job: 'netbsd-arm64-cells', engine: 'netbsd-arm64', files: ['test/fidelity/tools-local.test.cjs',
-    'test/fidelity/agentic-grep-glob.test.cjs'] },
+    'test/fidelity/agentic-grep-glob.test.cjs'], placed: 'committed 2026-11-20 (47cb84d); first CI run pending' },
 ];
 const LOCAL = 'deferred, no plan yet: it runs on this machine, so a canned-mock turn could drive it, and no live check '
   + 'judges its tool_result';
@@ -2184,6 +2194,19 @@ test('the escapes: Bash x sandbox:on with only a print driver, and Grep with no 
   const g = scanCoverage(fixtureInputs({ jobs: darwinOnly, workflow: fxWorkflow().replace(`tjs-${FX_ENGINE}`, 'tjs-darwin-arm64') }));
   assert.match(g.findings.join('\n'), new RegExp(`^Grep x print: on ${FX_ENGINE} no CI job drives it`, 'm'));
   assert.match(g.findings.join('\n'), /^Grep x print @ darwin-arm64: exempted .* but driven by fixture-job/m);
+});
+
+test('a job not yet run (`placed`) drives its cells, and the verdict counts them as placed, not observed', () => {
+  const r = scanCoverage(fixtureInputs({ jobs: [{ ...FX_JOBS[0], placed: 'first run pending (fixture)' }] }));
+  assert.deepStrictEqual(r.findings, []);
+  assert.strictEqual(r.counts.driven, 6);
+  assert.strictEqual(r.counts.placed, 6);
+  assert.match(r.note, / 6 driven \(0 observed \+ 6 placed \(not yet run\): fixture-job\), /);
+  const seen = scanCoverage(fixtureInputs());
+  assert.strictEqual(seen.counts.placed, undefined);
+  assert.match(seen.note, / 6 driven, /);
+  const bad = scanCoverage(fixtureInputs({ jobs: [{ ...FX_JOBS[0], placed: '' }] }));
+  assert.match(bad.findings[0], /drives no cell: its `placed` is not a one-line reason it has not run yet/);
 });
 
 test('a job ci.yml does not run as a cell job drives nothing, and says why', () => {
