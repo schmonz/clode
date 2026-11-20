@@ -93,7 +93,7 @@
 //   sandbox settings literal, SHELL), or it is a finding and drives nothing.
 //   EXEMPTIONS are per cell: { tool, reason, date, until }, optionally narrowed by `modes` and
 //   `engines`; a cell both driven and exempted is a finding, as is one neither driven nor
-//   exempted. The dates are the every-tool plan's phases (UNTIL_PHASE_A/B/C), carried as set.
+//   exempted. The dates are the every-tool plan's phases (UNTIL_PHASE_B/C; UNTIL_PHASE_A retired 2026-11-20, Phase A complete), carried as set.
 //   NOT APPLICABLE (ruling E10, 2026-11-20): a tool x mode where the tool is NOT REGISTERED (the Task
 //   list tools when unlisted). NOT_APPLICABLE names it { tool, modes, reason, date }, and a CI job
 //   must PROVE it: a claimed `assertNotRegistered(check, USE, MODES, { absent, registered })` control
@@ -1498,12 +1498,13 @@ const SHIPPING_ENGINES = ['darwin-arm64', 'linux-x64-musl', 'netbsd-arm64'];
 // until the grep-native plan's Task 11 drove them, 2026-10-05: test/fidelity/agentic-grep-glob.test.cjs,
 // every output mode against native, and agentic-tools' Grep rows, which no longer skip.)
 const RECORDED = '2026-09-28';
-const UNTIL_PHASE_A = '2026-12-15';          // was 2026-10-15; USER RULING 2026-11-18
+// UNTIL_PHASE_A ('2026-12-15', moved from 2026-10-15 by USER RULING 2026-11-18) is RETIRED 2026-11-20: Phase A is
+// complete at cell level (PHASE_A_CELLS below), pending the green CI run.
 const UNTIL_PHASE_B = '2027-01-15';          // was 2026-11-30; USER RULING 2026-11-19
 const UNTIL_PHASE_C = '2027-02-15';          // was 2026-12-31; USER RULING 2026-11-19
 // The quarterly re-decision: NOT Phase C (it shared Phase C's date until that ruling, and stays where it was).
 const UNTIL_REVIEW = '2026-12-31';
-const PHASES = new Map([[UNTIL_PHASE_A, 'every-tool Phase A'], [UNTIL_PHASE_B, 'every-tool Phase B'],
+const PHASES = new Map([[UNTIL_PHASE_B, 'every-tool Phase B'],
   [UNTIL_PHASE_C, 'every-tool Phase C'], [UNTIL_REVIEW, 'the quarterly review']]);
 // Every published engine but the three: one entry, outside the matrix (no cell is counted for
 // them, and a job run on one is not a cell job). Recorded with this gate; its until is the
@@ -1552,19 +1553,28 @@ const COMMON_MODES = ['print', 'interactive', 'unlisted', 'permission:acceptEdit
   'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan'];
 const SEARCH_MODES = COMMON_MODES.filter((mo) => mo !== 'unlisted');
 const BASH_MODES = [...COMMON_MODES, 'sandbox:on', 'sandbox:required', 'shell:bash', 'shell:zsh'];
-const PHASE_A_CELL = 'every-tool Phase A (cells): not yet driven in this mode on this engine, and NO JOB RUNS IT. Bash '
-  + '(agentic-sandbox-fail-closed drives only sandbox:on, and only on linux-x64-musl): sandbox:required (every engine) needs '
-  + 'a failIfUnavailable turn added to test/fidelity/agentic-sandbox-fail-closed.test.cjs, sandbox:on@darwin-arm64 a run '
-  + 'of that file in node-shim-oracle-darwin (Seatbelt), and sandbox:on@netbsd-arm64 a NetBSD sandbox, which upstream does '
-  + 'not have (its fail-closed answer is the cell); the sandbox under quaude needs a real net.createServer (BACKLOG). '
-  + 'shell:zsh (every engine) needs a driveTool turn with env { SHELL: zsh } in tools-local; zsh itself is cheap '
-  + 'everywhere (macOS runners ship /bin/zsh, linux-x64-pty would apt-get it, netbsd-arm64-cells already installs it)';
-const PHASE_A_CELLS = (tool, modes, driven, reason = PHASE_A_CELL) => modes.flatMap((mode) => {
+// EVERY-TOOL PHASE A IS COMPLETE AT CELL LEVEL (2026-11-20): every Phase A cell is claimed by a CI job, and
+// UNTIL_PHASE_A, which dated the undriven ones, is retired (plan Task 5 step 3). PHASE_A_CELLS still names, per tool,
+// the cells its drivers claim: a cell outside them becomes an exemption with NO date, which checkExemptionTable
+// reports by name, so a Phase A cell can never quietly drop back to undriven.
+const PHASE_A_CLOSED = 'every-tool Phase A is complete (UNTIL_PHASE_A retired 2026-11-20): this cell is not claimed by '
+  + 'any job and has no date; drive it, or have the user rule on it';
+const PHASE_A_CELLS = (tool, modes, driven) => modes.flatMap((mode) => {
   const engines = SHIPPING_ENGINES.filter((en) => !driven.includes(`${mode}@${en}`));
   if (!engines.length) return [];
-  return [{ tool, modes: [mode], ...(engines.length < SHIPPING_ENGINES.length ? { engines } : {}), reason,
-    date: '2026-11-18', until: UNTIL_PHASE_A }];
+  return [{ tool, modes: [mode], ...(engines.length < SHIPPING_ENGINES.length ? { engines } : {}), reason: PHASE_A_CLOSED,
+    date: '2026-11-20' }];
 });
+// The sandbox cells (USER RULING 2026-11-20: needs net.createServer (BACKLOG)): moved to Phase B. sandbox:on is claimed
+// on linux-x64-musl (agentic-sandbox-fail-closed); sandbox:required on every engine needs a failIfUnavailable turn added
+// to that file, sandbox:on@darwin-arm64 a run of it in node-shim-oracle-darwin (Seatbelt), and sandbox:on@netbsd-arm64
+// the fail-closed answer on a host upstream cannot sandbox. The sandbox's network proxies under quaude need a real
+// net.createServer, planned before Phase B's SendMessage.
+const SANDBOX_CELLS = 'every-tool Phase B (cells): USER RULING 2026-11-20: needs net.createServer (BACKLOG). The sandbox '
+  + 'under quaude runs its network proxies on net.createServer, the shim\'s named throwing stub; sandbox:required (every '
+  + 'engine) then needs a failIfUnavailable turn in test/fidelity/agentic-sandbox-fail-closed.test.cjs, sandbox:on@darwin-arm64 '
+  + 'a run of that file in node-shim-oracle-darwin (Seatbelt), sandbox:on@netbsd-arm64 the fail-closed answer on a host '
+  + 'upstream cannot sandbox';
 const LOCAL_CELLS = 'every-tool Phase A (cells): driven in print, interactive (a typed pty turn), unlisted and every '
   + 'permission mode on every shipping engine (test/fidelity/tools-local.test.cjs, in linux-x64-pty, node-shim-oracle-darwin '
   + 'and netbsd-arm64-cells); an exemption left here is a mode its call does not answer as in print, judged nowhere yet';
@@ -1593,8 +1603,12 @@ const EXEMPTIONS = [
   // The undriven cells of the five driven tools (USER RULING 2026-11-18).
   // Agent: one synchronous call in tools-local's T5 turn and every mode turn (fix round 2), its subagent answered by the mock.
   ...PHASE_A_CELLS('Agent', COMMON_MODES, LOCAL_DRIVEN, LOCAL_CELLS),
-  ...PHASE_A_CELLS('Bash', BASH_MODES, [...LOCAL_DRIVEN, 'permission:bypassPermissions@linux-x64-musl',
-    'sandbox:on@linux-x64-musl', 'shell:bash@linux-x64-musl', 'shell:bash@darwin-arm64', 'shell:bash@netbsd-arm64']),
+  ...PHASE_A_CELLS('Bash', BASH_MODES.filter((mo) => !mo.startsWith('sandbox:')), [...LOCAL_DRIVEN,
+    'shell:bash@linux-x64-musl', 'shell:bash@darwin-arm64', 'shell:bash@netbsd-arm64',
+    // tools-local's SHELL=zsh turn (USER RULING 2026-11-20)
+    'shell:zsh@linux-x64-musl', 'shell:zsh@darwin-arm64', 'shell:zsh@netbsd-arm64']),
+  ...PHASE_A_CELLS('Bash', ['sandbox:on'], ['sandbox:on@linux-x64-musl']).map((e) => ({ ...e, reason: SANDBOX_CELLS, until: UNTIL_PHASE_B })),
+  { tool: 'Bash', modes: ['sandbox:required'], reason: SANDBOX_CELLS, date: '2026-11-20', until: UNTIL_PHASE_B },
   ...PHASE_A_CELLS('Edit', COMMON_MODES, LOCAL_DRIVEN),
   ...PHASE_A_CELLS('Glob', SEARCH_MODES, SEARCH_DRIVEN),
   ...PHASE_A_CELLS('Grep', SEARCH_MODES, SEARCH_DRIVEN),
@@ -2338,8 +2352,12 @@ test('step 3 (b): an exemption past its `until` date is a finding naming its pha
     'Grep x permission:bypassPermissions', 'Grep x permission:plan'], late.findings.join('\n'));
   assert.match(late.findings[0], /^Glob: its exemption expired on 2026-10-12 \(recorded 2026-09-28: "deferred: the Grep and Glob/);
   for (const f of late.findings.slice(1)) assert.match(f, /^Grep x [^ ]+(?: @ [^ ]+)?: its exemption expired on 2026-10-12 \(recorded 2026-09-28/);
-  const phase = checkExemptionTable([{ tool: 'Read', reason: 'x', date: '2026-09-28', until: UNTIL_PHASE_A }], '2026-12-16');
-  assert.match(phase[0], /^Read: its exemption expired on 2026-12-15 \(every-tool Phase A's deadline\)/);
+  // PLANTED: Phase A is closed, so a Phase A cell no driver claims is an exemption with no date: a finding, by name
+  const dropped = PHASE_A_CELLS('Read', ['print', 'unlisted'], ['print@darwin-arm64', 'print@linux-x64-musl', 'print@netbsd-arm64']);
+  assert.deepStrictEqual(dropped.map((e) => [e.tool, e.modes, e.until]), [['Read', ['unlisted'], undefined]]);
+  assert.ok(checkExemptionTable(dropped, '2026-11-20').some((f) => /^Read x unlisted: /.test(f)), checkExemptionTable(dropped, '2026-11-20').join('\n'));
+  const phase = checkExemptionTable([{ tool: 'Read', reason: 'x', date: '2026-09-28', until: UNTIL_PHASE_B }], '2027-01-16');
+  assert.match(phase[0], /^Read: its exemption expired on 2027-01-15 \(every-tool Phase B's deadline\)/);
 });
 
 test('an exemption must not cover a driven cell, may only name a registered tool, and one entry per cell', () => {
