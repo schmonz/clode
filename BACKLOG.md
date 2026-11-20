@@ -1659,8 +1659,8 @@ Unmeasured. The win32-carve counts and the credman behaviour need the win32 carv
 
 **Status: OPEN, phases 1-5 of 6 DONE (phase 5 closed 2026-09-26), and the pin no longer waits on
 it: UPSTREAM_PIN moved to 2.1.283 on 2026-09-26 (the next block).** What remains ends the phase-5
-block: phase 6 (`reordered`, slow-box performance), measuring `Bun.wrapAnsi`, and the recorded
-nits. Phase 5's record follows the pin move, then phase 4's and phase 3's; phases 1-2's follows
+block: phase 6 (`reordered`, slow-box performance) and the recorded nits. `Bun.wrapAnsi` is
+DONE (2026-09-26, recorded 2026-11-20: the phase-3 follow-ups below). Phase 5's record follows the pin move, then phase 4's and phase 3's; phases 1-2's follows
 them.
 
 **The pin moved to 2.1.283 (2026-09-26), so CI judges the CellSegmenter painter users run.**
@@ -1875,8 +1875,9 @@ them.
   wide nor spacerTail) measured 21.3 microseconds on the ASCII sample, with a matching screen
   and return -- it restates part of SCREEN-BOUNDS/PAINT-DAMAGE, so it belongs behind the paint
   gate. Profile on the slow boxes first.
-- **`Bun.wrapAnsi`** (the phase-3 follow-up below): measure whether it ever changes a PAINTED
-  cell before a phase-3-sized effort.
+- ~~**`Bun.wrapAnsi`** (the phase-3 follow-up below): measure whether it ever changes a PAINTED
+  cell before a phase-3-sized effort.~~ DONE: it did (98 cells of a wrapped table), and it is
+  native's now (below).
 
 **Phase 4 landed (2026-09-25): OSC-8 hyperlinks are native's.** CellSegmenter parsed OSC 8 but
 never interned a link (`uris` stayed `['']`, every run's link 0), so a link painted as plain
@@ -2069,27 +2070,52 @@ spread argument and runs, with the style check, against upstream's `next` in ups
 - **The graphemes pool's pre-seed.** Native starts `graphemes` with 98 entries; ours starts
   empty. The caller only ever reads the indices a `segment()` hands it, so it is unobservable.
 - **`string-width` stays in `deps/claude`, now for two reasons that are not the product's
-  `Bun.stringWidth`.** Measured: no product code requires it since task 6, but `wrap-ansi`
-  (which backs bun-shim's `Bun.wrapAnsi`) depends on `string-width ^8.2.0`, so it is in the
-  embedded closure whether or not it is listed; and `test/node-shim-esm` and
+  `Bun.stringWidth`.** Measured: no product code requires it since task 6. Until 2026-09-26
+  `wrap-ansi` (which backed bun-shim's `Bun.wrapAnsi`) also depended on it; wrap-ansi has left
+  the closure since (below), so the one reason now is that `test/node-shim-esm` and
   `test/node-shim-vflag-regex` exercise the npm package itself under tjs, which the shipped
   stringWidth cannot stand in for. Its direct listing is therefore kept.
 
 **Phase-3 follow-ups (LATER, as the final review triaged them, 2026-09-25):**
 
-- **`Bun.wrapAnsi` is a fifth width consumer, still on npm rules.** bun-shim's `Bun.wrapAnsi`
-  is npm `wrap-ansi` (and its `string-width`), not native's. The 2.1.278 carve calls it from one
-  helper (3 call sites, the helper reached from 19 wrap calls passing `{trim, hard}`). Measured
-  2026-09-25 with the text probe's runners (native inside its own Bun through
-  `scripts/lib/native-oracle.cjs`, ours under tjs with bun-shim), over the text gates' corpora
-  but the bundle literals, each string wrapped as `s ab s` at 1, 4 and 10 columns under
-  {trim, hard}, {hard} and neither: **243,055 of 1,174,878 strings differ** (785,269 of 10,573,902
-  wraps): composed 12 of 19, cell probes 557 of 586, escapes 42,482 of 50,081, slice probes 3,440
-  of 4,855, emoji-test 5,012 of 5,225, code points 191,552 of 1,114,112. That is
-  `Bun.wrapAnsi`'s own answer, not what paints: the carve's helper swaps wide and astral clusters
-  for placeholders before calling it and restores them after, so of those strings only the
-  11,023 all-ASCII ones reach it untouched. Not fixed; the route is phase 3's (measure native's
-  rules, state them once in unicode-text.cjs, add a fifth text gate).
+- ~~**`Bun.wrapAnsi` is a fifth width consumer, still on npm rules.**~~ **DONE (2026-09-26;
+  recorded 2026-11-20): `Bun.wrapAnsi` is native's.** It was npm `wrap-ansi`; it is now
+  `wrapAnsi` in libexec/unicode-text.cjs, the ONE text implementation, its rules MEASURED in
+  native 2.1.283 and stated once as twelve named rules (WRAP-ARGUMENTS, -NARROW, -NEWLINE,
+  -VERBATIM, -SPACE, -TAB, -TRIM, -HARD, -WIDE, -ROW-WIDTH, -SGR, -LINK), each with a
+  same-named test in test/unicode-text.test.cjs whose literals are native's. The ones that
+  differed from npm: a tab is a 0-wide word character, never expanded (WRAP-TAB); only the last
+  one-number SGR is closed and reopened at a row end, so italic holding bold keeps its italic
+  across the break (WRAP-SGR); CR and CRLF become LF (WRAP-NEWLINE); text is never normalised
+  (WRAP-VERBATIM: npm NFC-normalised, so U+0340 came back as U+0300); a word wider than the row
+  breaks code point by code point with U+20E3 at 0 (WRAP-HARD); the row width is summed across
+  an ASCII seam, as Bun does (WRAP-ROW-WIDTH, linear where a first cut was quadratic).
+  - **The text gates, native 2.1.283 vs ours under tjs** (test/fidelity/text-differential.test.cjs):
+    `text-diff-wrapansi` (every corpus part, 18 width/option cases a string) 235,366 of
+    1,180,218 strings -> **0**; `text-diff-wrapansi-cases` (corpusWraps() at 84 cases) 1,032 of
+    1,955 -> **0**. Per part, re-measured 2026-11-20 with npm wrap-ansi 10.0.2 under node against
+    native (whose total, 235,320, is 46 under the gate's tjs baseline): code points 183,005 of
+    1,114,112, composed 8 of 19, cell probes 525 of 586, escapes 42,294 of 50,081, slice probes
+    3,199 of 4,855, links 294 of 395, emoji-test 4,799 of 5,225, wraps 1,032 of 1,955, bundle
+    literals 164 of 2,990; ours 0 in every part. The other four text gates, the paint gate and
+    cell-profile-diff stayed 0. text-probe-wrap-options checks that the carve's 18 call sites
+    pass only option shapes the gates judge (its floor raised 1 -> 18 on 2026-11-20).
+  - **The screen.** `tui-reply-wraps` (interactive-frame-diff: a reply whose markdown table wraps
+    tabs and italic-around-bold) was VIOLATION before, 98 of 1,239 cells (glyph 85, sgr 13), and
+    is OK after, on darwin and in CI's linux-x64-pty (run 44718991403). In a
+    node:24.21.0-bookworm container mirroring that job (2026-11-20): the scene OK over 1,214
+    cells, the frame step 28 of 28 and the text step 121 of 121 with 0 skipped, the text step
+    taking 1,509 s on 6 x86_64 CPUs (CI's took about 21 minutes in run 44718991403).
+  - **The npm package.** wrap-ansi and its ansi-styles left deps/claude and quaude's derived
+    closure (18 -> 16 packages; a quaude 44,224 bytes smaller). string-width stays (above).
+  - **Speed.** Under tjs ours takes 1.09x to 1.18x of npm wrap-ansi's time on the measured
+    samples; 8,000 zero-width words take 6 ms in node and 2,000 take 9 ms under tjs. Not yet
+    profiled on the slow boxes (phase 6).
+- **Next candidate: `Bun.stripANSI` is still npm `strip-ansi`** (bun-shim's `_stripAnsiFn`), and
+  nothing judges it against native. The 2.1.283 carve calls it once. To measure it: add a
+  `stripANSI` key to scripts/lib/text-probe.cjs's PROBE_SOURCE and KEYS, run
+  `node scripts/text-differential.cjs --native <2.1.283> --corpus escapes` (and `links`, `wraps`)
+  and read its count; a sixth text gate follows only if it is not 0.
 - **The UCD warm-up fetches from unicode.org on every CI run.** Recommended: an
   `actions/cache` step before it, keyed on `hashFiles('scripts/unicode-inputs.json')` with NO
   restore-keys (a restore-key is a rolling prefix and would hand back another pin's files), so
@@ -2310,7 +2336,11 @@ leave the stripped text identical. So:
   fatal error rather than causing one — but it turns a clean exit code into a signal, and
   a probe that reads exit status will report the wrong thing about the wrong event.
 
-Unmeasured. Phase 6 (`reordered`, slow-box performance) and Bun.wrapAnsi were not re-run here;
+Measured: test/fidelity/text-differential.test.cjs text-diff-wrapansi and text-diff-wrapansi-cases against native
+2.1.283, 0 differences; test/fidelity/interactive-frame-diff.test.cjs tui-reply-wraps OK in ci.yml run 44718991403's
+linux-x64-pty job (2026-11-20)
+
+Unmeasured. Phase 6 (`reordered`, slow-box performance) was not re-run here;
 test/bun-shim-cell-segmenter.test.cjs and the text/paint probe gates measure the shipped phases, the Tiger PPC VM the
 slow box.
 
