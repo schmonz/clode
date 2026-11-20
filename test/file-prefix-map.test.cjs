@@ -562,6 +562,14 @@ test('EVERY toolchain file that carries _INIT flags is covered, darwin floors in
   // next month is covered the day it lands, which is the only way this pin survives.
   const dir = path.join(__dirname, '..', 'scripts');
   const files = fs.readdirSync(dir).filter((f) => f.endsWith('.toolchain.cmake')).sort();
+  // An AppleDouble `._x.toolchain.cmake` (a macOS xattr sidecar, written beside every file of a
+  // checkout on a share that cannot hold xattrs) is not a toolchain file, and it doubled this
+  // count to 14 in a fresh worktree on 2026-11-20. Name it rather than miscount: the checkout
+  // needs a sweep, which no other test would ask for by name.
+  const appleDouble = files.filter((f) => f.startsWith('._'));
+  assert.deepStrictEqual(appleDouble, [],
+    'AppleDouble sidecars in scripts/: the checkout needs a sweep '
+    + "(find . -name '._*' -not -path './.git/*' -delete), they are not toolchain files");
   assert.ok(files.length >= 7, `expected the repo's toolchain files, found ${files.length}`);
   let withInit = 0;
   let withFloor = 0;

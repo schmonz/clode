@@ -8,6 +8,21 @@ Concrete clode-under-Node divergences from native Claude Code, to triage and fix
 That page is GENERATED from `scripts/build-graph.cjs` — the one declaration of the build — so it
 cannot drift from it; it is also where the honest answer to "does this need node?" lives.
 
+## A fresh worktree on the NFS share arrives with a `._*` AppleDouble sidecar beside every file (2026-11-20)
+
+A new git worktree under `.claude/worktrees/` on this NFS-mounted checkout held 999 `._*` files
+outside `.git` right after checkout (all timestamped at its creation; this box cannot create a
+`._*` name itself, `touch` refuses). Two suite findings followed from them and nothing else: the
+toolchain test in test/file-prefix-map.test.cjs counted `._x.toolchain.cmake` as a toolchain
+file (7 !== 14), and test/run.mjs's checkout guard reported `build/._clode-...` as written into
+the checkout. The test was not wrong to read the directory; the checkout needs a sweep
+(`find . -name '._*' -not -path './.git/*' -delete`), after which the suite was green. Ratchet:
+that test now names AppleDouble sidecars as the cause instead of miscounting. The mount fix in
+the AppleDouble entry further down would remove the cause; worktree creation has no sweep yet.
+
+Measured: test/file-prefix-map.test.cjs, failing in a fresh worktree then passing after the sweep, and red by name with a
+planted `._netbsd.toolchain.cmake` in its scripts/ listing (2026-11-20)
+
 ## test/procfs-linux-only.test.cjs sometimes kills node with SIGSEGV (2026-11-20, seen twice)
 
 One full suite on this box (darwin-arm64, during the every-tool plan's Task 3 fix round 2, with the temp-root
@@ -2093,13 +2108,17 @@ spread argument and runs, with the style check, against upstream's `next` in ups
   - **The text gates, native 2.1.283 vs ours under tjs** (test/fidelity/text-differential.test.cjs):
     `text-diff-wrapansi` (every corpus part, 18 width/option cases a string) 235,366 of
     1,180,218 strings -> **0**; `text-diff-wrapansi-cases` (corpusWraps() at 84 cases) 1,032 of
-    1,955 -> **0**. Per part, re-measured 2026-11-20 with npm wrap-ansi 10.0.2 under node against
-    native (whose total, 235,320, is 46 under the gate's tjs baseline): code points 183,005 of
-    1,114,112, composed 8 of 19, cell probes 525 of 586, escapes 42,294 of 50,081, slice probes
+    1,955 -> **0**. Per part, re-measured 2026-11-20 against
+    native with the baseline's own npm wrap-ansi 10.0.1 (45d8ca5's bun-shim under tjs, and the
+    package under node: the same 235,366 strings, string for string): code points 183,005 of
+    1,114,112, composed 9 of 19, cell probes 525 of 586, escapes 42,339 of 50,081, slice probes
     3,199 of 4,855, links 294 of 395, emoji-test 4,799 of 5,225, wraps 1,032 of 1,955, bundle
-    literals 164 of 2,990; ours 0 in every part. The other four text gates, the paint gate and
+    literals 164 of 2,990; ours 0 in every part. wrap-ansi 10.0.2 (Renovate's later bump) differs
+    on 46 fewer (composed 8, escapes 42,294): the package moved, not the engine. The other four text gates, the paint gate and
     cell-profile-diff stayed 0. text-probe-wrap-options checks that the carve's 18 call sites
-    pass only option shapes the gates judge (its floor raised 1 -> 18 on 2026-11-20).
+    pass only option shapes the gates judge (its floor raised 1 -> 18 on 2026-11-20; at 18 it
+    has run only on this box and in the container below, never in CI: it awaits its first run
+    on main).
   - **The screen.** `tui-reply-wraps` (interactive-frame-diff: a reply whose markdown table wraps
     tabs and italic-around-bold) was VIOLATION before, 98 of 1,239 cells (glyph 85, sgr 13), and
     is OK after, on darwin and in CI's linux-x64-pty (run 44718991403). In a
@@ -2336,9 +2355,12 @@ leave the stripped text identical. So:
   fatal error rather than causing one — but it turns a clean exit code into a signal, and
   a probe that reads exit status will report the wrong thing about the wrong event.
 
+Measured: scratch gap.mjs, wrap-ansi 10.0.1 under tjs (45d8ca5's scripts/lib/text-probe.cjs runOurs) and under node, and
+10.0.2 under node, each against native 2.1.283 over every corpus part at BASIC_WRAPS (2026-11-20)
+
 Measured: test/fidelity/text-differential.test.cjs text-diff-wrapansi and text-diff-wrapansi-cases against native
-2.1.283, 0 differences; test/fidelity/interactive-frame-diff.test.cjs tui-reply-wraps OK in ci.yml run 44718991403's
-linux-x64-pty job (2026-11-20)
+2.1.283, 0 differences; test/fidelity/interactive-frame-diff.test.cjs tui-reply-wraps OK, per ci.yml run 44718991403's
+per-job gates-ran record for linux-x64-pty (no gates-ran-in-ci verdict: that job was cancelled) (2026-11-20)
 
 Unmeasured. Phase 6 (`reordered`, slow-box performance) was not re-run here;
 test/bun-shim-cell-segmenter.test.cjs and the text/paint probe gates measure the shipped phases, the Tiger PPC VM the
