@@ -650,7 +650,7 @@ const MODE_ARGS = {
   unlisted: { allowedTools: null },
 };
 const layBoth = (work) => { layTree(work); layRepo(work); };
-const readBoth = (work, base) => ({ tree: readTree(work), repo: readRepo(work), workflow: readWorkflow(work, base) });
+const readBoth = (work, base) => ({ tree: readTree(work), gitState: readRepo(work), workflow: readWorkflow(work, base) });
 // The two calls only this turn makes, as print answers them (Edit's success, unlike Write's, has no file-state note).
 const EDIT_DONE = { text: `The file ${W('a.txt')} has been updated successfully.`, isError: false };
 const ECHO_DONE = { text: 'mode-turn-42', isError: false };
@@ -681,7 +681,7 @@ const LAID = { 'a.txt': TREE['a.txt'], 'b.txt': TREE['b.txt'], 'n.ipynb': TREE['
 const modeLeft = (mode) => {
   const edited = { ...DISK, 'a.txt': TREE['a.txt'].replace('two', 'TWO') };
   const tree = mode === 'permission:plan' || mode === 'unlisted' ? LAID : edited;
-  return { tree, repo: REPO_NATIVE, workflow: mode === 'unlisted' ? { scripts: [], journal: [], records: [] } : WORKFLOW_LEFT };
+  return { tree, gitState: REPO_NATIVE, workflow: mode === 'unlisted' ? { scripts: [], journal: [], records: [] } : WORKFLOW_LEFT };
 };
 
 // The controls, with the cells they drive declared: every tool of the turn, in every mode it runs in.
