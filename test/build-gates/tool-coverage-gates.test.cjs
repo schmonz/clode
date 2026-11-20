@@ -1190,7 +1190,7 @@ function checkExemptionTable(exemptions, today, { keys = EXEMPTION_KEYS, who: wh
 
 const cellKey = (tool, mode, engine) => `${tool}|${mode}|${engine}`;
 
-function scanCoverage({ carve, what, sources, exemptions, notApplicable = [], today, workflow, jobs, engines, published, enginesExemption }) {
+function scanCoverage({ carve, what, sources, exemptions, notApplicable = [], divergences = [], today, workflow, jobs, engines, published, enginesExemption }) {
   const reg = extractRegistry(carve);
   const md = extractModes(carve);
   const { tools } = reg;
@@ -1218,11 +1218,22 @@ function scanCoverage({ carve, what, sources, exemptions, notApplicable = [], to
   // many are OBSERVED (some job that has run drives them) and how many are only PLACED.
   const placedJobs = new Set(jb.valid.filter((j) => j.placed !== undefined).map((j) => j.job));
   let nPlaced = 0;
+  const jobTag = (j) => (placedJobs.has(j) ? `${j}, placed: not yet run` : j);
+  // M1: a PINNED DIVERGENCE is a claimed cell whose quaude answer is held to a NAMED difference from native's (the
+  // driver's file says why); counted apart, so "claimed" never reads as "equal to native" for it.
+  const pinned = new Map();
+  for (const v of divergences) {
+    const src = sources.find((x) => x.file === v.file);
+    if (!src || !src.text.includes('NAMED DIVERGENCE') || !src.text.includes(v.tool)) {
+      findings.push(`pinned divergence ${v.tool}: ${v.file} does not name it (a NAMED DIVERGENCE comment and the tool); fix the table`);
+    } else pinned.set(v.tool, v);
+  }
+  let nPinned = 0;
   findings.push(...jb.findings);
   const driven = new Map();                      // cellKey -> [{ driver, job }]
   const foreign = [];
   const declared = new Map();                    // tool -> drivers
-  const proofs = new Map();                      // `tool|mode` -> [{ driver, job }]: not-registered, proven in a job
+  const proofs = new Map();                      // `tool|mode|engine` -> [{ driver, job }]: not-registered, proven in a job ON that engine (I2)
   const notRegistered = [];                      // the not-applicable controls, for the map
   for (const x of d.drivers) {
     const name = tools.has(x.name) ? x.name : byAlias.get(x.name);
@@ -1232,7 +1243,7 @@ function scanCoverage({ carve, what, sources, exemptions, notApplicable = [], to
       for (const j of jb.valid) {
         if (!j.files.includes(x.file) || !x.tests.length) continue;
         for (const mo of x.modes) {
-          const k = `${name}|${mo}`;
+          const k = `${name}|${mo}|${j.engine}`;
           if (!proofs.has(k)) proofs.set(k, []);
           proofs.get(k).push({ driver: x, job: j.job });
         }
@@ -1316,18 +1327,23 @@ function scanCoverage({ carve, what, sources, exemptions, notApplicable = [], to
       const k = `${e.tool}|${mo}`;
       if (na.has(k)) { findings.push(`${e.tool} x ${mo}: not applicable by two entries; one entry per cell`); continue; }
       na.set(k, e);
-      if (!proofs.has(k)) {
+      // per engine: a proof counts only for the engine of the job that runs it
+      const unproven = engines.filter((en) => !proofs.has(`${k}|${en}`));
+      if (unproven.length) {
         findings.push(`${e.tool} x ${mo}: declared not applicable (${e.reason}), but no CI job (CELL_JOBS) runs an `
-          + 'assertNotRegistered control that proves it; a cell is not applicable only where the target is seen not to register it');
+          + `assertNotRegistered control that proves it on ${unproven.join(', ')}; a cell is not applicable only where the target is seen not to register it`);
       }
     }
   });
+  const orphans = new Map();                     // `tool|mode` -> proofs, across engines
   for (const [k, ps] of proofs) {
-    if (!na.has(k)) {
-      const [tool, mo] = k.split('|');
-      findings.push(`${tool} x ${mo}: ${[...new Set(ps.map((p) => `${p.driver.file}:${p.driver.line}`))].join(', ')} proves it not registered, `
-        + 'but NOT_APPLICABLE has no entry for it; add one, or drive the cell');
-    }
+    const tm = k.split('|').slice(0, 2).join('|');
+    if (!na.has(tm)) orphans.set(tm, [...(orphans.get(tm) || []), ...ps]);
+  }
+  for (const [tm, ps] of orphans) {
+    const [tool, mo] = tm.split('|');
+    findings.push(`${tool} x ${mo}: ${[...new Set(ps.map((p) => `${p.driver.file}:${p.driver.line}`))].join(', ')} proves it not registered, `
+      + 'but NOT_APPLICABLE has no entry for it; add one, or drive the cell');
   }
 
   // The verdict, cell by cell; undriven, unexempted cells reported one line per tool x mode.
@@ -1343,14 +1359,15 @@ function scanCoverage({ carve, what, sources, exemptions, notApplicable = [], to
         const dv = driven.get(k), e = exempt.get(k), n = na.get(`${name}|${mo}`);
         if (n) {
           nNa++;
-          const pj = [...new Set((proofs.get(`${name}|${mo}`) || []).map((p) => p.job))];
-          states.push(`${en} n/a (${pj.length ? `proven in ${pj.join(', ')}` : 'UNPROVEN'})`);
+          const pj = [...new Set((proofs.get(`${name}|${mo}|${en}`) || []).map((p) => p.job))];
+          states.push(`${en} n/a (${pj.length ? `claimed by ${pj.map(jobTag).join(', ')}` : 'UNPROVEN'})`);
           if (dv) findings.push(`${name} x ${mo} @ ${en}: not applicable (${n.reason}) but driven by ${where(dv)}; a registered tool is not n/a`);
           if (e) findings.push(`${name} x ${mo} @ ${en}: not applicable (${n.reason}) and exempted (${e.date}, until ${e.until}); remove the exemption`);
         } else if (dv) {
           nDriven++;
           if (dv.every((x) => placedJobs.has(x.job))) nPlaced++;
-          states.push(`${en} DRIVEN (${[...new Set(dv.map((x) => x.job))].join(', ')})`);
+          states.push(`${en} CLAIMED (${[...new Set(dv.map((x) => x.job))].map(jobTag).join(', ')})`);
+          if (pinned.has(name)) nPinned++;
           if (e) findings.push(`${name} x ${mo} @ ${en}: exempted (${e.date}, until ${e.until}) but driven by ${where(dv)}; narrow the exemption`);
         } else if (e) {
           nExempt++;
@@ -1372,12 +1389,15 @@ function scanCoverage({ carve, what, sources, exemptions, notApplicable = [], to
     else for (const r of rows) matrix.push(`${name} x ${r.mode}: ${r.states.join('; ')}`);
   }
   const files = new Set(d.drivers.map((x) => x.file)).size;
+  const claimedOf = [...(placedJobs.size ? [`${nPlaced} of them only by ${[...placedJobs].join(', ')}, placed: not yet run`] : []),
+    ...(pinned.size ? [`${nPinned} hold a pinned divergence: ${[...pinned.keys()].join(', ')}`] : [])];
   return { findings, examined: cells, tools, drivers: d, declared, driven, foreign, matrix, jobs: jb.valid, notRegistered,
-    counts: { driven: nDriven, exempted: nExempt, notApplicable: nNa, neither: nNone, ...(placedJobs.size ? { placed: nPlaced } : {}) },
+    counts: { driven: nDriven, exempted: nExempt, notApplicable: nNa, neither: nNone, ...(placedJobs.size ? { placed: nPlaced } : {}),
+      ...(pinned.size ? { pinned: nPinned } : {}) },
     note: `${what}: ${reg.note}; ${md.note}; ${cells} cell(s) over ${engines.join(', ')} (${others.length} other published `
-      + `engine(s) exempted as one): ${nDriven} driven${placedJobs.size ? ` (${nDriven - nPlaced} observed + ${nPlaced} placed (not yet run): `
-        + `${[...placedJobs].join(', ')})` : ''}, ${nExempt} exempted, ${nNa} not applicable, ${nNone} neither; ${jb.valid.length} CI job(s) `
-      + `report cells; ${d.drivers.length} driver(s) in ${files} file(s), ${d.scanned + d.skipped} file(s) scanned, `
+      + `engine(s) exempted as one): ${nDriven} claimed by a CI job${claimedOf.length ? ` (${claimedOf.join('; ')})` : ''}, ${nExempt} exempted, ${nNa} not applicable, ${nNone} neither; ${jb.valid.length} CI job(s) `
+      + `report cells (CLAIMED is this static scan's word: only cells-ran-in-ci-job, gathered by gates-ran-in-ci on a green CI `
+      + `run, shows a cell ran); ${d.drivers.length} driver(s) in ${files} file(s), ${d.scanned + d.skipped} file(s) scanned, `
       + `${d.skipped} of them skipped by name` };
 }
 
@@ -1556,6 +1576,12 @@ const LOCAL_DRIVEN = ['print', 'interactive', 'unlisted', 'permission:acceptEdit
 // netbsd-arm64-cells.
 const SEARCH_DRIVEN = ['print', 'permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions',
   'permission:dontAsk', 'permission:plan'].flatMap((mo) => [`${mo}@linux-x64-musl`, `${mo}@darwin-arm64`, `${mo}@netbsd-arm64`]);
+// THE PINNED DIVERGENCES (final-review M1): tools whose claimed cells hold quaude to a NAMED difference from native's
+// answer, each in a driver file that names it. Counted apart in the verdict.
+const PINNED_DIVERGENCES = [
+  { tool: 'ListAgents', file: 'test/fidelity/tools-local.test.cjs', why: 'no UDS messaging server under quaude: '
+    + 'net.createServer is the shim\'s named throwing stub, so "No reachable agents." without native\'s self-address line' },
+];
 // THE NOT-APPLICABLE CELLS (ruling E10): a tool x mode where the tool is not registered, proven in a CELL_JOBS job by
 // an assertNotRegistered control (see NOT APPLICABLE at the top). No deadline: the job's run is the evidence.
 // MEASURED on native 2.1.283 darwin-arm64 and a built quaude (2026-11-20): with no --allowedTools, each Task list call
@@ -1738,7 +1764,7 @@ let INPUTS = null;
 function readInputs() {
   if (!INPUTS) {
     const c = readCarve();
-    INPUTS = 'skip' in c ? c : { carve: c.text, what: c.what, sources: readSources(), exemptions: EXEMPTIONS, notApplicable: NOT_APPLICABLE,
+    INPUTS = 'skip' in c ? c : { carve: c.text, what: c.what, sources: readSources(), exemptions: EXEMPTIONS, notApplicable: NOT_APPLICABLE, divergences: PINNED_DIVERGENCES,
       today: new Date().toISOString().slice(0, 10), workflow: readWorkflow(), jobs: CELL_JOBS, engines: SHIPPING_ENGINES,
       published: readPublished(), enginesExemption: OTHER_ENGINES_EXEMPTION };
   }
@@ -2216,15 +2242,28 @@ test('the escapes: Bash x sandbox:on with only a print driver, and Grep with no 
   assert.match(g.findings.join('\n'), /^Grep x print @ darwin-arm64: exempted .* but driven by fixture-job/m);
 });
 
-test('a job not yet run (`placed`) drives its cells, and the verdict counts them as placed, not observed', () => {
+test('a job not yet run (`placed`) claims its cells, and the verdict counts them as placed (C1), with the pinned divergences apart (M1)', () => {
   const r = scanCoverage(fixtureInputs({ jobs: [{ ...FX_JOBS[0], placed: 'first run pending (fixture)' }] }));
   assert.deepStrictEqual(r.findings, []);
   assert.strictEqual(r.counts.driven, 6);
   assert.strictEqual(r.counts.placed, 6);
-  assert.match(r.note, / 6 driven \(0 observed \+ 6 placed \(not yet run\): fixture-job\), /);
+  assert.match(r.note, / 6 claimed by a CI job \(6 of them only by fixture-job, placed: not yet run\), /);
+  assert.match(r.note, /CLAIMED is this static scan's word: only cells-ran-in-ci-job, gathered by gates-ran-in-ci on a green CI run, shows a cell ran/);
+  assert.ok(r.matrix.some((l) => / CLAIMED \(fixture-job, placed: not yet run\)/.test(l)), r.matrix.join('\n'));
+  assert.ok(!/\bobserved\b|\bdriven\b/.test(r.note.split(': ').slice(1).join(': ').replace(/\d+ driver\(s\)/, '')), r.note);
+  const pin = scanCoverage(fixtureInputs({ divergences: [{ tool: 'Read', file: 'test/synthetic/drivers.test.cjs', why: 'x' }] }));
+  assert.match(pin.findings.join('\n'), /pinned divergence Read: test\/synthetic\/drivers\.test\.cjs does not name it/);
+  const named = DRIVER_SOURCES.map((x) => (x.file === 'test/synthetic/drivers.test.cjs' ? { ...x, text: `${x.text}\n// NAMED DIVERGENCE: Read` } : x));
+  const pinOk = scanCoverage(fixtureInputs({ sources: named, divergences: [{ tool: 'Read', file: 'test/synthetic/drivers.test.cjs', why: 'x' }] }));
+  assert.deepStrictEqual(pinOk.findings, []);
+  assert.strictEqual(pinOk.counts.pinned, 1);
+  assert.match(pinOk.note, / 6 claimed by a CI job \(1 hold a pinned divergence: Read\), /);
+  const both = scanCoverage(fixtureInputs({ sources: named, jobs: [{ ...FX_JOBS[0], placed: 'pending' }],
+    divergences: [{ tool: 'Read', file: 'test/synthetic/drivers.test.cjs', why: 'x' }] }));
+  assert.match(both.note, / 6 claimed by a CI job \(6 of them only by fixture-job, placed: not yet run; 1 hold a pinned divergence: Read\), /);
   const seen = scanCoverage(fixtureInputs());
   assert.strictEqual(seen.counts.placed, undefined);
-  assert.match(seen.note, / 6 driven, /);
+  assert.match(seen.note, / 6 claimed by a CI job, /);
   const bad = scanCoverage(fixtureInputs({ jobs: [{ ...FX_JOBS[0], placed: '' }] }));
   assert.match(bad.findings[0], /drives no cell: its `placed` is not a one-line reason it has not run yet/);
 });
@@ -2339,17 +2378,30 @@ const NA_SOURCE = { file: 'test/synthetic/not-registered.test.cjs', text: lines(
   '});',
 ) };
 const NA_READ = { tool: 'Read', modes: ['unlisted'], reason: 'not registered when unlisted (fixture)', date: '2026-11-20' };
-const naInputs = (over = {}) => {
+// A not-applicable proof counts only on the engine of the job that runs it (I2): one job per other shipping engine
+// runs the proving file, as netbsd-arm64-cells runs tools-local's.
+const NA_OTHER = SHIPPING_ENGINES.filter((e) => e !== FX_ENGINE);
+const naJob = (en) => ({ job: `na-${en}`, engine: en, files: [NA_SOURCE.file] });
+const naJobBlock = (en) => lines(
+  `  na-${en}:`, '    runs-on: ubuntu-latest', '    steps:', '      - uses: actions/download-artifact@v8.0.1', '        with:',
+  `          name: tjs-${en}`,
+  `      - run: node --test --test-reporter=./test/cell-reporter.mjs --test-reporter-destination=x.jsonl ${NA_SOURCE.file}`,
+  `      - run: CLODE_CELL_JOB=na-${en} node --test test/build-gates/tool-coverage-gates.test.cjs`);
+const naInputs = (over = {}, others = NA_OTHER) => {
   const files = [...FX_JOBS[0].files, NA_SOURCE.file];
-  return fixtureInputs({ sources: [...DRIVER_SOURCES, ...NEAR_MISS_SOURCES, NA_SOURCE], jobs: [{ ...FX_JOBS[0], files }],
-    workflow: fxWorkflow({ files: files.join(' ') }), notApplicable: [NA_READ],
+  return fixtureInputs({ sources: [...DRIVER_SOURCES, ...NEAR_MISS_SOURCES, NA_SOURCE], jobs: [{ ...FX_JOBS[0], files }, ...others.map(naJob)],
+    workflow: [fxWorkflow({ files: files.join(' ') }), ...others.map(naJobBlock)].join('\n'), notApplicable: [NA_READ],
     exemptions: FIXTURE_EXEMPTIONS.filter((e) => !(e.tool === 'Read' && e.modes && e.modes[0] === 'unlisted')), ...over });
 };
 test('not applicable: a tool x mode proven not registered is counted apart, neither driven nor exempted', () => {
   const r = scanCoverage(naInputs());
   assert.deepStrictEqual(r.findings, []);
   assert.deepStrictEqual(r.counts, { driven: 6, exempted: MINI_CELLS - 6 - 3, notApplicable: 3, neither: 0 });
-  assert.ok(r.matrix.includes(`Read x unlisted: ${SHIPPING_ENGINES.map((e) => `${e} n/a (proven in ${FX_JOB})`).join('; ')}`), r.matrix.join('\n'));
+  assert.ok(r.matrix.includes(`Read x unlisted: ${SHIPPING_ENGINES.map((e) => `${e} n/a (claimed by ${e === FX_ENGINE ? FX_JOB : `na-${e}`})`).join('; ')}`), r.matrix.join('\n'));
+  // PLANTED (I2): proven only by the linux-x64-musl job, the other engines' cells are unproven, by name
+  const one = scanCoverage(naInputs({}, []));
+  assert.match(one.findings.join('\n'), /^Read x unlisted: declared not applicable .*, but no CI job \(CELL_JOBS\) runs an assertNotRegistered control that proves it on darwin-arm64, netbsd-arm64;/m);
+  assert.ok(one.matrix.includes(`Read x unlisted: ${SHIPPING_ENGINES.map((e) => `${e} n/a (${e === FX_ENGINE ? `claimed by ${FX_JOB}` : 'UNPROVEN'})`).join('; ')}`), one.matrix.join('\n'));
   assert.match(r.note, / 3 not applicable, /);
   assert.ok(!r.driven.has(`Read|unlisted|${FX_ENGINE}`), 'a not-registered control drives nothing');
   const d = findDrivers([NA_SOURCE]);
