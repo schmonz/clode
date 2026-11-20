@@ -8,7 +8,7 @@ Concrete clode-under-Node divergences from native Claude Code, to triage and fix
 That page is GENERATED from `scripts/build-graph.cjs` — the one declaration of the build — so it
 cannot drift from it; it is also where the honest answer to "does this need node?" lives.
 
-## The forced-win32 pass once said test/procfs-linux-only.test.cjs "reported NO tests" (2026-11-20, seen once)
+## test/procfs-linux-only.test.cjs sometimes kills node with SIGSEGV (2026-11-20, seen twice)
 
 One full suite on this box (darwin-arm64, during the every-tool plan's Task 3 fix round 2, with the temp-root
 ratchet's code in the tree) ended RC=1 on the forced-win32 pass alone: `run: forced-win32:
@@ -20,7 +20,16 @@ was kept outside the repo, in the session scratchpad, as tools/t3-fix2-suite.log
 pass's TAP (run.mjs unlinks winTap) and rerun the file with `node test/forced-win32.cjs --run
 test/procfs-linux-only.test.cjs`.
 
-Unmeasured. The cause: the TAP that would show it was deleted, and it has not recurred (one in about six full suites that day).
+It came back the same day, in the MAIN pass this time, and the runner kept the cause: `not ok 301 -
+test/procfs-linux-only.test.cjs`, `signal: 'SIGSEGV'`, `exitCode: ~` after 377 ms (the full suite on 61d7dae, kept
+in the session scratchpad as tools/t4-suite.log). So node itself (host node 24.21.0, darwin-arm64) segfaults running
+this file, not a test failing; the forced-win32 "reported NO tests" was most likely the same crash. The file runs its
+guards in node:vm contexts. 30 runs of the file alone right after were all green: it shows only under a full suite's
+load (two in about eight full suites).
+
+Unmeasured: where node crashes. Next: run the file in a loop under load (or the full suite) with
+`--report-on-signal`/`ulimit -c unlimited` and read the native stack; check whether a vm context or a stand-in
+__tjs_fs_sync is on it.
 
 ## The shipped macOS arm64 floor is 14.0, not the 11.0 it is labelled (2026-11-20)
 
