@@ -30,7 +30,7 @@ const path = require('node:path');
 const { driveTool } = require('../tool-driver.cjs');
 const { builtQuaude } = require('../built-binary.cjs');
 const { rgOracle, rgOracleSkip } = require('../provider-resolve.cjs');
-const { toolResult, toolResultText, assertFailsOnMissingOutput } = require('../../scripts/lib/tool-result.cjs');
+const { toolResult, toolResultText, assertFailsOnMissingOutput, answeredLog } = require('../../scripts/lib/tool-result.cjs');
 
 // The tree, laid fresh before each side's turn. <B> is a temp dir both sides share, so the absolute paths the tool_use
 // inputs must name are the same for both.
@@ -167,7 +167,8 @@ test('native answers this script as NATIVE records', { skip: SKIP }, async (t) =
 // MEASURED on native 2.1.283 darwin-arm64 (2026-11-19) and a quaude built from this tree, the same on every call. Task
 // ids count from 1 per session; a background task's id is random, and its output lands under CLAUDE_CODE_TMPDIR,
 // which driveTool points into each side's sandbox, so those two calls are judged by shape: the id, and the path
-// <tmp>/claude-<uid>/<cwd slug>/<session uuid>/tasks/<id>.output.
+// <tmp>/claude-<uid>/<cwd slug>/<session uuid>/tasks/<id>.output. And the background process must really be gone
+// after TaskStop (sleepSurvivors).
 const T_CREATE_1 = { name: 'TaskCreate', input: { subject: 'Write the parser', description: 'Parse the input file', activeForm: 'Writing the parser' }, id: 'toolu_tk_create_1' };
 const T_CREATE_2 = { name: 'TaskCreate', input: { subject: 'Test the parser', description: 'Cover every branch' }, id: 'toolu_tk_create_2' };
 const T_LIST_1 = { name: 'TaskList', input: {}, id: 'toolu_tk_list_1' };
@@ -178,7 +179,7 @@ const T_GET_2 = { name: 'TaskGet', input: { taskId: '2' }, id: 'toolu_tk_get_2' 
 const T_GET_NONE = { name: 'TaskGet', input: { taskId: '99' }, id: 'toolu_tk_get_none' };
 const T_DONE_1 = { name: 'TaskUpdate', input: { taskId: '1', status: 'completed' }, id: 'toolu_tk_done_1' };
 const T_LIST_2 = { name: 'TaskList', input: {}, id: 'toolu_tk_list_2' };
-const T_BG = { name: 'Bash', input: { command: 'sleep 30', description: 'wait', run_in_background: true }, id: 'toolu_tk_bg' };
+const T_BG = { name: 'Bash', input: { command: 'sleep 37.5', description: 'wait', run_in_background: true }, id: 'toolu_tk_bg' };
 const T_STOP = { name: 'TaskStop', input: { task_id: '<the background id>' }, id: 'toolu_tk_stop' };
 const T_STOP_AGAIN = { name: 'TaskStop', input: { task_id: '<the background id>' }, id: 'toolu_tk_stop_again' };
 const T_KILL_NONE = { name: 'KillShell', input: { shell_id: 'no-such-task' }, id: 'toolu_tk_kill_none' };
@@ -201,12 +202,16 @@ const TASK_NATIVE = {
   toolu_tk_get_none: { text: 'Task not found', isError: false },
   toolu_tk_done_1: { text: 'Updated task #1 status', isError: false },
   toolu_tk_list_2: { text: '#1 [completed] Write the parser\n#2 [pending] Test the parser', isError: false },
-  toolu_tk_stop: { text: '{"message":"Successfully stopped task: <ID> (sleep 30)","task_id":"<ID>","task_type":"local_bash","command":"sleep 30"}', isError: false },
+  toolu_tk_stop: { text: '{"message":"Successfully stopped task: <ID> (sleep 37.5)","task_id":"<ID>","task_type":"local_bash","command":"sleep 37.5"}', isError: false },
   toolu_tk_stop_again: { text: '<tool_use_error>No task found with ID: <ID></tool_use_error>', isError: true },
   toolu_tk_kill_none: { text: '<tool_use_error>No task found with ID: no-such-task</tool_use_error>', isError: true },
 };
-// The side being judged: its CLAUDE_CODE_TMPDIR (set before any check runs).
-let taskTmp = '/nonexistent-task-tmp';
+// What the background call really answers (its shape, as measured), for the TaskStop controls' context: with it in
+// the log, a TaskStop check can only fail because TaskStop's own output is missing.
+const BG_ANSWER = 'Command running in background with ID: bctxsample. Output is being written to: '
+  + '/t/claude-501/-t-work/00000000-0000-0000-0000-000000000000/tasks/bctxsample.output. You will be notified when it '
+  + 'completes. To check interim output, use Read on that file path.';
+const BG_CONTEXT = [{ use: T_BG, content: BG_ANSWER }];
 const escRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const taskWant = (USE, m) => { const w = TASK_NATIVE[USE.id]; const id = bgIdOf(m); return w && id && { text: w.text.split('<ID>').join(id), isError: w.isError }; };
 const taskSame = (r, USE, m) => {
@@ -223,12 +228,15 @@ const tGet2 = (m) => taskSame(toolResult(m, T_GET_2.id), T_GET_2, m);
 const tGetNone = (m) => taskSame(toolResult(m, T_GET_NONE.id), T_GET_NONE, m);
 const tDone1 = (m) => taskSame(toolResult(m, T_DONE_1.id), T_DONE_1, m);
 const tList2 = (m) => taskSame(toolResult(m, T_LIST_2.id), T_LIST_2, m);
-// The background call, by shape: native's sentence around this side's own sandboxed output path.
+// The background call, by shape: native's sentence around this side's own sandboxed output path (raw.tmp, which
+// driveTool puts beside every log it returns; a synthetic control log has none, so there the path may be any, and the
+// check fails there for the reason the control means: the call's answer is missing).
 const tBg = (m) => {
   const r = toolResult(m, T_BG.id);
   const id = bgIdOf(m);
   if (!r || r.isError || !id) return false;
-  const shape = new RegExp(`^Command running in background with ID: ${id}\\. Output is being written to: ${escRe(taskTmp)}/claude-\\d+/[^/]+/[0-9a-f-]{36}/tasks/${id}\\.output\\. You will be notified when it completes\\. To check interim output, use Read on that file path\\.$`);
+  const tmp = typeof m.tmp === 'string' ? escRe(m.tmp) : '/.+';
+  const shape = new RegExp(`^Command running in background with ID: ${id}\\. Output is being written to: ${tmp}/claude-\\d+/[^/]+/[0-9a-f-]{36}/tasks/${id}\\.output\\. You will be notified when it completes\\. To check interim output, use Read on that file path\\.$`);
   return shape.test(r.text);
 };
 const tStop = (m) => taskSame(toolResult(m, T_STOP.id), T_STOP, m);
@@ -250,19 +258,38 @@ function taskControls() {
   assertFailsOnMissingOutput(tDone1, T_DONE_1);
   assertFailsOnMissingOutput(tList2, T_LIST_2);
   assertFailsOnMissingOutput(tBg, T_BG);
-  assertFailsOnMissingOutput(tStop, T_STOP);
-  assertFailsOnMissingOutput(tStopAgain, T_STOP_AGAIN);
+  // TaskStop's checks also read the background call's answer: their controls carry it (BG_CONTEXT), and each is shown
+  // to pass when its own answer is there, so the control's failures are about TaskStop's output alone
+  assertFailsOnMissingOutput(tStop, T_STOP, 'print', BG_CONTEXT);
+  assertFailsOnMissingOutput(tStopAgain, T_STOP_AGAIN, 'print', BG_CONTEXT);
+  assert.ok(tStop(answeredLog(T_STOP, TASK_NATIVE[T_STOP.id].text.split('<ID>').join('bctxsample'), BG_CONTEXT)),
+    'the TaskStop check passes on its own answer with the context');
+  assert.ok(tStopAgain(answeredLog(T_STOP_AGAIN, TASK_NATIVE[T_STOP_AGAIN.id].text.split('<ID>').join('bctxsample'), BG_CONTEXT, true)),
+    'the second TaskStop check passes on its own answer with the context');
   assertFailsOnMissingOutput(tKillNone, T_KILL_NONE);
 }
 
 function taskFindings(label, side) {
   const out = [];
   if (side.status !== 0) out.push(`${label}: the turn exited ${side.status}${side.signal ? ` (${side.signal})` : ''}: ${side.stderr.slice(0, 800)}`);
-  taskTmp = side.tmp;
   for (const [USE, same] of taskVerdicts(side.raw)) {
     if (!same) out.push(`${label}: ${USE.id} ${USE.name} sent ${JSON.stringify(side.sent[USE.id])}\n    got: ${JSON.stringify(toolResult(side.raw, USE.id))}`);
   }
   return out;
+}
+
+// TaskStop's answer says the task stopped; this checks the process did: no `sleep 37.5` is left on the box (polled for
+// a few seconds, as a kill lands asynchronously). Survivors are listed and then killed, so a failure here does not
+// leak into the next test. -> a finding, or null.
+async function sleepSurvivors(label) {
+  const { execFileSync } = require('node:child_process');
+  const live = () => execFileSync('ps', ['-axo', 'pid=,command='], { encoding: 'utf8' }).split('\n')
+    .map((l) => /^\s*(\d+)\s+(.*)$/.exec(l)).filter((x) => x && x[2].trim() === T_BG.input.command).map((x) => Number(x[1]));
+  let pids = live();
+  for (let i = 0; pids.length && i < 30; i++) { await new Promise((r) => setTimeout(r, 100)); pids = live(); }
+  if (!pids.length) return null;
+  for (const pid of pids) { try { process.kill(pid, 'SIGKILL'); } catch { /* gone */ } }
+  return `${label}: TaskStop answered "stopped" but \`${T_BG.input.command}\` survived (pid ${pids.join(', ')})`;
 }
 
 test('TaskCreate, TaskGet, TaskUpdate, TaskList and TaskStop in a built quaude: every tool_result equals native\'s', { skip: SKIP }, async (t) => {
@@ -272,6 +299,8 @@ test('TaskCreate, TaskGet, TaskUpdate, TaskList and TaskStop in a built quaude: 
   const r = await driveTool({ script: TASK_SCRIPT, quaude: q.path,
     nativeSkip: 'native is judged against the same recorded answers by the next test' });
   const got = taskFindings('quaude', r.quaude);
+  const survived = await sleepSurvivors('quaude');
+  if (survived) got.push(survived);
   assert.deepStrictEqual(got, [], `${got.length} finding(s) against native's answers:\n${got.join('\n')}`);
 });
 
@@ -281,6 +310,8 @@ test('native answers the task script as TASK_NATIVE records', { skip: SKIP }, as
   taskControls();
   const r = await driveTool({ script: TASK_SCRIPT, native, quaudeSkip: 'quaude is judged by the test above' });
   const got = taskFindings('native', r.native);
+  const survived = await sleepSurvivors('native');
+  if (survived) got.push(survived);
   if (got.length) t.diagnostic(`measured:\n${JSON.stringify(r.native.results, null, 1)}`);
   assert.deepStrictEqual(got, [], `native moved:\n${got.join('\n')}`);
 });
