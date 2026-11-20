@@ -1894,7 +1894,7 @@ jobs:
             # (each ~125 s under HVF) in three lanes, everything else in the fourth.
             lane() {
               n=$1; shift
-              node --test --test-concurrency=1 --test-reporter=spec --test-reporter-destination="$M/lane-$n.log" \
+              node --require ./test/file-watchdog-preload.cjs --test --test-concurrency=1 --test-reporter=spec --test-reporter-destination="$M/lane-$n.log" \
                 --test-reporter=./test/cell-reporter.mjs --test-reporter-destination="$M/gates-ran/cells/$n.jsonl" "$@" \
                 || echo "lane $n: a test failed" >> "$M/lanes.failed"
               echo "lane $n done after $(el)"
@@ -1906,7 +1906,7 @@ jobs:
             wait
             for f in "$M"/lane-*.log; do echo "==== $f"; cat "$f"; done
             # THE CELLS this job drives (CELL_JOBS), checked HERE: the check reads the host it runs on (netbsd-arm64)
-            CLODE_CELL_JOB=netbsd-arm64-cells CLODE_CELL_RAN="$M/gates-ran/cells" node --test \
+            CLODE_CELL_JOB=netbsd-arm64-cells CLODE_CELL_RAN="$M/gates-ran/cells" node --require ./test/file-watchdog-preload.cjs --test \
               --test-reporter=spec --test-reporter-destination=stdout \
               --test-reporter=./test/cell-reporter.mjs --test-reporter-destination="$M/gates-ran/gates/cells-check.jsonl" \
               --test-name-pattern=cells-ran-in-ci-job test/build-gates/tool-coverage-gates.test.cjs
