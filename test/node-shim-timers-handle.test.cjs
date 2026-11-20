@@ -193,3 +193,101 @@ test('timers: ref() after unref() restores __shimTimerLiveCount() (RECIPE G6)', 
   assert.deepStrictEqual(JSON.parse(r.stdout.trim()), { afterUnref: 0, afterRef: 1 },
     `expected count 0 after unref()ing both, back to 1 after ref()ing one; stdout=${r.stdout}`);
 });
+
+// TIMER-UNREF-STILL-FIRES. An unref'd timer does not keep the process alive, but
+// while something ELSE does, node still fires it. The shim used to STOP the real
+// timer on unref() (the engine gave it no per-timer uv_unref), so it never fired
+// at all. The tests above could not see that: each one either has nothing else
+// keeping the loop alive, or re-refs the timer. That divergence held a TUI turn's
+// answer unpainted until the next keystroke (NetBSD tui-probe D1, 7 of 8 runs):
+// the bundle's nonblocking stdout writer retries an EAGAIN from an unref'd timer.
+// Fixed through the engine's __tjs_timer_setref (txiki-timer-ref-global.patch).
+test('timers: an unref()d timer still fires while other work keeps the loop alive (matches node)', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const body = `
+    const out = [];
+    const u = setTimeout(() => { out.push('unref-timeout'); }, 30);
+    u.unref();
+    let n = 0;
+    const iv = setInterval(() => { if (++n === 2) { out.push('unref-interval'); clearInterval(iv); } }, 20);
+    iv.unref();
+    const r = setTimeout(() => {}, 60000);
+    r.unref();
+    r.refresh(); // still unref'd after a refresh, as in node: it must not pin the exit below
+    setTimeout(() => { console.log(JSON.stringify(out.sort())); }, 400); // the ref'd work
+  `;
+  const f = prog(body);
+  const node = require('node:child_process').execFileSync(process.execPath, [f], { encoding: 'utf8', timeout: 5000 }).trim();
+  assert.strictEqual(node, '["unref-interval","unref-timeout"]'); // the reference: both fire, and nothing pins exit
+  const r = runLoader(f, [], { timeout: 8000 });
+  assert.strictEqual(r.status, 0, `status=${r.status} stderr=${r.stderr}`);
+  assert.strictEqual(r.stdout.trim(), node);
+});
+
+// The bundle's shape, end to end (2.1.283's chunk-14ycq111, the TUI's nonblocking
+// stdout): writeSync to an O_NONBLOCK descriptor, a write that meets EAGAIN queued,
+// and the queue drained ONLY by `setTimeout(retry, ms).unref()`. A FIFO stands in
+// for the terminal: its reader starts late, so the first writes fill it. The reader
+// must get every byte while the writer is still alive (its ref'd keepalive is the
+// TUI's stdin). Before the fix the retry never ran and the tail never arrived.
+test('timers: a nonblocking writer\'s unref()d EAGAIN retry drains its queue while the loop is alive (matches node)', async (t) => {
+  if (skipUnlessTjs(t)) return;
+  if (process.platform === 'win32') { t.skip('no mkfifo(1) on Windows; the unref test above covers the timer itself there'); return; }
+  const { spawn, spawnSync } = require('node:child_process');
+  const { engineSpawn, LOADER } = require('./node-shim-helper.cjs');
+  const writer = prog(`
+    const fs = require('fs');
+    const fd = fs.openSync(process.argv[2], fs.constants.O_WRONLY | fs.constants.O_NONBLOCK);
+    const queue = [Buffer.concat([Buffer.alloc(1 << 20, 0x61), Buffer.from('END\\n')])];
+    const write = (b) => { try { return fs.writeSync(fd, b); } catch (e) { if (e.code === 'EAGAIN') return 0; throw e; } };
+    let retries = 0;
+    function drain() {
+      while (queue.length) {
+        const b = queue[0];
+        const n = write(b);
+        if (n === 0) { retries++; setTimeout(drain, 5).unref(); return; }
+        if (n < b.length) queue[0] = b.subarray(n); else queue.shift();
+      }
+      process.stderr.write('drained after ' + retries + ' retries\\n');
+    }
+    drain();
+    setTimeout(() => {}, 5000); // the TUI's stdin: other work keeping the loop alive
+  `);
+  const runOne = (cmd, argv) => new Promise((resolve) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-fifo-'));
+    const fifo = path.join(dir, 'tty');
+    const mk = spawnSync('mkfifo', [fifo]);
+    assert.strictEqual(mk.status, 0, `mkfifo: ${mk.stderr}`);
+    const rfd = fs.openSync(fifo, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK); // the writer's open needs a reader
+    const child = spawn(cmd, [...argv, fifo], { stdio: ['ignore', 'ignore', 'pipe'] });
+    let stderr = '';
+    child.stderr.on('data', (d) => { stderr += d; });
+    let got = 0, tail = '', endAt = null, exited = false;
+    const buf = Buffer.alloc(65536);
+    const t0 = Date.now();
+    const closed = new Promise((ok) => child.on('close', () => { exited = true; ok(); }));
+    const poll = setInterval(() => {
+      if (Date.now() - t0 < 300) return; // the late reader: the writer has already met EAGAIN
+      for (;;) {
+        let n;
+        try { n = fs.readSync(rfd, buf, 0, buf.length, null); } catch (e) { if (e.code === 'EAGAIN') break; throw e; }
+        if (n === 0) break;
+        got += n;
+        tail = (tail + buf.toString('latin1', 0, n)).slice(-8);
+        if (endAt === null && tail.endsWith('END\n')) endAt = { ms: Date.now() - t0, writerAlive: !exited };
+      }
+      if (exited || endAt) {
+        clearInterval(poll);
+        child.kill(); // a writer that drained has nothing left to do but wait out its keepalive
+        closed.then(() => { fs.closeSync(rfd); fs.rmSync(dir, { recursive: true, force: true }); resolve({ got, endAt, stderr }); });
+      }
+    }, 20);
+  });
+  const node = await runOne(process.execPath, [writer]);
+  assert.ok(node.endAt && node.endAt.writerAlive, `reference: node must drain while alive; got ${JSON.stringify(node)}`);
+  const [cmd, argv] = engineSpawn(['run', LOADER, writer]);
+  const shim = await runOne(cmd, argv);
+  assert.ok(shim.endAt && shim.endAt.writerAlive,
+    `every byte (${(1 << 20) + 4}) should reach the reader while the writer is alive, as under node; got ${JSON.stringify(shim)}`);
+  assert.strictEqual(shim.got, node.got);
+});

@@ -709,31 +709,43 @@ globalThis.__shimUncaught = __shimUncaught;
 // node exits immediately after `setTimeout(fn, 600000).unref()` with nothing
 // else pending; the old shim hung to any timeout.
 //
-// FIX: since there is no native per-timer unref, the only way JS can make an
-// unref'd timer stop blocking the loop is to make it GENUINELY not exist as
-// far as the real loop is concerned — clear the real underlying timer via the
-// same clearTimeout/clearInterval primitive a caller could call directly, and
-// re-arm it (full original delay; elapsed time is not tracked, the same
-// imprecision refresh() below already accepts) if ref() is called again
-// before it would have fired. DIVERGENCE this still leaves, deliberately
-// bounded and one-directional (matches this file's established "stopping
-// early is always safe, pinning forever is the only unsafe direction"
-// philosophy — see the liveTimerCount comment below): a genuinely-unref'd
-// timer whose delay elapses while the process happens to stay alive for OTHER
-// real reasons would, in real Node, still fire; under this shim it will not,
-// because the underlying timer was actually removed rather than merely
-// hidden from a liveness check that does not otherwise exist. That trades a
-// theoretical missed callback in a process that was going to keep running
-// anyway for the actual bug being fixed: an unref'd timer must never be the
-// reason a process that should exit does not.
+// FIX (TIMER-UNREF-STILL-FIRES, 2026-11-20): unref() and ref() call the
+// engine's real per-timer uv_unref/uv_ref, __tjs_timer_setref(id, ref)
+// (spike/quickjs/patches/txiki-timer-ref-global.patch). An unref'd timer then
+// stops pinning the loop AND still fires while something else keeps the loop
+// alive, which is node's contract.
+//
+// What this replaced, and why it mattered. With no engine hook, unref() STOPPED
+// the real timer (and ref() re-armed it at its full delay). That fixed G6, but
+// left a divergence this comment once called "a theoretical missed callback":
+// an unref'd timer never fired, even in a process that stayed alive. It was not
+// theoretical. The bundle's nonblocking stdout writer (the TUI, chunk-14ycq111)
+// retries a write that met EAGAIN from `setTimeout(retry, ms).unref()`, and
+// queues every later write behind it; with the retry gone, a turn's answer sat
+// in that queue until the next keystroke (NetBSD tui-probe D1: 7 of 8 runs).
+//
+// An engine without __tjs_timer_setref (one built before that patch) keeps the
+// old stop-and-re-arm route, and says so through CLODE_ENGINE_FLOOR_LOG
+// (internal/engine-floor-log.cjs); scripts/engine-api-floor.cjs refuses such an
+// engine as a quaude runtime.
 // hasRef() reflects the last ref/unref call. refresh() re-arms by clearing
 // the old timer and re-scheduling the same fn+delay, returning the same
-// handle (identity preserved), matching Node's observable contract.
+// handle (identity preserved), matching Node's observable contract; an
+// unref'd handle stays unref'd across it.
 {
   const _st = globalThis.setTimeout, _ct = globalThis.clearTimeout;
   const _si = globalThis.setInterval, _ci = globalThis.clearInterval;
   const TRACE = !!globalThis.process?.env?.CLODE_SHIM_TRACE;
   let n = 0;
+  // The engine's per-timer uv_ref/uv_unref (txiki-timer-ref-global.patch), or null on an
+  // engine built before it, which then takes the old stop-and-re-arm route (see above).
+  const _setref = typeof globalThis.__tjs_timer_setref === 'function' ? globalThis.__tjs_timer_setref : null;
+  const noteNoSetref = () => {
+    try {
+      globalThis.__nodeShim.engineFloorLog('node-shim: this engine has no __tjs_timer_setref '
+        + '(txiki-timer-ref-global.patch), so an unref\'d timer is STOPPED and never fires while the loop stays alive');
+    } catch { /* the log is best effort; the route below is the same either way */ }
+  };
 
   // ---- live-timer count: the __tjs_dump_handles() successor -----------------
   // WHY THIS EXISTS: fs.cjs's fs.watchFile poller must stop re-arming itself
@@ -750,9 +762,9 @@ globalThis.__shimUncaught = __shimUncaught;
   // WHY A PLAIN COUNTER OF *TIMERS* IS SOUND (checked against this engine's
   // actual C sources, spike/quickjs/vendor/txiki.js/src/*.c, not assumed): a
   // JS timer is the ONE class of loop-pinning handle this engine exposes with
-  // NO real per-instance unref — tjs_setTimeout/tjs_setInterval (timers.c)
-  // never call uv_unref, which is exactly why ref()/unref() below are
-  // documented no-ops. Every OTHER loop-pinning construct this shim exposes
+  // no unref of its own — tjs_setTimeout/tjs_setInterval (timers.c) arm every
+  // timer ref'd, and only the shim's unref() below (through __tjs_timer_setref)
+  // ever unrefs one. Every OTHER loop-pinning construct this shim exposes
   // already manages its own real uv ref state correctly, with no help needed:
   //   - streams (TCP/pipe/TTY — net.cjs/tty.cjs) and TLS sockets (tls.cjs)
   //     have REAL JS ref()/unref() wired straight to uv_ref/uv_unref
@@ -793,6 +805,7 @@ globalThis.__shimUncaught = __shimUncaught;
     let refed = true;
     let live = true; // does this handle currently count toward liveTimerCount?
     let armed = true; // is the REAL underlying tjs timer currently scheduled?
+    let done = false; // fired (a one-shot) or cleared: nothing left to ref or count
     let id = rawId;
     liveTimerCount++;
     return {
@@ -800,26 +813,29 @@ globalThis.__shimUncaught = __shimUncaught;
       // Called when this handle stops representing outstanding timer work:
       // a one-shot timeout firing, or either clear* function below. Guarded
       // so firing-then-clearing (or clearing twice) can't double-decrement.
-      _uncount() { if (live) { live = false; liveTimerCount--; } },
-      // See the DIVERGENCE note above this IIFE (RECIPE G6): txiki has no
-      // native per-timer uv_ref/uv_unref, so unref() must actually STOP the
-      // real underlying timer (rather than merely flip a JS-side flag) to
-      // genuinely stop pinning the loop; ref() re-arms it if called again
-      // before it would have fired (`rearm`/`live` guard: never resurrects an
-      // already-fired-and-uncounted one-shot timeout — Node's real .ref() on
-      // one of those is a no-op too).
+      _uncount() { done = true; if (live) { live = false; liveTimerCount--; } },
+      // TIMER-UNREF-STILL-FIRES (the note above this IIFE): with the engine's
+      // __tjs_timer_setref, unref()/ref() flip the real uv_timer_t's ref and the
+      // timer stays armed, so an unref'd timer still fires while the loop is
+      // alive. Without it (an engine built before that patch), unref() STOPS the
+      // real timer and ref() re-arms it at its full delay (RECIPE G6's route).
+      // Either way a fired or cleared one-shot is never resurrected or recounted:
+      // node's .ref() on one of those is a no-op too.
       ref() {
         if (!refed) {
           refed = true;
+          if (done) return this;
           if (!live) { live = true; liveTimerCount++; }
-          if (!armed && rearm) { id = rearm(); armed = true; }
+          if (_setref) { if (armed) _setref(id, true); }
+          else if (!armed && rearm) { id = rearm(); armed = true; }
         }
         return this;
       },
       unref() {
         if (refed) {
           refed = false;
-          if (armed && rearm) { stopRaw.call(globalThis, id); armed = false; }
+          if (_setref) { if (armed && !done) _setref(id, false); }
+          else if (armed && rearm && !done) { noteNoSetref(); stopRaw.call(globalThis, id); armed = false; }
           // An unref'd timer explicitly does NOT keep the process alive, so it
           // must stop counting as outstanding work — otherwise fs.watchFile's
           // _otherWorkPending() sees it forever and the pollers re-arm (on REF'd
@@ -831,13 +847,19 @@ globalThis.__shimUncaught = __shimUncaught;
       hasRef() { return refed; },
       refresh() {
         if (rearm) {
-          if (armed) stopRaw.call(globalThis, id);
+          if (armed && !done) stopRaw.call(globalThis, id);
           id = rearm();
           armed = true;
-          // refresh() can re-arm a timeout that already fired (and therefore
-          // already uncounted itself) — recount it, or a resurrected timer
-          // would silently stop contributing to liveTimerCount forever.
-          if (!live) { live = true; liveTimerCount++; }
+          done = false;
+          if (_setref && !refed) {
+            // still unref'd, as node keeps it: armed again, and still not counted
+            _setref(id, false);
+          } else if (!live) {
+            // refresh() can re-arm a timeout that already fired (and therefore
+            // already uncounted itself) — recount it, or a resurrected timer
+            // would silently stop contributing to liveTimerCount forever.
+            live = true; liveTimerCount++;
+          }
         }
         return this;
       },

@@ -503,6 +503,7 @@ const TXIKI_PATCH_ORDER = [
   'txiki-fetch-abort-reason.patch',           // an aborted fetch rejects with the signal's OWN reason (TimeoutError, custom abort reasons) instead of flattening every one to AbortError (fetch.js only; order-independent)
   'txiki-fetch-url-input.patch',               // fetch() accepts a URL object (and a Request), not just a string — .href before .url; MCP-over-HTTP built a URL and died in "Invalid URL" (fetch.js; after fetch-abort-reason, same file)
   'txiki-timer-update-time.patch',            // uv_update_time() before arming, so a timer armed during initial sync execution is not EARLY by however long the script already ran (timers.c; disjoint hunk from timer-unref's, but keep it after)
+  'txiki-timer-ref-global.patch',             // globalThis.__tjs_timer_setref(id, ref): timer-unref's id-keyed uv_ref/uv_unref where the node-shim can reach it, so an unref'd timer still FIRES while the loop is alive (node-shim loader.cjs, TIMER-UNREF-STILL-FIRES). timers.c's init function, beside timer-unref's table: after timer-unref
   'txiki-ws-close-frame.patch',
   'txiki-engine-module-meta.patch',          // PROBE: engine.moduleMeta(mod) — requires/exports/top-level locals, read-only               // ws.close() sends an RFC6455 CLOSE frame (opcode 0x8) instead of just dropping the TCP connection: lws only emits one via close_via_role_protocol, which the old PENDING_TIMEOUT_USER_OK path skipped (ws.c; after ws-root-path, same file)
 ];

@@ -110,6 +110,21 @@ const ENGINE_API_FLOOR = [
       + 'so the gates listed above refuse a build path that reaches it',
   },
   {
+    // Without it node-shim's Timeout#unref STOPS the timer (the old route), so an unref'd timer never fires while
+    // the loop stays alive: the TUI's nonblocking stdout then holds a turn's answer until the next keystroke.
+    name: '__tjs_timer_setref',
+    expr: 'globalThis.__tjs_timer_setref',
+    kind: 'function',
+    from: 'txiki-timer-ref-global.patch',
+    why: 'node-shim Timeout#unref/ref: a real uv_unref, so an unref\'d timer still fires while other work keeps the loop alive (loader.cjs TIMER-UNREF-STILL-FIRES)',
+    buildHost: false,
+    notForBuildHost: 'without it node-shim keeps the old route (unref stops the timer, ref re-arms it), the one every '
+      + 'build host ran on before this patch, and appends each such unref to CLODE_ENGINE_FLOOR_LOG, so the gates '
+      + 'listed above refuse a build path that reaches it. Measured 2026-11-20 (darwin-arm64) on the stand-in with '
+      + 'the binding removed (test/fixtures/stale-engine-prelude.js): source and regen, ./build.sh --plan and '
+      + 'libexec/graph-meta.js log nothing, and the same stand-in logs an unref\'d timer in a three-line program',
+  },
+  {
     name: '__tjs_spawn_sync',
     expr: 'globalThis.__tjs_spawn_sync',
     kind: 'function',
