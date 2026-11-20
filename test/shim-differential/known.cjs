@@ -20,7 +20,7 @@ const CAUSES = [
   { cause: 'DIFF-ASYNC-ERRORS', api: '^fs(/promises)?\\.(readFile|link|utimes|lutimes|statfs)$', id: '\\((<|")', leaf: '^r\\.error\\.(message|errno|syscall|path|dest)$' },
   { cause: 'DIFF-ASYNC-ERRORS', api: '^fs\\.createReadStream$', leaf: '^r\\.end\\.error\\.(message|errno|syscall|path)$' },
   { cause: 'DIFF-SCANDIR', api: '^fs(/promises)?\\.(readdirSync|readdir|opendir)$', leaf: '^r\\.error\\.(message|syscall)$' },
-  { cause: 'DIFF-ENCODINGS', api: '^fs(/promises)?\\.(readlinkSync|readlink|readdir|readFileSync)$', id: '"(buffer|ascii)"', leaf: '^r(\\.\\d+)?(\\.(Buffer|length))?$' },
+  { cause: 'DIFF-ENCODINGS', api: '^fs\\.readFileSync$', id: '"ascii"', leaf: '^r(\\.\\d+)?(\\.(Buffer|length))?$' },
   { cause: 'DIFF-FD-PRIMITIVES', api: '^fs\\.(fchmod|fchmodSync|fsyncSync|ftruncateSync)$', leaf: `(${ERR}|^r\\.undefined$|^after\\.file\\.(mode|size|data)$)` },
   { cause: 'DIFF-READSYNC-RANGE', api: '^fs\\.readSync$', leaf: ERR },
   { cause: 'DIFF-REALPATH-SYSCALL', api: '^fs\\.realpathSync$', leaf: '^r\\.error\\.(message|syscall)$' },

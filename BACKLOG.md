@@ -222,8 +222,8 @@ shapes cut to the driver's argument count.
   callback readFile; a read stream's 'error') carry no errno, syscall or path, and their message lacks node's
   `, read`/`, link 'a' -> 'b'` tail.
 - DIFF-SCANDIR: readdir and opendir errors say syscall `readdir`; node says `scandir` (`opendir` for opendir).
-- DIFF-ENCODINGS: `readlink(p, "buffer")` and `readdir(p, {encoding: "buffer"})` answer strings where node answers
-  Buffers; `readFileSync(p, {encoding: "ascii"})` answers a Buffer where node answers a string.
+- DIFF-ENCODINGS: `readFileSync(p, {encoding: "ascii"})` answers a Buffer where node answers a string. (readlink and
+  readdir with `encoding: "buffer"` answer Buffers since c61f4a9, 2026-11-20.)
 - DIFF-FD-PRIMITIVES: `fs.fchmod` (callback) is absent; `fchmodSync`, `fsyncSync` and `ftruncateSync` on a bad or
   read-only descriptor do not throw node's EBADF/EINVAL (`ftruncateSync` is absent, as the gap map says).
 - DIFF-READSYNC-RANGE: `readSync` with a length past the buffer reads first and fails in the engine; node throws
