@@ -1023,8 +1023,9 @@ const LEGS = [
 //     arm64 guest there): 54 min (release run 44691559850), 19-119 min over 2026-08..11, so TCG runs ~10-18x HVF.
 //   So one serial pass would take 4-7 h, past a hosted job's 6 h. The job runs the drivers in four parallel lanes (the
 //   VM has 4 vCPUs, MTTCG), each a disjoint set of tests by name, and every wait in them is multiplied by
-//   `timeoutScale` (CLODE_TIMEOUT_SCALE, test/tool-driver.cjs). An arm64 runner would not help: cross-platform-actions
-//   ships one x86-64 qemu (resources v2.1.0, measured with file(1)), and GitHub's arm64 runners offer it no KVM.
+//   `timeoutScale` (CLODE_TIMEOUT_SCALE, test/tool-driver.cjs). Not an arm64 runner (ubuntu-24.04-arm), because
+//   cross-platform-actions ships only an x86-64 qemu (resources v2.1.0, checked with file(1)), which an arm64 host
+//   cannot run. Whether GitHub's arm64 runners expose /dev/kvm was NOT measured; it matters only if cpa ships an arm64 qemu.
 //   `timeout` is the hosted maximum until the first run measures this job; then derive it as guestTimeout does.
 export const GUEST_CELL_JOBS = [
   { job: 'netbsd-arm64-cells', leg: 'netbsd-arm64',
