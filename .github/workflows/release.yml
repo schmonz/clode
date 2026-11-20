@@ -185,6 +185,7 @@ jobs:
     permissions:
       id-token: write
       attestations: write
+      actions: read          # list this run's darwin-slices jobs when a slice is missing
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: actions/setup-node@v7.1.0
@@ -200,7 +201,19 @@ jobs:
         run: |
           set -euo pipefail
           S="${{ runner.temp }}/slices"
-          for a in arm64 x64 x86 ppc; do test -f "$S/tjs-darwin-$a/tjs" || { echo "missing slice $a" >&2; exit 1; }; done
+          # A missing slice is DOWNSTREAM of a slice leg that did not succeed. Say which
+          # leg and how it ended, not just "missing slice": release dry run 44653527211
+          # printed "missing slice arm64" for a leg GitHub had CANCELLED because its runner
+          # image (macos-14) was retired — the cause was one click away and unnamed here.
+          missing=''
+          for a in arm64 x64 x86 ppc; do test -f "$S/tjs-darwin-$a/tjs" || missing="$missing $a"; done
+          if [ -n "$missing" ]; then
+            echo "missing slice(s):$missing (artifact tjs-darwin-<slice> absent); darwin-slices result: ${{ needs.darwin-slices.result }}" >&2
+            GH_TOKEN="${{ github.token }}" gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}/jobs?per_page=100" \
+              --jq '.jobs[] | select(.name | startswith("darwin-slices")) | select(.conclusion != "success") | "  \(.name): \(.conclusion // .status) \(.html_url)"' >&2 \
+              || echo "  (could not list the darwin-slices jobs)" >&2
+            exit 1
+          fi
           FAT="${{ runner.temp }}/tjs-darwin-universal"
           lipo -create -output "$FAT" \
             "$S/tjs-darwin-arm64/tjs" "$S/tjs-darwin-x64/tjs" \

@@ -754,7 +754,11 @@ test('version policy: ci rides the newest end, release the oldest floor', () => 
   // ends from the 2026-07-11 catalog sweep. When a catalog moves, the
   // freshness checker (scripts/check-guest-versions.mjs) flags it and these
   // pins move with the manifest.
-  assert.strictEqual(rel('darwin-arm64').os, 'macos-14');       // oldest hosted arm64 = publish floor
+  // Oldest STILL-HOSTED arm64 runner (macos-14 retired for arm64 2026-11-02). The OS
+  // floor itself is now pinned by macos-min, not inherited from the runner.
+  assert.strictEqual(rel('darwin-arm64').os, 'macos-15');
+  assert.strictEqual(rel('darwin-arm64')['macos-min'], '11.0');
+  assert.strictEqual(rel('darwin-arm64').floor, rel('darwin-arm64')['macos-min'], 'the asset floor label must be the pinned deployment target');
   assert.strictEqual(cin('darwin-arm64').os, 'macos-26');       // newest hosted arm64
   // glibc is a CI-only canary (absent from release); ci still rides the newest.
   assert.strictEqual(rel('linux-x64-glibc'), undefined, 'glibc is ciOnly — not in the release tier');
