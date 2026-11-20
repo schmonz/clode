@@ -9,7 +9,7 @@ require('./suite-home.cjs');   // the suite's own HOME, also for a standalone `n
 // the target's exit status; and the tool_result read through scripts/lib/tool-result.cjs, by the call's id. Then the
 // same turn by native Claude Code, over the same tree, compared (the fidelity doctrine). Each file wrote that by hand.
 //
-// driveTool(opts) -> Promise<{ base, quaude: SIDE | { absent }, native: SIDE | { skipped } | { absent } }>
+// driveTool(opts) -> Promise<{ base, quaude: SIDE | { skipped } | { absent }, native: SIDE | { skipped } | { absent } }>
 //
 // THE VERDICT is the caller's controlled check on the request log: `assert.ok(check(r.quaude.raw))`, the same `check`
 // it handed assertFailsOnMissingOutput. SIDE.text is for diagnostics and for comparing quaude with native, never the
@@ -39,6 +39,7 @@ require('./suite-home.cjs');   // the suite's own HOME, also for a standalone `n
 //                    and friends, which change which tools register.
 //   opts.quaude      the quaude binary; default the one built from this tree (test/built-binary.cjs builtQuaude()).
 //                    When there is none, quaude is { absent: <why> } and nothing is run.
+//   opts.quaudeSkip  a one-line reason not to run quaude this time (a test that measures native alone): { skipped }.
 //   opts.native      the native binary; default the pinned provider WHEN IT RUNS here (test/provider-resolve.cjs
 //                    rgOracle: CI's suite rows hold a minimised carve that cannot run; never a `claude` from PATH).
 //                    One that is not there, or does not run, is { absent: <why> }.
@@ -96,6 +97,7 @@ function baseEnv() {
 
 // Which binary a side runs: { bin }, { absent } (this box has none) or { skipped } (the caller said why).
 function quaudeOf(opts) {
+  if (opts.quaudeSkip !== undefined) return { skipped: opts.quaudeSkip };
   if (opts.quaude !== undefined) {
     return fs.existsSync(String(opts.quaude)) ? { bin: opts.quaude } : { absent: `quaude ${opts.quaude} does not exist` };
   }
@@ -147,8 +149,10 @@ async function runSide(side, bin, rules, opts, base) {
 // Validates synchronously (a malformed call throws at the call site), then drives quaude, then native.
 function driveTool(opts = {}) {
   const rules = rulesOf(opts);
-  if (opts.nativeSkip !== undefined && !(typeof opts.nativeSkip === 'string' && opts.nativeSkip.trim() && !/\n/.test(opts.nativeSkip))) {
-    throw new Error('driveTool: nativeSkip must be a one-line reason native cannot run this turn');
+  for (const k of ['quaudeSkip', 'nativeSkip']) {
+    if (opts[k] !== undefined && !(typeof opts[k] === 'string' && opts[k].trim() && !/\n/.test(opts[k]))) {
+      throw new Error(`driveTool: ${k} must be a one-line reason that side is not run`);
+    }
   }
   const reserved = Object.keys(opts.env || {}).filter((k) => RESERVED_ENV.test(k));
   if (reserved.length) {

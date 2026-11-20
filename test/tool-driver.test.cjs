@@ -149,6 +149,10 @@ test('driveTool reports a native skip with its reason, and a native this box lac
     assert.match(missing.native.absent, /no-such-native/);
     assert.strictEqual(missing.native.skipped, undefined, 'absent is the box\'s answer, skipped the caller\'s');
     assert.throws(() => driveTool({ tool: FAKE, quaude: f.quaude, nativeSkip: '' }), /one-line reason/);
+    const nativeOnly = await driveTool({ tool: FAKE, quaudeSkip: 'measuring native alone', native: f.native });
+    assert.deepStrictEqual(nativeOnly.quaude, { skipped: 'measuring native alone' });
+    assert.ok(sawProduct(nativeOnly.native.raw));
+    assert.throws(() => driveTool({ tool: FAKE, quaudeSkip: 'two\nlines' }), /quaudeSkip must be a one-line reason/);
   } finally { fs.rmSync(f.dir, { recursive: true, force: true }); }
 });
 

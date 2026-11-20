@@ -1367,7 +1367,8 @@ const CELL_JOBS = [
   { job: 'node-shim-oracle-darwin', engine: 'darwin-arm64', files: ['test/node-shim-agentic.test.cjs'] },
   { job: 'native-builder-oracle', engine: 'linux-x64-musl', files: ['test/clode-native.test.cjs'] },
   { job: 'linux-x64-pty', engine: 'linux-x64-musl', files: ['test/quaude-build.test.cjs',
-    'test/fidelity/agentic-grep-glob.test.cjs', 'test/fidelity/agentic-sandbox-fail-closed.test.cjs'] },
+    'test/fidelity/agentic-grep-glob.test.cjs', 'test/fidelity/agentic-sandbox-fail-closed.test.cjs',
+    'test/fidelity/tools-local.test.cjs'] },
 ];
 const LOCAL = 'deferred, no plan yet: it runs on this machine, so a canned-mock turn could drive it, and no live check '
   + 'judges its tool_result';
@@ -1403,6 +1404,11 @@ const PHASE_A_CELLS = (tool, modes, driven, reason = PHASE_A_CELL) => modes.flat
   return [{ tool, modes: [mode], ...(engines.length < SHIPPING_ENGINES.length ? { engines } : {}), reason,
     date: '2026-11-18', until: UNTIL_PHASE_A }];
 });
+const LOCAL_CELLS = 'every-tool Phase A (cells): driven only in a -p turn in the default mode on linux-x64-musl '
+  + '(test/fidelity/tools-local.test.cjs, in linux-x64-pty: the one job with both a built quaude and a native that runs; '
+  + 'node-shim-oracle-darwin stages a minimised carve that cannot run as native); no driver yet runs it interactively, '
+  + 'unlisted or in the other permission modes, and no CI job runs a quaude on darwin-arm64 against a running native or '
+  + 'on netbsd-arm64';
 const EXEMPTIONS = [
   // The undriven cells of the five driven tools (USER RULING 2026-11-18).
   ...PHASE_A_CELLS('Agent', COMMON_MODES, [], 'every-tool Phase A (cells): its one driver, '
@@ -1413,12 +1419,13 @@ const EXEMPTIONS = [
   ...PHASE_A_CELLS('Edit', COMMON_MODES, ['print@darwin-arm64', 'print@linux-x64-musl']),
   ...PHASE_A_CELLS('Glob', SEARCH_MODES, ['print@linux-x64-musl']),
   ...PHASE_A_CELLS('Grep', SEARCH_MODES, ['print@linux-x64-musl']),
+  // Read, Write and NotebookEdit: driven in a -p turn on linux-x64-musl (test/fidelity/tools-local.test.cjs, every-tool
+  // Task 2, judged against native in linux-x64-pty, the one job with a built quaude and a native that runs). Their
+  // other cells are the Phase A remainder, as for the five above.
+  ...PHASE_A_CELLS('Read', COMMON_MODES, ['print@linux-x64-musl'], LOCAL_CELLS),
+  ...PHASE_A_CELLS('Write', COMMON_MODES, ['print@linux-x64-musl'], LOCAL_CELLS),
+  ...PHASE_A_CELLS('NotebookEdit', COMMON_MODES, ['print@linux-x64-musl'], LOCAL_CELLS),
   // Local tools a canned mock could drive today: the to-do list proper.
-  { tool: 'Read', reason: `${LOCAL}. floor-probe B4 and node-shim-agentic's Edit row script Read only to satisfy `
-    + 'read-before-edit, and judge nothing it returns', date: RECORDED, until: UNTIL_PHASE_A },
-  { tool: 'Write', reason: `${LOCAL}. agentic-tools' Write row and floor-probe C1 judge the file on disk, `
-    + 'never the tool_result', date: RECORDED, until: UNTIL_PHASE_A },
-  { tool: 'NotebookEdit', reason: LOCAL, date: RECORDED, until: UNTIL_PHASE_A },
   { tool: 'TaskStop', reason: `${LOCAL} (it stops a background task; aliases KillShell, KillBash)`, date: RECORDED, until: UNTIL_PHASE_A },
   { tool: 'TaskCreate', reason: `${LOCAL} (the task list; registered unless CLAUDE_CODE_ENABLE_TASKS=false)`, date: RECORDED, until: UNTIL_PHASE_A },
   { tool: 'TaskGet', reason: `${LOCAL} (the task list; registered unless CLAUDE_CODE_ENABLE_TASKS=false)`, date: RECORDED, until: UNTIL_PHASE_A },

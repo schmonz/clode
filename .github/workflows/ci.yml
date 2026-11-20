@@ -1446,6 +1446,10 @@ jobs:
       #                       rg and one with a tripwire rg. CLODE_E2E_NATIVE=1 runs its instrument too: native's
       #                       own turn here must still give those recorded answers, so a Linux native that moved
       #                       is named, not hidden.
+      #   tools-local         Read, Write and NotebookEdit in a built quaude, one -p turn of 9 calls (every-tool Task 2),
+      #                       every tool_result and the tree left equal to native's recorded answer; its second test
+      #                       runs this native against the same answers. This is the one job with both a built quaude
+      #                       and a native that RUNS, so it drives those tools' print cell on linux-x64-musl.
       #   rg-regex-gates, rg-types-gates   the generated rg tables are what their generators make from THIS native
       #                       run as rg (the suite's minimised provider does not run as rg, so they skipped there).
       #   lead-scrub-equivalence, rg-spawn  need the engine AND a provider that runs here, or a POSIX shell for a
@@ -1458,7 +1462,7 @@ jobs:
       # ONE skip is accepted, by name: rg-differential's "macOS only" row (macOS native printing its own record of
       # the RG-MMAP-EVERYWHERE divergence), which cannot run on Linux. Any other skip — a missing native, engine,
       # ugrep, bash, quaude or naude — means the gates judged nothing, and fails the step.
-      - name: rg gates — quaude's rg vs native's embedded rg (rg-differential), and Grep/Glob/Bash rg end to end
+      - name: rg gates — quaude's rg vs native's embedded rg (rg-differential), Grep/Glob/Bash rg and Read/Write/NotebookEdit end to end
         if: ${{ !cancelled() && steps.deps.outcome == 'success' && steps.ugrep.outcome == 'success' }}
         env:
           CLODE_TJS: ${{ runner.temp }}/tjs/tjs
@@ -1484,6 +1488,7 @@ jobs:
               --test-reporter=./test/cell-reporter.mjs --test-reporter-destination="$RUNNER_TEMP/cells/pty-rg.jsonl" \
               test/fidelity/rg-differential.test.cjs \
               test/fidelity/agentic-grep-glob.test.cjs \
+              test/fidelity/tools-local.test.cjs \
               test/build-gates/rg-regex-gates.test.cjs \
               test/build-gates/rg-types-gates.test.cjs \
               test/fidelity/lead-scrub-equivalence.test.cjs \
