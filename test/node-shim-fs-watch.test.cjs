@@ -368,4 +368,6 @@ test('an unref\'d interval FIRES beside a watchFile poller, and the process stil
   const control = run(...engineSpawn(['run', LOADER, recounted]));
   t.diagnostic(`shim ${JSON.stringify(shim)} control ${JSON.stringify(control)}`);
   assert.ok(!passes(control), `control: an unref that keeps the timer counted must fail this check; got ${JSON.stringify(control)}`);
+  // ...and fail it by HANGING (killed at the bound, after the interval fired), not by a crash or a parse error.
+  assert.ok(control.status === null && /fired=[2-9]/.test(control.stdout), `control: should hang to the ${BOUND} ms bound after firing; got ${JSON.stringify(control)}`);
 });
