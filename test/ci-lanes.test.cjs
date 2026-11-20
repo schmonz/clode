@@ -52,7 +52,10 @@ function listTests(files) {
 }
 
 const FILES = ['test/fidelity/agentic-grep-glob.test.cjs', 'test/fidelity/tools-local.test.cjs'];
-const selects = (run, t) => run.files.some((f) => t.file.endsWith(f))
+// the reporter's file is the OS's own spelling (D:\\a\\clode\\test\\fidelity\\x.test.cjs on Windows, CI 44810612058), the run's is the
+// yml's POSIX one: compare them in one spelling
+const slashed = (f) => String(f).replace(/\\/g, '/');
+const selects = (run, t) => run.files.some((f) => slashed(t.file).endsWith(f))
   && (!run.names.length || run.names.some((p) => new RegExp(p).test(t.name)))
   && !run.skips.some((p) => new RegExp(p).test(t.name));
 
@@ -69,7 +72,7 @@ const lanesGuard = defineGuard({
     if (JSON.stringify(files) !== JSON.stringify(FILES)) findings.push(`the runs name ${files.join(', ')}, not ${FILES.join(', ')}`);
     for (const t of tests) {
       const by = runs.filter((r) => selects(r, t)).map((r) => r.id);
-      if (by.length !== 1) findings.push(`${path.basename(t.file)}:${t.line} "${t.name}" is selected by ${by.length ? by.join(' and ') : 'no run'}`);
+      if (by.length !== 1) findings.push(`${path.posix.basename(slashed(t.file))}:${t.line} "${t.name}" is selected by ${by.length ? by.join(' and ') : 'no run'}`);
     }
     for (const r of runs) if (!tests.some((t) => selects(r, t))) findings.push(`run ${r.id} selects no test`);
     return { findings, examined: tests.length };
@@ -87,3 +90,10 @@ const CONTROL_TESTS = [
   ...Array.from({ length: 20 }, (_, i) => ({ file: '/r/test/fidelity/agentic-grep-glob.test.cjs', line: 100 + i, name: `filler ${i}` })),
 ];
 guardTests(lanesGuard);
+
+test('ci-lanes: a Windows-spelled reported file is matched to the yml\'s POSIX path (CI 44810612058)', () => {
+  const run = { id: 'x', names: [], skips: [], files: ['test/fidelity/tools-local.test.cjs'] };
+  assert.ok(selects(run, { file: 'D:\\a\\clode\\clode\\test\\fidelity\\tools-local.test.cjs', name: 't' }));
+  assert.ok(selects(run, { file: '/a/clode/test/fidelity/tools-local.test.cjs', name: 't' }));
+  assert.ok(!selects(run, { file: 'D:\\a\\clode\\test\\fidelity\\agentic-grep-glob.test.cjs', name: 't' }));
+});
