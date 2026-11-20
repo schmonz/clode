@@ -12,7 +12,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
 const { graphemeBoundaries, clusterWidth, codePointWidth, escapeLayer, forEachCell, cellSgr, oscLink, textWidth, stringWidth, sliceAnsi,
-  wrapAnsi, UNICODE_DATA } = require('../libexec/unicode-text.cjs');
+  wrapAnsi, joinsSpace, UNICODE_DATA } = require('../libexec/unicode-text.cjs');
 const { ucdInput } = require('./ucd-input.cjs');
 const { census, rngBias, assertCensus, firstSighting, intRng } = require('./shape-census.cjs');
 const { defineGuard, guardTests } = require('./guard.cjs');
@@ -1028,6 +1028,25 @@ test('WRAP-ROW-WIDTH: the row is re-measured when a word may join the separator 
   assert.strictEqual(wrapAnsi('aa ' + H(0xdc00, 0x20e3) + 'bb cc', 9), 'aa ' + H(0xdc00, 0x20e3) + 'bb\ncc');
   // ...as does the low half an escape's intermediate leaves: it takes ONE code unit (ESCAPE-LAYER)
   assert.strictEqual(wrapAnsi('aa \x1b ' + H(0x1f600, 0x20e3) + 'bb cc', 9), 'aa \x1b ' + H(0x1f600, 0x20e3) + 'bb\ncc');
+});
+
+// joinsSpace (WRAP-ROW-WIDTH's predicate) restates "after a space, this code point is in the
+// space's bun-cell cluster" from the GCB tables (GB9/GB9a plus MODIFIER-NEEDS-BASE). Held to the
+// clusterer itself over every code point, so the two cannot drift. The one exception is measured:
+// bun-cell drops a lone surrogate (LONE-SURROGATES-INVISIBLE), so ' ' + U+D800 is one cluster,
+// but native SUMS a word that starts with one (the U+DC00 literal in the WRAP-ROW-WIDTH test).
+test('WRAP-ROW-WIDTH: joinsSpace(cp) is exactly "space + cp is one bun-cell cluster", lone surrogates excepted', () => {
+  let examined = 0;
+  const differ = [];
+  for (let cp = 0; cp <= 0x10ffff; cp++) {
+    const s = ' ' + String.fromCodePoint(cp);
+    const surrogate = cp >= 0xd800 && cp <= 0xdfff;
+    const want = surrogate ? false : graphemeBoundaries(s, 0, s.length, 'bun-cell').length === 1;
+    if (joinsSpace(cp) !== want) differ.push(cp.toString(16));
+    examined++;
+  }
+  assert.strictEqual(examined, 0x110000);
+  assert.deepStrictEqual(differ.slice(0, 20), [], `${differ.length} code points differ`);
 });
 
 test('WRAP-SGR: the last one-number SGR is closed at each row end by its close code and reopened after the break', () => {

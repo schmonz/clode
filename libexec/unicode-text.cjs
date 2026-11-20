@@ -1384,13 +1384,13 @@ function sgrNumber(q) {
 // The rows of one line, joined with LF, the style and link in force closed at each row's end and
 // reopened after the break (WRAP-SGR, WRAP-LINK); both start empty on every line (WRAP-NEWLINE).
 function joinRows(rows, out, c1) {
-  let code = 0, link = null;                              // 0: no style carried
+  let code = 0, link = null;                              // 0: no style carried (sgrCloseCode(0) is 0; WRAP-SGR's ESC[m literal pins it)
   const rec = [];
   for (let r = 0; r < rows.length; r++) {
     const s = rows[r].s;
     if (r > 0) {
       out += '\n';
-      if (code !== 0 && sgrCloseCode(code) !== 0) out += escSgr(code);                                      // WRAP-SGR
+      if (sgrCloseCode(code) !== 0) out += escSgr(code);                                                    // WRAP-SGR
       if (link !== null) out += '\x1b]8;' + link + '\x07';                                                  // WRAP-LINK
     }
     for (let i = nextIntroducer(s, 0, s.length, c1); i < s.length; i = nextIntroducer(s, i, s.length, c1)) {
@@ -1404,7 +1404,7 @@ function joinRows(rows, out, c1) {
     out += s;
     if (r + 1 < rows.length) {
       if (link !== null) out += '\x1b]8;;\x07';                                                              // WRAP-LINK
-      if (code !== 0 && sgrCloseCode(code) !== 0) out += escSgr(sgrCloseCode(code));                        // WRAP-SGR
+      if (sgrCloseCode(code) !== 0) out += escSgr(sgrCloseCode(code));                                      // WRAP-SGR
     }
   }
   return out;
@@ -1461,4 +1461,4 @@ function wrapAnsi(input, columns, options) {
 }
 
 module.exports = { graphemeBoundaries, clusterWidth: cellClusterWidth, codePointWidth, escapeLayer, textWidth, stringWidth, forEachCell, cellSgr,
-  oscLink, sliceAnsi, wrapAnsi, UNICODE_DATA };
+  oscLink, sliceAnsi, wrapAnsi, joinsSpace, UNICODE_DATA };

@@ -2144,6 +2144,24 @@ spread argument and runs, with the style check, against upstream's `next` in ups
   - **Speed.** Under tjs ours takes 1.09x to 1.18x of npm wrap-ansi's time on the measured
     samples; 8,000 zero-width words take 6 ms in node and 2,000 take 9 ms under tjs. Not yet
     profiled on the slow boxes (phase 6).
+  - **Quadratic, as native is (final-review fix wave, 2026-11-20).** With trim on, a word of
+    0-width non-ASCII text after a separator (a combining mark, a ZWJ) makes WRAP-ROW-WIDTH
+    re-measure the whole row, so N such words cost O(N^2). Native does the same: measured at 80
+    columns, `{trim:true}` and `{trim:true,hard:true}`, with the preload oracle and the same
+    inputs, each doubling of N quadruples the time on both sides. U+0301 + SP, N times: native 39
+    / 163 / 662 ms at N = 4,000 / 8,000 / 16,000, ours under node 175 / 735 / 2,883 ms. `a` + (SP
+    U+0301) x N: native 147 / 569 / 2,309 ms, ours 422 / 1,657 / 6,641 ms. U+200D + SP: native
+    39 / 155 / 661 ms, ours 221 / 837 / 3,448 ms. Every output identical. Faithful, so not
+    changed; ours costs 3-5x native's constant, and tjs more again.
+  - **Every SGR code crosses a wrap as native's (2026-11-20).** WRAP-SGR reuses SGR-CLOSES, which
+    was measured against native's slice and segmenter. corpusWraps() now also opens each
+    single-number SGR code 0-110 over two bodies that wrap (222 strings; the corpus is 2,175).
+    Native and ours differ on 0 of them at FULL_WRAPS. A planted SGR-CLOSES error (74 no longer
+    closed by 75) reads 2 differing.
+  - **joinsSpace is held to the clusterer.** A test checks that joinsSpace(cp) equals "space +
+    cp is one bun-cell cluster" for every code point. The one exception is the lone surrogates,
+    where native sums (measured; WRAP-ROW-WIDTH's U+DC00 literal). joinRows' redundant
+    `code !== 0` check is gone; the ESC[m literal in WRAP-SGR's test pins sgrCloseCode(0) === 0.
 - **Next candidate: `Bun.stripANSI` is still npm `strip-ansi`** (bun-shim's `_stripAnsiFn`), and
   nothing judges it against native. The 2.1.283 carve calls it once. To measure it: add a
   `stripANSI` key to scripts/lib/text-probe.cjs's PROBE_SOURCE and KEYS, run
@@ -2368,6 +2386,9 @@ leave the stripped text identical. So:
   tjs_new_error -> <null>`. Only reachable on the abrupt-stop path, so it follows a
   fatal error rather than causing one — but it turns a clean exit code into a signal, and
   a probe that reads exit status will report the wrong thing about the wrong event.
+
+Measured: scratch quad.cjs, native 2.1.283's Bun.wrapAnsi through scripts/lib/native-oracle.cjs runInNative vs
+libexec/unicode-text.cjs under node, timed at N = 1,000-16,000 (2026-11-20)
 
 Measured: scratch gap.mjs, wrap-ansi 10.0.1 under tjs (45d8ca5's scripts/lib/text-probe.cjs runOurs) and under node, and
 10.0.2 under node, each against native 2.1.283 over every corpus part at BASIC_WRAPS (2026-11-20)

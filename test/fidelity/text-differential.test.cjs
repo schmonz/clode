@@ -94,7 +94,7 @@ const PART_FLOORS = {
   links: 380,                // 395
   'emoji-test': 5000,        // 5,225
   'bundle literals': 1,      // 2,233 in the 2.1.278 carve, 2,990 in 2.1.283's; 0 without a provider
-  wraps: 1900,               // 1,955 (scripts/lib/text-corpus.cjs corpusWraps(), measured 2026-09-26)
+  wraps: 2100,               // 2,175 (corpusWraps(), 2026-11-20: 1,955 + the SGR 0-110 sweep)
 };
 
 let SKIP = null, STRINGS = null, NATIVE = null, OURS = null, WHAT = '', PARTS = null;

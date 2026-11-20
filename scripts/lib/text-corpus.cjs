@@ -359,9 +359,19 @@ function wrapDecorations() {
   return list;
 }
 
+// Every single-number SGR code 0..110 (final-review fix wave, 2026-11-20): WRAP-SGR reuses
+// SGR-CLOSES, measured against native's slice and segmenter but, until this block, against its
+// wrap only for 1, 3, 31-37, 41, 91, 99 and 100. Each code opens a run over a body that wraps at
+// the FULL_WRAPS widths, closed by ESC[0m, so every code crosses a wrap point.
+const SGR_SWEEP_MAX = 110;
+const SGR_SWEEP_BODIES = () => [SHORT_WORDS.slice(0, 6).join(' '), LONG_WORDS.slice(0, 4).join(' ')];
+
 function corpusWraps() {
   const out = [];
   for (const b of wrapBodies()) for (const d of wrapDecorations()) out.push(d(b));
+  for (let code = 0; code <= SGR_SWEEP_MAX; code++) {
+    for (const b of SGR_SWEEP_BODIES()) out.push(`\x1b[${code}m` + b + '\x1b[0m');
+  }
   return [...new Set(out)];
 }
 
