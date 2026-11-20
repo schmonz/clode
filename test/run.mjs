@@ -48,6 +48,9 @@ function removeRunTmp() {
 // PREPENDED, so it runs before the suite home's own exit hook on every earlier process.exit; the end of this file
 // does it itself, and judges a refusal.
 process.prependListener('exit', () => { const e = removeRunTmp(); if (e) console.error(`run: ${e.message}`); });
+// The root's stamp: this runner's pid and start time as the process table reports it, which another run's sweep
+// compares the pid's current owner against (test/run-tmp-runs.cjs ownsRoot). Unstamped, a root is a doubt: kept.
+try { runTmpRuns.stampRoot(RUN_TMP); } catch (e) { console.error(`run: could not stamp the temp root ${RUN_TMP}: ${e.message}`); }
 // A killed run's root (its pid is dead: no exit hook ran) is named and removed now.
 for (const r of runTmpRuns.removeStaleRoots(ROOT_PARENTS)) {
   console.error(r.error ? `run: could not remove a killed run's temp root (pid ${r.pid}): ${r.error.message}`

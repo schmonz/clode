@@ -29,20 +29,40 @@ function pidOwner(pid, { platform = process.platform, run = require('node:child_
   return { started: Number.isNaN(t) ? null : t, command: m[2] };
 }
 
-// A root's pid is that run's only if its process is alive AND either started no later than the root was born (a run
-// makes its root after it starts) or is node running test/run.mjs. A pid the kernel reused for something started
-// later is not the run: its root is a dead run's, swept, never counted as a live overlap. Birth time where the
-// filesystem keeps one; otherwise ctime, which is no earlier (so a doubt counts as live, never as dead). An owner that
-// cannot be read (ps answered nothing, PowerShell failed or timed out: started null) is a doubt too: a live pid whose
-// start is unknown counts as live, so a running suite's root is never swept for want of a process table.
+// THE ROOT'S STAMP: the runner writes, into its root right after making it, its pid and its OWN start time as the
+// process table reports it (stampRoot). A root's pid is that run's only while the process holding the pid has that same
+// start: both readings come from one clock source (ps derives lstart from the boot time on Linux; CIM's CreationDate on
+// Windows), so they agree for the same process and differ for a later one the kernel gave the pid to.
+// WHY NOT THE ROOT'S BIRTH TIME (CI ubuntu-latest on b3e9aaf: a reused pid's root read as live). On Linux ps's start
+// is the boot time from /proc/stat (whole seconds) plus the process's start in jiffies, then printed truncated to whole
+// seconds: up to about two seconds EARLIER than the wall clock a birth time is in, so a process started 1.1 s after the
+// root read as started before it. Measured in node:24-bookworm (2026-11-20): the fs keeps a birth time there and a
+// rename moves only ctime, so the clock is the cause; where a filesystem keeps no birth time (birthtimeMs 0) the old
+// ctime fallback was wrong as well, since every entry added, removed or renamed moves ctime later. Comparing ps with ps
+// (the stamp) has neither problem.
+// A DOUBT COUNTS AS LIVE, never as dead: an owner that cannot be read (ps answered nothing, PowerShell failed or timed
+// out), or a root with no stamp yet (made, not yet stamped) and no birth time, keeps its root. Node running
+// test/run.mjs owns any root (its command says so, whatever the times).
+const STAMP = '.clode-run-owner.json';
 const RUNNER_COMMAND = /\bnode(?:\.exe)?\b.*\btest[\\/]run\.mjs\b/;
-function ownsRoot(root, pid, { alive = require('./proc-tree.cjs').pidAlive, owner = pidOwner } = {}) {
+const SAME_START_MS = 1000; // lstart is whole seconds; a FILETIME is exact
+function stampRoot(root, { pid = process.pid, owner = pidOwner } = {}) {
+  fs.writeFileSync(path.join(root, STAMP), JSON.stringify({ pid, started: owner(pid).started }));
+}
+function readStamp(root) {
+  try { const j = JSON.parse(fs.readFileSync(path.join(root, STAMP), 'utf8')); return j && typeof j === 'object' ? j : null; } catch { return null; }
+}
+function ownsRoot(root, pid, { alive = require('./proc-tree.cjs').pidAlive, owner = pidOwner, stat = fs.statSync } = {}) {
   if (!alive(pid)) return false;
   const o = owner(pid);
   if (o.command && RUNNER_COMMAND.test(o.command)) return true;
-  let born;
-  try { const st = fs.statSync(root); born = st.birthtimeMs > 0 ? st.birthtimeMs : st.ctimeMs; } catch { return false; }
-  return o.started === null || o.started <= born;
+  if (o.started === null) return true;
+  const stamp = readStamp(root);
+  if (stamp && stamp.pid === pid && typeof stamp.started === 'number') return Math.abs(o.started - stamp.started) <= SAME_START_MS;
+  let st;
+  try { st = stat(root); } catch { return false; }
+  // no stamp: a birth time where the filesystem keeps one; with none, a doubt (ctime moves later, so it proves nothing)
+  return !(st.birthtimeMs > 0) || o.started <= st.birthtimeMs;
 }
 
 // The clode-run-<pid>-* roots in `parents`, other than `self`'s: [{ path, pid, alive }], alive meaning ownsRoot.
@@ -106,7 +126,7 @@ function overlapPids(out, parents) {
   return [...pids].sort((a, b) => a - b);
 }
 
-module.exports = { ROOT_NAME, RUNNER_COMMAND, pidOwner, cachedOwner, ownsRoot, runRoots, removeStaleRoots, watchOverlap, startOverlapWatch, overlapPids };
+module.exports = { ROOT_NAME, RUNNER_COMMAND, STAMP, stampRoot, readStamp, pidOwner, cachedOwner, ownsRoot, runRoots, removeStaleRoots, watchOverlap, startOverlapWatch, overlapPids };
 
 if (require.main === module && process.argv[2] === '--watch-overlap') {
   watchOverlap(process.argv[3], Number(process.argv[4]), process.argv.slice(5));

@@ -91,20 +91,45 @@ test('CONTROL: a dead run\'s root whose pid the kernel reused for a LATER proces
   const original = scratch(t);
   const pending = path.join(original, 'pending');
   fs.mkdirSync(pending);
-  await new Promise((r) => setTimeout(r, 1100)); // ps reports a start in whole seconds
+  // the dead run's stamp: its pid's start then, a minute before the process now holding that pid
   const reused = liveChild(t);
   const root = path.join(original, `clode-run-${reused}-Rr00Rr`);
-  fs.renameSync(pending, root); // keeps the dir's birth time: before the process now holding that pid
+  fs.renameSync(pending, root);
+  const now = RR.pidOwner(reused).started;
+  assert.ok(typeof now === 'number', 'the process table reads the live child');
+  fs.writeFileSync(path.join(root, RR.STAMP), JSON.stringify({ pid: reused, started: now - 60000 }));
   assert.strictEqual(RR.ownsRoot(root, reused), false);
   assert.deepStrictEqual(RR.overlapPids(path.join(original, 'no-log'), [original]), []);
   assert.deepStrictEqual(RR.removeStaleRoots([original]).map((r) => r.pid), [reused]);
   assert.strictEqual(fs.existsSync(root), false);
 });
 
+test('a stamped root is its run\'s while the pid\'s owner has the stamped start, whatever the filesystem says of the dir', (t) => {
+  const original = scratch(t);
+  const pid = liveChild(t);
+  const root = path.join(original, `clode-run-${pid}-Ss00Ss`);
+  fs.mkdirSync(root);
+  RR.stampRoot(root, { pid });
+  assert.strictEqual(RR.readStamp(root).pid, pid);
+  assert.strictEqual(RR.ownsRoot(root, pid), true, 'the same process: kept');
+  // LINUX'S CASE, on any box (CI ubuntu-latest on b3e9aaf): no birth time, and a ctime later than the owner's start
+  const linuxStat = () => ({ birthtimeMs: 0, ctimeMs: Date.now() + 3600000 });
+  const at = (started) => ({ alive: () => true, owner: () => ({ started, command: 'sleep 60' }), stat: linuxStat });
+  assert.strictEqual(RR.ownsRoot(root, pid, at(RR.readStamp(root).started + 60000)), false, 'a later owner of the pid: swept despite the ctime');
+  assert.strictEqual(RR.ownsRoot(root, pid, at(RR.readStamp(root).started)), true);
+  // unstamped (made, not yet stamped) with no birth time: a doubt, kept; with a birth time, judged by it
+  const bare = path.join(original, 'clode-run-1-Bb00Bb');
+  fs.mkdirSync(bare);
+  assert.strictEqual(RR.ownsRoot(bare, 1, at(Date.now() + 3600000)), true, 'no stamp, no birth time: kept');
+  const darwinStat = () => ({ birthtimeMs: 1000, ctimeMs: 1000 });
+  assert.strictEqual(RR.ownsRoot(bare, 1, { ...at(5000), stat: darwinStat }), false, 'no stamp, born before the owner started: swept');
+});
+
 test('a pid running node test/run.mjs owns a root whatever its start time; anything else started later does not', (t) => {
   const root = scratch(t);
   const later = Date.now() + 3600000;
-  const owns = (command, started = later) => RR.ownsRoot(root, 1, { alive: () => true, owner: () => ({ started, command }) });
+  const born = { birthtimeMs: Date.now(), ctimeMs: Date.now() }; // a birth time, so the row holds where the fs keeps none
+  const owns = (command, started = later) => RR.ownsRoot(root, 1, { alive: () => true, owner: () => ({ started, command }), stat: () => born });
   assert.strictEqual(owns('/opt/node/bin/node /src/clode/test/run.mjs --offline'), true);
   assert.strictEqual(owns('C:\\node\\node.exe D:\\a\\clode\\test\\run.mjs'), true);
   assert.strictEqual(owns('sleep 60'), false);
