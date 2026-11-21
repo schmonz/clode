@@ -96,10 +96,27 @@ function scanCallerStyle({ bundle, probe, what }) {
     for (const [needle, why] of want) {
       if (!body.includes(needle)) findings.push(`ansiCodes() no longer does "${needle}" (${why}); re-derive the probe's style column from it: ${at}...`);
     }
-    const t = /if\((\w+)\.test\((\w+)\)\)\w+\.push\(\{type:"ansi",code:(\w+),endCode:\w+\[\w+\]\}\)/.exec(body);
-    if (t === null || t[2] !== t[3]) {
+    // 2.1.330 added `&&T[O]!==AYa`: a code whose close is one SGR (AYa = CSI + "28m", conceal's
+    // close) is dropped. The close it drops is read from the binding nearest the method,
+    // `AYa=<csi>(28,"m")`, and the probe must drop exactly that one (its HIDDEN_CLOSE).
+    const t = /if\((\w+)\.test\((\w+)\)(?:&&(\w+)\[(\w+)\]!==([\w$]+))?\)\w+\.push\(\{type:"ansi",code:(\w+),endCode:(\w+)\[(\w+)\]\}\)/.exec(body);
+    if (t === null || t[2] !== t[6] || (t[3] !== undefined && (t[3] !== t[7] || t[4] !== t[8]))) {
       findings.push(`ansiCodes() no longer keeps an open code by one regex test and pairs it with its close code: ${at}...`);
       continue;
+    }
+    const ph = /\bconst HIDDEN_CLOSE = '([^']*)';/.exec(probe);
+    const probeDrop = ph && /u\[m\] !== HIDDEN_CLOSE/.test(probe) ? ph[1].replace(/\\x1b/g, '\x1b') : null;
+    if (t[3] === undefined) {
+      if (probeDrop !== null) findings.push(`ansiCodes() drops no close code, but the probe drops ${JSON.stringify(probeDrop)}: ${at}...`);
+    } else {
+      const cdefs = [...bundle.matchAll(new RegExp(`(?:^|[^\\w$.])${t[5].replace(/\$/g, '\\$')}=[\\w$]+\\((\\d+),"m"\\)`, 'g'))]
+        .sort((a, b) => Math.abs(a.index - m.index) - Math.abs(b.index - m.index));
+      const drop = cdefs.length ? `\x1b[${cdefs[0][1]}m` : null;
+      if (drop === null) findings.push(`ansiCodes() drops a code whose close is ${t[5]}, whose SGR binding this scan cannot find`);
+      else if (probeDrop !== drop) {
+        findings.push(`ansiCodes() drops a code whose close is ${JSON.stringify(drop)}, but the probe drops `
+          + `${JSON.stringify(probeDrop)}: copy it into PROBE_SOURCE's HIDDEN_CLOSE`);
+      }
     }
     // Minified names repeat across a carve's modules, so the definition read is the one
     // NEAREST this method (its module's), not the first in the file.
@@ -165,10 +182,15 @@ function readWrapCarve() {
   return { bundle: c.bundle, what: c.what };
 }
 
-// The 2.1.278 carve's own caller, verbatim (the darwin-arm64 carve, 2026-09-25), for the control.
-const CALLER = 'ansiCodes(n){if(n===0)return[];let s=this.sgrKeys[n].split("\\x00"),u=this.sgrCloseKeys[n].split("\\x00"),f=[];'
+// The 2.1.278 carve's own caller, verbatim (the darwin-arm64 carve, 2026-09-25).
+const CALLER_278 = 'ansiCodes(n){if(n===0)return[];let s=this.sgrKeys[n].split("\\x00"),u=this.sgrCloseKeys[n].split("\\x00"),f=[];'
   + 'for(let m=0;m<s.length;m++){let p=s[m];if(SC.test(p))f.push({type:"ansi",code:p,endCode:u[m]})}return f}}'
   + 'var SC=/^\\x1b\\[(?:\\d{1,3})(?:;5;\\d{1,3}|;2;\\d{1,3};\\d{1,3};\\d{1,3})?m$/;';
+// The 2.1.330 caller, verbatim (darwin-arm64, 2026-11-21), its names kept but for the minifier's,
+// with the SGR binding it reads from chunk-yrh4vxq4.js (`AYa=Jl(28,"m")`) beside it; for the control.
+const CALLER = 'var AYa=Jl(28,"m");ansiCodes(h){if(h===0)return[];let v=this.sgrKeys[h].split("\\x00"),T=this.sgrCloseKeys[h].split("\\x00"),M=[];'
+  + 'for(let O=0;O<v.length;O++){let L=v[O];if(DM.test(L)&&T[O]!==AYa)M.push({type:"ansi",code:L,endCode:T[O]})}return M}}'
+  + 'var DM=/^\\x1b\\[(?:\\d{1,3})(?:;5;\\d{1,3}|;2;\\d{1,3};\\d{1,3};\\d{1,3})?m$/;';
 
 guardTests(defineGuard({
   name: 'text-probe-caller-style',
@@ -179,21 +201,33 @@ guardTests(defineGuard({
   // TUI now paints) and an ansiCodes() that stopped reading the close pool.
   control: () => ({
     bundle: CALLER.replace('(?:\\d{1,3})(?:', '(?:\\d{1,3})(?::\\d{1,3})?(?:')
-      + 'class B{' + CALLER.replace('u=this.sgrCloseKeys[n].split("\\x00")', 'u=s').split('}}var SC=')[0] + '}}',
+      + 'class B{' + CALLER.replace('T=this.sgrCloseKeys[h].split("\\x00")', 'T=v').split('}}var DM=')[0] + '}}',
     probe: PROBE_SOURCE, what: 'synthetic control',
   }),
 }));
 
-test('the caller-style scan passes the 2.1.278 caller verbatim and names each drift', () => {
+test('the caller-style scan passes the 2.1.330 caller verbatim and names each drift', () => {
   const run = (bundle) => scanCallerStyle({ bundle, probe: PROBE_SOURCE, what: 'x' });
-  assert.deepStrictEqual(run(CALLER).findings, [], 'the probe restates the 2.1.278 caller');
+  assert.deepStrictEqual(run(CALLER).findings, [], 'the probe restates the 2.1.330 caller');
   assert.strictEqual(run(CALLER).examined, 1);
-  assert.strictEqual(run(CALLER.replace('if(n===0)return[];', '')).findings.length, 1, 'index 0 no longer short-circuits');
-  assert.strictEqual(run(CALLER.replace('code:p,endCode', 'code:s[0],endCode')).findings.length, 1, 'a test not on the open code');
-  assert.strictEqual(run(CALLER.replace('var SC=', 'var XX=')).findings.length, 1, 'an SC this scan cannot find');
-  assert.deepStrictEqual(run('var SC=/other/;' + ' '.repeat(5000) + CALLER).findings, [], 'another module\'s SC is not the caller\'s');
-  assert.strictEqual(scanCallerStyle({ bundle: CALLER, probe: 'no regex here', what: 'x' }).findings.length, 1);
+  assert.strictEqual(run(CALLER.replace('if(h===0)return[];', '')).findings.length, 1, 'index 0 no longer short-circuits');
+  assert.strictEqual(run(CALLER.replace('code:L,endCode', 'code:v[0],endCode')).findings.length, 1, 'a test not on the open code');
+  assert.strictEqual(run(CALLER.replace('var DM=', 'var XX=')).findings.length, 1, 'an SC this scan cannot find');
+  assert.deepStrictEqual(run('var DM=/other/;' + ' '.repeat(5000) + CALLER).findings, [], 'another module\'s SC is not the caller\'s');
+  // a probe that restates nothing: no SC, and no dropped close
+  assert.strictEqual(scanCallerStyle({ bundle: CALLER, probe: 'no regex here', what: 'x' }).findings.length, 2);
   assert.strictEqual(run('').examined, 0, 'no caller at all examines nothing, which the floor reads as BROKEN');
+});
+
+// 2.1.330's one change: the caller drops a code whose close is SGR 28. The probe must drop the same close, read from
+// the binding, never assumed; the 2.1.278 caller (no drop) is now drift against this probe, the way it really moved.
+test('the caller-style scan reads the dropped close from its SGR binding and holds the probe to it', () => {
+  const run = (bundle, probe = PROBE_SOURCE) => scanCallerStyle({ bundle, probe, what: 'x' });
+  assert.match(run(CALLER_278).findings.join('\n'), /drops no close code, but the probe drops "\\u001b\[28m"/);
+  assert.match(run(CALLER.replace('Jl(28,"m")', 'Jl(29,"m")')).findings.join('\n'), /drops a code whose close is "\\u001b\[29m", but the probe drops "\\u001b\[28m"/);
+  assert.match(run(CALLER.replace('var AYa=', 'var ZZZ=')).findings.join('\n'), /whose SGR binding this scan cannot find/);
+  assert.match(run(CALLER, PROBE_SOURCE.replace(' && u[m] !== HIDDEN_CLOSE', '')).findings.join('\n'), /but the probe drops null/);
+  assert.strictEqual(run(CALLER.replace('T[O]!==AYa', 'T[0]!==AYa')).findings.length, 1, 'a drop not at the open code\'s index');
 });
 
 // THE LINK COLUMN (CellSegmenter phase 4). The probe's rows also carry each cell's hyperlink,
@@ -332,7 +366,9 @@ function splitTopArgs(argstr) {
   return parts;
 }
 
-const DIRECT_WRAP_CALLER = /function (\w+)\((\w+),(\w+),(\w+)\)\{if\(!(\w+)\.test\(\2\)\)return Bun\.wrapAnsi\(\2,\3,\4\);/;
+// 2.1.330 respells the guard `if(a.search(V)===-1)` and adds a fourth parameter with a default (`r=!0`, its own
+// recursion's flag; never options): both spellings are this shape, nothing else is.
+const DIRECT_WRAP_CALLER = /function (\w+)\((\w+),(\w+),(\w+)(?:,\w+=![01])?\)\{if\((?:!(\w+)\.test\(\2\)|\2\.search\((\w+)\)===-1)\)return Bun\.wrapAnsi\(\2,\3,\4\);/;
 
 // { xname, wrapperName, callSites: [ [arg0Text, arg1Text, arg2Text], ... ] }. xname/wrapperName
 // null means the shape this scan expects was not found at all (the caller reads that as
@@ -363,6 +399,14 @@ function findWrapCallSites(bundle) {
       if (args === null) continue;
       const parts = splitTopArgs(args);
       if (parts.length !== 3) continue;   // a same-named local of a different arity: not this wrapper
+      // 2.1.330: `let K={trim:!0,hard:!0};...Au(A,N,K)` -- options passed by a binding are read from the binding's
+      // own literal, the NEAREST `let|const|var NAME={...}` before the call in its module. One that is not found
+      // stays the bare name, which the parser refuses (a finding), never a pass.
+      const id = parts[2].trim();
+      if (/^[A-Za-z_$][\w$]*$/.test(id)) {
+        const defs = [...mod.slice(0, cm.index).matchAll(new RegExp(`(?:let|const|var)\\s+${id.replace(/\$/g, '\\$')}=(\\{[^{}]*\\})`, 'g'))];
+        if (defs.length > 0) { parts[2] = defs[defs.length - 1][1]; parts.binding = id; }
+      }
       callSites.push(parts);
     }
   }
@@ -380,8 +424,13 @@ function parseBool(tok) {
 // `EXPR?.key??FALLBACK` / `EXPR.key??FALLBACK`: a caller-supplied boolean with a literal
 // fallback (the `{hard:p?.hard??!1,...}` table-cell shape). Both its values are kept — the
 // literal alone cannot say which the caller passes at runtime.
+// 2.1.330 also passes `!NAME` (a boolean, both values) and a bare `NAME` (a parameter: both
+// values, or undefined, which Bun.wrapAnsi reads as the key's default, so the key is ABSENT).
 function parseDynamicBool(expr) {
-  const m = /^[\w$.]+\?\.\w+\?\?(.+)$/.exec(expr.trim()) || /^[\w$.]+\.\w+\?\?(.+)$/.exec(expr.trim());
+  const e = expr.trim();
+  if (/^![A-Za-z_$][\w$]*$/.test(e)) return { dynamic: true };
+  if (/^[A-Za-z_$][\w$]*$/.test(e) && !['true', 'false', 'undefined', 'null'].includes(e)) return { dynamic: true, mayBeAbsent: true };
+  const m = /^[\w$.]+\?\.\w+\?\?(.+)$/.exec(e) || /^[\w$.]+\.\w+\?\?(.+)$/.exec(e);
   if (!m) return null;
   const fallback = parseBool(m[1]);
   return fallback === null ? null : { dynamic: true, fallback };
@@ -417,9 +466,10 @@ function expandOptions(parsed) {
   let variants = [{}];
   for (const key of Object.keys(parsed)) {
     const v = parsed[key];
-    const vals = (v && v.dynamic) ? [true, false] : [v];
+    const ABSENT = Symbol('absent');
+    const vals = (v && v.dynamic) ? [true, false, ...v.mayBeAbsent ? [ABSENT] : []] : [v];
     const next = [];
-    for (const base of variants) for (const val of vals) next.push({ ...base, [key]: val });
+    for (const base of variants) for (const val of vals) next.push(val === ABSENT ? { ...base } : { ...base, [key]: val });
     variants = next;
   }
   return variants;
@@ -443,9 +493,9 @@ function scanWrapOptions({ bundle, wrapOptions, what }) {
   const sites = new Map();   // each call site's options literal, as the carve spells it -> how many
   for (const parts of found.callSites) {
     examined++;
-    const optText = parts[2].trim();
+    const optText = parts.binding ? `${parts.binding}=${parts[2].trim()}` : parts[2].trim();
     sites.set(optText, (sites.get(optText) || 0) + 1);
-    const parsed = parseOptionsLiteral(optText);
+    const parsed = parseOptionsLiteral(parts[2].trim());
     if (parsed === null) {
       findings.push(`could not parse the options passed to ${found.wrapperName}(): ${optText} — `
         + 'a literal this scan does not recognise; re-derive WRAP_OPTIONS by hand and teach the parser its shape');
@@ -513,6 +563,21 @@ test('scanWrapOptions examines every real call site in the 2.1.283 shape and fin
 // the two guards above, so this checks the pure function it wraps rather than mutating that
 // shared cache mid-suite): a carve with no direct Bun.wrapAnsi caller at all names the reason
 // rather than reading as zero violations, and its own scan examines nothing.
+// 2.1.330's direct caller and wrapper, verbatim heads (darwin-arm64, 2026-11-21): `K(e,t,s,r=!0)` guarded by
+// `e.search(Y)===-1`, and `Au` forwarding its three parameters into it.
+test('scanWrapOptions reads the 2.1.330 caller shape (search guard, defaulted fourth parameter)', () => {
+  const head = 'function K(e,t,s,r=!0){if(e.search(Y)===-1)return Bun.wrapAnsi(e,t,s);let i="";return K(e,t,s,!1)}'
+    + 'function Au(e,t,s){if(!(t>0))return e;if(!e.includes("\\x1B["))return K(e,t,s);return e}';
+  const r = scanWrapOptions({ bundle: `${head}function caller(a){return Au(a,10,{hard:!0,trim:!1})}`, wrapOptions: WRAP_OPTIONS, what: 'x' });
+  assert.deepStrictEqual(r.findings, []);
+  assert.strictEqual(r.examined, 1);
+  assert.match(r.note, /call site\(s\) to Au\(\)/);
+  // a guard that is neither spelling, or a fourth parameter that could carry options, is not the shape
+  for (const bad of [head.replace('e.search(Y)===-1', 'e.search(Y)!==-1'), head.replace('r=!0', 'r')]) {
+    assert.strictEqual(scanWrapOptions({ bundle: bad, wrapOptions: WRAP_OPTIONS, what: 'x' }).examined, 0);
+  }
+});
+
 test('a carve with no Bun.wrapAnsi caller at all names the reason and examines nothing', () => {
   const found = findWrapCallSites('var a = 1; function unrelated(){}');
   assert.strictEqual(found.xname, null);

@@ -29,11 +29,14 @@ const PROBE_SOURCE = String.raw`
     // kept only when it passes the bundle's SC regex, paired with its sgrCloseKeys close
     // code (which the caller compares by identity). So a key SC drops is judged as the
     // caller judges it — invisible — and one that changes what is PAINTED is a difference.
+    // From 2.1.330 the caller also drops a code whose close is SGR 28 (conceal's close,
+    // T[O]!==AYa, AYa = CSI + "28m"): HIDDEN_CLOSE restates that, and the gate reads it back.
     const SC = /^\x1b\[(?:\d{1,3})(?:;5;\d{1,3}|;2;\d{1,3};\d{1,3};\d{1,3})?m$/;
+    const HIDDEN_CLOSE = '\x1b[28m';
     const ansiCodes = (k) => {
       if (k === 0) return [];
       const s = n.sgrKeys[k].split('\x00'), u = n.sgrCloseKeys[k].split('\x00'), f = [];
-      for (let m = 0; m < s.length; m++) if (SC.test(s[m])) f.push([s[m], u[m]]);
+      for (let m = 0; m < s.length; m++) if (SC.test(s[m]) && u[m] !== HIDDEN_CLOSE) f.push([s[m], u[m]]);
       return f;
     };
     // Each cell's HYPERLINK as the caller reads it, through the bundle's own runWords(): the
@@ -108,6 +111,10 @@ const KEYS = ['segmenter', 'stringWidth', 'intl', 'sliceAnsi', 'wrapAnsi'];
 // wordWrap:true} -- hard is a caller-supplied boolean, so BOTH its values are kept. No call
 // site passes zero options (r is always a literal object), so there is no `undefined` member
 // (the rule "plus undefined if any caller passes none" does not add one here).
+// Re-measured 2026-11-21 against the 2.1.330 carve (20 call sites, darwin-arm64 and linux-x64
+// alike): the table cell now passes trim:<p?.trim??false> too, so it adds the two trim:true
+// rows; the rest are shapes already here ({trim:<param>,hard:true}, {hard:true,trim:!<bool>},
+// and `let K={trim:!0,hard:!0}` passed by name).
 const WRAP_OPTIONS = [
   { hard: false, trim: false },
   { hard: true, trim: false },
@@ -115,6 +122,8 @@ const WRAP_OPTIONS = [
   { hard: true },
   { hard: true, trim: false, wordWrap: true },
   { hard: false, trim: false, wordWrap: true },
+  { hard: true, trim: true, wordWrap: true },
+  { hard: false, trim: true, wordWrap: true },
 ];
 
 // The BACKLOG's own measurement shape (widths 1, 4, 10) x WRAP_OPTIONS, run over EVERY text
