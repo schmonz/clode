@@ -100,4 +100,20 @@ if (impl && typeof impl.isAscii !== 'function') {
   };
 }
 
+// buffer.constants.MAX_LENGTH / MAX_STRING_LENGTH (and kMaxLength / kStringMaxLength), node 24's values. 2.1.330's
+// hook runner caps a hook's JSON input at `Math.floor(buffer.constants.MAX_STRING_LENGTH/2)`; neither feross nor
+// buffer-lite defines MAX_STRING_LENGTH, so the cap was NaN, nothing compared under it, and EVERY PreToolUse hook
+// was refused with "this call's input can't be written as JSON" (the update guard among them). Node's string
+// limit (V8's 2**29-24) is below QuickJS's own (2**30-1), so a string this long can always be made here too.
+if (impl) {
+  const MAX_LENGTH = 9007199254740991;
+  const MAX_STRING_LENGTH = 536870888;
+  const constants = impl.constants && typeof impl.constants === 'object' ? impl.constants : {};
+  if (constants.MAX_LENGTH === undefined) constants.MAX_LENGTH = MAX_LENGTH;
+  if (constants.MAX_STRING_LENGTH === undefined) constants.MAX_STRING_LENGTH = MAX_STRING_LENGTH;
+  try { impl.constants = constants; } catch (_) { /* readonly */ }
+  try { impl.kMaxLength = constants.MAX_LENGTH; } catch (_) { /* readonly */ }
+  try { impl.kStringMaxLength = constants.MAX_STRING_LENGTH; } catch (_) { /* readonly */ }
+}
+
 module.exports = impl;

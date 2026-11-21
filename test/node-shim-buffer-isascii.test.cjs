@@ -29,6 +29,9 @@ for (const [k, f] of [['isAscii', isAscii], ['isUtf8', isUtf8]]) {
     one(k + ' ' + label, () => f(v));
   }
 }
+// buffer.constants: 2.1.330's hook runner divides MAX_STRING_LENGTH by 2 to cap a hook's input; undefined made
+// every PreToolUse hook refuse its input as unwritable JSON
+one('constants', () => { const b = require('buffer'); return [b.constants, b.kMaxLength, b.kStringMaxLength]; });
 const file = process.argv[2];
 const fd = fs.openSync(file, 'r+');
 const cases = [
