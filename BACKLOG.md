@@ -583,13 +583,32 @@ native tests skipped by name (no native Claude Code on NetBSD), 0 failed; 310 s 
 needed test/self-signed-cert.cjs: NetBSD's base openssl has no /etc/openssl/openssl.cnf, so `openssl req` died until
 the config was written beside the key (test/self-signed-cert.test.cjs now reproduces that shape on any host).
 
-OPEN, NETBSD-ARM64 INTERMITTENT SIGSEGV: the first evidence run at 9e20ba4 (2026-11-21) failed one test: quaude died of
-SIGSEGV mid-turn in tools-local's "ReportFindings, Workflow and ListAgents in a built quaude" (the Workflow tool_use,
+FIXED, NETBSD-ARM64 INTERMITTENT SIGSEGV (2026-11-21): the first evidence run at 9e20ba4 failed one test: quaude died
+of SIGSEGV mid-turn in tools-local's "ReportFindings, Workflow and ListAgents in a built quaude" (the Workflow tool_use,
 then ListAgents and Agent never answered), so lane rest-tools exited 1 and the gate refused the record (193 cells, 189
-passed). The engine and quaude inputs were byte-identical to the 8f66672 run that passed, and the immediate re-run at
-the same commit passed all 193: an intermittent crash in the engine or shim on NetBSD/arm64, not yet reproduced or
-diagnosed. The red run's guest logs were kept off-repo; next step is a loop of that one test on the VM with core
-dumps on.
+passed); the immediate re-run passed. CAUSE, an engine use-after-free: quickjs-ng's JS_EnqueueJob kept the queuing
+JSContext as a bare pointer, so a vm context (the Workflow script's realm, src/mod_vm.c) could be freed by the cycle
+collector while a promise job it had queued was pending, and the job then ran in freed memory. FIX:
+quickjs-ng-job-realm-ref.patch (the job holds a context reference). Found beside it and fixed too: a vm child context
+had no TJSRuntime opaque, so the first promise rejection inside one SIGABRTed the engine (a Workflow script that
+throws); txiki-vm-context.patch gives the child its parent's runtime. Test: test/node-shim-vm-job-realm.test.cjs, both
+rows deterministic (unpatched: SIGSEGV on darwin-arm64 and SIGBUS on NetBSD/arm64 every run, and SIGABRT; patched:
+pass on both).
+
+Measured: that one test looped in the VM at 7263c8b (the 9e20ba4 engine and quaude inputs): 2 SIGSEGV in 25 runs, cores
+identical (free_gc_object reading a NULL shape under js_new_promise_capability <- js_promise_then_finally_func <-
+promise_reaction_job <- tjs__drain_microtasks); on darwin-arm64, 0 in 40 (four parallel loops of 10). An
+AddressSanitizer engine running a vm workflow shape (darwin-arm64): heap-use-after-free READ of the JSContext in
+js_async_function_resume, freed by JS_FreeContext <- js_c_function_finalizer <- gc_free_cycles. With both patches,
+the same loop in the VM: 0 in 40, no cores (2026-11-21).
+
+OPEN, an observability gap the crash showed: scripts/netbsd-arm64-evidence.mjs keeps no crash evidence in the guest.
+A quaude that dies of a signal leaves only `the turn exited null (SIGSEGV)` with empty stderr in the lane log; no core
+is kept (NetBSD writes `%n.core` in the process's cwd, which is the test's temp dir, removed after the test) and no
+backtrace is taken. What worked by hand: before the lane runs, `ulimit -c unlimited` and `/sbin/sysctl -w
+proc.$$.corename=<dir>/cores/%n.%p.core` in the lane's shell (per process, inherited, no system setting changes; base
+NetBSD has /usr/bin/gdb), then `gdb -batch -ex 'bt 40' <quaude> <core>` into logs/ (a core is ~300 MB, so the
+backtrace travels, not the core).
 
 Nothing falls due 2026-12-15 any more: UNTIL_PHASE_A is retired (2026-11-20, plan Task 5 step 3), because it covered
 0 cells. USER RULING 2026-11-20 settled the last 8 Bash cells. The 3 shell:zsh cells are driven now (tools-local's
