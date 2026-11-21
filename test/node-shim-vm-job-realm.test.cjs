@@ -1,5 +1,5 @@
 'use strict';
-// A vm context must outlive every promise job it queued.
+// A vm context must outlive every promise job it queued, and a rejection inside one must not abort the engine.
 //
 // WHY (2026-11-21, BACKLOG "NETBSD-ARM64 INTERMITTENT SIGSEGV"): quaude died of SIGSEGV mid-turn in tools-local's
 // "ReportFindings, Workflow and ListAgents" test on NetBSD/arm64 (2 of 25 runs of that one test; 0 of 40 on
@@ -11,15 +11,20 @@
 // JS_FreeContext from the cycle collector). spike/quickjs/patches/quickjs-ng-job-realm-ref.patch holds a reference
 // for as long as the job is queued.
 //
-// The program is the engine's own (the vm primitive, __tjs_vm, which node-shim's vm module is built on): the
-// collection between queuing and running is forced with tjs.engine.gc.run, and the engine is the subject.
+// The second test is the abort found beside it: a child context had no TJSRuntime opaque, so the engine's promise
+// rejection tracker hit CHECK_NOT_NULL and SIGABRTed on the first rejection inside a vm context, even one the host
+// catches (a Workflow script that throws). txiki-vm-context.patch now gives the child its parent's runtime.
+//
+// The first program is the engine's own (the vm primitive, __tjs_vm, which node-shim's vm module is built on): the
+// collection between queuing and running is forced with tjs.engine.gc.run, and the engine is the subject. The second
+// runs through node-shim's require('vm') under host node too, and quaude must print what node prints.
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
-const { engineSpawn, skipUnlessTjs } = require('./node-shim-helper.cjs');
+const { execFileSync, spawnSync } = require('node:child_process');
+const { engineSpawn, skipUnlessTjs, LOADER } = require('./node-shim-helper.cjs');
 
 function withProg(body, fn) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-vm-job-'));
@@ -59,4 +64,23 @@ test('a job a vm context queued still runs after the context is dropped and coll
   const r = withProg(QUEUED_JOB, (f) => runEngine(['run', f]));
   assert.deepStrictEqual({ status: r.status, signal: r.signal, out: r.out },
     { status: 0, signal: null, out: '{"out":[42],"junk":20000}' }, `stderr: ${r.stderr}`);
+});
+
+// An async script that throws, run in a vm context, with the host catching its promise: the Workflow tool's shape
+// for a script that fails. Measured on the unpatched engine: SIGABRT on every run ("tjs__promise_rejection_tracker:
+// Assertion (qrt) != NULL failed"), before the host's handler could run.
+const CHILD_REJECTION = `
+  const vm = require('vm');
+  const ctx = vm.createContext({});
+  const p = vm.runInContext('(async () => { throw new Error("script failed") })()', ctx);
+  p.then(() => console.log('resolved'), (e) => console.log('caught: ' + e.message));
+`;
+
+test('a rejection inside a vm context reaches the host handler instead of aborting the engine (quaude matches node)', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const { node, r } = withProg(CHILD_REJECTION, (f) => ({
+    node: execFileSync(process.execPath, [f], { encoding: 'utf8' }).trim(), r: runEngine(['run', LOADER, f]) }));
+  assert.strictEqual(node, 'caught: script failed', 'the node oracle moved');
+  assert.deepStrictEqual({ status: r.status, signal: r.signal, out: r.out }, { status: 0, signal: null, out: node },
+    `quaude differs from node. stderr: ${r.stderr}`);
 });

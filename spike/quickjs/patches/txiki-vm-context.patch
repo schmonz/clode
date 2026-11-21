@@ -3,7 +3,7 @@ new file mode 100644
 index 0000000..3899c83
 --- /dev/null
 +++ b/src/mod_vm.c
-@@ -0,0 +1,132 @@
+@@ -0,0 +1,138 @@
 +/* node:vm context isolation primitive for the node-shim. Exposed as the global
 + * `__tjs_vm`. quickjs-ng supports multiple JSContexts per JSRuntime — each with
 + * its OWN global object, sharing one heap — so a child context gives a workflow
@@ -35,6 +35,12 @@ index 0000000..3899c83
 +    JSContext *child = JS_NewContext(JS_GetRuntime(ctx));
 +    if (!child)
 +        return JS_ThrowOutOfMemory(ctx);
++    /* The child shares its parent's TJSRuntime. Engine callbacks that receive the child
++     * (the promise rejection tracker, for one) look the runtime up through the context
++     * opaque; with none they hit CHECK_NOT_NULL, and the first rejection inside a vm
++     * context, even one the host catches, SIGABRTed the engine
++     * (test/node-shim-vm-job-realm.test.cjs). */
++    JS_SetContextOpaque(child, JS_GetContextOpaque(ctx));
 +    JSValue obj = JS_NewObjectClass(ctx, tjs_vm_ctx_class_id);
 +    if (JS_IsException(obj)) {
 +        JS_FreeContext(child);
