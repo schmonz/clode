@@ -101,52 +101,136 @@ class NumberFormat {
   resolvedOptions() { return Object.assign({ locale: 'en-US', numberingSystem: 'latn', style: 'decimal' }, this._o); }
 }
 
-// ---- Intl.DateTimeFormat (en-US) ----
-// Honors year/month/day/hour/minute/second/weekday. timeZone is NOT applied
-// (quickjs Date is local-only and there is no tz database) — an approximation
-// that keeps the TUI rendering instead of throwing.
+// ---- Intl.DateTimeFormat (en-US; en-CA and sv-SE numeric dates) ----
+// Built as PARTS (formatToParts is the primitive, format joins it), judged against
+// native Bun's own ICU by test/node-shim-intl.test.cjs. ECMA-402's ToDateTimeOptions
+// supplies the defaults: a formatter given no date or time field formats the date.
+// timeZone: UTC and its aliases are honoured (getUTC*); any other zone is NOT applied
+// (quickjs Date is local-only and there is no tz database), an approximation that
+// renders the local clock instead of throwing.
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const MONL = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const DAY = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const DAYL = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 const p2 = (x) => String(x).padStart(2, '0');
-class DateTimeFormat {
-  constructor(_l, o) { this._o = o || {}; }
-  format(d) {
-    d = d == null ? new Date() : (d instanceof Date ? d : new Date(d));
-    const o = this._o;
-    const wd = o.weekday ? (o.weekday === 'long' ? DAYL : DAY)[d.getDay()] : '';
-    let datePart = '';
-    if (o.month === 'long' || o.month === 'short') {
-      datePart = (o.month === 'long' ? MONL : MON)[d.getMonth()] +
-        (o.day ? ' ' + (o.day === '2-digit' ? p2(d.getDate()) : d.getDate()) : '') +
-        (o.year ? ', ' + (o.year === '2-digit' ? p2(d.getFullYear() % 100) : d.getFullYear()) : '');
-    } else if (o.year || o.month || o.day) {
-      const mdy = [];
-      if (o.month) mdy.push(o.month === '2-digit' ? p2(d.getMonth() + 1) : String(d.getMonth() + 1));
-      if (o.day) mdy.push(o.day === '2-digit' ? p2(d.getDate()) : String(d.getDate()));
-      if (o.year) mdy.push(o.year === '2-digit' ? p2(d.getFullYear() % 100) : String(d.getFullYear()));
-      datePart = mdy.join('/');
-    }
-    let timePart = '';
-    if (o.hour || o.minute || o.second) {
-      const h24 = d.getHours();
-      const h24sys = o.hour12 === false || o.hourCycle === 'h23' || o.hourCycle === 'h24';
-      let hh = h24;
-      if (!h24sys) { hh = h24 % 12; if (hh === 0) hh = 12; }
-      const bits = [];
-      if (o.hour) bits.push(o.hour === '2-digit' ? p2(hh) : String(hh));
-      if (o.minute) bits.push(o.minute === '2-digit' ? p2(d.getMinutes()) : String(d.getMinutes()));
-      if (o.second) bits.push(o.second === '2-digit' ? p2(d.getSeconds()) : String(d.getSeconds()));
-      timePart = bits.join(':');
-      if (!h24sys) timePart += ' ' + (h24 < 12 ? 'AM' : 'PM');
-    }
-    const body = [datePart, timePart].filter(Boolean).join(', ');
-    return [wd, body].filter(Boolean).join(', ') || d.toISOString();
+const UTC_ZONES = new Set(['UTC', 'Etc/UTC', 'Etc/UCT', 'UCT', 'GMT', 'Etc/GMT', 'Etc/GMT0', 'Etc/GMT+0', 'Etc/GMT-0',
+  'GMT0', 'Zulu', 'Etc/Zulu', 'Universal', 'Etc/Universal']);
+const DATE_FIELDS = ['weekday', 'year', 'month', 'day'];
+const TIME_FIELDS = ['dayPeriod', 'hour', 'minute', 'second', 'fractionalSecondDigits'];
+// Locales whose numeric date is year-first, dash-separated and zero-padded (en-CA's and
+// sv-SE's short date), and whose clock is 24-hour (sv-SE).
+const ISO_DATE = new Set(['en-CA', 'sv-SE', 'sv']);
+const H23 = new Set(['sv-SE', 'sv']);
+const localeOf = (l) => {
+  const first = Array.isArray(l) ? l[0] : l;
+  return first == null ? 'en-US' : String(first && first.toString ? first.toString() : first);
+};
+// ECMA-402 ToDateTimeOptions(options, required, defaults); dateStyle/timeStyle are
+// lowered to the fields they name in the locale.
+function toDateTimeOptions(options, required, defaults, locale) {
+  const o = Object.assign({}, options == null ? {} : Object(options));
+  if (o.dateStyle !== undefined || o.timeStyle !== undefined) {
+    const iso = ISO_DATE.has(locale);
+    if (o.dateStyle === 'short') Object.assign(o, iso ? { year: 'numeric', month: '2-digit', day: '2-digit' } : { year: '2-digit', month: 'numeric', day: 'numeric' });
+    else if (o.dateStyle === 'medium') Object.assign(o, { year: 'numeric', month: 'short', day: 'numeric' });
+    else if (o.dateStyle === 'long') Object.assign(o, { year: 'numeric', month: 'long', day: 'numeric' });
+    else if (o.dateStyle === 'full') Object.assign(o, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+    if (o.timeStyle === 'short') Object.assign(o, { hour: 'numeric', minute: '2-digit' });
+    else if (o.timeStyle === 'medium' || o.timeStyle === 'long' || o.timeStyle === 'full') Object.assign(o, { hour: 'numeric', minute: '2-digit', second: '2-digit' });
+    return o;
   }
-  formatToParts(d) { return [{ type: 'literal', value: this.format(d) }]; }
-  resolvedOptions() { return Object.assign({ locale: 'en-US', timeZone: this._o.timeZone || 'UTC', calendar: 'gregory', numberingSystem: 'latn' }, this._o); }
+  let need = true;
+  if (required === 'date' || required === 'any') for (const k of DATE_FIELDS) if (o[k] !== undefined) need = false;
+  if (required === 'time' || required === 'any') for (const k of TIME_FIELDS) if (o[k] !== undefined) need = false;
+  if (need && (defaults === 'date' || defaults === 'all')) Object.assign(o, { year: 'numeric', month: 'numeric', day: 'numeric' });
+  if (need && (defaults === 'time' || defaults === 'all')) Object.assign(o, { hour: 'numeric', minute: 'numeric', second: 'numeric' });
+  return o;
 }
+function clockOf(d, timeZone) {
+  if (timeZone !== undefined && UTC_ZONES.has(String(timeZone))) {
+    return { Y: d.getUTCFullYear(), M: d.getUTCMonth(), D: d.getUTCDate(), w: d.getUTCDay(), h: d.getUTCHours(), m: d.getUTCMinutes(), s: d.getUTCSeconds() };
+  }
+  return { Y: d.getFullYear(), M: d.getMonth(), D: d.getDate(), w: d.getDay(), h: d.getHours(), m: d.getMinutes(), s: d.getSeconds() };
+}
+function dateTimeParts(d, o, locale) {
+  const c = clockOf(d, o.timeZone);
+  const P = [];
+  const put = (type, value) => P.push({ type, value: String(value) });
+  const lit = (value) => put('literal', value);
+  const textMonth = o.month === 'long' || o.month === 'short' || o.month === 'narrow';
+  const hasDate = o.year !== undefined || o.month !== undefined || o.day !== undefined;
+  const hasTime = o.hour !== undefined || o.minute !== undefined || o.second !== undefined;
+  const year = o.year === '2-digit' ? p2(c.Y % 100) : String(c.Y);
+  const day = o.day === '2-digit' ? p2(c.D) : String(c.D);
+  if (o.weekday !== undefined) {
+    put('weekday', (o.weekday === 'long' ? DAYL : DAY)[c.w]);
+    if (hasDate || hasTime) lit(', ');
+  }
+  if (textMonth) {
+    const name = (o.month === 'long' ? MONL : MON)[c.M];
+    put('month', o.month === 'narrow' ? name[0] : name);
+    if (o.day !== undefined) { lit(' '); put('day', day); }
+    if (o.year !== undefined) { lit(o.day !== undefined ? ', ' : ' '); put('year', year); }
+  } else if (hasDate) {
+    const month = o.month === '2-digit' ? p2(c.M + 1) : String(c.M + 1);
+    if (ISO_DATE.has(locale) && o.year !== undefined && o.month !== undefined && o.day !== undefined) {
+      put('year', year); lit('-'); put('month', p2(c.M + 1)); lit('-'); put('day', p2(c.D));
+    } else {
+      const order = [['month', o.month, month], ['day', o.day, day], ['year', o.year, year]].filter((f) => f[1] !== undefined);
+      order.forEach(([type, , value], i) => { if (i) lit('/'); put(type, value); });
+    }
+  }
+  if (hasTime) {
+    if (hasDate) lit(textMonth ? ' at ' : H23.has(locale) ? ' ' : ', ');
+    const h12 = o.hour12 !== undefined ? !!o.hour12
+      : o.hourCycle !== undefined ? (o.hourCycle === 'h11' || o.hourCycle === 'h12') : !H23.has(locale);
+    const shown = [];
+    if (o.hour !== undefined) {
+      const hh = h12 ? (c.h % 12 || 12) : c.h;
+      shown.push(['hour', o.hour === '2-digit' || !h12 ? p2(hh) : String(hh)]);
+    }
+    if (o.minute !== undefined) shown.push(['minute', o.hour !== undefined || o.minute === '2-digit' ? p2(c.m) : String(c.m)]);
+    if (o.second !== undefined) shown.push(['second', o.minute !== undefined || o.second === '2-digit' ? p2(c.s) : String(c.s)]);
+    shown.forEach(([type, value], i) => { if (i) lit(':'); put(type, value); });
+    if (h12 && o.hour !== undefined) { lit(' '); put('dayPeriod', c.h < 12 ? 'AM' : 'PM'); }
+  }
+  return P;
+}
+const asDate = (d) => (d === undefined ? new Date() : (d instanceof Date ? d : new Date(d)));
+class DateTimeFormat {
+  constructor(l, o) { this._l = localeOf(l); this._o = toDateTimeOptions(o, 'any', 'date', this._l); }
+  formatToParts(d) {
+    d = asDate(d);
+    if (isNaN(d.getTime())) throw new RangeError('Invalid time value');
+    return dateTimeParts(d, this._o, this._l);
+  }
+  format(d) { return this.formatToParts(d).map((p) => p.value).join(''); }
+  resolvedOptions() { return Object.assign({ locale: this._l, timeZone: this._o.timeZone || 'UTC', calendar: 'gregory', numberingSystem: 'latn' }, this._o); }
+}
+
+// ECMA-402 DEFINES Date.prototype.toLocaleString / toLocaleDateString / toLocaleTimeString
+// and Number.prototype.toLocaleString in terms of DateTimeFormat and NumberFormat. quickjs's
+// own versions ignore both arguments ("01/01/2027, 02:59:07 AM" for any options), so the
+// bundle's CronCreate answered "Next run: 01/01/2027 02:59:00am" where native says
+// "Jan 1 2:59am", and its cost lines lost their grouping and fixed decimals. Installed
+// here because this module is evaluated only on an engine with no Intl (the loader's gate):
+// where Intl is native, its toLocale* methods are native too.
+function installLocaleMethods(G) {
+  const define = (proto, name, fn) => Object.defineProperty(proto, name, { value: fn, writable: true, configurable: true, enumerable: false });
+  for (const [name, required, defaults] of [['toLocaleString', 'any', 'all'], ['toLocaleDateString', 'date', 'date'], ['toLocaleTimeString', 'time', 'time']]) {
+    define(G.Date.prototype, name, {
+      [name](locales, options) {
+        if (isNaN(this.getTime())) return 'Invalid Date';
+        const l = localeOf(locales);
+        return dateTimeParts(this, toDateTimeOptions(options, required, defaults, l), l).map((p) => p.value).join('');
+      },
+    }[name]);
+  }
+  define(G.Number.prototype, 'toLocaleString', {
+    toLocaleString(_locales, options) { return fmtNumber(Number.prototype.valueOf.call(this), options); },
+  }.toLocaleString);
+}
+installLocaleMethods(globalThis);
 
 // ---- Intl.RelativeTimeFormat (en) ----
 class RelativeTimeFormat {

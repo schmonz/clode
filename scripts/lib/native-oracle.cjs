@@ -87,6 +87,8 @@ function runInNative(bin, programSource, opts = {}) {
     ].join('\n'));
     const env = { PATH: '/usr/bin:/bin', HOME: home, OUTF: outf, INF: inf, BUN_OPTIONS: `--preload ${prog}` };
     if (process.platform === 'win32') { env.USERPROFILE = home; env.SystemRoot = process.env.SystemRoot; }
+    // a program whose answer reads the local clock (Date's local getters) names its zone
+    if (opts.tz) env.TZ = opts.tz;
     const r = spawnSync(bin, ['--version'], { encoding: 'utf8', env, timeout: opts.timeoutMs || 120000, maxBuffer: 64 * 1024 * 1024 });
     let raw = '';
     try { raw = fs.readFileSync(outf, 'utf8'); } catch { /* absent */ }

@@ -85,6 +85,39 @@ test('Intl legacy constructors are callable without `new` (matches node) — the
   }
 });
 
+// Date.prototype.toLocaleString / toLocaleDateString / toLocaleTimeString and
+// Number.prototype.toLocaleString are DEFINED by ECMA-402 as DateTimeFormat and
+// NumberFormat. quickjs's own ignore both arguments, so under quaude 2.1.330's
+// CronCreate answered "Next run: 01/01/2027 02:59:00am" where native says "Jan 1
+// 2:59am" (test/fidelity/tools-local.test.cjs), and every cost line lost its
+// grouping and fixed decimals. The cases are the bundle's own shapes; the
+// reference is NATIVE BUN's ICU, recorded (intl-locale-native.json) so the tjs
+// side is judged on every box, and re-measured wherever native is present, so a
+// moved native shows here rather than as a stale record. Native, not host node:
+// they differ ("Jan 1 at 2:59 AM" vs node's "Jan 1, 2:59 AM").
+const LOCALE_CASES = require('./fixtures/intl-locale-cases.cjs');
+const LOCALE_NATIVE = require('./fixtures/intl-locale-native.json');
+const LOCALE_TZ = 'America/New_York';
+
+test('Date and Number toLocale*String under tjs answer as native Bun does, row for row', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const f = fixture(`console.log(JSON.stringify((${LOCALE_CASES.toString()})()));`);
+  const r = spawnSync(tjsPath(), ['run', LOADER, f], { encoding: 'utf8', timeout: 20000, env: { ...process.env, TZ: LOCALE_TZ } });
+  let got;
+  try { got = JSON.parse(r.stdout); } catch { assert.fail(`tjs printed no answer (exit ${r.status}): ${(r.stdout || '').slice(0, 300)} ${(r.stderr || '').slice(0, 600)}`); }
+  const diffs = LOCALE_NATIVE.map((n, i) => (n === got[i] ? null : `native: ${n}\n   tjs: ${got[i]}`)).filter(Boolean);
+  assert.strictEqual(got.length, LOCALE_NATIVE.length, 'one answer per recorded row');
+  assert.deepStrictEqual(diffs, [], `${diffs.length} row(s) differ from native:\n${diffs.join('\n')}`);
+});
+
+test('native Bun still answers the toLocale*String cases as recorded', (t) => {
+  const { resolveNativeOracle, runInNative } = require('../scripts/lib/native-oracle.cjs');
+  const bin = resolveNativeOracle();
+  if (!bin) { t.skip('no native claude (CLODE_NATIVE_ORACLE / CLODE_NATIVE_CLAUDE / PATH)'); return; }
+  const got = runInNative(bin, `return (${LOCALE_CASES.toString()})();`, { tz: LOCALE_TZ });
+  assert.deepStrictEqual(got, LOCALE_NATIVE, 'native moved: re-record test/fixtures/intl-locale-native.json and review each row');
+});
+
 test('Intl.DateTimeFormat under tjs formats the h23 timestamp shape the bundle uses', (t) => {
   if (skipUnlessTjs(t)) return;
   const f = fixture(`
