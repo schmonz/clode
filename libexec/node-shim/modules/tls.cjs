@@ -88,10 +88,39 @@ function getCACertificates(type) {
 function unimplemented(name) {
   return function () { throw new Error(`node-shim: tls.${name} not implemented (fetch is the -p transport; the mock path is plain http)`); };
 }
-const SOCKET_API = ['connect', 'createServer', 'createSecureContext', 'TLSSocket', 'Server', 'checkServerIdentity'];
+const SOCKET_API = ['connect', 'createServer', 'TLSSocket', 'Server', 'checkServerIdentity'];
+
+// createSecureContext({ ca }), as node answers it (measured, node 24): a string, Buffer or TypedArray `ca`, or an array
+// of them, is ACCEPTED whatever it holds (garbage, a key, a truncated certificate: no throw), and any other type is
+// ERR_INVALID_ARG_TYPE. 2.1.330 asks it whether the NODE_EXTRA_CA_CERTS file loads (`createSecureContext({ca:[file]})`
+// in its CA-trust builder) and drops the file when it throws; as a wall it always threw, so a private CA never
+// reached WebFetch's trust list (test/fidelity/webfetch.test.cjs: "X509 - Certificate verification failed"). Options
+// this context could not honour (a certificate, a key, ciphers...) still meet the wall: accepting them would lie.
+class SecureContext { constructor() { this.context = {}; } }
+const SECURE_CONTEXT_HONOURED = new Set(['ca']);
+function createSecureContext(options) {
+  const NE = require('../internal/node-errors.cjs');
+  if (options === undefined || options === null) return new SecureContext(); // node takes null as no options
+  if (options === null || typeof options !== 'object') throw NE.invalidArgType('The "options" argument must be of type object', options);
+  for (const k of Object.keys(options)) {
+    if (options[k] !== undefined && !SECURE_CONTEXT_HONOURED.has(k)) {
+      throw new Error(`node-shim: tls.createSecureContext({${k}}) not implemented (only the ca option is taken)`);
+    }
+  }
+  const ca = options.ca;
+  if (ca !== undefined) {
+    const ok = (v) => typeof v === 'string' || ArrayBuffer.isView(v);
+    for (const v of Array.isArray(ca) ? ca : [ca]) {
+      if (!ok(v)) throw NE.invalidArgType('The "options.ca" property must be of type string or an instance of Buffer, TypedArray, or DataView', v);
+    }
+  }
+  return new SecureContext();
+}
 
 const tls = {
   getCACertificates,
+  createSecureContext,
+  SecureContext,
   DEFAULT_MIN_VERSION: 'TLSv1.2',
   DEFAULT_MAX_VERSION: 'TLSv1.3',
 };
