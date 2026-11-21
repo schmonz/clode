@@ -517,7 +517,9 @@ function orderedPatches(prefix) {
     if (undocumented.length) throw new Error(`patches without a documented order: ${undocumented.join(', ')} (add to TXIKI_PATCH_ORDER)`);
     return TXIKI_PATCH_ORDER.filter((f) => present.includes(f));
   }
-  return present;
+  // quickjs-ng-*: name order, stated rather than left to readdir. quickjs-ng-regexp-capture-u16.patch's quickjs.c hunk
+  // edits the function quickjs-ng-canonical-le-bytecode.patch adds, so the order is load-bearing.
+  return present.sort();
 }
 
 // Apply every patch UNCONDITIONALLY: a plain `git apply` onto the (pristine, in

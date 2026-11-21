@@ -19,9 +19,12 @@
 # 3 bytes, save_reset from 3 to 5), and the header is 10 bytes, not 8:
 #     flags u16 @0 | capture count u16 @2 | bytecode length u32 @4 | stack size u8 @8 | pad @9
 # The flags and the bytecode length stay where they were ON PURPOSE:
-# quickjs-ng-canonical-le-bytecode.patch's big-endian recompile reads exactly those two
-# fields (flags at 0, length at 4) to tell little-endian bytecode from native and to
-# recompile it, so that patch needs no change and still discriminates correctly.
+# quickjs-ng-canonical-le-bytecode.patch's big-endian recompile (js_re_recompile_le in
+# quickjs.c) reads exactly those two fields (flags at 0, length at 4) to tell
+# little-endian bytecode from native and to recompile it. It also assumed the 8-byte
+# header (`len < 8`, `cap = len - 8`), so the last hunk below makes that 10 (review,
+# 2026-11-21). At 8 the plausibility window was 2 bytes too wide: a wrong-endian length
+# landing in it would have been taken for native.
 # Every opcode walker (compute_stack_size, the simple-quantifier and check-advance scans)
 # steps by reopcode_info[].size, which libregexp-opcode.h now states.
 #
@@ -33,9 +36,11 @@
 # BC_VERSION IS NOT BUMPED, deliberately: compiled regexp bytecode is embedded opaquely in
 # JS bytecode, and clode's bytecode writer IS the runtime (clode-build.cjs, BC_VERSION and
 # engine fingerprint lockstep, recorded by attest), so no other build's bytecode reaches
-# this reader. Order-independent of every other quickjs-ng-*.patch: none touches
-# libregexp.c, libregexp-opcode.h or lre-test.c. lre-test.c's hand-built bytecode moves
-# to the new header and operand widths.
+# this reader. No other quickjs-ng-*.patch touches libregexp.c, libregexp-opcode.h or
+# lre-test.c. The quickjs.c hunk edits js_re_recompile_le, so it applies after
+# quickjs-ng-canonical-le-bytecode.patch, which adds that function (applyPatches takes
+# them in name order). lre-test.c's hand-built bytecode moves to the new header and
+# operand widths.
 #
 # Tests: test/engine-regexp-captures.test.cjs (under the engine, 32,768 groups compile and
 # match and 32,769 are refused, native's boundary; 588 groups, with backreferences past 255,
@@ -284,3 +289,26 @@ diff --git a/lre-test.c b/lre-test.c
          0x0B,                    // REOP_match
      };
  
+diff --git a/quickjs.c b/quickjs.c
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -39699,7 +39699,9 @@
+     JSValue bc_val;
+     JSString *new_bc;
+ 
+-    if (le_bc->is_wide_char || le_bc->len < 8)
++    /* 10: libregexp's RE_HEADER_LEN since the capture-u16 header (flags u16, capture count u16,
++       bytecode length u32, stack size u8, a pad byte), not the 8 bytes this was written for. */
++    if (le_bc->is_wide_char || le_bc->len < 10)
+         return JS_ThrowInternalError(ctx, "bad regexp bytecode");
+     /* OP_regexp fires for BOTH deserialized cpool literals (canonical-LE)
+        AND freshly-parsed literals in running code (native-BE) — recompiling
+@@ -39711,7 +39713,7 @@
+        untouched. Only recompile when the little-endian reading is the
+        plausible one. */
+     {
+-        uint32_t cap = (uint32_t)le_bc->len - 8;
++        uint32_t cap = (uint32_t)le_bc->len - 10;
+         uint32_t len_native = get_u32(hdr + 4);
+         uint32_t len_le = hdr[4] |
+                           (hdr[5] << 8) |
