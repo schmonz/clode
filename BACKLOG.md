@@ -508,7 +508,7 @@ with TJS_HOME unset creates $HOME/.tjs holding localStorage.db only (no cookies.
 Unmeasured. The suite-hermeticity claims (suite home, sentinel HOME byte-untouched, the 18/81 spawn counts) were not
 re-run; test/suite-home-hermetic.test.cjs and a full suite with a sentinel HOME would.
 
-## Every-tool Phase A is complete at cell level, pending the green CI run: of the 2166 tool x mode x engine cells, 363 are CLAIMED by a CI job, 181 (netbsd-arm64) are DRIVEN-LOCAL by committed VM evidence (2026-11-21, not CI), 12 are not applicable; NO GREEN CI RUN HAS YET SHOWN THE CI-CLAIMED ONES RAN; Phase A's 18 tools, Agent, Edit and Bash in print, interactive, unlisted and every permission mode (cells 2026-11-18; tools 2026-09-28; Grep and Glob driven 2026-10-05; Read, Write, NotebookEdit, the Task tools and TaskStop 2026-11-19; Skill, the worktree and cron tools, ScheduleWakeup, ReportFindings, Workflow and ListAgents 2026-11-20; the -p modes, interactive, Agent and the Grep/Glob modes 2026-11-20)
+## Every-tool Phase A is DONE (2026-11-21): of the 2166 tool x mode x engine cells, 363 are CLAIMED by a CI job and a green run showed them ran (ci.yml run 44892635437 on 7263c8b, gates-ran-in-ci green), 181 (netbsd-arm64) are DRIVEN-LOCAL by committed VM evidence (not CI), 12 are not applicable; Phase A's 18 tools, Agent, Edit and Bash in print, interactive, unlisted and every permission mode (cells 2026-11-18; tools 2026-09-28; Grep and Glob driven 2026-10-05; Read, Write, NotebookEdit, the Task tools and TaskStop 2026-11-19; Skill, the worktree and cron tools, ScheduleWakeup, ReportFindings, Workflow and ListAgents 2026-11-20; the -p modes, interactive, Agent and the Grep/Glob modes 2026-11-20)
 
 Since observability Task 1 (2026-11-18) the gate counts CELLS, tool x mode x engine: 90 tools, 722
 tool x mode pairs (permission modes, sandbox, Bash shells, interactive, unlisted, from the carve where
@@ -642,9 +642,16 @@ purpose). Its phases, each tool's `until` in the gate being its phase's constant
   against native, no tool exemption is left with UNTIL_PHASE_A, and driving them found and fixed shim defects (each in
   its task's report; among them readdir/readlink/opendir ignoring `encoding`, which kept quaude's ExitWorktree from
   removing a worktree) and named one divergence (ListAgents, above). CELL LEVEL: every Phase A cell is claimed by a
-  CI job (363) or, on netbsd-arm64, driven-local by committed VM evidence (181), but no green run has yet shown the
-  newest CI claims ran (above). The 5 sandbox cells moved to Phase B.
-  UNTIL_PHASE_A is removed.
+  CI job (363) or, on netbsd-arm64, driven-local by committed VM evidence (181). DONE 2026-11-21: ci.yml run
+  44892635437 (7263c8b) was green, linux-x64-pty and gates-ran-in-ci included, so the CI claims are shown ran. The
+  5 sandbox cells moved to Phase B. UNTIL_PHASE_A is removed.
+  PARKED from the plan's reviews (minor; take before or during Phase B):
+  - live-checks' CONTROL_CALL regex does not know assertFailsOnMissingOutputClaimingNoCell, so bashDisabled reads as
+    uncontrolled there and passes only because other controls are in reach;
+  - tui-screen-script's never-quiet step's 1500 ms settle window rests on one failure, not a measured stall length;
+  - builtQuaude() honours CLODE_QUAUDE, so a job env pointing at a wrapper still passes modeTurnFinding's binary check;
+  - an unclaimed Phase A cell's finding names the date fault, not the PHASE_A_CLOSED reason;
+  - PHASE_A_CELLS still receives a LOCAL_CELLS argument it ignores (tool-coverage-gates.test.cjs).
 - PLANNED, before Phase B's SendMessage (2026-11-20): a real `net.createServer` in the shim (unix-socket and loopback
   TCP listen, accepted sockets with data/end/close, server close). It is the one prerequisite shared by the sandbox's
   network proxies (sandboxed Bash under quaude), UDS peer messaging (SendMessage between sessions), and ListAgents'
