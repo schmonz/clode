@@ -173,6 +173,7 @@ const FILES = {
   'test/shim-surface.test.cjs': { jobs: ['node-shim-oracle'] },
   'test/guard-subcommands-gate.test.cjs': { jobs: ['node-shim-oracle'] },
   'test/engine-regexp-reuse.test.cjs': { jobs: ['node-shim-oracle'] },
+  'test/engine-regexp-captures.test.cjs': { jobs: ['node-shim-oracle'] },
   'test/build-gates/dep-closure-gates.test.cjs': { jobs: ['node-shim-oracle'] },
   'test/build-gates/lexical-code-mask.test.cjs': { jobs: ['node-shim-oracle'] },
   'test/build-gates/renameable-positions.test.cjs': { jobs: ['node-shim-oracle'] },

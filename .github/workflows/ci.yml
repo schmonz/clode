@@ -808,6 +808,10 @@ jobs:
           # It needs CLODE_TJS and nothing else, and the suite job has no engine, so
           # without this line it would run on dev boxes only.
           FILES="$FILES test/engine-regexp-reuse.test.cjs"
+          # test/engine-regexp-captures.test.cjs tests the ENGINE too: REGEXP-CAPTURE-U16 (a RegExp may
+          # carry 32,768 capture groups, native's limit), its semantics against this job's node. It needs
+          # CLODE_TJS and nothing else, so it is placed exactly as its sibling above.
+          FILES="$FILES test/engine-regexp-captures.test.cjs"
           # The gates that read the pinned carve seeded above, or stage the provider (which needs CLODE_TJS):
           # each skipped in both suite rows of CI run 44572930594 ("pinned carve not found", "provider found but
           # staging it failed"), and no job ran them (observability Task 5; test/ci-gates.cjs PLACED). Measured
