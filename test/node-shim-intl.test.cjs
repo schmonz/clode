@@ -96,7 +96,13 @@ test('Intl legacy constructors are callable without `new` (matches node) — the
 // moved native shows here rather than as a stale record. Native, not host node:
 // they differ ("Jan 1 at 2:59 AM" vs node's "Jan 1, 2:59 AM").
 const LOCALE_CASES = require('./fixtures/intl-locale-cases.cjs');
-const LOCALE_NATIVE = require('./fixtures/intl-locale-native.json');
+// Native's ICU is the platform's: Apple's on macOS ("Jan 1 at 2:59 AM"), Bun's own elsewhere ("Jan 1, 2:59 AM"), and
+// those 13 date-time joins are the only difference (measured 2026-11-21, darwin-arm64 and linux-x64-musl; intl.cjs
+// DATE_TIME_AT). Each platform is judged against its own native; every non-darwin platform against Linux's record
+// (Windows and the BSDs carry Bun's ICU too; unmeasured there).
+const LOCALE_NATIVE = process.platform === 'darwin'
+  ? require('./fixtures/intl-locale-native.json') : require('./fixtures/intl-locale-native-linux.json');
+const LOCALE_RECORD = process.platform === 'darwin' ? 'intl-locale-native.json' : 'intl-locale-native-linux.json';
 const LOCALE_TZ = 'America/New_York';
 
 test('Date and Number toLocale*String under tjs answer as native Bun does, row for row', (t) => {
@@ -115,7 +121,7 @@ test('native Bun still answers the toLocale*String cases as recorded', (t) => {
   const bin = resolveNativeOracle();
   if (!bin) { t.skip('no native claude (CLODE_NATIVE_ORACLE / CLODE_NATIVE_CLAUDE / PATH)'); return; }
   const got = runInNative(bin, `return (${LOCALE_CASES.toString()})();`, { tz: LOCALE_TZ });
-  assert.deepStrictEqual(got, LOCALE_NATIVE, 'native moved: re-record test/fixtures/intl-locale-native.json and review each row');
+  assert.deepStrictEqual(got, LOCALE_NATIVE, `native moved: re-record test/fixtures/${LOCALE_RECORD} and review each row`);
 });
 
 test('Intl.DateTimeFormat under tjs formats the h23 timestamp shape the bundle uses', (t) => {

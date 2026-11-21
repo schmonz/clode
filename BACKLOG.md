@@ -264,6 +264,12 @@ Bun.SHA256/gzipSync. STILL RED, beyond 1 and 2 above, by gate:
     and drops the file, where native keeps the good root. This fails closed (LESS trust than native, not more). The
     rest is open: a minimal X509Certificate (constructor validating, `raw`, `toString`, a wall for the rest). 2.1.330
     reads it in 11 modules, so each read site needs reviewing first.
+19. **Without zoneinfo, quaude's local time is UTC; native's is not** (found 2026-11-21 running node-shim-oracle's
+    files in node:24.22.0-alpine). The engine reads local time through libc. musl with no /usr/share/zoneinfo (a bare
+    alpine) answers UTC for TZ=America/New_York, where native (and node) carry ICU's zone data and answer New York:
+    node-shim-intl's TZ rows read off by the zone's offset (15 of 120). ci.yml's node-shim-oracle now installs tzdata so
+    the row asks its formatting question; the divergence itself stays open (an engine-side zone database, or
+    reading TZ through the ICU-shaped polyfill).
 
 The full suite after 15 (2026-11-21, same setup): 4011 pass, 6 fail, 113 skip, RC=1. The six were: 16 and 17 above;
 backlog-claims-measured (the RULED entry had no Measured line), live-checks-judge-output (the sandbox test's native
@@ -442,6 +448,9 @@ shapes cut to the driver's argument count.
   for 'a' is fixed: util.inspect is now its own entry, which also stopped throwing when given options.)
 - DIFF-STATFS-SYNC: the linux carve calls `fs.statfsSync`, and since 2.1.330 the darwin carve too; it is absent
   from the shim (the gap map's entry): the sync-fs patch has no statfs.
+- DIFF-BUFFER-ENGINE-LIMITS: `buffer.constants.MAX_LENGTH` and `MAX_STRING_LENGTH` are QuickJS-ng's own limits
+  (INT32_MAX, 2**30-1), on purpose: node's numbers (2**53-1, 2**29-24) and native's (2**32, 2**31-1) promise a buffer
+  or string this engine refuses (libexec/node-shim/modules/buffer.cjs; test/node-shim-buffer-isascii.test.cjs).
 
 Measured: `node --test test/node-shim-differential.test.cjs` on darwin-arm64 (the scratch tjs built from this
 tree, node 24.21.0, the 2.1.283 macos-arm64 provider): at c7d7716, 1785 calls judged, 372 diverging; after

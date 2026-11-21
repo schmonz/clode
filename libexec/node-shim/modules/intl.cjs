@@ -121,6 +121,13 @@ const TIME_FIELDS = ['dayPeriod', 'hour', 'minute', 'second', 'fractionalSecondD
 // sv-SE's short date), and whose clock is 24-hour (sv-SE).
 const ISO_DATE = new Set(['en-CA', 'sv-SE', 'sv']);
 const H23 = new Set(['sv-SE', 'sv']);
+// THE ONE PLATFORM FACT HERE (a written reason, per the one-implementation rule): native's ICU is not the same ICU
+// everywhere. On macOS Bun uses the system's (Apple's CLDR), which joins a text-month date to its time with " at "
+// ("Jan 1 at 2:59 AM"); on Linux it carries its own ICU, which joins them with ", " ("Jan 1, 2:59 AM", node's answer
+// too). Measured 2026-11-21 with the BUN_OPTIONS preload oracle in native 2.1.330, darwin-arm64 and linux-x64-musl: of
+// 120 rows those 13 joins are the only difference (test/fixtures/intl-locale-native.json, -linux.json). Windows and
+// the BSDs carry Bun's own ICU too, so they take Linux's join; unmeasured there (no native oracle has run on them).
+const DATE_TIME_AT = !!(globalThis.process && globalThis.process.platform === 'darwin');
 const localeOf = (l) => {
   const first = Array.isArray(l) ? l[0] : l;
   return first == null ? 'en-US' : String(first && first.toString ? first.toString() : first);
@@ -181,7 +188,7 @@ function dateTimeParts(d, o, locale) {
     }
   }
   if (hasTime) {
-    if (hasDate) lit(textMonth ? ' at ' : H23.has(locale) ? ' ' : ', ');
+    if (hasDate) lit(textMonth && DATE_TIME_AT ? ' at ' : H23.has(locale) ? ' ' : ', ');
     const h12 = o.hour12 !== undefined ? !!o.hour12
       : o.hourCycle !== undefined ? (o.hourCycle === 'h11' || o.hourCycle === 'h12') : !H23.has(locale);
     const shown = [];

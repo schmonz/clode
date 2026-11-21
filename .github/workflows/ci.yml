@@ -648,19 +648,25 @@ jobs:
       #   libstdc++   the Bun-packaged provider binary links it. node:alpine
       #               already pulls it in for node itself; named explicitly so the
       #               dependency is stated rather than inherited by luck.
+      #   tzdata      node-shim-intl runs its rows at TZ=America/New_York. node and
+      #               native carry ICU's own zone data; the engine reads local time
+      #               through libc, and musl without /usr/share/zoneinfo answers UTC
+      #               for every zone (measured 2026-11-21: 15 rows off by the zone's offset). That
+      #               divergence is real and named in BACKLOG.md; this row asks the
+      #               formatting question, on a box that has the zone.
       # The other externals these tests reach for — /bin/echo, /bin/cat, /bin/sh,
       # /bin/sleep, /bin/pwd, mkfifo, kill, uname, true — are busybox applets that
       # alpine already symlinks into place, and every row that uses one runs the
       # SAME binary on both sides of the diff, so busybox-vs-coreutils cannot skew
       # a comparison here.
-      - name: musl prerequisites (bash, git, openssl, procps — see above)
+      - name: musl prerequisites (bash, git, openssl, procps, tzdata — see above)
         shell: sh
         run: |
           set -e
           # `procps` is the provides-name; the real package is procps-ng on
           # alpine >= 3.19. Asking for the provides-name works on both sides of
           # that rename.
-          apk add --no-cache bash git openssl procps libstdc++
+          apk add --no-cache bash git openssl procps libstdc++ tzdata
           # Name the tool failure HERE rather than letting it surface as a red
           # SIGSTOP row two steps later. procps-ng installs /usr/bin/ps, which
           # precedes busybox's /bin/ps on alpine's PATH.
