@@ -35,7 +35,7 @@ const CAUSES = [
   { cause: 'DIFF-ARG-VALIDATION', api: '^fs\\.writeFileSync$', id: '^fs\\.writeFileSync\\(<[^>]*>\\)$', leaf: '^r\\.error\\.(message|code)$' },
   { cause: 'DIFF-MISSING-MEMBERS', api: '^(fs\\.promises|fs/promises\\.constants|path\\.(win32|posix)|util\\.types|zlib\\.constants)$', leaf: '^r\\.(keys\\.\\w+|[A-Z][A-Z0-9_]*|undefined)$' },
   { cause: 'DIFF-STDIO-CLASS', api: '^process\\.(stdout|stderr|env)$', leaf: '^r\\.ctor$' },
-  { cause: 'DIFF-ZLIB', api: '^zlib\\.(gzipSync|deflateSync|inflateSync|inflateRawSync)$', leaf: `(${ERR}|^r\\.(header|roundtrip|Buffer|length)$)` },
+  { cause: 'DIFF-ZLIB', api: '^zlib\\.(gzipSync|deflateSync|deflateRawSync|inflateSync|inflateRawSync)$', leaf: `(${ERR}|^r\\.(header|roundtrip|Buffer|length)$)` },
   { cause: 'DIFF-OS-MEMORY-RELEASE', api: '^os\\.(totalmem|freemem|release|version)$', leaf: '^r(\\.sign)?$' },
   { cause: 'DIFF-NET-SERVER', api: '^net\\.createServer$', leaf: '^r\\.(closed|error\\.(ctor|name|message))$' },
   { cause: 'DIFF-PATH-DOTDOT', api: '^path\\.(parse|extname)$', leaf: '^r(\\.(dir|ext|name|base|root))?$' },

@@ -239,6 +239,41 @@ function sysError(code, op, p) {
   e.syscall = op;
   return require('../internal/node-errors.cjs').asNodeError(e, op, [p]);
 }
+// node's path-argument check (validatePath): a string, a Buffer or TypedArray, or a URL; anything else is
+// ERR_INVALID_ARG_TYPE, before any syscall (measured, node 24.21.0: fs.promises.lstat() and mkdtemp()
+// reject so; the engine took `undefined` as the path 'undefined' and said ENOENT).
+function validatePathArg(v, name = 'path') {
+  if (typeof v === 'string' || ArrayBuffer.isView(v) || (v !== null && typeof v === 'object' && typeof v.href === 'string')) return v;
+  throw require('../internal/node-errors.cjs').invalidArgType(`The "${name}" argument must be of type string or an instance of Buffer or URL`, v);
+}
+// An engine error retold under the syscall node's own implementation names (readdirSync: scandir; opendir:
+// opendir, with no path; the JS realpath walk: lstat or stat; utimesSync: utime), code, errno and text kept.
+function retold(e, syscall, p) {
+  if (!e || typeof e.code !== 'string' || typeof e.syscall !== 'string') return e;
+  const msg = String(e.message);
+  const at = msg.indexOf(`, ${e.syscall}`);
+  const head = at < 0 ? msg : msg.slice(0, at);
+  e.syscall = syscall;
+  if (p === undefined) { delete e.path; e.message = `${head}, ${syscall}`; } else { e.path = p; e.message = `${head}, ${syscall} '${p}'`; }
+  return e;
+}
+// The error node's JS realpath (fs.realpath, fs.realpathSync; not their .native, not fs.promises.realpath)
+// reports for a path that does not resolve: it lstat()s each prefix of the resolved path in turn and
+// stat()s a prefix that is a symlink, so a missing component says lstat and a dangling link says stat
+// (measured, node 24.21.0). Any other failure keeps the engine's realpath error.
+function realpathWalkError(p, e) {
+  if (typeof p !== 'string') return e;
+  const abs = path.resolve(p);
+  let cur = path.parse(abs).root;
+  for (const part of abs.slice(cur.length).split(path.sep).filter(Boolean)) {
+    cur = path.join(cur, part);
+    let l;
+    try { l = FSS.lstat(cur); } catch (le) { return retold(le, 'lstat', cur); }
+    if (typeIs(l.mode, 'symlink')) { try { FSS.stat(cur); } catch (se) { return retold(se, 'stat', cur); } }
+  }
+  return e;
+}
+const realpathJs = (p) => { try { return FSS.realpath(p); } catch (e) { throw realpathWalkError(p, e); } };
 // CREATE EXCLUSIVELY, from primitives that are each atomic (the engine has no O_EXCL, no link(2) and
 // no fchmod):
 //   1. mkdir a private directory beside the path, 0700: exclusive, so it is ours and nobody else can
@@ -634,11 +669,13 @@ function readSync(fd, buf, offset, length, position) {
 // permission deny path has no try around it.
 const noEntry = (opts, e, codes) => !!opts && opts.throwIfNoEntry === false && !!e && codes.includes(e.code);
 function statSync(p, opts) {
+  validatePathArg(p);
   let raw;
   try { raw = FSS.stat(p); } catch (e) { if (noEntry(opts, e, ['ENOENT', 'ENOTDIR'])) return undefined; throw e; }
   return makeStats(raw, opts);
 }
 function lstatSync(p, opts) {
+  validatePathArg(p);
   let raw;
   try { raw = FSS.lstat(p); } catch (e) { if (noEntry(opts, e, ['ENOENT'])) return undefined; throw e; }
   return makeStats(raw, opts);
@@ -711,6 +748,7 @@ function rmSync(p, opts) {
 // chars, mode 0o700) and return its path.
 const MKDTEMP_CHARS = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
 function mkdtempSync(prefix) {
+  validatePathArg(prefix, 'prefix');
   for (let attempt = 0; attempt < 16; attempt++) {
     let suffix = '';
     for (let i = 0; i < 6; i++) suffix += MKDTEMP_CHARS[Math.floor(Math.random() * MKDTEMP_CHARS.length)];
@@ -750,20 +788,25 @@ function readdirCore(p, opts) {
   const recursive = !!(opts && opts.recursive);
   const enc = nameEncoding(opts);
   const named = (d, n) => { if (enc !== 'utf8' && enc !== 'utf-8') d.name = encodeName(n, enc); return d; };
+  // node's readdir is a scandir: its errors say so ("ENOENT: ..., scandir '<p>'")
+  const scandir = (d) => { try { return FSS.readdir(d); } catch (e) { throw retold(e, 'scandir', d); } };
   if (!recursive) {
-    const names = FSS.readdir(p);
+    const names = scandir(p);
     return wft ? names.map((n) => named(direntFor(p, n), n)) : names.map((n) => encodeName(n, enc));
   }
+  // breadth-first, as node's recursive readdir is: every entry of a directory, then each subdirectory
+  // in the order it was met (measured, node 24.21.0)
   const out = [];
-  const walk = (dir, relBase) => {
-    for (const n of FSS.readdir(dir)) {
+  const queue = [[p, '']];
+  while (queue.length) {
+    const [dir, relBase] = queue.shift();
+    for (const n of scandir(dir)) {
       const rel = relBase ? path.join(relBase, n) : n;
       const d = direntFor(dir, n);
       out.push(wft ? named(d, n) : encodeName(rel, enc));
-      if (d.isDirectory()) walk(path.join(dir, n), rel);
+      if (d.isDirectory()) queue.push([path.join(dir, n), rel]);
     }
-  };
-  walk(p, '');
+  }
   return out;
 }
 
@@ -864,11 +907,51 @@ function cpDir(src, dest, opts) {
   chmodBestEffort(dest, st.mode & 0o7777);
 }
 
-// fs.utimesSync: the sync-fs patch exposes no sync utime; tjs.utime is async.
-// Best-effort — fire the async utime (the bundle stamps files it just wrote,
-// where a slightly-deferred mtime is observably fine) rather than throw.
+function openDir(p, opts, withPath) {
+  // A Dir over an eager Dirent list in the OS's readdir order (the engine's readdir does not sort,
+  // as node's Dir does not: test/node-shim-fs-opendir.test.cjs): readSync()/read() hand over the next
+  // entry or null, an async iterator, and closeSync()/close(), after which a read is node's
+  // ERR_DIR_CLOSED.
+  // `encoding` names the entries as readdir's does (a Dirent's name a Buffer for 'buffer'), as node's Dir does.
+  // Errors are node's opendir's: syscall opendir, and NO path from opendirSync ("ENOENT: no such file or
+  // directory, opendir") but the path from fs.promises.opendir and the callback form (measured, node
+  // 24.21.0). { recursive } walks as node's Dir does, breadth-first: the directory's entries, then each
+  // subdirectory's in the order met, without following symlinks.
+  const listed = (d) => { try { return readdirCore(d, { withFileTypes: true }); } catch (e) { throw retold(e, 'opendir', withPath ? d : undefined); } };
+  const ents = listed(p);
+  if (opts && opts.recursive) {
+    for (let k = 0; k < ents.length; k++) if (ents[k].isDirectory()) ents.push(...listed(path.join(ents[k].parentPath, ents[k].name)));
+  }
+  const enc = nameEncoding(opts);
+  if (enc !== 'utf8' && enc !== 'utf-8') for (const d of ents) d.name = encodeName(d.name, enc);
+  let i = 0, closed = false;
+  const next = () => {
+    if (closed) { const e = new Error('Directory handle was closed'); e.code = 'ERR_DIR_CLOSED'; throw e; }
+    return i < ents.length ? ents[i++] : null;
+  };
+  return {
+    path: p,
+    readSync: next,
+    read: async () => next(),
+    close: async () => { closed = true; },
+    closeSync: () => { closed = true; },
+    [Symbol.asyncIterator]() { return { next: async () => { const e = next(); return e ? { value: e, done: false } : { value: undefined, done: true }; } }; },
+  };
+}
+
+// fs.utimesSync / fs.lutimesSync: the sync-fs patch exposes no sync utime; tjs.utime and tjs.lutime are
+// async. The times are set best-effort by the async call (the bundle stamps files it just wrote, where a
+// slightly-deferred mtime is observably fine), but node's ERRORS are thrown synchronously, as node does:
+// a stat (utimes follows a link) or lstat (lutimes does not) first, its failure retold as node's utime /
+// lutime error. Until 2026-11-21 utimesSync of a missing path returned as if it had worked, and
+// lutimesSync (2.1.330 calls it) did not exist (test/node-shim-differential.test.cjs).
 function utimesSync(p, atime, mtime) {
-  try { _refuseProcFdOffLinux('utime', p); const r = tjs.utime(p, timeToMs(atime), timeToMs(mtime)); if (r && r.catch) r.catch(() => {}); } catch (_) { /* best-effort */ }
+  try { FSS.stat(p); } catch (e) { throw retold(e, 'utime', p); }
+  const r = tjs.utime(p, timeToMs(atime), timeToMs(mtime)); if (r && r.catch) r.catch(() => {});
+}
+function lutimesSync(p, atime, mtime) {
+  try { FSS.lstat(p); } catch (e) { throw retold(e, 'lutime', p); }
+  const r = tjs.lutime(p, timeToMs(atime), timeToMs(mtime)); if (r && r.catch) r.catch(() => {});
 }
 
 // fs.fchmodSync(fd, mode): the sync-fs patch (spike/quickjs/patches/txiki-sync-fs.patch)
@@ -911,34 +994,15 @@ const fsMod = {
   fstatSync: (fd, opts) => makeStats(FSS.fstat(fd), opts),
   fchmodSync,
   existsSync: (p) => { try { FSS.stat(p); return true; } catch { return false; } },
-  realpathSync: (p) => FSS.realpath(p),
+  realpathSync: (p) => realpathJs(p),
   createReadStream,
   createWriteStream,
   cpSync,
   utimesSync,
+  lutimesSync,
   readlinkSync: (p, opts) => encodeName(FSS.readlink(p), nameEncoding(opts)),
   readdirSync: (p, opts) => readdirCore(p, opts),
-  opendirSync: (p, opts) => {
-    // A Dir over an eager Dirent list in the OS's readdir order (the engine's readdir does not sort,
-    // as node's Dir does not: test/node-shim-fs-opendir.test.cjs): readSync()/read() hand over the next
-    // entry or null, an async iterator, and closeSync()/close(), after which a read is node's
-    // ERR_DIR_CLOSED.
-    // `encoding` names the entries as readdir's does (a Dirent's name a Buffer for 'buffer'), as node's Dir does.
-    const ents = readdirCore(p, { withFileTypes: true, encoding: nameEncoding(opts) });
-    let i = 0, closed = false;
-    const next = () => {
-      if (closed) { const e = new Error('Directory handle was closed'); e.code = 'ERR_DIR_CLOSED'; throw e; }
-      return i < ents.length ? ents[i++] : null;
-    };
-    return {
-      path: p,
-      readSync: next,
-      read: async () => next(),
-      close: async () => { closed = true; },
-      closeSync: () => { closed = true; },
-      [Symbol.asyncIterator]() { return { next: async () => { const e = next(); return e ? { value: e, done: false } : { value: undefined, done: true }; } }; },
-    };
-  },
+  opendirSync: (p, opts) => openDir(p, opts, false),
   rmdirSync: (p) => FSS.rmdir(p),
   unlinkSync: (p) => FSS.unlink(p),
   renameSync: (a, b) => renameReplace(a, b),
@@ -1115,11 +1179,11 @@ const promises = {
     };
   },
   stat: async (p, opts) => statSync(p, opts),
-  lstat: async (p, opts) => makeStats(FSS.lstat(p), opts), // ignores throwIfNoEntry, as node's does
+  lstat: async (p, opts) => makeStats(FSS.lstat(validatePathArg(p)), opts), // ignores throwIfNoEntry, as node's does
   fstat: async (fd, opts) => fsMod.fstatSync(fd, opts),
   mkdir: async (p, opts) => mkdirSync(p, opts),
   readdir: async (p, opts) => readdirCore(p, opts),
-  opendir: async (p, opts) => fsMod.opendirSync(p, opts),
+  opendir: async (p, opts) => openDir(p, opts, true),
   access: async (p, m) => FSS.access(p, m ?? constants.F_OK),
   realpath: async (p) => FSS.realpath(p),
   readlink: async (p, opts) => encodeName(FSS.readlink(p), nameEncoding(opts)),
@@ -1161,7 +1225,7 @@ const promises = {
   },
 };
 // realpathSync.native (4 sites) — same resolution as realpathSync here.
-fsMod.realpathSync.native = fsMod.realpathSync;
+fsMod.realpathSync.native = (p) => FSS.realpath(p);
 // KNOWN LIMITATION (documented, not implemented): fs.statfsSync. The engine
 // exposes statFs only ASYNC (tjs.statFs) and the sync-fs binding has no statfs
 // entry, so a faithful sync form needs an engine patch (libuv's uv_fs_statfs
@@ -1184,6 +1248,10 @@ for (const name of ['readFile', 'writeFile', 'stat', 'lstat', 'fstat', 'access',
   'statfs']) {
   fsMod[name] = cbWrap(promises[name]);
 }
+// node's callback realpath is its JS walk (lstat/stat errors), fs.promises.realpath and fs.realpath.native the
+// realpath syscall.
+fsMod.realpath = cbWrap(async (p) => realpathJs(p));
+fsMod.realpath.native = cbWrap(promises.realpath);
 // fs.write / fs.read: callback receives (err, bytes, buffer) — extra trailing
 // arg beyond cbWrap's (err, val) shape, so wire them explicitly.
 // Both validate as node does BEFORE any callback (2.1.330's carve calls fs.write and fs.read): a
@@ -1241,7 +1309,15 @@ fsMod.read = function read(fd, buffer, offset, length, position, cb) {
 // genuinely needs fd-based times is a future wall — wire a tjs File handle then.
 fsMod.futimes = (fd, atime, mtime, cb) => { if (typeof cb === 'function') cb(null); };
 promises.futimes = async () => {};
-fsMod.open = (p, flags, mode, cb) => { const c = typeof cb === 'function' ? cb : (typeof mode === 'function' ? mode : flags); try { c(null, fsMod.openSync(p, typeof flags === 'string' || typeof flags === 'number' ? flags : 'r')); } catch (e) { c(e); } };
+// fs.open(path[, flags[, mode]], cb): the mode reaches openSync. Until 2026-11-21 it was dropped, so
+// `fs.open(p, O_WRONLY|O_APPEND|O_CREAT, 0o600, cb)` (2.1.330 calls it so) created the file 0644 where node
+// makes it 0600 (test/node-shim-differential.test.cjs).
+fsMod.open = (p, flags, mode, cb) => {
+  const c = typeof cb === 'function' ? cb : (typeof mode === 'function' ? mode : flags);
+  const fl = typeof flags === 'string' || typeof flags === 'number' ? flags : 'r';
+  const md = typeof mode === 'function' ? undefined : mode;
+  try { c(null, fsMod.openSync(p, fl, md)); } catch (e) { c(e); }
+};
 // fdPaths cleanup runs in `finally` (see closeSync's comment) so a throwing
 // close still drops the stale entry before the error reaches cb.
 // The fd is validated first, as node's getValidatedFd does, and that error is THROWN:

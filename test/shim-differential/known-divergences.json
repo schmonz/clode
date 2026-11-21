@@ -29,32 +29,54 @@
    ]
   }
  },
+ "fs.createReadStream(<dangling>, \"utf8\")": {
+  "r.end.error.errno": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.end.error.message": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.end.error.path": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.end.error.syscall": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  }
+ },
  "fs.createReadStream(<dangling>, {encoding:\"utf8\",end:3})": {
   "r.end.error.errno": {
    "cause": "DIFF-ASYNC-ERRORS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.message": {
    "cause": "DIFF-ASYNC-ERRORS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.path": {
    "cause": "DIFF-ASYNC-ERRORS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.syscall": {
    "cause": "DIFF-ASYNC-ERRORS",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -89,6 +111,32 @@
    ]
   }
  },
+ "fs.createReadStream(<dangling>, {end:3,highWaterMark:4194304})": {
+  "r.end.error.errno": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.end.error.message": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.end.error.path": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.end.error.syscall": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  }
+ },
  "fs.createReadStream(<dangling>, {highWaterMark:524288})": {
   "r.end.error.errno": {
    "cause": "DIFF-ASYNC-ERRORS",
@@ -119,6 +167,32 @@
    ]
   }
  },
+ "fs.createReadStream(<dangling>, {highWaterMark:65536})": {
+  "r.end.error.errno": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.end.error.message": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.end.error.path": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.end.error.syscall": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  }
+ },
  "fs.createReadStream(<dir>)": {
   "r.end.error.errno": {
    "cause": "DIFF-ASYNC-ERRORS",
@@ -142,25 +216,42 @@
    ]
   }
  },
+ "fs.createReadStream(<dir>, \"utf8\")": {
+  "r.end.error.errno": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.end.error.message": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.end.error.syscall": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  }
+ },
  "fs.createReadStream(<dir>, {encoding:\"utf8\",end:3})": {
   "r.end.error.errno": {
    "cause": "DIFF-ASYNC-ERRORS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.message": {
    "cause": "DIFF-ASYNC-ERRORS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.syscall": {
    "cause": "DIFF-ASYNC-ERRORS",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -188,6 +279,26 @@
    ]
   }
  },
+ "fs.createReadStream(<dir>, {end:3,highWaterMark:4194304})": {
+  "r.end.error.errno": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.end.error.message": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.end.error.syscall": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  }
+ },
  "fs.createReadStream(<dir>, {highWaterMark:524288})": {
   "r.end.error.errno": {
    "cause": "DIFF-ASYNC-ERRORS",
@@ -208,6 +319,26 @@
    "on": [
     "darwin",
     "linux"
+   ]
+  }
+ },
+ "fs.createReadStream(<dir>, {highWaterMark:65536})": {
+  "r.end.error.errno": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.end.error.message": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.end.error.syscall": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
    ]
   }
  },
@@ -234,25 +365,42 @@
    ]
   }
  },
+ "fs.createReadStream(<dirlink>, \"utf8\")": {
+  "r.end.error.errno": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.end.error.message": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.end.error.syscall": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  }
+ },
  "fs.createReadStream(<dirlink>, {encoding:\"utf8\",end:3})": {
   "r.end.error.errno": {
    "cause": "DIFF-ASYNC-ERRORS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.message": {
    "cause": "DIFF-ASYNC-ERRORS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.syscall": {
    "cause": "DIFF-ASYNC-ERRORS",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -280,6 +428,26 @@
    ]
   }
  },
+ "fs.createReadStream(<dirlink>, {end:3,highWaterMark:4194304})": {
+  "r.end.error.errno": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.end.error.message": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.end.error.syscall": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  }
+ },
  "fs.createReadStream(<dirlink>, {highWaterMark:524288})": {
   "r.end.error.errno": {
    "cause": "DIFF-ASYNC-ERRORS",
@@ -300,6 +468,26 @@
    "on": [
     "darwin",
     "linux"
+   ]
+  }
+ },
+ "fs.createReadStream(<dirlink>, {highWaterMark:65536})": {
+  "r.end.error.errno": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.end.error.message": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.end.error.syscall": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
    ]
   }
  },
@@ -326,25 +514,42 @@
    ]
   }
  },
+ "fs.createReadStream(<emptydir>, \"utf8\")": {
+  "r.end.error.errno": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.end.error.message": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.end.error.syscall": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  }
+ },
  "fs.createReadStream(<emptydir>, {encoding:\"utf8\",end:3})": {
   "r.end.error.errno": {
    "cause": "DIFF-ASYNC-ERRORS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.message": {
    "cause": "DIFF-ASYNC-ERRORS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.syscall": {
    "cause": "DIFF-ASYNC-ERRORS",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -372,6 +577,26 @@
    ]
   }
  },
+ "fs.createReadStream(<emptydir>, {end:3,highWaterMark:4194304})": {
+  "r.end.error.errno": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.end.error.message": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.end.error.syscall": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  }
+ },
  "fs.createReadStream(<emptydir>, {highWaterMark:524288})": {
   "r.end.error.errno": {
    "cause": "DIFF-ASYNC-ERRORS",
@@ -392,6 +617,26 @@
    "on": [
     "darwin",
     "linux"
+   ]
+  }
+ },
+ "fs.createReadStream(<emptydir>, {highWaterMark:65536})": {
+  "r.end.error.errno": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.end.error.message": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.end.error.syscall": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
    ]
   }
  },
@@ -425,32 +670,54 @@
    ]
   }
  },
+ "fs.createReadStream(<missing>, \"utf8\")": {
+  "r.end.error.errno": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.end.error.message": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.end.error.path": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.end.error.syscall": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  }
+ },
  "fs.createReadStream(<missing>, {encoding:\"utf8\",end:3})": {
   "r.end.error.errno": {
    "cause": "DIFF-ASYNC-ERRORS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.message": {
    "cause": "DIFF-ASYNC-ERRORS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.path": {
    "cause": "DIFF-ASYNC-ERRORS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.syscall": {
    "cause": "DIFF-ASYNC-ERRORS",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -485,6 +752,32 @@
    ]
   }
  },
+ "fs.createReadStream(<missing>, {end:3,highWaterMark:4194304})": {
+  "r.end.error.errno": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.end.error.message": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.end.error.path": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.end.error.syscall": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  }
+ },
  "fs.createReadStream(<missing>, {highWaterMark:524288})": {
   "r.end.error.errno": {
    "cause": "DIFF-ASYNC-ERRORS",
@@ -512,6 +805,32 @@
    "on": [
     "darwin",
     "linux"
+   ]
+  }
+ },
+ "fs.createReadStream(<missing>, {highWaterMark:65536})": {
+  "r.end.error.errno": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.end.error.message": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.end.error.path": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.end.error.syscall": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
    ]
   }
  },
@@ -545,32 +864,54 @@
    ]
   }
  },
+ "fs.createReadStream(<notdir>, \"utf8\")": {
+  "r.end.error.errno": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.end.error.message": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.end.error.path": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.end.error.syscall": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  }
+ },
  "fs.createReadStream(<notdir>, {encoding:\"utf8\",end:3})": {
   "r.end.error.errno": {
    "cause": "DIFF-ASYNC-ERRORS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.message": {
    "cause": "DIFF-ASYNC-ERRORS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.path": {
    "cause": "DIFF-ASYNC-ERRORS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.syscall": {
    "cause": "DIFF-ASYNC-ERRORS",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -605,6 +946,32 @@
    ]
   }
  },
+ "fs.createReadStream(<notdir>, {end:3,highWaterMark:4194304})": {
+  "r.end.error.errno": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.end.error.message": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.end.error.path": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.end.error.syscall": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  }
+ },
  "fs.createReadStream(<notdir>, {highWaterMark:524288})": {
   "r.end.error.errno": {
    "cause": "DIFF-ASYNC-ERRORS",
@@ -632,6 +999,32 @@
    "on": [
     "darwin",
     "linux"
+   ]
+  }
+ },
+ "fs.createReadStream(<notdir>, {highWaterMark:65536})": {
+  "r.end.error.errno": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.end.error.message": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.end.error.path": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.end.error.syscall": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
    ]
   }
  },
@@ -809,6 +1202,106 @@
    ]
   }
  },
+ "fs.createWriteStream(<dir>, {fd:fd:file:r,autoClose:true})": {
+  "r.end": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.code": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.ctor": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.errno": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.message": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.name": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.path": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.syscall": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  }
+ },
+ "fs.createWriteStream(<dir>, {flags:\"a\",fs:undefined})": {
+  "r.end": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.code": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.ctor": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.errno": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.message": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.name": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.path": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.syscall": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  }
+ },
  "fs.createWriteStream(<dir>, {flags:\"a\",mode:384})": {
   "r.end": {
    "cause": "DIFF-WRITESTREAM-THROWS",
@@ -980,6 +1473,56 @@
    "on": [
     "darwin",
     "linux"
+   ]
+  }
+ },
+ "fs.createWriteStream(<dir>, {flags:\"wx\",highWaterMark:4194304})": {
+  "r.end": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.code": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.ctor": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.errno": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.message": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.name": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.path": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.syscall": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
    ]
   }
  },
@@ -1157,6 +1700,56 @@
    ]
   }
  },
+ "fs.createWriteStream(<dir>, {mode:384,flags:\"wx\"})": {
+  "r.end": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.code": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.ctor": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.errno": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.message": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.name": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.path": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.syscall": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  }
+ },
  "fs.createWriteStream(<dir>, {mode:384})": {
   "r.end": {
    "cause": "DIFF-WRITESTREAM-THROWS",
@@ -1231,6 +1824,70 @@
    ]
   }
  },
+ "fs.createWriteStream(<file>, {fd:fd:file:r,autoClose:true})": {
+  "after.file.data": {
+   "cause": "DIFF-WRITESTREAM-FD",
+   "on": [
+    "darwin"
+   ]
+  },
+  "after.file.size": {
+   "cause": "DIFF-WRITESTREAM-FD",
+   "on": [
+    "darwin"
+   ]
+  }
+ },
+ "fs.createWriteStream(<file>, {flags:\"wx\",highWaterMark:4194304})": {
+  "r.end": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.code": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.ctor": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.errno": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.message": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.name": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.path": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.syscall": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  }
+ },
  "fs.createWriteStream(<file>, {flags:\"wx\"})": {
   "r.end": {
    "cause": "DIFF-WRITESTREAM-THROWS",
@@ -1286,6 +1943,56 @@
    "on": [
     "darwin",
     "linux"
+   ]
+  }
+ },
+ "fs.createWriteStream(<file>, {mode:384,flags:\"wx\"})": {
+  "r.end": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.code": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.ctor": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.errno": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.message": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.name": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.path": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.syscall": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
    ]
   }
  },
@@ -1463,6 +2170,106 @@
    ]
   }
  },
+ "fs.createWriteStream(<missing/x>, {fd:fd:file:r,autoClose:true})": {
+  "r.end": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.code": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.ctor": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.errno": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.message": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.name": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.path": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.syscall": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  }
+ },
+ "fs.createWriteStream(<missing/x>, {flags:\"a\",fs:undefined})": {
+  "r.end": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.code": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.ctor": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.errno": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.message": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.name": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.path": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.syscall": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  }
+ },
  "fs.createWriteStream(<missing/x>, {flags:\"a\",mode:384})": {
   "r.end": {
    "cause": "DIFF-WRITESTREAM-THROWS",
@@ -1634,6 +2441,56 @@
    "on": [
     "darwin",
     "linux"
+   ]
+  }
+ },
+ "fs.createWriteStream(<missing/x>, {flags:\"wx\",highWaterMark:4194304})": {
+  "r.end": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.code": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.ctor": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.errno": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.message": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.name": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.path": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.syscall": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
    ]
   }
  },
@@ -1811,6 +2668,56 @@
    ]
   }
  },
+ "fs.createWriteStream(<missing/x>, {mode:384,flags:\"wx\"})": {
+  "r.end": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.code": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.ctor": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.errno": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.message": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.name": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.path": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.syscall": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin"
+   ]
+  }
+ },
  "fs.createWriteStream(<missing/x>, {mode:384})": {
   "r.end": {
    "cause": "DIFF-WRITESTREAM-THROWS",
@@ -1910,6 +2817,44 @@
    "on": [
     "darwin",
     "linux"
+   ]
+  }
+ },
+ "fs.createWriteStream(<new>, {fd:fd:file:r,autoClose:true})": {
+  "after.new.atimeMs": {
+   "cause": "DIFF-WRITESTREAM-FD",
+   "on": [
+    "darwin"
+   ]
+  },
+  "after.new.data": {
+   "cause": "DIFF-WRITESTREAM-FD",
+   "on": [
+    "darwin"
+   ]
+  },
+  "after.new.kind": {
+   "cause": "DIFF-WRITESTREAM-FD",
+   "on": [
+    "darwin"
+   ]
+  },
+  "after.new.mode": {
+   "cause": "DIFF-WRITESTREAM-FD",
+   "on": [
+    "darwin"
+   ]
+  },
+  "after.new.mtimeMs": {
+   "cause": "DIFF-WRITESTREAM-FD",
+   "on": [
+    "darwin"
+   ]
+  },
+  "after.new.size": {
+   "cause": "DIFF-WRITESTREAM-FD",
+   "on": [
+    "darwin"
    ]
   }
  },
@@ -2042,6 +2987,46 @@
    "on": [
     "darwin",
     "linux"
+   ]
+  }
+ },
+ "fs.fchmodSync(fd:bad, 0)": {
+  "r.error.errno": {
+   "cause": "DIFF-FD-PRIMITIVES",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.message": {
+   "cause": "DIFF-FD-PRIMITIVES",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.syscall": {
+   "cause": "DIFF-FD-PRIMITIVES",
+   "on": [
+    "darwin"
+   ]
+  }
+ },
+ "fs.fchmodSync(fd:bad, 256)": {
+  "r.error.errno": {
+   "cause": "DIFF-FD-PRIMITIVES",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.message": {
+   "cause": "DIFF-FD-PRIMITIVES",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.syscall": {
+   "cause": "DIFF-FD-PRIMITIVES",
+   "on": [
+    "darwin"
    ]
   }
  },
@@ -2237,6 +3222,50 @@
    ]
   }
  },
+ "fs.ftruncateSync(fd:file:r+, 3)": {
+  "after.file.data": {
+   "cause": "DIFF-FD-PRIMITIVES",
+   "on": [
+    "darwin"
+   ]
+  },
+  "after.file.size": {
+   "cause": "DIFF-FD-PRIMITIVES",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.code": {
+   "cause": "DIFF-FD-PRIMITIVES",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.ctor": {
+   "cause": "DIFF-FD-PRIMITIVES",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.message": {
+   "cause": "DIFF-FD-PRIMITIVES",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.name": {
+   "cause": "DIFF-FD-PRIMITIVES",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.undefined": {
+   "cause": "DIFF-FD-PRIMITIVES",
+   "on": [
+    "darwin"
+   ]
+  }
+ },
  "fs.ftruncateSync(fd:file:r, 0)": {
   "r.error.code": {
    "cause": "DIFF-FD-PRIMITIVES",
@@ -2383,6 +3412,32 @@
    ]
   }
  },
+ "fs.readFile(<dangling>)": {
+  "r.error.errno": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.message": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.path": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.syscall": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  }
+ },
  "fs.readFile(<dangling>, undefined)": {
   "r.error.errno": {
    "cause": "DIFF-ASYNC-ERRORS",
@@ -2413,6 +3468,26 @@
    ]
   }
  },
+ "fs.readFile(<dir>)": {
+  "r.error.errno": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.message": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.syscall": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  }
+ },
  "fs.readFile(<dir>, undefined)": {
   "r.error.errno": {
    "cause": "DIFF-ASYNC-ERRORS",
@@ -2433,6 +3508,26 @@
    "on": [
     "darwin",
     "linux"
+   ]
+  }
+ },
+ "fs.readFile(<dirlink>)": {
+  "r.error.errno": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.message": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.syscall": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
    ]
   }
  },
@@ -2459,6 +3554,26 @@
    ]
   }
  },
+ "fs.readFile(<emptydir>)": {
+  "r.error.errno": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.message": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.syscall": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  }
+ },
  "fs.readFile(<emptydir>, undefined)": {
   "r.error.errno": {
    "cause": "DIFF-ASYNC-ERRORS",
@@ -2479,6 +3594,32 @@
    "on": [
     "darwin",
     "linux"
+   ]
+  }
+ },
+ "fs.readFile(<missing>)": {
+  "r.error.errno": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.message": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.path": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.syscall": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
    ]
   }
  },
@@ -2509,6 +3650,32 @@
    "on": [
     "darwin",
     "linux"
+   ]
+  }
+ },
+ "fs.readFile(<notdir>)": {
+  "r.error.errno": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.message": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.path": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.syscall": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
    ]
   }
  },
@@ -2546,21 +3713,18 @@
   "r": {
    "cause": "DIFF-ENCODINGS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.Buffer": {
    "cause": "DIFF-ENCODINGS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.length": {
    "cause": "DIFF-ENCODINGS",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -2569,21 +3733,18 @@
   "r": {
    "cause": "DIFF-ENCODINGS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.Buffer": {
    "cause": "DIFF-ENCODINGS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.length": {
    "cause": "DIFF-ENCODINGS",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -2692,32 +3853,16 @@
    ]
   }
  },
- "fs.readdirSync(\"/proc\")": {
-  "r.error.message": {
-   "cause": "DIFF-SCANDIR",
-   "on": [
-    "darwin"
-   ]
-  },
-  "r.error.syscall": {
-   "cause": "DIFF-SCANDIR",
-   "on": [
-    "darwin"
-   ]
-  }
- },
  "fs.readdirSync(<dangling>)": {
   "r.error.message": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -2726,14 +3871,12 @@
   "r.error.message": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -2742,14 +3885,12 @@
   "r.error.message": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -2758,14 +3899,12 @@
   "r.error.message": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -2774,14 +3913,12 @@
   "r.error.message": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -2790,14 +3927,12 @@
   "r.error.message": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -2806,14 +3941,12 @@
   "r.error.message": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -2822,14 +3955,12 @@
   "r.error.message": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -2838,14 +3969,12 @@
   "r.error.message": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -2854,14 +3983,12 @@
   "r.error.message": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -2870,14 +3997,12 @@
   "r.error.message": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -2886,14 +4011,12 @@
   "r.error.message": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -2902,14 +4025,12 @@
   "r.error.message": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -2918,14 +4039,12 @@
   "r.error.message": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -2934,14 +4053,12 @@
   "r.error.message": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -2950,14 +4067,12 @@
   "r.error.message": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -2966,14 +4081,12 @@
   "r.error.message": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -2982,14 +4095,12 @@
   "r.error.message": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -2998,14 +4109,12 @@
   "r.error.message": {
    "cause": "DIFF-REALPATH-SYSCALL",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-REALPATH-SYSCALL",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -3014,14 +4123,12 @@
   "r.error.message": {
    "cause": "DIFF-REALPATH-SYSCALL",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-REALPATH-SYSCALL",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -3030,14 +4137,12 @@
   "r.error.message": {
    "cause": "DIFF-REALPATH-SYSCALL",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-REALPATH-SYSCALL",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -3127,6 +4232,82 @@
    "on": [
     "darwin",
     "linux"
+   ]
+  }
+ },
+ "fs.rmSync(<dir>, {recursive:false,force:true})": {
+  "r.error.code": {
+   "cause": "DIFF-RM",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.ctor": {
+   "cause": "DIFF-RM",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.errno": {
+   "cause": "DIFF-RM",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.message": {
+   "cause": "DIFF-RM",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.name": {
+   "cause": "DIFF-RM",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.syscall": {
+   "cause": "DIFF-RM",
+   "on": [
+    "darwin"
+   ]
+  }
+ },
+ "fs.rmSync(<dir>, {recursive:false})": {
+  "r.error.code": {
+   "cause": "DIFF-RM",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.ctor": {
+   "cause": "DIFF-RM",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.errno": {
+   "cause": "DIFF-RM",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.message": {
+   "cause": "DIFF-RM",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.name": {
+   "cause": "DIFF-RM",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.syscall": {
+   "cause": "DIFF-RM",
+   "on": [
+    "darwin"
    ]
   }
  },
@@ -3302,6 +4483,154 @@
    ]
   }
  },
+ "fs.rmSync(<emptydir>, {recursive:false,force:true})": {
+  "after.emptydir.atimeMs": {
+   "cause": "DIFF-RM",
+   "on": [
+    "darwin"
+   ]
+  },
+  "after.emptydir.kind": {
+   "cause": "DIFF-RM",
+   "on": [
+    "darwin"
+   ]
+  },
+  "after.emptydir.mode": {
+   "cause": "DIFF-RM",
+   "on": [
+    "darwin"
+   ]
+  },
+  "after.emptydir.mtimeMs": {
+   "cause": "DIFF-RM",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.code": {
+   "cause": "DIFF-RM",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.ctor": {
+   "cause": "DIFF-RM",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.errno": {
+   "cause": "DIFF-RM",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.message": {
+   "cause": "DIFF-RM",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.name": {
+   "cause": "DIFF-RM",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.path": {
+   "cause": "DIFF-RM",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.syscall": {
+   "cause": "DIFF-RM",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.undefined": {
+   "cause": "DIFF-RM",
+   "on": [
+    "darwin"
+   ]
+  }
+ },
+ "fs.rmSync(<emptydir>, {recursive:false})": {
+  "after.emptydir.atimeMs": {
+   "cause": "DIFF-RM",
+   "on": [
+    "darwin"
+   ]
+  },
+  "after.emptydir.kind": {
+   "cause": "DIFF-RM",
+   "on": [
+    "darwin"
+   ]
+  },
+  "after.emptydir.mode": {
+   "cause": "DIFF-RM",
+   "on": [
+    "darwin"
+   ]
+  },
+  "after.emptydir.mtimeMs": {
+   "cause": "DIFF-RM",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.code": {
+   "cause": "DIFF-RM",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.ctor": {
+   "cause": "DIFF-RM",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.errno": {
+   "cause": "DIFF-RM",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.message": {
+   "cause": "DIFF-RM",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.name": {
+   "cause": "DIFF-RM",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.path": {
+   "cause": "DIFF-RM",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.syscall": {
+   "cause": "DIFF-RM",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.undefined": {
+   "cause": "DIFF-RM",
+   "on": [
+    "darwin"
+   ]
+  }
+ },
  "fs.rmSync(<notdir>, {recursive:true,force:true})": {
   "r.error.code": {
    "cause": "DIFF-RM",
@@ -3364,42 +4693,49 @@
   "r.error.code": {
    "cause": "DIFF-STATFS-SYNC",
    "on": [
+    "darwin",
     "linux"
    ]
   },
   "r.error.ctor": {
    "cause": "DIFF-STATFS-SYNC",
    "on": [
+    "darwin",
     "linux"
    ]
   },
   "r.error.errno": {
    "cause": "DIFF-STATFS-SYNC",
    "on": [
+    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-STATFS-SYNC",
    "on": [
+    "darwin",
     "linux"
    ]
   },
   "r.error.name": {
    "cause": "DIFF-STATFS-SYNC",
    "on": [
+    "darwin",
     "linux"
    ]
   },
   "r.error.path": {
    "cause": "DIFF-STATFS-SYNC",
    "on": [
+    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-STATFS-SYNC",
    "on": [
+    "darwin",
     "linux"
    ]
   }
@@ -3408,36 +4744,42 @@
   "r.ctor": {
    "cause": "DIFF-STATFS-SYNC",
    "on": [
+    "darwin",
     "linux"
    ]
   },
   "r.error.code": {
    "cause": "DIFF-STATFS-SYNC",
    "on": [
+    "darwin",
     "linux"
    ]
   },
   "r.error.ctor": {
    "cause": "DIFF-STATFS-SYNC",
    "on": [
+    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-STATFS-SYNC",
    "on": [
+    "darwin",
     "linux"
    ]
   },
   "r.error.name": {
    "cause": "DIFF-STATFS-SYNC",
    "on": [
+    "darwin",
     "linux"
    ]
   },
   "r.typeof": {
    "cause": "DIFF-STATFS-SYNC",
    "on": [
+    "darwin",
     "linux"
    ]
   }
@@ -3446,36 +4788,42 @@
   "r.ctor": {
    "cause": "DIFF-STATFS-SYNC",
    "on": [
+    "darwin",
     "linux"
    ]
   },
   "r.error.code": {
    "cause": "DIFF-STATFS-SYNC",
    "on": [
+    "darwin",
     "linux"
    ]
   },
   "r.error.ctor": {
    "cause": "DIFF-STATFS-SYNC",
    "on": [
+    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-STATFS-SYNC",
    "on": [
+    "darwin",
     "linux"
    ]
   },
   "r.error.name": {
    "cause": "DIFF-STATFS-SYNC",
    "on": [
+    "darwin",
     "linux"
    ]
   },
   "r.typeof": {
    "cause": "DIFF-STATFS-SYNC",
    "on": [
+    "darwin",
     "linux"
    ]
   }
@@ -3484,36 +4832,42 @@
   "r.ctor": {
    "cause": "DIFF-STATFS-SYNC",
    "on": [
+    "darwin",
     "linux"
    ]
   },
   "r.error.code": {
    "cause": "DIFF-STATFS-SYNC",
    "on": [
+    "darwin",
     "linux"
    ]
   },
   "r.error.ctor": {
    "cause": "DIFF-STATFS-SYNC",
    "on": [
+    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-STATFS-SYNC",
    "on": [
+    "darwin",
     "linux"
    ]
   },
   "r.error.name": {
    "cause": "DIFF-STATFS-SYNC",
    "on": [
+    "darwin",
     "linux"
    ]
   },
   "r.typeof": {
    "cause": "DIFF-STATFS-SYNC",
    "on": [
+    "darwin",
     "linux"
    ]
   }
@@ -3522,36 +4876,42 @@
   "r.ctor": {
    "cause": "DIFF-STATFS-SYNC",
    "on": [
+    "darwin",
     "linux"
    ]
   },
   "r.error.code": {
    "cause": "DIFF-STATFS-SYNC",
    "on": [
+    "darwin",
     "linux"
    ]
   },
   "r.error.ctor": {
    "cause": "DIFF-STATFS-SYNC",
    "on": [
+    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-STATFS-SYNC",
    "on": [
+    "darwin",
     "linux"
    ]
   },
   "r.error.name": {
    "cause": "DIFF-STATFS-SYNC",
    "on": [
+    "darwin",
     "linux"
    ]
   },
   "r.typeof": {
    "cause": "DIFF-STATFS-SYNC",
    "on": [
+    "darwin",
     "linux"
    ]
   }
@@ -3560,36 +4920,42 @@
   "r.ctor": {
    "cause": "DIFF-STATFS-SYNC",
    "on": [
+    "darwin",
     "linux"
    ]
   },
   "r.error.code": {
    "cause": "DIFF-STATFS-SYNC",
    "on": [
+    "darwin",
     "linux"
    ]
   },
   "r.error.ctor": {
    "cause": "DIFF-STATFS-SYNC",
    "on": [
+    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-STATFS-SYNC",
    "on": [
+    "darwin",
     "linux"
    ]
   },
   "r.error.name": {
    "cause": "DIFF-STATFS-SYNC",
    "on": [
+    "darwin",
     "linux"
    ]
   },
   "r.typeof": {
    "cause": "DIFF-STATFS-SYNC",
    "on": [
+    "darwin",
     "linux"
    ]
   }
@@ -3598,42 +4964,49 @@
   "r.error.code": {
    "cause": "DIFF-STATFS-SYNC",
    "on": [
+    "darwin",
     "linux"
    ]
   },
   "r.error.ctor": {
    "cause": "DIFF-STATFS-SYNC",
    "on": [
+    "darwin",
     "linux"
    ]
   },
   "r.error.errno": {
    "cause": "DIFF-STATFS-SYNC",
    "on": [
+    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-STATFS-SYNC",
    "on": [
+    "darwin",
     "linux"
    ]
   },
   "r.error.name": {
    "cause": "DIFF-STATFS-SYNC",
    "on": [
+    "darwin",
     "linux"
    ]
   },
   "r.error.path": {
    "cause": "DIFF-STATFS-SYNC",
    "on": [
+    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-STATFS-SYNC",
    "on": [
+    "darwin",
     "linux"
    ]
   }
@@ -3642,42 +5015,49 @@
   "r.error.code": {
    "cause": "DIFF-STATFS-SYNC",
    "on": [
+    "darwin",
     "linux"
    ]
   },
   "r.error.ctor": {
    "cause": "DIFF-STATFS-SYNC",
    "on": [
+    "darwin",
     "linux"
    ]
   },
   "r.error.errno": {
    "cause": "DIFF-STATFS-SYNC",
    "on": [
+    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-STATFS-SYNC",
    "on": [
+    "darwin",
     "linux"
    ]
   },
   "r.error.name": {
    "cause": "DIFF-STATFS-SYNC",
    "on": [
+    "darwin",
     "linux"
    ]
   },
   "r.error.path": {
    "cause": "DIFF-STATFS-SYNC",
    "on": [
+    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-STATFS-SYNC",
    "on": [
+    "darwin",
     "linux"
    ]
   }
@@ -3686,37 +5066,121 @@
   "r.ctor": {
    "cause": "DIFF-STATFS-SYNC",
    "on": [
+    "darwin",
     "linux"
    ]
   },
   "r.error.code": {
    "cause": "DIFF-STATFS-SYNC",
    "on": [
+    "darwin",
     "linux"
    ]
   },
   "r.error.ctor": {
    "cause": "DIFF-STATFS-SYNC",
    "on": [
+    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-STATFS-SYNC",
    "on": [
+    "darwin",
     "linux"
    ]
   },
   "r.error.name": {
    "cause": "DIFF-STATFS-SYNC",
    "on": [
+    "darwin",
     "linux"
    ]
   },
   "r.typeof": {
    "cause": "DIFF-STATFS-SYNC",
    "on": [
+    "darwin",
     "linux"
+   ]
+  }
+ },
+ "fs.utimes(<dangling>, 1000, 1000)": {
+  "r.error.errno": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.message": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.path": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.syscall": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  }
+ },
+ "fs.utimes(<missing>, 1700000000.5, 1700000000.5)": {
+  "r.error.errno": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.message": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.path": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.syscall": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  }
+ },
+ "fs.utimes(<notdir>, 1000, 1000)": {
+  "r.error.errno": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.message": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.path": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.syscall": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
    ]
   }
  },
@@ -3724,14 +5188,12 @@
   "r.error.code": {
    "cause": "DIFF-ARG-VALIDATION",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-ARG-VALIDATION",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -3740,14 +5202,12 @@
   "r.error.code": {
    "cause": "DIFF-ARG-VALIDATION",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-ARG-VALIDATION",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -3756,14 +5216,12 @@
   "r.error.code": {
    "cause": "DIFF-ARG-VALIDATION",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-ARG-VALIDATION",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -3772,14 +5230,12 @@
   "r.error.code": {
    "cause": "DIFF-ARG-VALIDATION",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-ARG-VALIDATION",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -4995,14 +6451,12 @@
   "r.error.message": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -5011,14 +6465,12 @@
   "r.error.message": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -5027,14 +6479,12 @@
   "r.error.message": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -5043,14 +6493,12 @@
   "r.error.message": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -5059,14 +6507,12 @@
   "r.error.message": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -5075,14 +6521,12 @@
   "r.error.message": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -5143,7 +6587,7 @@
    ]
   }
  },
- "fs/promises.readFile(\"/proc/self/statm\", \"utf8\")": {
+ "fs/promises.readFile(\"/proc/self/mountinfo\", \"utf8\")": {
   "r.error.errno": {
    "cause": "DIFF-ASYNC-ERRORS",
    "on": [
@@ -5225,51 +6669,29 @@
   "r.error.errno": {
    "cause": "DIFF-ASYNC-ERRORS",
    "on": [
+    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-ASYNC-ERRORS",
    "on": [
+    "darwin",
     "linux"
    ]
   },
   "r.error.path": {
    "cause": "DIFF-ASYNC-ERRORS",
    "on": [
+    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-ASYNC-ERRORS",
    "on": [
+    "darwin",
     "linux"
-   ]
-  }
- },
- "fs/promises.readFile()": {
-  "r.error.code": {
-   "cause": "DIFF-ARG-VALIDATION",
-   "on": [
-    "darwin"
-   ]
-  },
-  "r.error.ctor": {
-   "cause": "DIFF-ARG-VALIDATION",
-   "on": [
-    "darwin"
-   ]
-  },
-  "r.error.message": {
-   "cause": "DIFF-ARG-VALIDATION",
-   "on": [
-    "darwin"
-   ]
-  },
-  "r.error.name": {
-   "cause": "DIFF-ARG-VALIDATION",
-   "on": [
-    "darwin"
    ]
   }
  },
@@ -6227,29 +7649,13 @@
   "r.error.message": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
-   ]
-  }
- },
- "fs/promises.readdir(\"/proc/self/fd\")": {
-  "r.error.message": {
-   "cause": "DIFF-SCANDIR",
-   "on": [
-    "darwin"
-   ]
-  },
-  "r.error.syscall": {
-   "cause": "DIFF-SCANDIR",
-   "on": [
-    "darwin"
    ]
   }
  },
@@ -6257,14 +7663,12 @@
   "r.error.message": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -6273,14 +7677,12 @@
   "r.error.message": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -6289,14 +7691,12 @@
   "r.error.message": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -6305,14 +7705,12 @@
   "r.error.message": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -6321,14 +7719,12 @@
   "r.error.message": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -6337,14 +7733,12 @@
   "r.error.message": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -6353,14 +7747,12 @@
   "r.error.message": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -6369,14 +7761,12 @@
   "r.error.message": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -6385,14 +7775,12 @@
   "r.error.message": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -6401,14 +7789,12 @@
   "r.error.message": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -6417,14 +7803,12 @@
   "r.error.message": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -6433,14 +7817,12 @@
   "r.error.message": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -6449,14 +7831,12 @@
   "r.error.message": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -6465,14 +7845,12 @@
   "r.error.message": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -6481,14 +7859,12 @@
   "r.error.message": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -6497,14 +7873,12 @@
   "r.error.message": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -6513,14 +7887,12 @@
   "r.error.message": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -6529,14 +7901,12 @@
   "r.error.message": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -6545,14 +7915,12 @@
   "r.error.message": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -6561,14 +7929,12 @@
   "r.error.message": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -6577,14 +7943,12 @@
   "r.error.message": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -6593,14 +7957,12 @@
   "r.error.message": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -6609,14 +7971,12 @@
   "r.error.message": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -6625,14 +7985,12 @@
   "r.error.message": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -6641,14 +7999,12 @@
   "r.error.message": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -6657,14 +8013,12 @@
   "r.error.message": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -6673,14 +8027,12 @@
   "r.error.message": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -6689,14 +8041,12 @@
   "r.error.message": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -6705,14 +8055,12 @@
   "r.error.message": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -6721,14 +8069,12 @@
   "r.error.message": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-SCANDIR",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -7123,6 +8469,32 @@
    ]
   }
  },
+ "fs/promises.statfs(<dangling>)": {
+  "r.error.errno": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.message": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.path": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.syscall": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  }
+ },
  "fs/promises.statfs(<dangling>, {bigint:true})": {
   "r.error.errno": {
    "cause": "DIFF-ASYNC-ERRORS",
@@ -7153,12 +8525,28 @@
    ]
   }
  },
+ "fs/promises.statfs(<dir>)": {
+  "r.ctor": {
+   "cause": "DIFF-STATFS-CLASS",
+   "on": [
+    "darwin"
+   ]
+  }
+ },
  "fs/promises.statfs(<dir>, {bigint:true})": {
   "r.ctor": {
    "cause": "DIFF-STATFS-CLASS",
    "on": [
     "darwin",
     "linux"
+   ]
+  }
+ },
+ "fs/promises.statfs(<dirlink>)": {
+  "r.ctor": {
+   "cause": "DIFF-STATFS-CLASS",
+   "on": [
+    "darwin"
    ]
   }
  },
@@ -7171,12 +8559,28 @@
    ]
   }
  },
+ "fs/promises.statfs(<empty>)": {
+  "r.ctor": {
+   "cause": "DIFF-STATFS-CLASS",
+   "on": [
+    "darwin"
+   ]
+  }
+ },
  "fs/promises.statfs(<empty>, {bigint:true})": {
   "r.ctor": {
    "cause": "DIFF-STATFS-CLASS",
    "on": [
     "darwin",
     "linux"
+   ]
+  }
+ },
+ "fs/promises.statfs(<emptydir>)": {
+  "r.ctor": {
+   "cause": "DIFF-STATFS-CLASS",
+   "on": [
+    "darwin"
    ]
   }
  },
@@ -7189,12 +8593,46 @@
    ]
   }
  },
+ "fs/promises.statfs(<file>)": {
+  "r.ctor": {
+   "cause": "DIFF-STATFS-CLASS",
+   "on": [
+    "darwin"
+   ]
+  }
+ },
  "fs/promises.statfs(<file>, {bigint:true})": {
   "r.ctor": {
    "cause": "DIFF-STATFS-CLASS",
    "on": [
     "darwin",
     "linux"
+   ]
+  }
+ },
+ "fs/promises.statfs(<missing>)": {
+  "r.error.errno": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.message": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.path": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.syscall": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
    ]
   }
  },
@@ -7228,6 +8666,32 @@
    ]
   }
  },
+ "fs/promises.statfs(<notdir>)": {
+  "r.error.errno": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.message": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.path": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.syscall": {
+   "cause": "DIFF-ASYNC-ERRORS",
+   "on": [
+    "darwin"
+   ]
+  }
+ },
  "fs/promises.statfs(<notdir>, {bigint:true})": {
   "r.error.errno": {
    "cause": "DIFF-ASYNC-ERRORS",
@@ -7258,6 +8722,14 @@
    ]
   }
  },
+ "fs/promises.statfs(<symlink>)": {
+  "r.ctor": {
+   "cause": "DIFF-STATFS-CLASS",
+   "on": [
+    "darwin"
+   ]
+  }
+ },
  "fs/promises.statfs(<symlink>, {bigint:true})": {
   "r.ctor": {
    "cause": "DIFF-STATFS-CLASS",
@@ -7271,49 +8743,42 @@
   "r.error.code": {
    "cause": "DIFF-ARG-VALIDATION",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.ctor": {
    "cause": "DIFF-ARG-VALIDATION",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.errno": {
    "cause": "DIFF-ARG-VALIDATION",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-ARG-VALIDATION",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.name": {
    "cause": "DIFF-ARG-VALIDATION",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.path": {
    "cause": "DIFF-ARG-VALIDATION",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-ARG-VALIDATION",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -7412,28 +8877,24 @@
   "r.closed": {
    "cause": "DIFF-NET-SERVER",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.ctor": {
    "cause": "DIFF-NET-SERVER",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-NET-SERVER",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.name": {
    "cause": "DIFF-NET-SERVER",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -7600,12 +9061,14 @@
   "r.error.code": {
    "cause": "DIFF-ARG-VALIDATION",
    "on": [
+    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-ARG-VALIDATION",
    "on": [
+    "darwin",
     "linux"
    ]
   }
@@ -7891,7 +9354,6 @@
   "r.ctor": {
    "cause": "DIFF-STDIO-CLASS",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -8358,6 +9820,14 @@
    ]
   }
  },
+ "util.inspect({name:\"Error\",code:\"ENOENT\",errno:-2,syscall:\"open\",address:\"127.0.0.1\",port:1}, {depth:0,breakLength:80})": {
+  "r": {
+   "cause": "DIFF-UTIL-FORMAT",
+   "on": [
+    "darwin"
+   ]
+  }
+ },
  "util.types (value)": {
   "r.keys.isAnyArrayBuffer": {
    "cause": "DIFF-MISSING-MEMBERS",
@@ -8656,6 +10126,84 @@
    ]
   }
  },
+ "zlib.deflateRawSync(\"\", undefined)": {
+  "r.error.ctor": {
+   "cause": "DIFF-ZLIB",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.message": {
+   "cause": "DIFF-ZLIB",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.name": {
+   "cause": "DIFF-ZLIB",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.roundtrip": {
+   "cause": "DIFF-ZLIB",
+   "on": [
+    "darwin"
+   ]
+  }
+ },
+ "zlib.deflateRawSync(\"data\\n\", undefined)": {
+  "r.error.ctor": {
+   "cause": "DIFF-ZLIB",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.message": {
+   "cause": "DIFF-ZLIB",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.name": {
+   "cause": "DIFF-ZLIB",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.roundtrip": {
+   "cause": "DIFF-ZLIB",
+   "on": [
+    "darwin"
+   ]
+  }
+ },
+ "zlib.deflateRawSync(buf:00ff0a, undefined)": {
+  "r.error.ctor": {
+   "cause": "DIFF-ZLIB",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.message": {
+   "cause": "DIFF-ZLIB",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.name": {
+   "cause": "DIFF-ZLIB",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.roundtrip": {
+   "cause": "DIFF-ZLIB",
+   "on": [
+    "darwin"
+   ]
+  }
+ },
  "zlib.deflateSync(\"\")": {
   "r.error.ctor": {
    "cause": "DIFF-ZLIB",
@@ -8697,35 +10245,30 @@
   "r.error.ctor": {
    "cause": "DIFF-ZLIB",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-ZLIB",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.name": {
    "cause": "DIFF-ZLIB",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.header": {
    "cause": "DIFF-ZLIB",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.roundtrip": {
    "cause": "DIFF-ZLIB",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -8771,35 +10314,30 @@
   "r.error.ctor": {
    "cause": "DIFF-ZLIB",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-ZLIB",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.name": {
    "cause": "DIFF-ZLIB",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.header": {
    "cause": "DIFF-ZLIB",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.roundtrip": {
    "cause": "DIFF-ZLIB",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -8845,35 +10383,30 @@
   "r.error.ctor": {
    "cause": "DIFF-ZLIB",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-ZLIB",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.name": {
    "cause": "DIFF-ZLIB",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.header": {
    "cause": "DIFF-ZLIB",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.roundtrip": {
    "cause": "DIFF-ZLIB",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -9012,6 +10545,26 @@
    ]
   }
  },
+ "zlib.inflateRawSync(\"\", undefined)": {
+  "r.error.code": {
+   "cause": "DIFF-ZLIB",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.errno": {
+   "cause": "DIFF-ZLIB",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.message": {
+   "cause": "DIFF-ZLIB",
+   "on": [
+    "darwin"
+   ]
+  }
+ },
  "zlib.inflateRawSync(\"\", {maxOutputLength:1048576,chunkSize:16384})": {
   "r.error.code": {
    "cause": "DIFF-ZLIB",
@@ -9058,6 +10611,26 @@
    ]
   }
  },
+ "zlib.inflateRawSync(\"data\\n\", undefined)": {
+  "r.error.code": {
+   "cause": "DIFF-ZLIB",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.errno": {
+   "cause": "DIFF-ZLIB",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.message": {
+   "cause": "DIFF-ZLIB",
+   "on": [
+    "darwin"
+   ]
+  }
+ },
  "zlib.inflateRawSync(\"data\\n\", {maxOutputLength:1048576,chunkSize:16384})": {
   "r.error.code": {
    "cause": "DIFF-ZLIB",
@@ -9101,6 +10674,26 @@
    "on": [
     "darwin",
     "linux"
+   ]
+  }
+ },
+ "zlib.inflateRawSync(buf:00ff0a, undefined)": {
+  "r.error.code": {
+   "cause": "DIFF-ZLIB",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.errno": {
+   "cause": "DIFF-ZLIB",
+   "on": [
+    "darwin"
+   ]
+  },
+  "r.error.message": {
+   "cause": "DIFF-ZLIB",
+   "on": [
+    "darwin"
    ]
   }
  },
@@ -9168,21 +10761,18 @@
   "r.error.code": {
    "cause": "DIFF-ZLIB",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.errno": {
    "cause": "DIFF-ZLIB",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-ZLIB",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -9191,21 +10781,18 @@
   "r.error.code": {
    "cause": "DIFF-ZLIB",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.errno": {
    "cause": "DIFF-ZLIB",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-ZLIB",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -9214,21 +10801,18 @@
   "r.error.code": {
    "cause": "DIFF-ZLIB",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.errno": {
    "cause": "DIFF-ZLIB",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-ZLIB",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -9237,21 +10821,18 @@
   "r.error.code": {
    "cause": "DIFF-ZLIB",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.errno": {
    "cause": "DIFF-ZLIB",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-ZLIB",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -9260,21 +10841,18 @@
   "r.error.code": {
    "cause": "DIFF-ZLIB",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.errno": {
    "cause": "DIFF-ZLIB",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-ZLIB",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -9283,21 +10861,18 @@
   "r.error.code": {
    "cause": "DIFF-ZLIB",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.errno": {
    "cause": "DIFF-ZLIB",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-ZLIB",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -9306,21 +10881,18 @@
   "r.error.code": {
    "cause": "DIFF-ZLIB",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.errno": {
    "cause": "DIFF-ZLIB",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-ZLIB",
    "on": [
-    "darwin",
     "linux"
    ]
   }

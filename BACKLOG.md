@@ -160,6 +160,9 @@ the more closed outcome, but the row says native starts. The choice: accept the 
 (re-cut the row's expectation, with this measurement), or stop imposing failIfUnavailable when the user's --settings
 fails (calls would then run unsandboxed: contrary to the fail-closed ruling). Not changed pending a ruling.
 
+Measured: test/fidelity/agentic-sandbox-fail-closed.test.cjs against a quaude built from this branch, and native
+2.1.330 by hand with and without quaude's --managed-settings layer, on darwin-arm64 (2026-11-21).
+
 ## 2.1.330 is the pin and the suite is RED on it: 39 failures, each named here (2026-11-21)
 
 The pin moved 2.1.283 -> 2.1.330 (UPSTREAM_PIN). upstream-drift.yml's five red anchor steps (red since 2026-10-23)
@@ -168,20 +171,17 @@ the text tripwires and the text oracle (4c9899b), shadow-writer-from-carve plus 
 (582cbf2), rg-matrix-from-carve (764f694), and the regexp census (588 groups is no finding: the engine allows
 native's 32,768, c7c3983; lead-scrub retired, 52c0306). What 2.1.330 still asks that quaude does not answer:
 
-1. **node-shim-differential is VIOLATION on 2.1.330** (darwin-arm64 and linux-x64 carves alike, node 24.21.0). The
-   table now drives every API the carve calls (buffer.isAscii and isUtf8 implemented; fs.close/write/read/readSync
-   argument handling fixed, test/node-shim-buffer-isascii.test.cjs), but these answers differ from node and no
-   cause in test/shim-differential/known.cjs claims them, so freeze.cjs refuses to list them:
-   `fs.lutimesSync` absent (63 fields); `fs.utimesSync` is a fire-and-forget async utime (the sync-fs patch has no
-   utime; 24); `fs.opendirSync` errors say readdir/path where node says opendir (18); `zlib.deflateRawSync`
-   unimplemented (12); `fs/promises.opendir` with `{recursive:true}` orders entries unlike node (12);
-   `fs.realpath` errors say realpath where node says stat/lstat (12); `fs/promises.lstat()` and `mkdtemp()` with
-   no argument do not throw node's ERR_INVALID_ARG_TYPE (11); `fs.open(p, O_WRONLY|O_APPEND|O_CREAT, 0o600)`
-   ignores the mode for NUMERIC flags (file made 644; 2); chmodSync's after-snapshot words scandir as readdir (6,
-   the DIFF-SCANDIR cause, unlisted for this case); `buffer.constants` lacks MAX_LENGTH and MAX_STRING_LENGTH.
-   Each wants a fix or a named cause; the known-divergences pairs for 2.1.330's new case ids (re-keyed options
-   like `{end:3,highWaterMark:4194304}`) then need a freeze on darwin AND linux (the linux half is CI's musl
-   node-shim-oracle).
+1. **node-shim-differential: darwin GREEN at 2.1.330; LINUX STILL TO FREEZE.** Fixed in node-shim fs
+   (test/node-shim-fs-2-1-330.test.cjs, node against quaude with no provider needed): fs.open's callback form
+   dropped its mode (`fs.open(p, O_WRONLY|O_APPEND|O_CREAT, 0o600, cb)` made the file 0644); utimesSync of a
+   missing path returned as if it had worked, and lutimesSync was absent (both now throw node's errors
+   synchronously, times still set by the async call); readdir errors say scandir, opendir's say opendir (no path
+   from opendirSync, the path from the promise), and opendir honours `{recursive}`, breadth-first like node's Dir;
+   recursive readdir is breadth-first too; the JS realpath walk's errors; promises.lstat()/mkdtemp() argument
+   checks. zlib.deflateRawSync joins DIFF-ZLIB. known-divergences.json is frozen for darwin from a measured run
+   (freeze.cjs). Its LINUX pairs are still 2.1.283's case ids, so CI's musl node-shim-oracle will name them stale
+   and the 2.1.330 ids unlisted until a linux run is frozen: `CLODE_SHIM_DIFF_DUMP=<f> node --test
+   test/node-shim-differential.test.cjs` on that job, then `node test/shim-differential/freeze.cjs <f>`.
 2. **rg-carve-argv-answered: quaude's rg refuses two NEW production searches.** `--text --fixed-strings --glob
    *.jsonl* --regexp "type":"hybrid-organization"` (runner apo) and the environment scan's `--max-count N`
    (runner rre, beside the already-answered --line-buffered). Until answered, those searches reach the model as
@@ -357,6 +357,10 @@ shapes cut to the driver's argument count.
   callback readFile; a read stream's 'error') carry no errno, syscall or path, and their message lacks node's
   `, read`/`, link 'a' -> 'b'` tail.
 - DIFF-SCANDIR: readdir and opendir errors say syscall `readdir`; node says `scandir` (`opendir` for opendir).
+  FIXED 2026-11-21 (no darwin pair left); the linux pairs stay listed until linux is frozen at 2.1.330 (item 1 of
+  the 2.1.330 entry). Not judged by the differential, which sorts: the engine's readdir is the directory's raw
+  order, where node's readdirSync is sorted (libuv's scandir sorts; measured on APFS, `z a emp sub two` against
+  node's `a emp sub two z`).
 - DIFF-ENCODINGS: `readFileSync(p, {encoding: "ascii"})` answers a Buffer where node answers a string. (readlink and
   readdir with `encoding: "buffer"` answer Buffers since c61f4a9, 2026-11-20; opendir's entries too since its fix
   round.) Not compared, on purpose: readdir `recursive` with a non-utf8 encoding, because node 24.21.0 itself breaks
@@ -366,7 +370,9 @@ shapes cut to the driver's argument count.
   read-only descriptor do not throw node's EBADF/EINVAL (`ftruncateSync` is absent, as the gap map says).
 - DIFF-READSYNC-RANGE: `readSync` with a length past the buffer reads first and fails in the engine; node throws
   ERR_OUT_OF_RANGE before reading.
-- DIFF-REALPATH-SYSCALL: realpathSync of a dangling link says syscall `realpath`; node says `stat`.
+- DIFF-REALPATH-SYSCALL: realpathSync of a dangling link says syscall `realpath`; node says `stat`. FIXED
+  2026-11-21 for realpathSync and the callback realpath (node's JS walk: lstat, or stat for a link); `.native` and
+  fs.promises.realpath keep the realpath syscall, as node's do. Linux pairs as DIFF-SCANDIR's.
 - DIFF-RM: `rmSync(dir)` without recursive says ENOTEMPTY/rmdir where node says ERR_FS_EISDIR; `rmSync` with
   force through a regular file throws ENOTDIR where node succeeds.
 - DIFF-MKDTEMP-ERROR: mkdtemp's error names syscall `mkdir` and the random name; node says `mkdtemp` and
@@ -383,7 +389,7 @@ shapes cut to the driver's argument count.
   _makeLong; `util.types` has 2 of node's predicates.
 - DIFF-STDIO-CLASS: `process.stdout`/`stderr` are EventEmitters, node's (a pipe here) Sockets; `process.env` is a
   plain object, node's has no prototype.
-- DIFF-ZLIB: gzipSync, deflateSync, inflateSync and inflateRawSync throw `not implemented` (the gzipSync entry
+- DIFF-ZLIB: gzipSync, deflateSync, deflateRawSync (2.1.330 calls it), inflateSync and inflateRawSync throw `not implemented` (the gzipSync entry
   under "Grep, Glob and the Bash tool's rg" below has its consequence); `zlib.constants.ZLIB_VERNUM` is not node's.
 - DIFF-OS-MEMORY-RELEASE: `os.totalmem()` and `os.freemem()` answer 0, `os.release()` and `os.version()` "".
 - DIFF-NET-SERVER: `net.createServer` throws (the named stub; the sandbox entries below).
@@ -392,7 +398,8 @@ shapes cut to the driver's argument count.
 - DIFF-ISATTY-DEVNULL: `tty.isatty(0)` is true when fd 0 is /dev/null.
 - DIFF-UTIL-FORMAT: `util.format("%%")` answers "%" (node "%%" with no arguments). (`util.inspect("a")` answering a
   for 'a' is fixed: util.inspect is now its own entry, which also stopped throwing when given options.)
-- DIFF-STATFS-SYNC (Linux): the linux carve calls `fs.statfsSync`, absent from the shim (the gap map's entry).
+- DIFF-STATFS-SYNC: the linux carve calls `fs.statfsSync`, and since 2.1.330 the darwin carve too; it is absent
+  from the shim (the gap map's entry): the sync-fs patch has no statfs.
 
 Measured: `node --test test/node-shim-differential.test.cjs` on darwin-arm64 (the scratch tjs built from this
 tree, node 24.21.0, the 2.1.283 macos-arm64 provider): at c7d7716, 1785 calls judged, 372 diverging; after
