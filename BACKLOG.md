@@ -139,7 +139,7 @@ phase timestamps in a scratch copy of rg-native.cjs, alone and beside 16 CPU hog
 30.6 MB reached the tjs reader within 0.9 s every run, and 4 of 4 loaded runs hit a 20 s timeout before printing
 (2026-11-19)
 
-## 2.1.330 absorbed except three gaps: the shim differential, two rg flags, and NetBSD evidence (2026-11-21)
+## 2.1.330 is the pin and the suite is RED on it: 39 failures, each named here (2026-11-21)
 
 The pin moved 2.1.283 -> 2.1.330 (UPSTREAM_PIN). upstream-drift.yml's five red anchor steps (red since 2026-10-23)
 were each re-pinned to the 2.1.330 shape, not loosened: the Remote Control and snapshot-generator hooks (bc7758c),
@@ -167,6 +167,39 @@ native's 32,768, c7c3983; lead-scrub retired, 52c0306). What 2.1.330 still asks 
    refusals. Both translate to ugrep (-a, -m) but need rg-differential rows first.
 3. **NetBSD/arm64 VM evidence** (test/fidelity/evidence/netbsd-arm64.json) names 9e20ba4 and the old pin; stale
    by design until re-run.
+
+The full suite at the pin (darwin-arm64, node 24.21.0, CLODE_TJS = main's engine plus the capture patch,
+CLODE_TEST_PROVIDER_STORE = 2.1.330) ended RC=2 with 39 failures. Fixed on the way there, each with its test:
+buffer.constants (every PreToolUse hook was refused as "input can't be written as JSON"), the dep-closure
+allowlist (every build refused 'Cocoa'/'CoreGraphics'/'mod', all string text), the builtin facade dropping
+`import Ce,{ChildProcess as $t}` (every naude turn died at link), the extractor signature missing bun-graph-plan,
+Bun.SHA256/gzipSync. STILL RED, beyond 1 and 2 above, by gate:
+
+4. **The tool fidelity rows, against native 2.1.330** (test/fidelity/tools-local.test.cjs, every "native answers
+   ... as recorded" and "in a built quaude ... equal native's" row, 20 tests): the recorded native answers moved
+   (re-record them against native 2.1.330 and review each diff), and quaude now differs from native too, e.g.
+   CronCreate's "Next run: 01/01/2027 02:59:00am" where native says "Jan 1 2:59am" (a date-formatting path 2.1.330
+   took), ReportFindings and Workflow input validation.
+5. **every-tool-driven BROKEN** (and forced-win32's "the pinned carve spelled the win32 way" row, 0 tools): 2.1.330's
+   getAllBaseTools is no longer `let ...; return [...]`, and the Bash tool's shell discovery
+   (`C?["bash","zsh"]:["zsh","bash"]).flatMap(`) is spelled differently: re-derive both scans.
+6. **bun-ant-member-surface**: 11 Bun.ant members new in 2.1.330 with no review (isVmContextGlobal, loginTty,
+   posixFsAt, stringifyToBytes, stringifyToBytesFallbacks, ttyName, windowsFolderSecurity,
+   windowsProcessCreationTime, windowsProcessList, windowsSandboxDeniesArg, withThreadWorkingDirectory).
+7. **The rg tables**: rg-regex-data-fresh, rg-regex-oracle-fresh, rg-bundle-line-fresh and rg-types-fresh: 2.1.330's
+   embedded rg is ripgrep 14.1.1 rev 6634fc3b5b, the tables were generated from rev 7c1d0ed28a; regenerate from it.
+   rg-differential also red on this.
+8. **API surface** (node-shim-api-surface-gate): Bun.Archive (live: `new Bun.Archive(G,{compress:"gzip"}).bytes()`
+   builds a .tgz to push files) needs a tar writer. Under tjs node-shim has no gzip at all, so Bun.gzipSync refuses
+   there by name (test/bun-shim-gzip-sha256.test.cjs pins that).
+9. **node-shim-wall-tripwires**: net.connect/createConnection reach rose 11 -> 16 modules; review the five new
+   sites before the baseline moves.
+10. **shim-surface**: golden.json was measured on 2.1.283; re-measure with UPDATE_GOLDEN=1 on 2.1.330 and review.
+11. **paint-probe-damage-packing BROKEN**: 0 damage-decode sites in the 2.1.330 carve; re-derive the anchor.
+12. **Workflow under quaude** (agentic-workflow-complete): no wf_<id>.json, even with main's job-realm engine fix.
+13. **sandboxed Bash fails closed** (one row differs), **/status in -p** (naude says "/status isn't available in
+    this environment.", quaude prints nothing), and **WebFetch over TLS 1.2 rsa_pss_rsae_sha256** (quaude:
+    "X509 - Certificate verification failed").
 
 Measured: CLODE_PROVIDER_BIN=<2.1.330 darwin-arm64 and linux-x64 from npm pack> CLODE_TJS=<engine with
 quickjs-ng-regexp-capture-u16.patch> node --test test/node-shim-differential.test.cjs (VIOLATION, 2092 calls

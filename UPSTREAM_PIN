@@ -67,14 +67,18 @@
 #            engine): 3574 staged modules, merged groups 2/49/4; its Bun is 1.4.4. Its text
 #            matches native 2.1.330 under our shim (test/text-differential, 31 rows, 0
 #            failures), so the text oracle moved with it. Absorbing it took, beyond the five
-#            drift anchors re-pinned to its shapes (BACKLOG, "2.1.330 absorbed except three
-#            gaps"): an engine patch for capture groups past 254 (its artifact-lead scrub
-#            builds 588; quickjs-ng-regexp-capture-u16.patch), buffer.isAscii, readSync's
-#            options form, a builtin facade that dropped `import Ce,{ChildProcess as $t}`'s
-#            names (every naude turn died at link), quaude's rg taking --line-buffered, and
-#            the snapshot writer's new flagged shadows. STILL OPEN at the bump: the
-#            node-shim differential's unclaimed divergences and two rg flags it now passes
-#            (--text, --max-count), both in that BACKLOG entry.
+#            drift anchors re-pinned to its shapes (BACKLOG, "2.1.330 is the pin and the
+#            suite is RED on it"): an engine patch for capture groups past 254 (its
+#            artifact-lead scrub builds 588; quickjs-ng-regexp-capture-u16.patch),
+#            buffer.isAscii and buffer.constants (without MAX_STRING_LENGTH every PreToolUse
+#            hook was refused), readSync's options form, a builtin facade that dropped
+#            `import Ce,{ChildProcess as $t}`'s names (every naude turn died at link), three
+#            string-text bare specifiers the dep-closure gate refused, Bun.SHA256 and
+#            gzipSync, quaude's rg taking --line-buffered, and the snapshot writer's new
+#            flagged shadows. The pin moved with the suite STILL RED (39 failures, RC=2 on
+#            darwin-arm64): tool fidelity rows against native 2.1.330, every-tool-driven,
+#            Bun.ant review, the rg tables (new embedded rg revision), the node-shim
+#            differential, rg --text/--max-count, and more, each named in that entry.
 #
 # WHAT ACTUALLY BREAKS, measured 2026-09-21 on this box with a real engine, because
 # "QuickJS rejects the merged file" was true and told nobody where to look. The merged

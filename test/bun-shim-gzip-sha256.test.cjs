@@ -30,7 +30,7 @@ console.log(JSON.stringify(out));
 // FIPS 180-2's "abc" vector
 const ABC_HEX = 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad';
 const GZIP = { type: '[object Uint8Array]', magic: [0x1f, 0x8b], roundTrip: true, smaller: true };
-// UNDER tjs node-shim has no gzip (its zlib.gzipSync refuses by name; BACKLOG "2.1.330 absorbed except three gaps",
+// UNDER tjs node-shim has no gzip (its zlib.gzipSync refuses by name; BACKLOG "2.1.330 is the pin and the suite is RED on it",
 // with deflateRawSync), so Bun.gzipSync there refuses the same way instead of failing as "not a function".
 const GZIP_TJS = { threw: 'node-shim: zlib.gzipSync not implemented' };
 const EXPECTED = {
