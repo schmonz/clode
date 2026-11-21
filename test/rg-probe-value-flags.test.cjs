@@ -4,6 +4,7 @@
 // --max-count, so the reader built `--max-count --max-filesize 1M ...` and rg-carve-argv-answered reported quaude's rg
 // refusing an argv the carve never builds. Every flag quaude's rg reads a value for must be in that map, with a
 // placeholder the parser accepts, so the next value flag quaude's rg learns cannot be misread the same way.
+// forced-win32: spawn-injected: no test here spawns; each compares two flag tables and parses an argv in-process
 const { test } = require('node:test');
 const assert = require('node:assert');
 const { RG_VALUE_FLAGS } = require('../scripts/lib/rg-probe.cjs');

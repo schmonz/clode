@@ -234,7 +234,8 @@ test('native refuses to start on the startup rows\' input as recorded, and start
   const native = rgOracle(process.env);
   if (!native) { t.skip(rgOracleSkip(process.env)); return; }
   if (!nativeWouldSandbox()) { t.skip('native would not sandbox here: the startup rows are the fail-closed branch\'s'); return; }
-  // the checks' own controls: each fails on the other's answer
+  // the checks' own controls: each fails on the other's answer; a start is judged by its first call's answer too
+  assertFailsOnMissingOutput(ran1, M1, ['print', 'shell:bash']);
   const refusedRun = { mock: { requests: [] }, markers: [], r: { status: 1, stderr: `x\n\n${STARTUP_REFUSED('why')}\n` } };
   const startedRun = { mock: { requests: [{ method: 'POST' }] }, markers: [], r: { status: 0, stderr: '' } };
   assert.strictEqual(startupFinding('c', refusedRun, 'why'), null);
@@ -250,8 +251,10 @@ test('native refuses to start on the startup rows\' input as recorded, and start
       if (f) findings.push(f);
     }
     for (const [label, extra] of [['native, sandbox not named', []], ['native + quaude\'s layer, sandbox not named', QUAUDE_LAYER]]) {
-      const f = startedFinding(`${c.name}, ${label}`, await runCase(native, { ...starts, args: (ctx) => [...starts.args(ctx), ...extra] }));
+      const run = await runCase(native, { ...starts, args: (ctx) => [...starts.args(ctx), ...extra] });
+      const f = startedFinding(`${c.name}, ${label}`, run);
       if (f) findings.push(f);
+      else if (!ran1(run.mock)) findings.push(`${c.name}, ${label}: started, but its first call did not run: ${JSON.stringify(toolResult(run.mock, M1.id))}`);
     }
   }
   assert.deepStrictEqual(findings, [], `native moved:\n${findings.join('\n')}`);

@@ -154,6 +154,7 @@ Its native test keeps that expectation native-derived, measured on 2.1.330 darwi
   quaude's exact text.
 - The control that pins the reason: the same input with the sandbox NOT named (`{"env": `, or the user's merge-row
   file as written) starts, with and without the layer.
+Measured: native 2.1.330 darwin-arm64 and a fresh quaude, both run by agentic-sandbox-fail-closed.test.cjs (2026-11-21).
 
 ## 2.1.330 is the pin and the suite is RED on it: 39 failures, each named here (2026-11-21)
 
@@ -188,7 +189,7 @@ allowlist (every build refused 'Cocoa'/'CoreGraphics'/'mod', all string text), t
 `import Ce,{ChildProcess as $t}` (every naude turn died at link), the extractor signature missing bun-graph-plan,
 Bun.SHA256/gzipSync. STILL RED, beyond 1 and 2 above, by gate:
 
-4. **The tool fidelity rows, against native 2.1.330** (test/fidelity/tools-local.test.cjs, every "native answers
+4. FIXED (the re-records, 61d8b41; Date/Number toLocale*, fdd1c39; Intl.ListFormat, the interactive turn): **The tool fidelity rows, against native 2.1.330** (test/fidelity/tools-local.test.cjs, every "native answers
    ... as recorded" and "in a built quaude ... equal native's" row, 20 tests): the recorded native answers moved
    (re-record them against native 2.1.330 and review each diff), and quaude now differs from native too, e.g.
    CronCreate's "Next run: 01/01/2027 02:59:00am" where native says "Jan 1 2:59am" (a date-formatting path 2.1.330
@@ -223,6 +224,26 @@ Bun.SHA256/gzipSync. STILL RED, beyond 1 and 2 above, by gate:
     "process.resourceUsage() failed: not a function". crypto.X509Certificate is absent too (2.1.330 reads it in 11
     modules, its CA-trust builder inside try/catch). Bun.Archive (new in 2.1.330: the hosted project folder's .tgz)
     waits on the same gzip compressor; accepted-missing for now with its review (inspect-claude-bundle.cjs).
+15. FIXED: **the interactive TUI never painted** at 2.1.330: the REPL chunk builds `new Intl.ListFormat(...)` at
+    module load and the polyfill had none, so the REPL import threw and quaude sat idle with 13 bytes written. -p
+    never loads that chunk. Intl.ListFormat added; the ratchet intl-members-the-bundle-names (node-shim-intl) now
+    requires every `Intl.<member>` the carve names to exist under tjs.
+16. **INTERMITTENT, needs a ruling: fs.utimesSync is not synchronous.** The sync-fs patch has no utime, so the shim
+    stamps the times with tjs's ASYNC utime (fs.cjs, utimesSync). Under the full suite's load the differential's
+    `after` snapshot ran before it landed: `fs.utimesSync(<file>, 1000, 1000)` read mtimeMs/atimeMs "recent" where
+    node reads 1000000. Alone the differential is green (8/8). The same run found two DIFF-WRITESTREAM-THROWS pairs
+    (`createWriteStream(<dir>|<missing/x>, {fd, autoClose})` r.end) agreeing with node, which they do not alone. The
+    fix is an engine primitive (a sync utime/lutime in txiki-sync-fs.patch, with an engine-floor fallback), which
+    touches every engine leg: not done inside the pin bump without a ruling. The gate is left as is.
+17. **INTERMITTENT: the host node died of SIGSEGV running test/procfs-linux-only.test.cjs** (378 ms in, no test
+    reported; run.mjs kept the TAP). Not reproduced in 63 more runs (8 via the suite's own runner, 25 under
+    `node --test` with the watchdog preload on this branch and 25 on main's tree, 30 directly). The file loads
+    fs.cjs into a node:vm context; a crash in node 24.21.0 itself, no product code runs natively there.
+
+The full suite after 15 (2026-11-21, same setup): 4011 pass, 6 fail, 113 skip, RC=1. The six were: 16 and 17 above;
+backlog-claims-measured (the RULED entry had no Measured line), live-checks-judge-output (the sandbox test's native
+run judged no tool_result under a control), guards-population (bun-shim-vm-context-global unexcluded,
+node-shim-intl unmigrated) and forced-win32 (rg-probe-value-flags undeclared). Those four are fixed.
 
 Measured: CLODE_PROVIDER_BIN=<2.1.330 darwin-arm64 and linux-x64 from npm pack> CLODE_TJS=<engine with
 quickjs-ng-regexp-capture-u16.patch> node --test test/node-shim-differential.test.cjs (VIOLATION, 2092 calls

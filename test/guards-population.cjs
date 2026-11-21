@@ -186,6 +186,11 @@ const TEST_VERDICT_EXTRA = [
   // regex. Moved here from PATTERN_MATCHES on 2026-09-24 (R10 revised): it is a test's
   // shape, not a gate's. captureSessions joined 2026-09-25 for fidelity/session-determinism.
   ...FRAME_CAPTURE_CALLS,
+  // EVERY MATCH OF A REGEX LITERAL over the bytes (`text.matchAll(/\bIntl\.(\w+)/g)`): the same derivation as
+  // `.match(/`, spelled for all matches. Added 2026-11-21 for node-shim-intl's intl-members-the-bundle-names, a
+  // registered guard that names each Intl member the staged carve reaches for, which the FLOOR test said the
+  // classifier could not see. Test-only, like the rest of this list; no other test file changed verdict with it.
+  /\.matchAll\s*\(\s*\//,
   // A TEXT DIFFERENTIAL: the same probe program run inside native Bun and under our shim,
   // compared string by string (scripts/lib/text-probe.cjs's runNative, judged by
   // compareTextResults). Added 2026-09-24 for fidelity/text-differential, a registered
@@ -261,6 +266,14 @@ const GUARD_EXCLUSIONS = [
       + 'it hands to build.sh (the subject it runs, not bytes it scans) and PATTERN_MATCHES on '
       + '`assert.match(out, /source tree ready:/)` against its own child\'s output. There is no '
       + 'fixed artifact and no violation pattern: the subject is whether the build runs on that engine.',
+  },
+  {
+    file: 'bun-shim-vm-context-global.test.cjs',
+    because: 'a behavioural differential, not a scan: it RUNS test/fixtures/vm-context-global-probe.cjs with '
+      + 'libexec/bun-shim.cjs loaded, under node, under the tjs loader and inside native Bun (BUN_OPTIONS '
+      + 'preload), and compares the answers those runs printed with native\'s recorded ones. READS_ARTIFACT fires '
+      + 'on the libexec/bun-shim.cjs path it hands the probe to load (the subject it executes, never bytes it '
+      + 'searches) and PATTERN_MATCHES on `/CTXGLOBAL /.test(stdout)` against its own child\'s output.',
   },
   {
     file: 'node-shim-fs-engine-floor.test.cjs',

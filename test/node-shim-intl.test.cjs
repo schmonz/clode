@@ -198,18 +198,32 @@ test('Intl.Segmenter segments.containing() matches host node (the dead-TUI gap)'
 // had no ListFormat, so the REPL import threw and quaude never painted. Nothing named the gap: the probe watches
 // builtin MODULES, and Intl is a global. This reads every `Intl.<member>` the staged bundle names and requires each to
 // be a function under tjs, so the next Intl constructor upstream reaches for is red here, not a frozen TUI.
-test('every Intl member the staged bundle names exists under tjs', (t) => {
-  if (skipUnlessTjs(t)) return;
-  const models = require('./oracle-models.cjs');
-  const refs = require('./shim-surface/bundle-refs.cjs');
-  let staged;
-  try { staged = models.stageProviderCli({ env: process.env }); } catch (e) { assert.fail(`provider found but staging it failed: ${e.message}`); }
-  const skip = models.providerSkipReason(staged, 'no staged provider bundle (CLODE_PROVIDER_BIN)');
-  if (skip) { t.skip(skip); return; }
-  const cached = path.join(staged.cacheDir, 'cli.cjs');
-  const text = refs.loadBundle(fs.existsSync(cached) ? cached : staged.cli);
-  const named = [...new Set([...text.matchAll(/\bIntl\.([A-Za-z_$][\w$]*)/g)].map((m) => m[1]))].sort();
-  assert.ok(named.includes('ListFormat'), `the scan finds the ListFormat the REPL chunk names (found: ${named.join(', ')})`);
-  const out = runTjs(fixture(`console.log(JSON.stringify(${JSON.stringify(named)}.filter((k) => typeof Intl[k] !== 'function')));`));
-  assert.deepStrictEqual(JSON.parse(out || 'null'), [], `Intl members the bundle names that tjs lacks (of ${named.join(', ')})`);
-});
+// read() names the members and asks tjs what each is; scan() reports every one that is not a function.
+const { defineGuard, guardTests } = require('./guard.cjs');
+guardTests(defineGuard({
+  name: 'intl-members-the-bundle-names',
+  // 2.1.330 names 8 (Collator, DateTimeFormat, DisplayNames, ListFormat, Locale, NumberFormat,
+  // RelativeTimeFormat, Segmenter): fewer than 5 means the scan stopped seeing the bundle
+  floor: 5,
+  read() {
+    if (!tjsPath()) return { skip: 'no tjs engine (CLODE_TJS, or build one with scripts/build-tjs.cjs)' };
+    const models = require('./oracle-models.cjs');
+    const refs = require('./shim-surface/bundle-refs.cjs');
+    const staged = models.stageProviderCli({ env: process.env });
+    const skip = models.providerSkipReason(staged, 'no staged provider bundle (CLODE_PROVIDER_BIN)');
+    if (skip) return { skip };
+    const cached = path.join(staged.cacheDir, 'cli.cjs');
+    const text = refs.loadBundle(fs.existsSync(cached) ? cached : staged.cli);
+    const named = [...new Set([...text.matchAll(/\bIntl\.([A-Za-z_$][\w$]*)/g)].map((m) => m[1]))].sort();
+    const out = runTjs(fixture(`console.log(JSON.stringify(Object.fromEntries(${JSON.stringify(named)}.map((k) => [k, typeof Intl[k]]))));`));
+    return { named, types: JSON.parse(out || '{}') };
+  },
+  scan({ named, types }) {
+    return { examined: named.length, note: `the Intl members the staged bundle names: ${named.join(', ')}`,
+      findings: named.filter((k) => types[k] !== 'function').map((k) => `Intl.${k} is ${types[k] || 'unanswered'} under tjs; the bundle names it`) };
+  },
+  control() {
+    return { named: ['Bogus', 'Collator', 'DateTimeFormat', 'ListFormat', 'NumberFormat', 'Segmenter'],
+      types: { Bogus: 'undefined', Collator: 'function', DateTimeFormat: 'function', ListFormat: 'function', NumberFormat: 'function', Segmenter: 'function' } };
+  },
+}));
