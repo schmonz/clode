@@ -29,9 +29,6 @@ for (const [k, f] of [['isAscii', isAscii], ['isUtf8', isUtf8]]) {
     one(k + ' ' + label, () => f(v));
   }
 }
-// buffer.constants: 2.1.330's hook runner divides MAX_STRING_LENGTH by 2 to cap a hook's input; undefined made
-// every PreToolUse hook refuse its input as unwritable JSON
-one('constants', () => { const b = require('buffer'); return [b.constants, b.kMaxLength, b.kStringMaxLength]; });
 const file = process.argv[2];
 const fd = fs.openSync(file, 'r+');
 const cases = [
@@ -89,4 +86,39 @@ test('buffer.isAscii/isUtf8 and fs.close/write/read argument handling answer as 
     for (let i = 0; i < node.length; i++) assert.deepStrictEqual(ours[i], node[i], `row ${i}: ${node[i][0]}`);
     assert.strictEqual(ours.length, node.length);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+// buffer.constants: 2.1.330's hook runner divides MAX_STRING_LENGTH by 2 to cap a hook's input; undefined made every
+// PreToolUse hook refuse its input as unwritable JSON. Not node's numbers, nor native's (4294967296 / 2147483647,
+// asked below): this engine's own limits, each proved at its edge (one past it is refused before anything is
+// allocated; the limit itself would allocate 1-2 GB, so it is not made here).
+test('buffer.constants under tjs are the engine\'s own limits, and one past each is refused', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-buffer-max-'));
+  try {
+    const prog = path.join(dir, 'p.cjs');
+    fs.writeFileSync(prog, `
+const b = require('buffer');
+const refused = (f) => { try { f(); return 'made'; } catch (e) { return e.name + ': ' + e.message; } };
+console.log(JSON.stringify({
+  constants: b.constants, kMaxLength: b.kMaxLength, kStringMaxLength: b.kStringMaxLength,
+  stringPast: refused(() => 'x'.repeat(b.constants.MAX_STRING_LENGTH + 1)),
+  bufferPast: refused(() => new ArrayBuffer(b.constants.MAX_LENGTH + 1)),
+}));`);
+    const r = runLoader(prog, []);
+    assert.strictEqual(r.status, 0, String(r.stderr));
+    assert.deepStrictEqual(JSON.parse(r.stdout.trim().split('\n').pop()), {
+      constants: { MAX_LENGTH: 2147483647, MAX_STRING_LENGTH: 1073741823 }, kMaxLength: 2147483647, kStringMaxLength: 1073741823,
+      stringPast: 'RangeError: invalid string length', bufferPast: 'RangeError: invalid array buffer length',
+    });
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('native still answers buffer.constants as the shim\'s comment says it does', (t) => {
+  const { resolveNativeOracle, runInNative } = require('../scripts/lib/native-oracle.cjs');
+  const bin = resolveNativeOracle();
+  if (!bin) { t.skip('no native claude (CLODE_NATIVE_ORACLE / CLODE_NATIVE_CLAUDE / PATH)'); return; }
+  assert.deepStrictEqual(runInNative(bin, "const b = require('buffer'); return [b.constants, b.kMaxLength, b.kStringMaxLength];"),
+    [{ MAX_LENGTH: 4294967296, MAX_STRING_LENGTH: 2147483647 }, 4294967296, 2147483647],
+    'native moved: re-read libexec/node-shim/modules/buffer.cjs\'s constants comment');
 });
