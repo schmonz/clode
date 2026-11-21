@@ -286,6 +286,15 @@ const GUARD_EXCLUSIONS = [
       + 'it did not create.',
   },
   {
+    file: 'node-shim-fs-utime-sync.test.cjs',
+    because: 'a behavioural differential of fs.utimesSync/lutimesSync: it writes its own files in a mkdtemp, '
+      + 'runs one program under node and under the tjs loader and compares the Stats those runs printed. Its '
+      + 'second test is node-shim-fs-engine-floor\'s shape exactly: READS_ARTIFACT fires on reading '
+      + 'test/fixtures/stale-engine-prelude.js, PREPENDED to the program as code (the stand-in), and '
+      + 'PATTERN_MATCHES on `assert.match` against the refusal and the CLODE_ENGINE_FLOOR_LOG that run just '
+      + 'wrote. Nothing here looks for a violation in bytes it did not create.',
+  },
+  {
     file: 'provider-store-key.test.cjs',
     because: 'it BUILDS every input it looks at and then asserts on what the product did '
       + 'with them: mkdtemp provider stores, a file:// releases fixture it writes, and '
