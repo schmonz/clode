@@ -219,6 +219,11 @@ const AUDIT_PENDING_CEILING = 38;   // lower it as names go; never raise it
 const PRODUCTION_SPAWN_EXCLUDED = {
   ...Object.fromEntries(AUDIT_PENDING_BASELINE.map((k) => [k, AUDIT_PENDING])),
   // A file excluded since 2026-11-19 goes here with ITS OWN reason: what its tests reach that is real, and why.
+  // 2026-11-21: its last test-side spawn (the retired lead-scrub QuickJS probe) went with LEAD-SCRUB-POSSESSIVE,
+  // so only its production closure spawns: extract-claude-js.cjs requires bun-graph.cjs, whose zstd decoder runs a
+  // host tool. Its tests call the extractor's text transforms and never inject that spawn, so it is not
+  // spawn-injected; it reads `process.platform` only through those transforms' carve fixtures.
+  'test/extract-hooks.test.cjs': 'out only through extract-claude-js.cjs -> bun-graph.cjs (a host zstd spawn its tests never reach and never inject)',
 };
 // Sensitive, OUT, undeclared, and its test-side code spawns nothing: out only through a production module.
 function productionSpawnOnly(testFiles, io = realIo) {

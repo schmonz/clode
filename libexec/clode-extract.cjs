@@ -78,21 +78,7 @@ function sigOrAbsent(p) {
 // changed no signature, so every warm cache kept the broken facade and naude died at link on that machine
 // only. `require(__dirname + '/x')` is NOT followed: that form is the runtime prelude (bun-shim.cjs and its
 // companions), which the companion refresh below keeps current without a re-extract.
-const EXTRACTOR_ROOTS = ['extract-claude-js.cjs', 'scc-merge.cjs', 'graph-scc-merge.cjs'];
-function extractorSourcesOf(libexec) {
-  const seen = new Set();
-  const visit = (f) => {
-    if (seen.has(f)) return;
-    seen.add(f);
-    let src;
-    try { src = fs.readFileSync(path.join(libexec, f), 'utf8'); } catch { return; }
-    const re = /\brequire\('\.\/([\w.-]+\.c?js)'\)/g;
-    let m;
-    while ((m = re.exec(src))) visit(m[1]);
-  };
-  EXTRACTOR_ROOTS.forEach(visit);
-  return [...EXTRACTOR_ROOTS, ...[...seen].filter((f) => !EXTRACTOR_ROOTS.includes(f)).sort()];
-}
+const { extractorSourcesOf } = require('./extractor-sources.cjs');
 function extractorSigOf(libexec) {
   return extractorSourcesOf(libexec)
     .map((f) => sigOrAbsent(path.join(libexec, f)))

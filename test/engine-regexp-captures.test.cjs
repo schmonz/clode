@@ -19,7 +19,7 @@
 //     (the d flag) for groups past 255;
 //   - the lead scrub's own shape at 2.1.327's size: 588 atomic separators under giu;
 //   - a regexp LITERAL with 300 groups through serialize/deserialize/evalBytecode, the path a
-//     fused quaude's bytecode takes (OP_regexp carries libregexp's bytecode opaquely).
+//     built quaude's bytecode takes (OP_regexp carries libregexp's bytecode opaquely).
 // Before the patch, every probe here past 254 groups throws under tjs (measured 2026-11-21 on
 // the engine built without it: "too many captures").
 const test = require('node:test');
@@ -131,7 +131,7 @@ test('capture indexes past 255 match as node matches them, in every opcode that 
 });
 
 // A regexp literal is compiled when its module is, and its libregexp bytecode rides inside the
-// serialized function (OP_regexp): the path every fused quaude takes.
+// serialized function (OP_regexp): the path every built quaude takes.
 function bytecodeProbe() {
   const src = 'const re = /' + '()'.repeat(299) + '(\\w)\\300/u;'
     + 'const m = re.exec("xyzz!"); globalThis.__answer = m && [m.index, m.length, m[300]];';
