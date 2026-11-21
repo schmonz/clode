@@ -193,3 +193,23 @@ test('Intl.Segmenter segments.containing() matches host node (the dead-TUI gap)'
   assert.deepStrictEqual(rows[1][1], { segment: 'a\u0300', index: 0 });
   assert.deepStrictEqual(rows[1][2], { segment: 'a\u0300', index: 0 });
 });
+
+// THE RATCHET for the 2.1.330 dead TUI. The REPL chunk built `new Intl.ListFormat(...)` at module load, the polyfill
+// had no ListFormat, so the REPL import threw and quaude never painted. Nothing named the gap: the probe watches
+// builtin MODULES, and Intl is a global. This reads every `Intl.<member>` the staged bundle names and requires each to
+// be a function under tjs, so the next Intl constructor upstream reaches for is red here, not a frozen TUI.
+test('every Intl member the staged bundle names exists under tjs', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const models = require('./oracle-models.cjs');
+  const refs = require('./shim-surface/bundle-refs.cjs');
+  let staged;
+  try { staged = models.stageProviderCli({ env: process.env }); } catch (e) { assert.fail(`provider found but staging it failed: ${e.message}`); }
+  const skip = models.providerSkipReason(staged, 'no staged provider bundle (CLODE_PROVIDER_BIN)');
+  if (skip) { t.skip(skip); return; }
+  const cached = path.join(staged.cacheDir, 'cli.cjs');
+  const text = refs.loadBundle(fs.existsSync(cached) ? cached : staged.cli);
+  const named = [...new Set([...text.matchAll(/\bIntl\.([A-Za-z_$][\w$]*)/g)].map((m) => m[1]))].sort();
+  assert.ok(named.includes('ListFormat'), `the scan finds the ListFormat the REPL chunk names (found: ${named.join(', ')})`);
+  const out = runTjs(fixture(`console.log(JSON.stringify(${JSON.stringify(named)}.filter((k) => typeof Intl[k] !== 'function')));`));
+  assert.deepStrictEqual(JSON.parse(out || 'null'), [], `Intl members the bundle names that tjs lacks (of ${named.join(', ')})`);
+});

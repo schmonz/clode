@@ -1,5 +1,5 @@
 'use strict';
-// The date and number formatting shapes the 2.1.330 bundle uses, one string per row. Self-contained, so
+// The date, number and list formatting shapes the 2.1.330 bundle uses, one string per row. Self-contained, so
 // test/node-shim-intl.test.cjs runs its SOURCE (cases.toString()) under tjs+loader and inside native Bun
 // (scripts/lib/native-oracle.cjs), both at TZ=America/New_York; intl-locale-native.json is native's answer.
 module.exports = function cases() {
@@ -43,5 +43,17 @@ module.exports = function cases() {
   for (const n of [0, 1234.5, 1234567.891, 0.5, -12]) {
     for (const o of [undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }, { minimumFractionDigits: 1 }]) out.push(`${n}.toLocaleString ${JSON.stringify(o)} => ${n.toLocaleString('en-US', o)}`);
   }
+  // Intl.ListFormat: 2.1.330 builds one at module load in the REPL chunk, so its absence kept the TUI from painting
+  const L = [[], ['a'], ['a', 'b'], ['a', 'b', 'c'], ['a', 'b', 'c', 'd']];
+  for (const type of [undefined, 'conjunction', 'disjunction', 'unit']) for (const style of [undefined, 'long', 'short', 'narrow']) {
+    const o = {}; if (type) o.type = type; if (style) o.style = style;
+    const f = new Intl.ListFormat('en', o);
+    out.push(`ListFormat ${JSON.stringify(o)} => ${L.map((l) => JSON.stringify(f.format(l))).join(' | ')} :: ${JSON.stringify(f.resolvedOptions())}`);
+  }
+  out.push(`ListFormat parts => ${JSON.stringify(new Intl.ListFormat('en', { type: 'disjunction' }).formatToParts(['x', 'y', 'z']))}`);
+  out.push(`ListFormat iterable => ${new Intl.ListFormat('en').format(new Set(['p', 'q']))}`);
+  const thrown = (fn) => { try { fn(); return 'no throw'; } catch (e) { return e instanceof TypeError ? 'TypeError' : 'other'; } };
+  out.push(`ListFormat non-string => ${thrown(() => new Intl.ListFormat('en').format(['a', 1]))}`);
+  out.push(`ListFormat without new => ${thrown(() => Intl.ListFormat('en'))}`);
   return out;
 };

@@ -244,6 +244,42 @@ class RelativeTimeFormat {
   resolvedOptions() { return Object.assign({ locale: 'en', style: 'long', numeric: 'always' }, this._o); }
 }
 
+// ---- Intl.ListFormat — the en patterns native's ICU answers with ----
+// 2.1.330 builds one at MODULE LOAD in the REPL's survey chunk (`new Intl.ListFormat("en",{style:"long",
+// type:"conjunction"})`), so without it the REPL import threw and the TUI never painted. [pair, middle, end]
+// separators per type and style, each measured in native Bun (test/fixtures/intl-locale-native.json).
+const LIST_SEPARATORS = {
+  conjunction: { long: [' and ', ', ', ', and '], short: [' & ', ', ', ', & '], narrow: [', ', ', ', ', '] },
+  disjunction: { long: [' or ', ', ', ', or '], short: [' or ', ', ', ', or '], narrow: [' or ', ', ', ', or '] },
+  unit: { long: [', ', ', ', ', '], short: [', ', ', ', ', '], narrow: [' ', ' ', ' '] },
+};
+class ListFormat {
+  constructor(l, o) {
+    const opt = o || {};
+    const type = opt.type === undefined ? 'conjunction' : String(opt.type);
+    const style = opt.style === undefined ? 'long' : String(opt.style);
+    if (!LIST_SEPARATORS[type]) throw new RangeError(`Value ${type} out of range for Intl.ListFormat options property type`);
+    if (!LIST_SEPARATORS[type][style]) throw new RangeError(`Value ${style} out of range for Intl.ListFormat options property style`);
+    this._r = { locale: localeOf(l), type, style };
+  }
+  formatToParts(list) {
+    const items = [];
+    for (const x of list === undefined ? [] : list) {
+      if (typeof x !== 'string') throw new TypeError('Iterable yielded a value that is not a string');
+      items.push(x);
+    }
+    const [pair, middle, end] = LIST_SEPARATORS[this._r.type][this._r.style];
+    const parts = [];
+    items.forEach((x, i) => {
+      if (i > 0) parts.push({ type: 'literal', value: items.length === 2 ? pair : i === items.length - 1 ? end : middle });
+      parts.push({ type: 'element', value: x });
+    });
+    return parts;
+  }
+  format(list) { return this.formatToParts(list).map((p) => p.value).join(''); }
+  resolvedOptions() { return Object.assign({}, this._r); }
+}
+
 // ---- Intl.Collator — locale-agnostic ordinal compare ----
 class Collator {
   constructor(_l, o) { this._o = o || {}; }
@@ -292,7 +328,7 @@ module.exports = {
   Segmenter,
   NumberFormat: newOptional(NumberFormat),
   DateTimeFormat: newOptional(DateTimeFormat),
-  RelativeTimeFormat,
+  RelativeTimeFormat, ListFormat,
   Collator: newOptional(Collator),
   DisplayNames, Locale,
   getCanonicalLocales: (l) => (Array.isArray(l) ? l.map(String) : [String(l)]),
