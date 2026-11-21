@@ -98,9 +98,15 @@ function scanWordPacking({ bundle, probe, what }) {
 // the real carve, 0 false positives from unrelated floor/mod code elsewhere in the 37MB bundle
 // — a looser `Math.floor(x/N)%M...Math.floor(x/P)` regex without the `let a=...,b=` prefix and
 // shared ident matched a THIRD, unrelated site).
+// 2.1.330 spells the two sites differently, and the 2.1.283 regex matched NEITHER (the guard went BROKEN, examined 0):
+// `function WR(h,v,T){let M=Math.floor(T/1048576)%65536;Th(h,M,Math.floor(T/68719476736),v)}` (the second floor an
+// argument of the next call) and `let O=M.paint(...),L=Math.floor(O/1048576)%65536,F=Math.floor(O/68719476736)` (the
+// first floor a later declarator). So the first floor is a declarator (`let a=` or `,a=`), still mod'd, and the second
+// divides the SAME ident within 60 bytes that open no block and end no statement. Measured: exactly these 2 sites on
+// the 2.1.330 carve (darwin-arm64, 2026-11-21) and the same 2 as before on 2.1.283, no third.
 function scanDamagePacking({ bundle, probe, what }) {
   const findings = [];
-  const re = /let \w+=Math\.floor\((\w+)\/(\d+)\)%(\d+),\w+=Math\.floor\(\1\/(\d+)\)/g;
+  const re = /(?:let |,)[\w$]+=Math\.floor\(([\w$]+)\/(\d+)\)%(\d+)[,;][^;{}]{0,60}?Math\.floor\(\1\/(\d+)\)/g;
   let m, examined = 0;
   while ((m = re.exec(bundle)) !== null) {
     examined++;
@@ -200,6 +206,18 @@ guardTests(defineGuard({
   // must be EXACTLY equal to native" (constraints.md) would be judging against a wrong shape.
   control: () => ({ bundle: DAMAGE_CALLER.replace(/%65536/g, '%65537'), probe: PAINT_SOURCE, what: 'synthetic control' }),
 }));
+
+// The 2.1.330 carve's own two sites, verbatim (darwin-arm64, 2026-11-21).
+const DAMAGE_CALLER_330 = 'function WR(h,v,T){let M=Math.floor(T/1048576)%65536;Th(h,M,Math.floor(T/68719476736),v)}'
+  + 'function qg(h,v,T,M){let O=M.paint(h.cells,h.width,v,T,h.hyperlinkPool),L=Math.floor(O/1048576)%65536,F=Math.floor(O/68719476736);Th(h,L,F,T)}';
+test('the damage-packing scan reads the 2.1.330 carve\'s two sites, and names each drift there', () => {
+  const run = (bundle) => scanDamagePacking({ bundle, probe: PAINT_SOURCE, what: 'x' });
+  assert.deepStrictEqual(run(DAMAGE_CALLER_330).findings, []);
+  assert.strictEqual(run(DAMAGE_CALLER_330).examined, 2);
+  assert.strictEqual(run(DAMAGE_CALLER_330.replace(/68719476736/g, '68719476737')).findings.length, 2, 'a second divisor that moved at both sites');
+  assert.strictEqual(run(DAMAGE_CALLER_330.replace('Math.floor(T/68719476736)', 'Math.floor(X/68719476736)')).examined, 1, 'a second floor over another ident is not the decode');
+  assert.strictEqual(run('let M=Math.floor(T/1048576)%65536;if(a){b()}Math.floor(T/68719476736)').examined, 0, 'nor one past a block');
+});
 
 test('the damage-packing scan passes the 2.1.278 carve verbatim and names each drift', () => {
   const run = (bundle) => scanDamagePacking({ bundle, probe: PAINT_SOURCE, what: 'x' });
