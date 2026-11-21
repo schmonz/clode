@@ -1,0 +1,64 @@
+# RUSAGE-GLOBAL: __tjs_getrusage() -> node's process.resourceUsage() object, from libuv's uv_getrusage.
+#
+# WHY. 2.1.330's event-loop-stall sampler calls process.resourceUsage(); txiki has no rusage binding at all, so
+# node-shim had none, and every agentic run logged "[event-loop-stall] process.resourceUsage() failed: not a
+# function" (CI 44945260530, windows-amd64-tests and windows-arm64-tests). node answers it from uv_getrusage
+# (node_process_methods.cc ResourceUsage); so does this, with node's field names and units: CPU times in
+# microseconds, maxRSS in kilobytes (libuv normalises macOS's bytes and Solaris's pages itself). No table.
+# vm.c only, beside uname-global's global, so after it (TXIKI_PATCH_ORDER).
+#
+diff --git a/src/vm.c b/src/vm.c
+--- a/src/vm.c
++++ b/src/vm.c
+@@ -263,6 +263,39 @@
+     JS_DefinePropertyValueStr(ctx, obj, "release", JS_NewString(ctx, u.release), JS_PROP_C_W_E);
+     JS_DefinePropertyValueStr(ctx, obj, "version", JS_NewString(ctx, u.version), JS_PROP_C_W_E);
+     JS_DefinePropertyValueStr(ctx, obj, "machine", JS_NewString(ctx, u.machine), JS_PROP_C_W_E);
++    return obj;
++}
++
++/* CLODE: __tjs_getrusage() -> node's process.resourceUsage() object, from libuv's uv_getrusage, the call node itself
++ * makes (node_process_methods.cc ResourceUsage). Field names and units are node's: CPU times in microseconds,
++ * maxRSS in kilobytes (libuv already normalises macOS's bytes and Solaris's pages). txiki exposes no rusage at all,
++ * so node-shim had no process.resourceUsage and 2.1.330's event-loop-stall sampler logged "not a function". */
++static JSValue tjs__getrusage_global(JSContext *ctx, JSValue this_val, int argc, JSValue *argv) {
++    uv_rusage_t ru;
++    int r = uv_getrusage(&ru);
++    if (r != 0) {
++        return tjs_throw_errno(ctx, r);
++    }
++
++    JSValue obj = JS_NewObject(ctx);
++#define CLODE_RU(name, v) JS_DefinePropertyValueStr(ctx, obj, name, JS_NewFloat64(ctx, (double) (v)), JS_PROP_C_W_E)
++    CLODE_RU("userCPUTime", 1e6 * (double) ru.ru_utime.tv_sec + (double) ru.ru_utime.tv_usec);
++    CLODE_RU("systemCPUTime", 1e6 * (double) ru.ru_stime.tv_sec + (double) ru.ru_stime.tv_usec);
++    CLODE_RU("maxRSS", ru.ru_maxrss);
++    CLODE_RU("sharedMemorySize", ru.ru_ixrss);
++    CLODE_RU("unsharedDataSize", ru.ru_idrss);
++    CLODE_RU("unsharedStackSize", ru.ru_isrss);
++    CLODE_RU("minorPageFault", ru.ru_minflt);
++    CLODE_RU("majorPageFault", ru.ru_majflt);
++    CLODE_RU("swappedOut", ru.ru_nswap);
++    CLODE_RU("fsRead", ru.ru_inblock);
++    CLODE_RU("fsWrite", ru.ru_oublock);
++    CLODE_RU("ipcSent", ru.ru_msgsnd);
++    CLODE_RU("ipcReceived", ru.ru_msgrcv);
++    CLODE_RU("signalsCount", ru.ru_nsignals);
++    CLODE_RU("voluntaryContextSwitches", ru.ru_nvcsw);
++    CLODE_RU("involuntaryContextSwitches", ru.ru_nivcsw);
++#undef CLODE_RU
+     return obj;
+ }
+ 
+@@ -423,6 +456,11 @@
+                                   global,
+                                   "__tjs_uname",
+                                   JS_NewCFunction(ctx, tjs__uname_global, "__tjs_uname", 0),
++                                  JS_PROP_C_W_E);
++        JS_DefinePropertyValueStr(ctx,
++                                  global,
++                                  "__tjs_getrusage",
++                                  JS_NewCFunction(ctx, tjs__getrusage_global, "__tjs_getrusage", 0),
+                                   JS_PROP_C_W_E);
+         JS_FreeValue(ctx, global);
+     }

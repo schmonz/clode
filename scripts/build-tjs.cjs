@@ -508,6 +508,8 @@ const TXIKI_PATCH_ORDER = [
   'txiki-ws-close-frame.patch',
   'txiki-ca-bundle-global.patch',             // globalThis.__tjs_set_ca_bundle_path(path): core.setCABundlePath where a standalone binary can reach it, for NODE_EXTRA_CA_CERTS (quaude-bootstrap.mjs applyExtraCaCerts). vm.c only; order-independent
   'txiki-uname-global.patch',                 // globalThis.__tjs_uname(): libuv's uv_os_uname for node-shim's os.machine() (node says "x86_64" where process.arch says "x64"). vm.c, beside ca-bundle-global's globals: after it
+  'txiki-rusage-global.patch',                // globalThis.__tjs_getrusage(): libuv's uv_getrusage for node-shim's process.resourceUsage(), in node's field names and units. vm.c, beside uname-global's global: after it
+  'txiki-sync-readlink.patch',                // __tjs_fs_sync.readlink through libuv's uv_fs_readlink on every platform (it was ENOSYS on Windows, which made 2.1.330's link-walk call every path sensitive). mod_fs_sync.c: after every other patch that touches it (sync-fs, strerror, sync-stat-identity, sync-utime, sync-spawn, vm-context)
   'txiki-engine-module-meta.patch',          // PROBE: engine.moduleMeta(mod) — requires/exports/top-level locals, read-only               // ws.close() sends an RFC6455 CLOSE frame (opcode 0x8) instead of just dropping the TCP connection: lws only emits one via close_via_role_protocol, which the old PENDING_TIMEOUT_USER_OK path skipped (ws.c; after ws-root-path, same file)
 ];
 

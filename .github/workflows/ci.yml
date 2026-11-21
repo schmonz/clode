@@ -340,7 +340,9 @@ jobs:
               test/node-shim-agentic.test.cjs \
               test/node-shim-fs-stat-identity.test.cjs \
               test/node-shim-os-devnull.test.cjs \
-              test/node-shim-os-priority.test.cjs
+              test/node-shim-os-priority.test.cjs \
+              test/node-shim-fs-readlink.test.cjs \
+              test/node-shim-resource-usage.test.cjs
 
       # THIS JOB'S GATE LIST (observability plan Task 5): every record test/cell-reporter.mjs wrote above, for ci.yml's
       # gates-ran-in-ci job to hold against test/ci-gates.cjs. Uploaded whatever happened above: a red job's list still
@@ -523,7 +525,9 @@ jobs:
               test/node-shim-roundtrip.test.cjs \
               test/node-shim-agentic.test.cjs \
               test/node-shim-fs-stat-identity.test.cjs \
-              test/node-shim-os-devnull.test.cjs
+              test/node-shim-os-devnull.test.cjs \
+              test/node-shim-fs-readlink.test.cjs \
+              test/node-shim-resource-usage.test.cjs
 
       # THIS JOB'S GATE LIST (observability plan Task 5): every record test/cell-reporter.mjs wrote above, for ci.yml's
       # gates-ran-in-ci job to hold against test/ci-gates.cjs. Uploaded whatever happened above: a red job's list still

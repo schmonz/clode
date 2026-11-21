@@ -459,6 +459,20 @@ module.exports = {
   // accounting. Node returns cumulative {user,system} microseconds; zeros keep
   // any prev-relative delta well-defined.
   cpuUsage: () => ({ user: 0, system: 0 }),
+  // process.resourceUsage(): libuv's uv_getrusage, as node answers it (node_process_methods.cc ResourceUsage), from
+  // the engine's __tjs_getrusage (txiki-rusage-global.patch), which already uses node's field names and units. 2.1.330's
+  // event-loop-stall sampler calls it; missing, every run logged "process.resourceUsage() failed: not a function"
+  // (CI 44945260530, Windows agentic legs). An engine without it is REFUSED by name (scripts/engine-api-floor.cjs).
+  resourceUsage: () => {
+    if (typeof globalThis.__tjs_getrusage !== 'function') {
+      const e = new Error('node-shim: this engine has no __tjs_getrusage (it predates txiki-rusage-global.patch), so '
+        + 'process.resourceUsage() cannot answer; rebuild it: ./build.sh --only engine.compile');
+      e.code = 'ERR_CLODE_ENGINE_FLOOR';
+      require('../internal/engine-floor-log.cjs').engineFloorLog(e.message);
+      throw e;
+    }
+    return globalThis.__tjs_getrusage();
+  },
   // Event registry: process EventEmitter surface (Task 4 wall): the -p boot
   // registers handlers and calls process.removeAllListeners('warning'). A real
   // registry over __handlers backs on/once/off/removeListener/

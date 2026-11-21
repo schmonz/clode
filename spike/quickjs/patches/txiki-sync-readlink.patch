@@ -1,0 +1,54 @@
+# SYNC-READLINK: __tjs_fs_sync.readlink through libuv (uv_fs_readlink with no callback, so synchronously), the call
+# node's fs.readlinkSync makes, on every platform.
+#
+# WHY. txiki-sync-fs.patch called readlink(2) on POSIX and threw ENOSYS on Windows, so under quaude on Windows every
+# fs.readlinkSync threw ENOSYS. 2.1.330's link-walk (the permission check's "is any component of this path a link or
+# junction") asks readlinkSync of each directory on the path and reads EINVAL as "a plain directory"; ENOSYS made the
+# path unclassifiable, which the check treats as sensitive, so every Edit on Windows was refused with "... which is a
+# sensitive file" (CI 44945260530, windows-amd64-tests and windows-arm64-tests). libuv answers EINVAL for a directory
+# that is no reparse point and a junction's or symlink's target, as node does. One implementation everywhere: POSIX
+# moves to libuv too, the same readlink(2) underneath.
+# mod_fs_sync.c only, after every other patch that touches it (TXIKI_PATCH_ORDER, last of them; uses sync-utime's
+# uv_to_errno).
+#
+diff --git a/src/mod_fs_sync.c b/src/mod_fs_sync.c
+--- a/src/mod_fs_sync.c
++++ b/src/mod_fs_sync.c
+@@ -374,23 +374,26 @@
+     return ret;
+ }
+ 
++/* readlink through libuv (uv_fs_readlink with no callback, so synchronously, on this thread), the call node's
++ * fs.readlinkSync makes, on every platform. It was readlink(2) on POSIX and ENOSYS on Windows, so on Windows every
++ * readlinkSync threw ENOSYS: 2.1.330's link-walk asks readlinkSync of each directory on a path and expects EINVAL
++ * ("not a link") for a plain one, so ENOSYS made every path unclassifiable and every Edit "a sensitive file". libuv
++ * answers EINVAL for a directory that is no reparse point, and a junction's or symlink's target as node does. */
+ static JSValue js_fss_readlink(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv) {
+     const char *path = JS_ToCString(ctx, argv[0]);
+     if (!path) return JS_EXCEPTION;
+-#if defined(_WIN32)
+-    errno = ENOSYS;
+-    JSValue ret = throw_errno(ctx, "readlink", path);
+-    JS_FreeCString(ctx, path);
+-    return ret;
+-#else
+-    char buf[PATH_MAX];
+-    ssize_t n = readlink(path, buf, sizeof(buf) - 1);
++    uv_fs_t req;
++    int r = uv_fs_readlink(tjs_get_loop(ctx), &req, path, NULL);
+     JSValue ret;
+-    if (n < 0) ret = throw_errno(ctx, "readlink", path);
+-    else { buf[n] = 0; ret = JS_NewString(ctx, buf); }
++    if (r < 0) {
++        errno = uv_to_errno(r);
++        ret = throw_errno(ctx, "readlink", path);
++    } else {
++        ret = JS_NewString(ctx, (const char *) req.ptr);
++    }
++    uv_fs_req_cleanup(&req);
+     JS_FreeCString(ctx, path);
+     return ret;
+-#endif
+ }
+ 
+ static JSValue js_fss_readdir(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv) {
