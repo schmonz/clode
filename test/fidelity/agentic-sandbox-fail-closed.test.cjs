@@ -125,12 +125,19 @@ const ON_CASES = [
   // runs on without it. Fix round 1 (I-1): quaude's keys never ride in it, so the sandbox from user settings still
   // fails closed. Before, merged into the dropped file, sandbox.failIfUnavailable went with it: the first call was
   // refused by the optional branch and calls 2 and 3 ran UNSANDBOXED.
-  { name: 'user settings + an unparseable --settings file', source: 'user', files: { 'bad.json': '{"sandbox": ' }, args: fileArg('bad.json') },
+  // 2.1.330 (RULING 2026-11-21, USER-standing fail-closed, applied): a --settings file that NAMES the sandbox and fails
+  // validation is a reason the sandbox is unavailable, so a session that requires it REFUSES TO START (STARTUP, below).
+  { name: 'user settings + an unparseable --settings file', source: 'user', files: { 'bad.json': '{"sandbox": ' }, args: fileArg('bad.json'),
+    startup: { reason: 'Invalid or malformed JSON', nativeStarts: { 'bad.json': '{"env": ' } } },
   { name: 'user settings + a schema-invalid --settings file ({"permissions":5})', source: 'user', files: { 'sch.json': { permissions: 5 } }, args: fileArg('sch.json') },
   // Fix round 2: where managed policy may exist quaude merges into the user's --settings AND adds the layers (belt and
   // braces). The test seam that makes quaude see "policy may exist" without any policy: an empty cached
   // remote-settings.json in the config dir (policyProbe lists it; the bundle finds no settings in it).
-  { name: 'policy may exist (merge mode) + user settings + a schema-invalid --settings file', source: 'user', cfgFiles: MERGE_SEAM, files: { 'sch.json': { permissions: 5 } }, args: fileArg('sch.json') },
+  // ...and in merge mode the file quaude hands the bundle is the user's WITH quaude's sandbox.failIfUnavailable merged
+  // in, so it names the sandbox: the same refusal (nativeRefuses: native given that merged file).
+  { name: 'policy may exist (merge mode) + user settings + a schema-invalid --settings file', source: 'user', cfgFiles: MERGE_SEAM, files: { 'sch.json': { permissions: 5 } }, args: fileArg('sch.json'),
+    startup: { reason: 'permissions: Expected object, but received number', nativeRefuses: { 'sch.json': { permissions: 5, sandbox: { failIfUnavailable: true } } },
+      nativeStarts: { 'sch.json': { permissions: 5 } } } },
   // I1 + placement: `--add-dir config` is the model command with one added directory, not the `config` subcommand (the
   // prompt rides after `--`; with stdout not a TTY the bundle prints). quaude's --settings goes BEFORE the `--`: after
   // it, it would be a prompt word, not an option.
@@ -141,6 +148,31 @@ const ON_CASES = [
   { name: 'user settings with failIfUnavailable:false (D1)', source: 'user', sourceSettings: { sandbox: { enabled: true, failIfUnavailable: false } } },
   { name: 'a --settings file with failIfUnavailable:false (D1)', files: { 'f.json': { sandbox: { enabled: true, failIfUnavailable: false } } }, args: fileArg('f.json') },
 ];
+
+// THE STARTUP REFUSAL (2.1.330; RULING 2026-11-21: USER-standing fail-closed, applied). 2.1.330 checks at startup
+// that a session which REQUIRES the sandbox has one, and a --settings file that names the sandbox but fails validation
+// is a reason it has none: it prints the file's problem, then this, and exits 1 before any request. quaude requires the
+// sandbox (sandbox.failIfUnavailable, the fail-closed ruling), so the two rows that carry `startup` refuse to start.
+// The text is NATIVE's, and stays native-derived: the native test below drives native into it on the same input as
+// the bundle under quaude sees (the user's file; in merge mode, that file with quaude's sandbox key merged in, which
+// is what quaude hands the bundle), under quaude's --managed-settings layer and without it, and drives native on a
+// near-identical input that does NOT name the sandbox, which starts (so the reason the refusal happens is pinned).
+// MEASURED on native 2.1.330 darwin-arm64 (2026-11-21): the unparseable file refuses with or without the layer; the
+// merge row's file AS THE USER WROTE IT starts with or without the layer (it does not name the sandbox), and refuses
+// once quaude's key is merged into it.
+const STARTUP_REFUSED = (reason) => 'Error: sandbox required but unavailable: the settings passed with --settings or the '
+  + `SDK's settings option configure the sandbox but failed validation, so none of them apply (${reason}). Fix them and `
+  + 'start again\n  Refusing to start without a working sandbox (see sandbox.failIfUnavailable).\n';
+const QUAUDE_LAYER = ['--managed-settings', JSON.stringify({ sandbox: { failIfUnavailable: true } })];
+// -> null when the run refused at startup with native's text for `reason`: rc 1, no request made, nothing written.
+const startupFinding = (label, { mock, markers, r }, reason) => {
+  const posts = mock.requests.filter((q) => q.method === 'POST').length;
+  return r.status === 1 && r.stderr.includes(STARTUP_REFUSED(reason)) && !posts && !markers.length ? null
+    : `${label}: not native's startup refusal (${reason}): rc ${r.status}, ${posts} POST(s), markers ${markers.join(', ')}, stderr ${JSON.stringify(r.stderr.slice(-600))}`;
+};
+// -> null when the run started: no startup refusal, and the turn reached the mock.
+const startedFinding = (label, { mock, r }) => (!STARTUP_REFUSAL.test(r.stderr) && mock.requests.some((q) => q.method === 'POST') ? null
+  : `${label}: did not start: rc ${r.status}, stderr ${JSON.stringify(r.stderr.slice(-600))}`);
 
 // Where native would sandbox (libexec/update-guard.cjs, sandboxWouldRun, by the bundle's own check): macOS always;
 // Linux unless WSL1 or bubblewrap or socat is missing from PATH (no managed policy in these throwaway runs).
@@ -185,7 +217,9 @@ test('sandboxed Bash fails CLOSED under quaude: every call refused, nothing writ
   assertFailsOnMissingOutput(ran3, M3, ['print', 'shell:bash']);
   const findings = [];
   for (const c of ON_CASES) {
-    const { mock, markers, r } = await runCase(q.path, c);
+    const run = await runCase(q.path, c);
+    const { mock, markers, r } = run;
+    if (c.startup) { const f = startupFinding(c.name, run, c.startup.reason); if (f) findings.push(f); continue; }
     const verdict = verdicts(mock);
     if (STARTUP_REFUSAL.test(r.stderr)) findings.push(`${c.name}: refused to START (native starts): rc ${r.status} ${r.stderr.slice(0, 300)}`);
     if (markers.length) findings.push(`${c.name}: wrote ${markers.join(', ')} (ran unsandboxed)`);
@@ -193,6 +227,34 @@ test('sandboxed Bash fails CLOSED under quaude: every call refused, nothing writ
   }
   await sandboxOff(q, findings);
   assert.deepStrictEqual(findings, []);
+});
+
+test('native refuses to start on the startup rows\' input as recorded, and starts on the same input without the sandbox named', { skip: SKIP }, async (t) => {
+  const { rgOracle, rgOracleSkip } = require('../provider-resolve.cjs');
+  const native = rgOracle(process.env);
+  if (!native) { t.skip(rgOracleSkip(process.env)); return; }
+  if (!nativeWouldSandbox()) { t.skip('native would not sandbox here: the startup rows are the fail-closed branch\'s'); return; }
+  // the checks' own controls: each fails on the other's answer
+  const refusedRun = { mock: { requests: [] }, markers: [], r: { status: 1, stderr: `x\n\n${STARTUP_REFUSED('why')}\n` } };
+  const startedRun = { mock: { requests: [{ method: 'POST' }] }, markers: [], r: { status: 0, stderr: '' } };
+  assert.strictEqual(startupFinding('c', refusedRun, 'why'), null);
+  assert.ok(startupFinding('c', refusedRun, 'another reason') && startupFinding('c', startedRun, 'why'));
+  assert.strictEqual(startedFinding('c', startedRun), null);
+  assert.ok(startedFinding('c', refusedRun));
+  const findings = [];
+  for (const c of ON_CASES.filter((x) => x.startup)) {
+    const refuses = { ...c, files: c.startup.nativeRefuses || c.files };
+    const starts = { ...c, files: c.startup.nativeStarts };
+    for (const [label, kase, extra] of [['native', refuses, []], ['native + quaude\'s layer', refuses, QUAUDE_LAYER]]) {
+      const f = startupFinding(`${c.name}, ${label}`, await runCase(native, { ...kase, args: (ctx) => [...kase.args(ctx), ...extra] }), c.startup.reason);
+      if (f) findings.push(f);
+    }
+    for (const [label, extra] of [['native, sandbox not named', []], ['native + quaude\'s layer, sandbox not named', QUAUDE_LAYER]]) {
+      const f = startedFinding(`${c.name}, ${label}`, await runCase(native, { ...starts, args: (ctx) => [...starts.args(ctx), ...extra] }));
+      if (f) findings.push(f);
+    }
+  }
+  assert.deepStrictEqual(findings, [], `native moved:\n${findings.join('\n')}`);
 });
 
 test('where native would not sandbox, quaude does as native does (D2): its warning, and every call runs', { skip: SKIP }, async (t) => {

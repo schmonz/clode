@@ -139,29 +139,21 @@ phase timestamps in a scratch copy of rg-native.cjs, alone and beside 16 CPU hog
 30.6 MB reached the tjs reader within 0.9 s every run, and 4 of 4 loaded runs hit a 20 s timeout before printing
 (2026-11-19)
 
-## RULING NEEDED: at 2.1.330 a bad --settings file that names the sandbox makes quaude refuse to START (2026-11-21)
+## RULED: at 2.1.330 a bad --settings file that names the sandbox makes quaude refuse to START (USER-standing fail-closed, applied 2026-11-21)
 
-test/fidelity/agentic-sandbox-fail-closed.test.cjs, two rows ("user settings + an unparseable --settings file" and
-"policy may exist (merge mode) + user settings + a schema-invalid --settings file"), finding "refused to START (native
-starts)". 2.1.330 added a STARTUP check (chunk-a0tz781a.js, and the TUI's I3.start): when the sandbox is required
-(`isSandboxRequired()`) and `getSandboxUnavailableReason()` names a reason, it prints "Error: sandbox required but
-unavailable: <reason> / Refusing to start without a working sandbox (see sandbox.failIfUnavailable)" and exits 1. A
---settings file that mentions `sandbox` and fails validation is now such a reason: "the settings passed with --settings
-or the SDK's settings option configure the sandbox but failed validation, so none of them apply (Invalid or malformed
-JSON)". quaude always requires the sandbox (sandbox.failIfUnavailable via --managed-settings, the fail-closed ruling
-and D1), so it refuses to start; in merge mode quaude's own failIfUnavailable merged into the user's schema-invalid file
-makes that file "configure the sandbox" too.
-
-Measured 2026-11-21 on darwin-arm64 against native 2.1.330 (user settings `{"sandbox":{"enabled":true}}`,
-`-p hi --settings s.json`, s.json = `{"sandbox": `): native prints the "These settings did not load" warning and
-STARTS; native given quaude's layer (`--managed-settings {"sandbox":{"failIfUnavailable":true}}`) refuses to start
-with exactly quaude's message and rc 1. So quaude is native under the configuration quaude imposes, and refusing is
-the more closed outcome, but the row says native starts. The choice: accept the startup refusal for these rows
-(re-cut the row's expectation, with this measurement), or stop imposing failIfUnavailable when the user's --settings
-fails (calls would then run unsandboxed: contrary to the fail-closed ruling). Not changed pending a ruling.
-
-Measured: test/fidelity/agentic-sandbox-fail-closed.test.cjs against a quaude built from this branch, and native
-2.1.330 by hand with and without quaude's --managed-settings layer, on darwin-arm64 (2026-11-21).
+2.1.330 refuses to start a session that requires the sandbox when a --settings file names the sandbox and fails
+validation ("Error: sandbox required but unavailable: ... Refusing to start without a working sandbox"). quaude
+requires the sandbox (sandbox.failIfUnavailable), so it refuses on such a file. ACCEPTED, under the standing fail-closed
+ruling. test/fidelity/agentic-sandbox-fail-closed.test.cjs's two rows now expect native's exact refusal (STARTUP_REFUSED).
+Its native test keeps that expectation native-derived, measured on 2.1.330 darwin-arm64:
+- The unparseable file `{"sandbox": ` makes native refuse with this text, both with quaude's --managed-settings layer
+  and WITHOUT it. The coordinator's premise was "native without the layer starts"; it does not, so that is not a
+  control.
+- In merge mode the user's file `{"permissions":5}` does not name the sandbox, and native starts on it with or without
+  the layer. quaude merges its own failIfUnavailable into the file. Native given that merged file refuses with
+  quaude's exact text.
+- The control that pins the reason: the same input with the sandbox NOT named (`{"env": `, or the user's merge-row
+  file as written) starts, with and without the layer.
 
 ## 2.1.330 is the pin and the suite is RED on it: 39 failures, each named here (2026-11-21)
 
@@ -219,12 +211,12 @@ Bun.SHA256/gzipSync. STILL RED, beyond 1 and 2 above, by gate:
    there by name (test/bun-shim-gzip-sha256.test.cjs pins that).
 9. **node-shim-wall-tripwires**: net.connect/createConnection reach rose 11 -> 16 modules; review the five new
    sites before the baseline moves.
-10. **shim-surface**: golden.json was measured on 2.1.283; re-measure with UPDATE_GOLDEN=1 on 2.1.330 and review.
+10. FIXED: **shim-surface** re-measured on 2.1.330, each new gap read at its site and noted in golden.json (db2405a).
 11. FIXED: **paint-probe-damage-packing** reads 2.1.330's two damage-decode sites (re-derived, both carves measured).
 12. **Workflow under quaude** (agentic-workflow-complete): no wf_<id>.json, even with main's job-realm engine fix.
 13. FIXED since: WebFetch over TLS 1.2 (tls.createSecureContext, 4ae7fc5), Workflow (Bun.ant.isVmContextGlobal,
-    3b2100f), /status in -p (a load timeout read as an empty answer, ac28804). Sandboxed Bash: RULING NEEDED, the
-    entry above.
+    3b2100f), /status in -p (a load timeout read as an empty answer, ac28804). Sandboxed Bash: RULED (accept the
+    startup refusal, 2026-11-21), the entry above.
 14. **quaude -p is slow and two node APIs it reaches are missing** (seen in /status's --debug log, 2026-11-21):
     `-p /status` takes 23-48 s wall, ~12 s user CPU, where naude takes ~10 s; 1P telemetry export fails every session
     on zlib.gzipSync (node-shim has no gzip; Bun.gzipSync refuses with it); the event-loop-stall detector logs
