@@ -160,6 +160,13 @@ Its native test keeps that expectation native-derived, measured on 2.1.330 darwi
   quaude's exact text.
 - The control that pins the reason: the same input with the sandbox NOT named (`{"env": `, or the user's merge-row
   file as written) starts, with and without the layer.
+- OPEN, the merge-mode message misleads (review, 2026-11-21): it tells the user "the settings passed with --settings
+  ... configure the sandbox", but THEIR file did not; quaude's merge (libexec/quaude-bootstrap.mjs, planGuardSettings,
+  merge mode only: Windows/WSL, or wherever a managed-policy source may exist) put sandbox.failIfUnavailable in. The
+  text is upstream's own (native prints it, byte for byte, given the merged file), so quaude cannot reword it. Two
+  ways out, neither taken yet: quaude prints its own line first naming the key it merged (when the user file fails
+  the schema), or merge mode stops putting the sandbox key into the user's file and relies on --managed-settings
+  alone, which reopens the policy-shuts-the-parent-out residual named in the bootstrap's comment.
 
 Measured: test/fidelity/agentic-sandbox-fail-closed.test.cjs on darwin-arm64, native 2.1.330 and a fresh quaude (2026-11-21)
 
