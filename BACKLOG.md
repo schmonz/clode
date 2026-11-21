@@ -564,7 +564,10 @@ NOT HASHED (scripts/lib/evidence-inputs.cjs EVIDENCE_UNHASHED): a file named by 
 variable, a template string, an environment value, a function's return), and anything under node_modules (the
 harness's node-pty and its kin, installed on the guest by `npm install --prefix test`). Cell rows carry no line
 numbers. Each record carries `attempts` and `priorFailures` at the same engine and quaude, and the verdict prints
-them by test name; at a release (full clone) the inputs are also recomputed at the record's own commit (`git archive`)
+them by test name. OPEN (review 2026-11-21): that history lives only in the working-tree record, so a checkout,
+stash, fresh clone or deleted file resets it with no engine or quaude change, and the gate cannot tell. Fix: compare
+against the last COMMITTED record (`git log -p` of the evidence file) and go red if attempts or priorFailures shrink
+at the same engine+quaude. At a release (full clone) the inputs are also recomputed at the record's own commit (`git archive`)
 and must equal the record's, so hashes copied from another tree are red there. STALE IS RED ONLY AT RELEASE (USER RULING 2026-11-21): in CI and the local suite a stale record is a WARNING
 printed every run ("NetBSD/arm64 VM record stale since <commit> (<what changed>); run node
 scripts/netbsd-arm64-evidence.mjs"), and its cells a separate drivenLocalStale count; release.yml's
