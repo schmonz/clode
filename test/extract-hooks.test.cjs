@@ -210,8 +210,45 @@ for (const [version, gen, wrapper] of [
   });
 }
 
+// 2.1.330 is the fourth shape: the generator takes the session's SHELL STATE first (upstream
+// now starts the snapshot ahead and records it there), and the memo lives on that state
+// (`e.shellConfig??=BPi(e,o)`). The bridge must hand it a FRESH state, never call it bare (it
+// would throw on `e.snapshotStartedAheadAt`) and never the session's (it would consume the
+// head-start bookkeeping). Verbatim from the real 2.1.330 darwin-arm64 bundle, generator to memo.
+test('patchSnapshotBridge applies to the REAL 2.1.330 shell-state shape, with a fresh state', () => {
+  const src = read('snapshot-gen-2.1.330.js');
+  const [out, applied] = ex.patchSnapshotBridge(src);
+  assert.strictEqual(applied, true);
+  assert.ok(out.includes('pluginBinPaths:y}}globalThis.__clodeEnsureSnapshot=()=>BPi({snapshotStartedAheadAt:null,snapshotHeadStartSkip:null});'), out.slice(0, 600));
+  assert.ok(out.includes('return e.shellConfig??=BPi(e,o),e.shellConfig}'), 'the memo site was disturbed');
+});
+
+test('the 2.1.330 bridge leaves the session\'s shell state, memo and head start alone', async () => {
+  const [patched] = ex.patchSnapshotBridge(read('snapshot-gen-2.1.330.js'));
+  const seen = [];
+  const session = { shellConfig: null, snapshotStartedAheadAt: 1234, snapshotHeadStartSkip: 'too_old', bashToolShellPath: null };
+  const ctx = vm.createContext({
+    SESSION: session,
+    Lv: () => ({ snapshotSettled: false }),
+    cRi: async (e) => { e.bashToolShellPath ??= '/bin/zsh'; return e.bashToolShellPath; },
+    Cmi: async (o) => ['/plugins/' + o],
+    iNo: async (h, opts) => { seen.push({ h, ...opts }); return { shellPath: h }; },
+    t: () => {}, d: String, i: () => {}, iC: () => {}, u3: () => session,
+  });
+  vm.runInContext(patched, ctx);
+  await vm.runInContext('globalThis.__clodeEnsureSnapshot()', ctx);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(seen)), [{ h: '/bin/zsh', pluginBinPaths: ['/plugins/undefined'], startedAhead: false, headStartSkip: 'other' }]);
+  assert.deepStrictEqual(session, { shellConfig: null, snapshotStartedAheadAt: 1234, snapshotHeadStartSkip: 'too_old', bashToolShellPath: null },
+    'the pre-warm must not touch the session\'s state');
+  await vm.runInContext('jPi("REAL_STORAGE")', ctx);
+  assert.strictEqual(seen[1].startedAhead, true, "the app's own call still sees its own head start");
+  assert.strictEqual(seen[1].headStartSkip, 'too_old');
+  assert.deepStrictEqual(seen[1].pluginBinPaths, ['/plugins/REAL_STORAGE']);
+  assert.notStrictEqual(session.shellConfig, null);
+});
+
 test('patchSnapshotBridge is fail-loud on absent/ambiguous generator', () => {
-  for (const v of ['2.1.205', '2.1.241', '2.1.245', '2.1.251', '2.1.278', '2.1.283']) {
+  for (const v of ['2.1.205', '2.1.241', '2.1.245', '2.1.251', '2.1.278', '2.1.283', '2.1.330']) {
     const gen = read(`snapshot-gen-${v}.js`);
     assert.strictEqual(ex.patchSnapshotBridge(gen + gen)[1], false, `${v}: doubled must not apply`);
   }
@@ -391,6 +428,28 @@ test('the 2.1.281+ anchor pins the helper, so a field upstream adds is a red and
   assert.strictEqual(ex.patchRemoteControlUnavailable(RC_GATE_CODED + RC_GATE_CODED)[1], false);
 });
 
+// The gate as upstream emits it at 2.1.330: the same coded helper, but the gate now OPENS with a
+// sign-in check (`let e=bFn();if(e!==void 0)return l("not_signed_in",e);`) and gained a REPL-mode
+// reason, so the coded anchor's `{if(..())return null;` opening never matches. Verbatim from the
+// real 2.1.330 darwin-arm64 bundle, the whole function.
+const RC_GATE_SIGNED_IN = read('rc-gate-signed-in-2.1.330.js');
+
+test('patchRemoteControlUnavailable handles the 2.1.330 signed-in-first gate, gating off BEFORE the sign-in check', () => {
+  const [out, applied] = ex.patchRemoteControlUnavailable('var z=1;' + RC_GATE_SIGNED_IN);
+  assert.strictEqual(applied, true);
+  assert.match(out, /async function SFn\(\)\{if\(globalThis\.__clodeWsUnavailable\)return\{reason:"Remote Control isn.*transport\.",code:"quaude_no_websocket_transport",orgPolicyDenied:!1\};let e=bFn\(\);/);
+});
+
+test('the 2.1.330 anchor pins the helper and the sign-in binding', () => {
+  const grown = RC_GATE_SIGNED_IN.replace('orgPolicyDenied:!1})', 'orgPolicyDenied:!1,retryable:!1})');
+  assert.notStrictEqual(grown, RC_GATE_SIGNED_IN);
+  assert.strictEqual(ex.patchRemoteControlUnavailable(grown)[1], false);
+  const other = RC_GATE_SIGNED_IN.replace('if(e!==void 0)return l("not_signed_in",e)', 'if(e!==void 0)return l("not_signed_in",z)');
+  assert.notStrictEqual(other, RC_GATE_SIGNED_IN);
+  assert.strictEqual(ex.patchRemoteControlUnavailable(other)[1], false, 'the returned reason must be the binding tested');
+  assert.strictEqual(ex.patchRemoteControlUnavailable(RC_GATE_SIGNED_IN + RC_GATE_SIGNED_IN)[1], false);
+});
+
 // ONE BEHAVIOUR, WHATEVER THE SHAPE. The hook exists to make every Remote Control entry
 // point say "not available in quaude" when the engine has no WebSocket transport, and to say
 // it BEFORE upstream's own "available" path can return null. Each shape is run the same way:
@@ -399,10 +458,11 @@ test('the 2.1.281+ anchor pins the helper, so a field upstream adds is a red and
 // consumers read it (all read from the real bundles):
 //   gate    (seen 2.1.219..2.1.251; the pin until 2026-09-26): the value itself — `if(i)exitWithError(\`Error: ${i}\`…)`
 //   wrapped (seen 2.1.270..2.1.280): `(await gate())?.reason ?? null`, `.orgPolicyDenied`
-//   coded   (2.1.281+; the pin, 2.1.283, since 2026-09-26): the same two, plus `.code` —
+//   coded   (2.1.281..2.1.283): the same two, plus `.code` —
 //                             sent as telemetry `error_code`, which upstream keeps only if it
 //                             matches /^[A-Za-z][A-Za-z0-9_-]{0,63}$/ (anything else is
 //                             recorded as "nonconforming").
+//   signed-in-first (2.1.330; the pin since 2026-11-21): the coded consumers, unchanged.
 // The object shapes must also carry EXACTLY the fields upstream's own helper builds, so the
 // helper in each fixture is run and its keys compared.
 const RC_SHAPE_CASES = [
@@ -412,15 +472,18 @@ const RC_SHAPE_CASES = [
   { shape: 'wrapped (seen 2.1.270..2.1.280)', src: RC_GATE_WRAPPED, fn: 'xen', helperArgs: ['r'],
     stubs: 'const l=()=>true,dG=()=>true,qC=()=>false,I$=()=>false,g=()=>true,x=()=>"nope",Z2="nope";',
     reasonOf: (v) => v?.reason ?? null, deniedOf: (v) => v.orgPolicyDenied },
-  { shape: 'coded (2.1.281+)', src: RC_GATE_CODED, fn: 'MFn', helperArgs: ['c', 'r'],
+  { shape: 'coded (2.1.281..2.1.283)', src: RC_GATE_CODED, fn: 'MFn', helperArgs: ['c', 'r'],
     stubs: 'const u=()=>true,tj=()=>true,H=()=>"nope",kP=()=>false,AN=()=>false,Eq="nope",d=()=>true;',
+    reasonOf: (v) => v?.reason ?? null, deniedOf: (v) => v.orgPolicyDenied },
+  { shape: 'signed-in-first (2.1.330)', src: RC_GATE_SIGNED_IN, fn: 'SFn', helper: 'l', helperArgs: ['c', 'r'],
+    stubs: 'const bFn=()=>void 0,g=()=>true,vi=()=>false,Qb="x",ELi=()=>"",FH=()=>true,le=()=>"nope",AG=()=>false;',
     reasonOf: (v) => v?.reason ?? null, deniedOf: (v) => v.orgPolicyDenied },
 ];
 
 for (const c of RC_SHAPE_CASES) {
   test(`Remote Control gate-off behaves the same on the ${c.shape} shape`, async () => {
     const load = (src) => new Function(c.stubs + src + ';return [' + c.fn + ','
-      + (c.helperArgs ? 'i' : 'null') + '];')();
+      + (c.helperArgs ? (c.helper || 'i') : 'null') + '];')();
     const [upstream] = load(c.src);
     const [out, applied] = ex.patchRemoteControlUnavailable(c.src);
     assert.strictEqual(applied, true, `${c.shape}: hook did not apply`);

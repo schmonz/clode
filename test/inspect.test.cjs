@@ -139,36 +139,29 @@ test('doctor-load anchor retired: no export, no report field, snapshot gen kept'
   fs.rmSync(tmp, { recursive: true, force: true });
 });
 
-// THE MIRROR IS PART OF THE ANCHOR, not a copy of it. inspect-claude-bundle.cjs's
-// _SNAPSHOT_GEN_ANCHOR exists to answer "would patchSnapshotBridge apply?", which it can
-// only answer if it is the SAME regex. It was already once a looser substring, and the
-// gate reported the site present for three releases after the real anchor had stopped
-// applying. Nothing pinned the two together, so the 2026-09-21 re-pin for 2.1.278's
-// third generator shape could have landed in one file and not the other and read green
-// here. Compared as SOURCE TEXT, read out of the two files, so neither literal has to be
-// restated in this test.
-test('the inspector\'s snapshot-generator anchor is byte-identical to the extractor\'s', () => {
-  const literalAfter = (file, decl) => {
-    const src = fs.readFileSync(path.join(ROOT, 'libexec', file), 'utf8');
-    const i = src.indexOf(decl);
-    assert.notStrictEqual(i, -1, `${file}: no \`${decl}\` declaration to compare`);
-    const start = src.indexOf('/async function', i);
-    const end = src.indexOf('/g;', start);
-    assert.ok(start !== -1 && end > start, `${file}: could not read the anchor literal`);
-    return src.slice(start, end + 2);
-  };
-  assert.strictEqual(
-    literalAfter('inspect-claude-bundle.cjs', 'const _SNAPSHOT_GEN_ANCHOR ='),
-    literalAfter('extract-claude-js.cjs', 'const SNAPSHOT_GEN ='),
-    'the inspector mirror and the extractor anchor have drifted — one of them is now lying '
-    + 'about whether the eager-snapshot bridge would apply');
+// THE ANCHOR HAS ONE STATEMENT. inspect-claude-bundle.cjs once mirrored SNAPSHOT_GEN verbatim
+// (pinned byte-identical here), and before that used a looser substring that reported the site
+// present for three releases after the real anchor stopped applying. Since 2.1.330's fourth shape
+// it reads the extractor's snapshotGeneratorSite(), as it does for Remote Control: this text check
+// is the ratchet against a mirror coming back, and the loop proves "present" is "would apply".
+test('the snapshot-generator anchors have ONE statement: inspect reads the extractor\'s, never its own', () => {
+  const text = fs.readFileSync(SCRIPT, 'utf8');
+  assert.doesNotMatch(text, /return\\\{provider:await/,
+    'inspect-claude-bundle.cjs restates a snapshot-generator anchor instead of importing it');
+  const ex = require(path.join(ROOT, 'libexec', 'extract-claude-js.cjs'));
+  const fix = (n) => fs.readFileSync(path.join(__dirname, 'fixtures', 'doctor', n), 'latin1');
+  for (const v of ['2.1.205', '2.1.241', '2.1.251', '2.1.278', '2.1.283', '2.1.330']) {
+    const src = fix(`snapshot-gen-${v}.js`);
+    assert.strictEqual(ins.snapshotGeneratorPresent(src), ex.patchSnapshotBridge(src)[1], v);
+    assert.strictEqual(ins.snapshotGeneratorPresent(src + src), ex.patchSnapshotBridge(src + src)[1], v);
+  }
 });
 
 // The five-day red light this re-pin closes: upstream-drift.yml reported
 // `snapshot_generator_present = false` against `next` from 2026-09-17. Both ends are
 // asserted, because an anchor that matches only the NEW shape trades one red for another:
 // every build in CI stages the PIN (2.1.251 until 2026-09-26, 2.1.283 since).
-for (const [version, gen] of [['2.1.251', 'CDn'], ['2.1.278', 'OCr'], ['2.1.283', 'JAn']]) {
+for (const [version, gen] of [['2.1.251', 'CDn'], ['2.1.278', 'OCr'], ['2.1.283', 'JAn'], ['2.1.330', 'BPi']]) {
   test(`snapshotGeneratorPresent on the REAL ${version} bundle shape`, () => {
     const src = fs.readFileSync(
       path.join(__dirname, 'fixtures', 'doctor', `snapshot-gen-${version}.js`), 'latin1');
@@ -333,6 +326,12 @@ test('remoteControlHookAnchorPresent: true on the 2.1.281+ coded-reason gate', (
   );
 });
 
+test('remoteControlHookAnchorPresent: true on the 2.1.330 signed-in-first gate', () => {
+  const signedIn = fs.readFileSync(path.join(__dirname, 'fixtures', 'doctor', 'rc-gate-signed-in-2.1.330.js'), 'latin1');
+  assert.strictEqual(ins.remoteControlHookAnchorPresent(signedIn), true);
+  assert.strictEqual(ins.remoteControlHookAnchorPresent(signedIn + signedIn), false);
+});
+
 // ONE STATEMENT OF THE ANCHORS. This file used to restate every Remote Control regex from
 // libexec/extract-claude-js.cjs ("keep them in step"), so a re-pin was two edits that had to
 // agree. They are now read from the extractor, which is the only way the strict gate and the
@@ -346,7 +345,7 @@ test('the Remote Control anchors have ONE statement: inspect reads the extractor
     'inspect-claude-bundle.cjs restates a Remote Control anchor instead of importing it');
   const ex = require(path.join(ROOT, 'libexec', 'extract-claude-js.cjs'));
   const fix = (n) => fs.readFileSync(path.join(__dirname, 'fixtures', 'doctor', n), 'latin1');
-  for (const src of [fix('cbo-remote-control-2.1.218.js'), fix('rc-gate-coded-2.1.282.js'), 'nothing']) {
+  for (const src of [fix('cbo-remote-control-2.1.218.js'), fix('rc-gate-coded-2.1.282.js'), fix('rc-gate-signed-in-2.1.330.js'), 'nothing']) {
     assert.strictEqual(ins.remoteControlHookAnchorPresent(src), ex.patchRemoteControlUnavailable(src)[1]);
   }
 });

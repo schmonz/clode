@@ -358,6 +358,51 @@ function patchDoctorWarnings(body) {
 const SNAPSHOT_GEN =
   /async function (?<gen>[A-Za-z0-9_$]{1,6})\((?<arg>[A-Za-z0-9_$]{0,6})\)\{let (?<h>[A-Za-z0-9_$]{1,6})=await [A-Za-z0-9_$]{1,6}\(\)(?:,(?<paths>[A-Za-z0-9_$]{1,6})=await [A-Za-z0-9_$]{1,6}\(\k<arg>\))?;return\{provider:await [A-Za-z0-9_$]{1,6}\(\k<h>(?:,\{(?:storageV5:\k<arg>|pluginBinPaths:\k<paths>)\})?\)(?:,pluginBinPaths:\k<paths>)?\}\}/g;
 
+// THE FOURTH SHAPE (measured at 2.1.330; 2.1.283 is the third), which had upstream-drift.yml
+// reporting `snapshot_generator_present = false` from 2026-10-23. Upstream now starts the bash
+// snapshot AHEAD of the first command (a "head start", xgi() at 2.1.330), and the generator
+// takes the session's SHELL STATE as its first parameter to record whether that happened:
+//
+//   async function BPi(e,o){let r=e.snapshotStartedAheadAt!==null,
+//     g=Lv().snapshotSettled?"rebuild":e.snapshotHeadStartSkip??"other";
+//     e.snapshotHeadStartSkip=null;let h=await cRi(e),y=await GNo(o);
+//     return{provider:await iNo(h,{pluginBinPaths:y,startedAhead:r,headStartSkip:g}),pluginBinPaths:y}}
+//   function qNo(e,o){return e.shellConfig??=BPi(e,o),e.shellConfig}     (the memo, on that state)
+//
+// `e` is the session's one shell-state object (a class whose instance fields start null:
+// shellConfig, snapshotStartedAheadAt, snapshotHeadStartSkip, bashToolShellPath, ...). Calling
+// the generator with no arguments, as the bridge did, would throw on `e.snapshotStartedAheadAt`.
+// Passing the SESSION's state would be the wrapper-pinning mistake above by another door: the
+// generator writes `e.snapshotHeadStartSkip=null` and cRi(e) memoizes the bash path on it, so a
+// pre-warm would consume the session's head-start bookkeeping. So the bridge hands the generator
+// a FRESH state, the two fields the anchor sees it read set as the class initialises them (null),
+// and the throwaway stays a throwaway: the session's state, its memo and its head start are
+// untouched, and our snapshot reports `startedAhead:false` like any snapshot not started ahead.
+// cRi(fresh) resolves the bash path into the fresh object (`??=` on an absent field, as on null).
+// The state and plugin-path bindings are back-referenced, so the anchor cannot drift onto another
+// async function that merely returns a provider.
+const SNAPSHOT_GEN_STATE =
+  /async function (?<gen>[A-Za-z0-9_$]{1,6})\((?<state>[A-Za-z0-9_$]{1,6}),(?<arg>[A-Za-z0-9_$]{1,6})\)\{let (?<ahead>[A-Za-z0-9_$]{1,6})=\k<state>\.snapshotStartedAheadAt!==null,(?<skip>[A-Za-z0-9_$]{1,6})=[A-Za-z0-9_$]{1,6}\(\)\.snapshotSettled\?"rebuild":\k<state>\.snapshotHeadStartSkip\?\?"other";\k<state>\.snapshotHeadStartSkip=null;let (?<h>[A-Za-z0-9_$]{1,6})=await [A-Za-z0-9_$]{1,6}\(\k<state>\),(?<paths>[A-Za-z0-9_$]{1,6})=await [A-Za-z0-9_$]{1,6}\(\k<arg>\);return\{provider:await [A-Za-z0-9_$]{1,6}\(\k<h>,\{pluginBinPaths:\k<paths>,startedAhead:\k<ahead>,headStartSkip:\k<skip>\}\),pluginBinPaths:\k<paths>\}\}/g;
+
+// EVERY GENERATOR SHAPE, newest first; the first whose anchor matches exactly once wins.
+// libexec/inspect-claude-bundle.cjs's gate reads THIS (snapshotGeneratorSite) rather than
+// restating the regexes, as it does for Remote Control.
+const SNAPSHOT_GEN_SHAPES = [
+  { name: 'shell-state (2.1.330)', anchor: SNAPSHOT_GEN_STATE,
+    expose: (g) => 'globalThis.__clodeEnsureSnapshot=()=>' + g.gen
+      + '({snapshotStartedAheadAt:null,snapshotHeadStartSkip:null});' },
+  { name: 'no-arg / storageV5 / pluginBinPaths (<=2.1.283)', anchor: SNAPSHOT_GEN,
+    expose: (g) => 'globalThis.__clodeEnsureSnapshot=' + g.gen + ';' },
+];
+
+function snapshotGeneratorSite(body) {
+  for (const shape of SNAPSHOT_GEN_SHAPES) {
+    const hits = [...body.matchAll(shape.anchor)];
+    if (hits.length === 1) return { shape, match: hits[0] };
+  }
+  return null;
+}
+
 // Expose the snapshot generator as globalThis.__clodeEnsureSnapshot (the bridge
 // the _skewContribution splice awaits). The bridge is called with no arguments, so
 // on 2.1.243+ the generator sees storageV5 === undefined; see the comment above for
@@ -365,12 +410,11 @@ const SNAPSHOT_GEN =
 // own first call on a plain session passes undefined too). Returns [body, applied];
 // applied is false (body unchanged) unless the anchor matches exactly once.
 function patchSnapshotBridge(body) {
-  const gens = [...body.matchAll(SNAPSHOT_GEN)];
-  if (gens.length !== 1) return [body, false];
-  const g = gens[0];
+  const site = snapshotGeneratorSite(body);
+  if (!site) return [body, false];
+  const g = site.match;
   const gEnd = g.index + g[0].length;
-  const expose = 'globalThis.__clodeEnsureSnapshot=' + g.groups.gen + ';';
-  return [body.slice(0, gEnd) + expose + body.slice(gEnd), true];
+  return [body.slice(0, gEnd) + site.shape.expose(g.groups) + body.slice(gEnd), true];
 }
 
 // --- Remote Control honest gate-off under quaude -----------------------------
@@ -436,6 +480,25 @@ const REMOTE_CONTROL_CODED_ANCHOR =
   /(?<pre>var (?<wrap>[A-Za-z0-9_$]{1,8})=\((?<code>[A-Za-z0-9_$]{1,8}),(?<reason>[A-Za-z0-9_$]{1,8})\)=>\(\{reason:\k<reason>,code:\k<code>,orgPolicyDenied:!1\}\);async function [A-Za-z0-9_$]{1,8}\(\)\{)if\([A-Za-z0-9_$]{1,8}\(\)\)return null;if\(!?[A-Za-z0-9_$]{1,8}\(\)\)return \k<wrap>\("[a-z_]{1,40}",[A-Za-z0-9_$]{1,8}\(\)\);if\([A-Za-z0-9_$]{1,8}\(\)\)return \k<wrap>\("[a-z_]{1,40}","Remote Control is not available inside a cloud session\."\)/g;
 const RC_CODE = 'quaude_no_websocket_transport';
 
+// SIGNED-IN-FIRST shape (measured at 2.1.330; 2.1.283 is still the coded shape above; the
+// versions between were not measured): the same coded helper, but the gate now OPENS with a
+// sign-in check and gained a REPL-mode reason before the first-party one:
+//
+//   var l=(e,n)=>({reason:n,code:e,orgPolicyDenied:!1});async function SFn(){
+//     let e=bFn();if(e!==void 0)return l("not_signed_in",e);if(g())return null;
+//     if(vi())return l("repl_mode",`Remote Control isn't available in ${Qb} yet. ${ELi()}`);
+//     if(!FH())return l("not_first_party",le());
+//     if(AG())return l("cloud_session","Remote Control is not available inside a cloud session.");
+//
+// so the coded anchor's `{if(..())return null;` opening never matches again. The helper is
+// pinned exactly as the coded anchor pins it (same fields, same parameter order), so the injection
+// is the coded one. The gate-off still goes FIRST, before the sign-in check: with no WebSocket
+// transport Remote Control cannot work whatever the account, and "not signed in" would send the
+// user to fix something that is not the reason. The sign-in binding is back-referenced (the value
+// tested is the value returned), and the REPL reason's template literal is bounded.
+const REMOTE_CONTROL_SIGNED_IN_ANCHOR =
+  /(?<pre>var (?<wrap>[A-Za-z0-9_$]{1,8})=\((?<code>[A-Za-z0-9_$]{1,8}),(?<reason>[A-Za-z0-9_$]{1,8})\)=>\(\{reason:\k<reason>,code:\k<code>,orgPolicyDenied:!1\}\);async function [A-Za-z0-9_$]{1,8}\(\)\{)let (?<signin>[A-Za-z0-9_$]{1,8})=[A-Za-z0-9_$]{1,8}\(\);if\(\k<signin>!==void 0\)return \k<wrap>\("[a-z_]{1,40}",\k<signin>\);if\([A-Za-z0-9_$]{1,8}\(\)\)return null;if\([A-Za-z0-9_$]{1,8}\(\)\)return \k<wrap>\("[a-z_]{1,40}",`[^`]{0,200}`\);if\(!?[A-Za-z0-9_$]{1,8}\(\)\)return \k<wrap>\("[a-z_]{1,40}",[A-Za-z0-9_$]{1,8}\(\)\);if\([A-Za-z0-9_$]{1,8}\(\)\)return \k<wrap>\("[a-z_]{1,40}","Remote Control is not available inside a cloud session\."\)/g;
+
 // EVERY SHAPE, IN ONE STATEMENT, newest first; the first whose anchor matches exactly once
 // wins. libexec/inspect-claude-bundle.cjs's strict gate reads THIS (remoteControlSite) rather
 // than restating the regexes — it used to mirror them, and a re-pin was two edits that had to
@@ -443,9 +506,10 @@ const RC_CODE = 'quaude_no_websocket_transport';
 // function's FIRST statement; the old inline shape has no `pre` and splices before its guard.
 // The value each injects is the one THAT shape's consumers read (see each anchor above).
 const RC_INJECT_STRING = 'if(globalThis.__clodeWsUnavailable)return"' + RC_NOTICE + '";';
+const RC_INJECT_CODED = 'if(globalThis.__clodeWsUnavailable)return{reason:"' + RC_NOTICE + '",code:"' + RC_CODE + '",orgPolicyDenied:!1};';
 const REMOTE_CONTROL_SHAPES = [
-  { name: 'coded (2.1.281+)', anchor: REMOTE_CONTROL_CODED_ANCHOR,
-    inject: 'if(globalThis.__clodeWsUnavailable)return{reason:"' + RC_NOTICE + '",code:"' + RC_CODE + '",orgPolicyDenied:!1};' },
+  { name: 'signed-in-first (2.1.330)', anchor: REMOTE_CONTROL_SIGNED_IN_ANCHOR, inject: RC_INJECT_CODED },
+  { name: 'coded (2.1.281..2.1.283)', anchor: REMOTE_CONTROL_CODED_ANCHOR, inject: RC_INJECT_CODED },
   { name: 'wrapped (seen 2.1.270..2.1.280)', anchor: REMOTE_CONTROL_WRAPPED_ANCHOR,
     inject: 'if(globalThis.__clodeWsUnavailable)return{reason:"' + RC_NOTICE + '",orgPolicyDenied:!1};' },
   { name: 'gate (seen 2.1.219..2.1.251)', anchor: REMOTE_CONTROL_GATE_ANCHOR, inject: RC_INJECT_STRING },
@@ -1860,6 +1924,7 @@ module.exports = {
   patchUpdateNotice,
   patchRemoteControlUnavailable,
   remoteControlSite,
+  snapshotGeneratorSite,
   REMOTE_CONTROL_PATCHED,
   transform,
   transformGraph,

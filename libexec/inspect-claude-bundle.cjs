@@ -13,7 +13,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { nearestName } = require('./bundle-carve.cjs');
 const { findTool } = require('./clode-hosttools.cjs');
-const { remoteControlSite, REMOTE_CONTROL_PATCHED } = require('./extract-claude-js.cjs');
+const { remoteControlSite, REMOTE_CONTROL_PATCHED, snapshotGeneratorSite } = require('./extract-claude-js.cjs');
 
 // __doc__ equivalent: reproduced verbatim from the Python module docstring so the
 // usage/error path prints identical text. (Python sys.exit(__doc__) prints this
@@ -258,25 +258,18 @@ function doctorHookAnchorPresent(data) {
 // with no load site; the eager work now rides the installation-warnings splice
 // (see _DOCTOR_WARNINGS_ANCHOR above), so no doctor-command-shaped anchor exists.
 //
-// This is a VERBATIM mirror of extract-claude-js.cjs's SNAPSHOT_GEN, and it used
-// to be the loose substring `return{provider:await ` instead. That looseness made
-// this gate LIE: 2.1.243 gave the generator a storageV5 parameter, the real anchor
-// stopped applying, and this check went on reporting the site present on every
-// build for three releases. A gate that says "the patch WOULD apply" has to test
-// the thing that decides whether it applies.
-//
-// Re-pinned 2026-09-21 for upstream 2.1.278's third generator shape (the storageV5
-// argument now feeds a plugin-bin-paths read whose result is what reaches the
-// snapshot builder). The reasoning, the measurements and the three shapes are
-// written out ONCE, beside SNAPSHOT_GEN in extract-claude-js.cjs — read it there.
-// The two literals must stay byte-identical; test/inspect.test.cjs pins that.
-const _SNAPSHOT_GEN_ANCHOR =
-  /async function (?<gen>[A-Za-z0-9_$]{1,6})\((?<arg>[A-Za-z0-9_$]{0,6})\)\{let (?<h>[A-Za-z0-9_$]{1,6})=await [A-Za-z0-9_$]{1,6}\(\)(?:,(?<paths>[A-Za-z0-9_$]{1,6})=await [A-Za-z0-9_$]{1,6}\(\k<arg>\))?;return\{provider:await [A-Za-z0-9_$]{1,6}\(\k<h>(?:,\{(?:storageV5:\k<arg>|pluginBinPaths:\k<paths>)\})?\)(?:,pluginBinPaths:\k<paths>)?\}\}/g;
+// It used to be the loose substring `return{provider:await `, which made this gate LIE: 2.1.243
+// gave the generator a storageV5 parameter, the real anchor stopped applying, and this check went
+// on reporting the site present for three releases. Then it was a verbatim MIRROR of the
+// extractor's regex, pinned byte-identical by a test. Since 2026-11-21 (upstream 2.1.330's fourth
+// generator shape, whose bridge injection differs) it asks the extractor's own question,
+// snapshotGeneratorSite(): every shape lives once, in extract-claude-js.cjs's SNAPSHOT_GEN_SHAPES,
+// with the reasoning and the measurements; test/inspect.test.cjs fails if a mirror comes back.
 // No already-patched alternative is needed (unlike _AUTOUPDATER_PATCHED below):
 // patchSnapshotBridge only APPENDS the exposure statement after the generator, so
 // the anchor survives its own patch verbatim.
 function snapshotGeneratorPresent(data) {
-  return [...data.matchAll(_SNAPSHOT_GEN_ANCHOR)].length === 1;
+  return snapshotGeneratorSite(data) !== null;
 }
 
 // Mirrors extract-claude-js.cjs AUTOUPDATER_SPAWN (sans the capture groups it
