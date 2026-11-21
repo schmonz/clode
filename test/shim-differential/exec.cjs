@@ -137,6 +137,21 @@ const withTimeout = (p, what) => Promise.race([p, new Promise((_, rej) => {
   if (t.unref) t.unref();
 })]);
 
+// A stream's own close, waited for before the case goes on. An autoClose stream closes its fd ASYNCHRONOUSLY, after
+// 'end'/'error'/end()'s callback, which is where post() used to return. runCase then closed the case's fds itself
+// (closeSync), and snapshot() opened the case directory, which the kernel gave the number just freed; the stream's
+// late close then closed THAT, and node's snapshot threw "EBADF: bad file descriptor, scandir '<case>'" (node-shim-
+// oracle, linux-musl, CI 44945260530: fs.createWriteStream(<file>, {fd: <read-only fd>, autoClose: true})). A driver
+// double close, not node's answer: waiting for 'close' takes the race out on both sides. Bounded, so a stream that
+// never emits 'close' cannot hang the case; that it did not is not judged here.
+function streamClosed(r) {
+  if (!r || typeof r.once !== 'function' || r.closed === true) return Promise.resolve();
+  return new Promise((res) => {
+    const t = setTimeout(res, 2000);
+    r.once('close', () => { clearTimeout(t); res(); });
+  });
+}
+
 // After a call: things that need closing or draining are described by what they do.
 async function post(kind, r, ctx, args) {
   if (kind === 'typeof') return { typeof: typeof r, ctor: r && typeof r === 'object' ? Object.getPrototypeOf(r) && Object.getPrototypeOf(r).constructor && Object.getPrototypeOf(r).constructor.name : undefined };
@@ -168,6 +183,7 @@ async function post(kind, r, ctx, args) {
       r.on('end', () => res('end'));
       r.on('error', (e) => res(errShape(e)));
     });
+    await streamClosed(r);
     return { end, data: Buffer.concat(chunks).toString('hex') };
   }
   if (kind === 'writestream') {
@@ -179,6 +195,7 @@ async function post(kind, r, ctx, args) {
       // node said "finish" alone and EBADF in the suite, 2026-11-21). Both now give the error's shape.
       r.end((e) => res(e ? errShape(e) : 'finish'));
     });
+    await streamClosed(r);
     return { end };
   }
   if (kind === 'dir') {
