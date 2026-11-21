@@ -939,20 +939,24 @@ function openDir(p, opts, withPath) {
   };
 }
 
-// fs.utimesSync / fs.lutimesSync: the sync-fs patch exposes no sync utime; tjs.utime and tjs.lutime are
-// async. The times are set best-effort by the async call (the bundle stamps files it just wrote, where a
-// slightly-deferred mtime is observably fine), but node's ERRORS are thrown synchronously, as node does:
-// a stat (utimes follows a link) or lstat (lutimes does not) first, its failure retold as node's utime /
-// lutime error. Until 2026-11-21 utimesSync of a missing path returned as if it had worked, and
-// lutimesSync (2.1.330 calls it) did not exist (test/node-shim-differential.test.cjs).
-function utimesSync(p, atime, mtime) {
-  try { FSS.stat(p); } catch (e) { throw retold(e, 'utime', p); }
-  const r = tjs.utime(p, timeToMs(atime), timeToMs(mtime)); if (r && r.catch) r.catch(() => {});
+// fs.utimesSync / fs.lutimesSync: the engine's SYNC utime and lutime (txiki-sync-utime.patch, libuv with no
+// callback), so the times are set before the call returns, as node sets them; errors are node's utime /
+// lutime ones (retold). Until 2026-11-21 these started the ASYNC tjs.utime and returned, so a stat right
+// after one read the old times: the differential saw it under load (test/node-shim-fs-utime-sync.test.cjs
+// now sees it in one tick). An engine without the sync calls is REFUSED, by name, never quietly async:
+// scripts/engine-api-floor.cjs refuses it at build time, and this refuses the call at run time.
+function syncUtime(op, p, atime, mtime) {
+  if (typeof FSS[op] !== 'function') {
+    const e = new Error(`node-shim: this engine has no synchronous ${op} (it predates txiki-sync-utime.patch), so `
+      + `fs.${op}sSync cannot set the times before it returns; rebuild it: ./build.sh --only engine.compile`);
+    e.code = 'ERR_CLODE_ENGINE_FLOOR';
+    require('../internal/engine-floor-log.cjs').engineFloorLog(e.message);
+    throw e;
+  }
+  try { FSS[op](p, timeToMs(atime), timeToMs(mtime)); } catch (e) { throw retold(e, op, p); }
 }
-function lutimesSync(p, atime, mtime) {
-  try { FSS.lstat(p); } catch (e) { throw retold(e, 'lutime', p); }
-  const r = tjs.lutime(p, timeToMs(atime), timeToMs(mtime)); if (r && r.catch) r.catch(() => {});
-}
+function utimesSync(p, atime, mtime) { syncUtime('utime', p, atime, mtime); }
+function lutimesSync(p, atime, mtime) { syncUtime('lutime', p, atime, mtime); }
 
 // fs.fchmodSync(fd, mode): the sync-fs patch (spike/quickjs/patches/txiki-sync-fs.patch)
 // has no FSS.fchmod — same gap FileHandle.chmod hit above ("No fd-based fchmod

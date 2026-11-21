@@ -1,0 +1,67 @@
+# SYNC-UTIME: __tjs_fs_sync.utime(path, atimeMs, mtimeMs) and .lutime(path, atimeMs, mtimeMs), run by
+# libuv with no callback (uv_fs_utime, uv_fs_lutime), so synchronously on this thread.
+#
+# WHY. node-shim's fs.utimesSync and lutimesSync had only the engine's ASYNC utime calls: they
+# threw node's errors at once (from a sync stat first) but set the times later. A *Sync call that is not
+# synchronous is a product bug: a stat right after it read the OLD times. Under the full suite's load
+# node-shim-differential saw `fs.utimesSync(<file>, 1000, 1000)` and `fs.lutimesSync(<empty>, ...)` leave mtime
+# "recent" where node has the new value (BACKLOG, the 2.1.330 entry, item 16; ruling 2026-11-21: do the real fix).
+#
+# ONE IMPLEMENTATION. libuv's calls, the same ones the async tjs.utime/lutime make, on every leg
+# (Windows included; libuv supplies lutimes where the OS lacks it). Times in milliseconds, as the async calls take
+# them; libuv takes seconds. Errors go through stat-identity's uv_to_errno and throw_errno, so this patch follows
+# txiki-sync-stat-identity.patch, which defines them; the function table entries go after strerror's.
+#
+# Guarded by test/node-shim-fs-utime-sync.test.cjs (set the times, stat in the same tick: red on an engine
+# without this patch) and by the engine-api-floor entry that refuses an engine without __tjs_fs_sync.utime.
+diff --git a/src/mod_fs_sync.c b/src/mod_fs_sync.c
+index 036945d..5a73bf6 100644
+--- a/src/mod_fs_sync.c
++++ b/src/mod_fs_sync.c
+@@ -261,6 +261,37 @@ static JSValue js_fss_fstat(JSContext *ctx, JSValueConst t, int argc, JSValueCon
+     return fss_stat_result(ctx, &req, r, "fstat", NULL);
+ }
+ 
++/* SYNC-UTIME: utime/lutime, run by libuv with no callback, so synchronously, on this thread: the
++ * call the engine's async tjs.utime/lutime make, with its rules on every leg (Windows
++ * included). Times in milliseconds, as those take them; libuv takes seconds. node-shim's
++ * fs.utimesSync/lutimesSync had only the async calls, so a stat right after one could read
++ * the OLD times (test/node-shim-fs-utime-sync.test.cjs). */
++static JSValue fss_uv_done(JSContext *ctx, uv_fs_t *req, int r, const char *op, const char *path) {
++    JSValue ret = JS_UNDEFINED;
++    if (r < 0) {
++        errno = uv_to_errno(r);
++        ret = throw_errno(ctx, op, path);
++    }
++    uv_fs_req_cleanup(req);
++    return ret;
++}
++
++#define FSS_PATH_UTIME(NAME, CALL)                                                       \
++static JSValue js_fss_##NAME(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv) { \
++    double atime, mtime;                                                                 \
++    if (JS_ToFloat64(ctx, &atime, argv[1]) || JS_ToFloat64(ctx, &mtime, argv[2]))        \
++        return JS_EXCEPTION;                                                             \
++    const char *path = JS_ToCString(ctx, argv[0]);                                       \
++    if (!path) return JS_EXCEPTION;                                                      \
++    uv_fs_t req;                                                                         \
++    int r = CALL(tjs_get_loop(ctx), &req, path, atime / 1000, mtime / 1000, NULL);       \
++    JSValue ret = fss_uv_done(ctx, &req, r, #NAME, path);                                \
++    JS_FreeCString(ctx, path);                                                           \
++    return ret;                                                                          \
++}
++FSS_PATH_UTIME(utime, uv_fs_utime)
++FSS_PATH_UTIME(lutime, uv_fs_lutime)
++
+ static JSValue js_fss_realpath(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv) {
+     const char *path = JS_ToCString(ctx, argv[0]);
+     if (!path) return JS_EXCEPTION;
+@@ -403,6 +434,8 @@ static const JSCFunctionListEntry fss_funcs[] = {
+     JS_CFUNC_DEF("symlink", 2, js_fss_symlink),
+     JS_CFUNC_DEF("chmod", 2, js_fss_chmod),
+     JS_CFUNC_DEF("strerror", 1, js_fss_strerror),
++    JS_CFUNC_DEF("utime", 3, js_fss_utime),
++    JS_CFUNC_DEF("lutime", 3, js_fss_lutime),
+ };
+ 
+ void tjs__mod_fs_sync_init(JSContext *ctx, JSValue ns) {

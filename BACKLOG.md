@@ -54,7 +54,7 @@ the AppleDouble entry further down would remove the cause; worktree creation has
 Measured: test/file-prefix-map.test.cjs, failing in a fresh worktree then passing after the sweep, and red by name with a
 planted `._netbsd.toolchain.cmake` in its scripts/ listing (2026-11-20)
 
-## test/procfs-linux-only.test.cjs sometimes kills node with SIGSEGV (2026-11-20, seen twice)
+## test/procfs-linux-only.test.cjs sometimes kills node with SIGSEGV (2026-11-20, seen three times)
 
 One full suite on this box (darwin-arm64, during the every-tool plan's Task 3 fix round 2, with the temp-root
 ratchet's code in the tree) ended RC=1 on the forced-win32 pass alone: `run: forced-win32:
@@ -87,6 +87,12 @@ report (--report-on-fatalerror does not fire on a signal) and no core (ubuntu-la
 capturing one there means `sudo sysctl kernel.core_pattern=<dir>/core.%p`, `ulimit -c unlimited` in the suite step,
 and uploading a node core of hundreds of MB, not done: no Linux crash has been seen yet). Open: whether a newer node 24 fixes it (check the V8 log for
 ClearStaleLeftTrimmedPointerVisitor fixes), and if not, a minimal repro to file upstream.
+
+A third time on 2026-11-21, in the main pass of a full suite on the 2.1.330 pin branch (`not ok 311`, `signal:
+'SIGSEGV'`, 378 ms in, no test reported; run.mjs kept the TAP). 63 reruns right after were all green: 8 through the
+suite's own runner (`node --require ./test/file-watchdog-preload.cjs --test`), 25 the same way on this branch and 25
+on main's tree (an archive of main, so not this branch's code), and 30 under plain `node`. Still only under a full
+suite's load.
 
 ## The shipped macOS arm64 floor is 14.0, not the 11.0 it is labelled (2026-11-20)
 
@@ -229,19 +235,18 @@ Bun.SHA256/gzipSync. STILL RED, beyond 1 and 2 above, by gate:
     module load and the polyfill had none, so the REPL import threw and quaude sat idle with 13 bytes written. -p
     never loads that chunk. Intl.ListFormat added; the ratchet intl-members-the-bundle-names (node-shim-intl) now
     requires every `Intl.<member>` the carve names to exist under tjs.
-16. **INTERMITTENT, needs a ruling: fs.utimesSync is not synchronous.** The sync-fs patch has no utime, so the shim
-    stamps the times with tjs's ASYNC utime (fs.cjs, utimesSync). Under the full suite's load the differential's
-    `after` snapshot ran before it landed: `fs.utimesSync(<file>, 1000, 1000)` read mtimeMs/atimeMs "recent" where
-    node reads 1000000. Alone the differential is green (8/8). The same run found two DIFF-WRITESTREAM-THROWS pairs
-    (`createWriteStream(<dir>|<missing/x>, {fd, autoClose})` r.end) agreeing with node, which they do not alone. The
-    fix is an engine primitive (a sync utime/lutime in txiki-sync-fs.patch, with an engine-floor fallback), which
-    touches every engine leg: not done inside the pin bump without a ruling. The gate is left as is. The next full
-    run (after the four gate fixes: 4051 pass, 2 fail) hit it again on lutimesSync, `fs.lutimesSync(<empty>|<emptydir>,
-    1700000000.5, ...)` reading "recent" where node reads 1700000000500.
-17. **INTERMITTENT: the host node died of SIGSEGV running test/procfs-linux-only.test.cjs** (378 ms in, no test
-    reported; run.mjs kept the TAP). Not reproduced in 63 more runs (8 via the suite's own runner, 25 under
-    `node --test` with the watchdog preload on this branch and 25 on main's tree, 30 directly). The file loads
-    fs.cjs into a node:vm context; a crash in node 24.21.0 itself, no product code runs natively there.
+16. FIXED (ruling 2026-11-21: a *Sync call that is not synchronous is a product bug): **fs.utimesSync and
+    lutimesSync were not synchronous.** They threw node's errors at once but set the times with tjs's ASYNC utime,
+    so under the full suite's load the differential read mtime "recent" (`fs.utimesSync(<file>, 1000, 1000)`, then
+    `fs.lutimesSync(<empty>|<emptydir>, 1700000000.5, ...)`). Now txiki-sync-utime.patch gives the engine a sync
+    utime/lutime (libuv, no callback, every leg), node-shim calls it, and an engine without it is refused by name:
+    engine-api-floor at build time, ERR_CLODE_ENGINE_FLOOR plus CLODE_ENGINE_FLOOR_LOG at the call.
+    test/node-shim-fs-utime-sync.test.cjs sets the times and stats in the same tick against node. THE AUDIT of every
+    node-shim/bun-shim *Sync for an async tjs call found only these two (fs.cjs: utimesSync, lutimesSync); fs.futimesSync
+    does not exist in node-shim, and nothing in the 2.1.330 carve calls it. The same run's two DIFF-WRITESTREAM-THROWS
+    fd pairs (`createWriteStream(<dir>|<missing/x>, {fd, autoClose})` r.end) agreed with node under load and not
+    alone: Unmeasured whether that is the same kind of race; it did not recur in the next run.
+17. The host node SIGSEGV in test/procfs-linux-only.test.cjs came back once: added to its own entry, above.
 
 The full suite after 15 (2026-11-21, same setup): 4011 pass, 6 fail, 113 skip, RC=1. The six were: 16 and 17 above;
 backlog-claims-measured (the RULED entry had no Measured line), live-checks-judge-output (the sandbox test's native

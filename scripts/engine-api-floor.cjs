@@ -110,6 +110,20 @@ const ENGINE_API_FLOOR = [
       + 'so the gates listed above refuse a build path that reaches it',
   },
   {
+    // Without it fs.utimesSync/lutimesSync could only start the engine's ASYNC utime, so a stat right after one read
+    // the old times: a *Sync call that was not synchronous. node-shim now refuses such an engine at the call.
+    name: '__tjs_fs_sync.utime',
+    expr: 'globalThis.__tjs_fs_sync.utime',
+    kind: 'function',
+    from: 'txiki-sync-utime.patch',
+    why: 'node-shim fs.utimesSync/lutimesSync: the times are set before the call returns, as node sets them (libuv uv_fs_utime/uv_fs_lutime, no callback)',
+    buildHost: false,
+    notForBuildHost: 'nothing the build runs calls fs.utimesSync or lutimesSync: no caller in scripts/, libexec/ '
+      + '(outside node-shim\'s fs.cjs) or build.sh but scripts/lib/rg-probe.cjs, a test probe run under node. On an '
+      + 'engine without it node-shim REFUSES the call (ERR_CLODE_ENGINE_FLOOR) and appends it to '
+      + 'CLODE_ENGINE_FLOOR_LOG, so the gates listed above refuse a build path that ever reaches it',
+  },
+  {
     // Without it node-shim's Timeout#unref STOPS the timer (the old route), so an unref'd timer never fires while
     // the loop stays alive: the TUI's nonblocking stdout then holds a turn's answer until the next keystroke.
     name: '__tjs_timer_setref',

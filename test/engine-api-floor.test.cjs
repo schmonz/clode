@@ -103,8 +103,10 @@ test('every floor entry declares its build-host role, and every build-host exemp
   assert.strictEqual(floorFor(), ENGINE_API_FLOOR);
   assert.strictEqual(floorFor('runtime'), ENGINE_API_FLOOR);
   // Today's build-host exemptions, by name: widening this set is a decision, so it is a diff here.
+  // __tjs_fs_sync.utime (2026-11-21, ruling: a *Sync that is not synchronous is a product bug): the last release's
+  // engine, which CI bootstraps the build on, has none, and no build step sets times; the call is refused, not faked.
   assert.deepStrictEqual(ENGINE_API_FLOOR.filter((b) => !b.buildHost).map((b) => b.name),
-    ['__tjs_fs_sync.stat identity', '__tjs_fs_sync.strerror', '__tjs_timer_setref']);
+    ['__tjs_fs_sync.stat identity', '__tjs_fs_sync.strerror', '__tjs_fs_sync.utime', '__tjs_timer_setref']);
   assert.deepStrictEqual(floorFor('build-host').map((b) => b.name), ['__tjs_fs_sync', '__tjs_spawn_sync', 'tjs.engine.moduleMeta']);
   assert.throws(() => floorFor('shipped'), /unknown role/);
 });

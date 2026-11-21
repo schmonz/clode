@@ -490,6 +490,7 @@ const TXIKI_PATCH_ORDER = [
   'txiki-sync-fs.patch',                      // shared vm.c/CMakeLists/private.h registration — before sync-spawn + vm-context
   'txiki-strerror.patch',                     // __tjs_fs_sync.strerror(n): the platform libc's strerror(3) text, which rg prints and libuv's own table does not (mod_fs_sync.c's function table only; after sync-fs, which creates the file)
   'txiki-sync-stat-identity.patch',           // the sync stat/lstat/fstat answer from libuv's uv_stat_t (dev, ino, rdev, nlink, blocks, ns times, as node reads them); mod_fs_sync.c's stat region only, so right after sync-fs, which creates the file, and before the mod-fs-sync-msvc fixup, whose anchors it leaves alone
+  'txiki-sync-utime.patch',                   // __tjs_fs_sync.utime/lutime, synchronous through libuv (node-shim's utimesSync/lutimesSync set the times before they return); uses stat-identity's uv_to_errno, so right after it
   'txiki-sync-spawn.patch',                   // registers after sync-fs
   'txiki-wurl-url.patch',
   'txiki-unhandledrejection-drain.patch',      // the deferred unhandled-rejection drain in tjs__execute_jobs: do not SIGABRT when the PromiseRejectionEvent ctor throws, AND detach each entry before dispatching it (list_for_each_safe cached a `next` that the handler's own JS could js_free -- a use-after-free six lines of JavaScript could reach). vm.c only, one region; order-independent of sync-fs/sync-spawn/vm-context, which touch vm.c elsewhere
