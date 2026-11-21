@@ -893,15 +893,23 @@ const LONG_BOOL = {
   // RG-CONFIG (rg-entry.cjs): quaude's rg reads no config file, so --no-config changes nothing it does; the command
   // reads it to know that native's rg would not read RIPGREP_CONFIG_PATH either
   '--no-config': (s) => { s.noConfig = true; },
+  // RG-TEXT (2.1.330's hybrid-organization scan passes --text): no binary detection at all, a NUL is a byte like any
+  // other, in a walked file, a named one or stdin (rgView's 'text')
+  '--text': (s) => { s.text = true; }, '--no-text': (s) => { s.text = false; },
+  // RG-FIXED-STRINGS (the same scan passes --fixed-strings): the pattern is a literal, every regex metacharacter in it
+  // escaped (rg's regex::escape) before the one translation every pattern takes
+  '--fixed-strings': (s) => { s.fixed = true; }, '--no-fixed-strings': (s) => { s.fixed = false; },
 };
 const SHORT_BOOL = { l: '--files-with-matches', c: '--count', i: '--ignore-case', s: '--case-sensitive', n: '--line-number',
-  N: '--no-line-number', H: '--with-filename', I: '--no-filename', 0: '--null', o: '--only-matching', '.': '--hidden', U: '--multiline', L: '--follow' };
+  N: '--no-line-number', H: '--with-filename', I: '--no-filename', 0: '--null', o: '--only-matching', '.': '--hidden', U: '--multiline', L: '--follow', a: '--text', F: '--fixed-strings' };
 const LONG_VALUE = { '--after-context': 'after', '--before-context': 'before', '--context': 'context', '--max-columns': 'maxColumns',
   '--regexp': 'pattern', '--glob': 'glob', '--iglob': 'iglob', '--threads': 'threads', '--type': 'type', '--type-not': 'typeNot',
   '--sort': 'sort', '--sortr': 'sortr', '--max-depth': 'maxDepth', '--maxdepth': 'maxDepth', '--max-filesize': 'maxFilesize',
-  '--color': 'color' };
-const SHORT_VALUE = { A: 'after', B: 'before', C: 'context', M: 'maxColumns', e: 'pattern', g: 'glob', j: 'threads', t: 'type', T: 'typeNot', d: 'maxDepth' };
+  '--color': 'color', '--max-count': 'maxCount' };
+const SHORT_VALUE = { A: 'after', B: 'before', C: 'context', M: 'maxColumns', e: 'pattern', g: 'glob', j: 'threads', t: 'type', T: 'typeNot', d: 'maxDepth', m: 'maxCount' };
 // rg's special modes, answered whatever else the argv holds (RG-VERSION, RG-TYPE-LIST: rg-types.cjs).
+// Every flag that takes a value, as spelled on a command line (scripts/lib/rg-probe.cjs reads the carve's argv by them).
+const RG_VALUE_FLAG_NAMES = [...Object.keys(LONG_VALUE), ...Object.keys(SHORT_VALUE).map((c) => `-${c}`)];
 const SPECIAL_LONG = { '--version': 'version', '--type-list': 'type-list' };
 const SPECIAL_SHORT = { V: 'version-short' };
 // RG-SORT-MODIFIED: --sort/--sortr's choices, as rg spells its usage error for any other; `modified` is
@@ -960,7 +968,7 @@ function setValue(s, key, flag, v) {
 function parseRgSearch(argv, { implicit = null } = {}) {
   const s = { mode: 'standard', patterns: [], ignoreCase: false, lineNumber: null, withFilename: null, nul: false, only: false, multiline: false, dotall: false,
     before: null, after: null, context: null, maxColumns: 0, hidden: false, noIgnore: false, globs: [], types: [], threads: null, paths: [],
-    sort: null, maxDepth: null, follow: false, noIgnoreVcs: false, maxFilesize: null, noMessages: false };
+    sort: null, maxDepth: null, follow: false, noIgnoreVcs: false, maxFilesize: null, noMessages: false, text: false, maxCount: null, fixed: false };
   let special = null;
   const pos = [];
   let end = false;
@@ -1004,6 +1012,7 @@ function parseRgSearch(argv, { implicit = null } = {}) {
     s.patterns.push(pos.shift());
   }
   if (s.patterns.length > 1) return cannotYet('-e');
+  if (s.fixed) s.patterns = s.patterns.map((P) => P.replace(/[\\.+*?()|[\]{}^$]/g, '\\$&'));
   // RG-IMPLICIT-PATH: rg with no path searches its stdin or the working directory, by what its stdin is. Only a
   // command knows its stdin (rg-entry.cjs); every rg the bundle runs names a path, so with no `implicit` quaude's
   // rg does not guess. ./ is searched as `.` and printed without its `./` (s.implicit: rg's strip_dot_prefix).
@@ -1014,6 +1023,9 @@ function parseRgSearch(argv, { implicit = null } = {}) {
   s.before = s.before !== null ? s.before : s.context || 0;
   s.after = s.after !== null ? s.after : s.context || 0;
   s.countMatches = s.mode === 'count' && s.only;
+  // RG-MAX-COUNT under --json: the end message's bytes_searched is where rg's reads stood when it stopped (65532 for a
+  // match in big.txt's first fill, 196593 two fills on), a mapped file's unmeasured: refused by name until it is
+  if (s.maxCount !== null && s.mode === 'json') return cannotYet('--max-count with --json');
   // RG-JSON: line numbers unless -N.
   if (s.mode === 'json') s.lineNumber = s.lineNumber !== false;
   return { spec: s };
@@ -1157,7 +1169,8 @@ const RG_BUFFER = 64 * 1024;          // grep-searcher's DEFAULT_BUFFER_CAPACITY
 const FILL_TICK_BYTES = 1024 * 1024;
 const MMAP_MAX_PATHS = 10;            // hiargs.rs: memory maps for at most 10 paths, all files
 // How rg searches one target: 'quit' (walked), 'convert' (named or stdin), 'mmap' (named, RG-BINARY-MMAP).
-function binaryHow(e, mmap) { return e.walked ? 'quit' : e.stdin || !mmap ? 'convert' : 'mmap'; }
+// 'text' (RG-TEXT): -a, no binary detection anywhere.
+function binaryHow(e, mmap, spec) { return spec && spec.text ? 'text' : e.walked ? 'quit' : e.stdin || !mmap ? 'convert' : 'mmap'; }
 // Whether rg memory-maps this search's named files (RG-BINARY-MMAP): every path (`-` too, as a file of
 // that name) a regular file, following symlinks; at most 10. On every host (RG-MMAP-EVERYWHERE).
 function mmapsNamedFiles(spec, cwd) {
@@ -1171,6 +1184,7 @@ function mmapsNamedFiles(spec, cwd) {
 function rgView(bytes, how, { stdin = false } = {}) {
   const { text, read } = rgTextRead(bytes, { stdin });
   const h = how === 'mmap' && read.kind !== 'plain' ? 'convert' : how;
+  if (h === 'text') return { how: h, text, read, nul: -1 };     // RG-TEXT: a NUL is text
   const nul = text.indexOf(0);
   if (nul === -1 || h !== 'convert') return { how: h, text, read, nul };
   const conv = Buffer.from(text);
@@ -1315,17 +1329,48 @@ function* binaryOutcome(v, sel, spec) {
     const pairs = maxContext > 0 ? yield* sunkLines(v.text, sel, spec) : [];
     return yield* lineBufferFills(v, { quit: v.how === 'quit', maxContext, visited: visitedIn(pairs) });
   };
+  const counted = sel.filter((L) => !L.tail), full = spec.maxCount !== null && counted.length > 0 && counted.length >= spec.maxCount;
+  const nth = full ? counted[counted.length - 1].ls : -1;
   if (v.how === 'quit') {
-    if (spec.mode === 'count') return { squash: true };
+    // RG-MAX-COUNT: rg stops once its Nth selected line (and that line's after-context) is printed; when that comes
+    // before the fill holding the NUL, the NUL is never read and the file is text
+    if (spec.mode === 'count' && !full) return { squash: true };
     const f = yield* fills();
+    if (full && (!f.met || stopEnd(v.text, nth, spec.after) <= f.searched)) return { text: v.text, sel, bin: null };
+    if (spec.mode === 'count') return { squash: true };
     return { text: v.text.subarray(0, f.searched), sel: sel.filter((L) => L.ls < f.searched), bin: { offset: v.nul, bytes: f.bytes, quit: true } };
   }
   if (v.how === 'convert') {
+    // RG-MAX-COUNT: as for a walked file, a NUL in a fill rg never read is no binary data
+    if (full) { const f = yield* fills(); if (!f.met || stopEnd(v.text, nth, spec.after) <= f.searched) return { text: v.text, sel, bin: null }; }
     const stopAt = spec.mode === 'standard' ? (yield* fills()).from : -1;
     return { text: v.text, sel, bin: { offset: v.nul, bytes: v.text.length, stopAt } };
   }
   const window = v.nul < Math.min(v.text.length, RG_BUFFER);
   return { text: v.text, sel, bin: { offset: window ? v.nul : -1, mmap: true, window } };
+}
+// RG-MAX-COUNT: the first N selected lines (rg's max_count, per file). rg still prints the Nth line's after-context,
+// and a line there that matches is printed AS A MATCH (`3:needle two` under -m 1 -A 2) without extending that
+// context: such a line is a TAIL ({ tail: true }), printed by the standard printer only (-c counts N). Every whole-text
+// printer reads the selected lines through here; streamEntry states the same over its windows.
+function capped(spec, sel, text) {
+  if (spec.maxCount === null || sel.length <= spec.maxCount) return sel;
+  if (spec.maxCount === 0) return [];
+  const out = sel.slice(0, spec.maxCount);
+  if (spec.mode !== 'standard' || spec.after === 0) return out;
+  const stop = stopEnd(text, out[out.length - 1].ls, spec.after);
+  for (let i = spec.maxCount; i < sel.length && sel[i].ls < stop; i++) out.push({ ...sel[i], tail: true });
+  return out;
+}
+// Where rg's search ends once it has printed the line at `ls` and `after` lines of after-context: past their newline.
+// `eof` false: the text is a window of whole lines with more to come, so -1 when that context runs past it.
+function stopEnd(text, ls, after, eof = true) {
+  let e = lineEndAt(text, ls);
+  for (let k = 0; k < after; k++) {
+    if (e + 1 >= text.length) { if (!eof) return -1; break; }
+    e = lineEndAt(text, e + 1);
+  }
+  return Math.min(text.length, e + 1);
 }
 // RG-BINARY-MMAP's look inside each line rg prints: (ls, end) -> the first NUL in [ls, end), or -1. Lines
 // come in ascending order, so the text is scanned once.
@@ -1405,6 +1450,8 @@ function* eachPrintedLine(text, sel, spec, firstNum = 1) {
   for (const L of sel) {
     const n = numAt(L.ls);
     yield* drainAfter(L.ls);
+    // RG-MAX-COUNT's tail: one of the after-context lines, printed as a match, the context not extended
+    if (L.tail) { yield { ls: L.ls, num: n, L, at: L.ls }; cur = L.ls; curNum = n; pend--; continue; }
     let first = L.ls, firstNum = n;
     for (let k = 0, p; k < spec.before && (p = prev(first)) !== -1 && (cur === -1 || p > cur); k++) { first = p; firstNum--; }
     if (cur === -1 || next(cur) !== first) yield GAP;
@@ -1473,7 +1520,7 @@ function lineEndAt(text, ls) { const i = text.indexOf(0x0a, ls); return i === -1
 function* printFile(spec, e, out, state) {
   const { text } = e;
   if (spec.mode === 'files') {
-    if (e.sel && !e.sel.length) return false;
+    if ((e.sel && !e.sel.length) || spec.maxCount === 0) return false;     // RG-MAX-COUNT: -m 0 selects no line
     out.push(Buffer.from(e.disp + (spec.nul ? '\0' : '\n')));
     return true;
   }
@@ -2273,7 +2320,7 @@ function* streamEntry(spec, e, t, out, state, ctx) {
     let buf = Buffer.alloc(0), base = 0, total = 0, lineBase = 1, nul = -1, eof = false, wm = -1, pending = [];
     // pieces wait in `pending` until the next window is searched (joined once, not a piece at a time)
     const append = (c) => {
-      const z = c.indexOf(0);
+      const z = how === 'text' ? -1 : c.indexOf(0);
       if (nul === -1 && z !== -1) nul = total + z;
       let v = c;
       if (convert && z !== -1) { v = Buffer.from(c); for (let i = z; i !== -1; i = v.indexOf(0, i + 1)) v[i] = 0x0a; }
@@ -2286,6 +2333,8 @@ function* streamEntry(spec, e, t, out, state, ctx) {
     const printer = mode === 'standard' || mode === 'json' ? linePrinter(spec, e, out, state, how === 'mmap' ? { offset: -1, mmap: true, window: false } : null) : null;
     const fills = convert && mode === 'standard' ? new StreamFills(read, ctxLines) : null;
     let met = false, stopAtAbs = -1, finished = false, found = false, counted = 0, countSeen = false, mmapDecided = how !== 'mmap';
+    // RG-MAX-COUNT: selected lines taken so far, the last one's start, and where rg stops (-1 until known)
+    let taken = 0, selMark = -1, stopAbs = -1;
     // drop what no later window can need: before `keep` (absolute, a line start)
     const dropTo = (keep) => {
       if (keep <= base) return;
@@ -2317,7 +2366,19 @@ function* streamEntry(spec, e, t, out, state, ctx) {
       const text = buf.subarray(0, complete);
       if (ctx.deadline && Date.now() > ctx.deadline) throw timedOutError();
       const ms = matchTextLines(text, t, ctx.deadline, ctx.first);
-      const sel = yield* selectedLines(text, ms);
+      let sel = yield* selectedLines(text, ms);
+      // RG-MAX-COUNT: the first N selected lines of the whole stream, counted once each as the windows overlap
+      // (capped's rule, over windows: the lines up to the Nth are kept, a later one is a tail inside where rg stops)
+      if (spec.maxCount === 0) sel = [];
+      else if (spec.maxCount !== null) {
+        for (const L of sel) { const a = L.ls + base; if (a > selMark && taken < spec.maxCount) { taken++; selMark = a; } }
+        if (taken >= spec.maxCount && stopAbs === -1) {
+          const e2 = stopEnd(text, selMark - base, spec.after, eof);
+          if (e2 !== -1) stopAbs = base + e2;
+        }
+        const tails = mode === 'standard' && spec.after > 0;
+        sel = sel.flatMap((L) => { const a = L.ls + base; return a <= selMark ? [L] : tails && (stopAbs === -1 || a < stopAbs) ? [{ ...L, tail: true }] : []; });
+      }
       if (mode === 'files') {
         if (sel.some((L) => L.ls + base > wm)) { out.push(Buffer.from(e.disp + (spec.nul ? '\0' : '\n'))); found = true; finished = true; break; }
         wm = base + complete - 1;
@@ -2355,8 +2416,9 @@ function* streamEntry(spec, e, t, out, state, ctx) {
         if (f.met) { met = true; stopAtAbs = f.stopAt; }
         else if (f.wait) cut = Math.min(cut, f.searchStart - base);
       }
-      // the printer's stop compares a window's own offsets
-      if (met) printer.setBin({ offset: nul, bytes: total, stopAt: stopAtAbs - base });
+      // the printer's stop compares a window's own offsets; RG-MAX-COUNT: a NUL in a fill begun past where rg stopped
+      // was never read
+      if (met && !(stopAbs !== -1 && stopAtAbs >= stopAbs)) printer.setBin({ offset: nul, bytes: total, stopAt: stopAtAbs - base });
       let gap = false;
       for (const ev of events) {
         if (ev === GAP) { gap = true; continue; }
@@ -2368,6 +2430,8 @@ function* streamEntry(spec, e, t, out, state, ctx) {
       }
       if (printer.flush) printer.flush();
       out.flush();
+      // RG-MAX-COUNT: every line rg prints before it stops is printed, so nothing more is read
+      if (stopAbs !== -1 && cut === Infinity) finished = true;
       if (finished || eof) break;
       // keep: the lines a later window may print or need (lead lines before what is not yet final), and rg's buffer
       const anchor = Math.min(cut === Infinity ? base + complete : base + cut, base + complete);
@@ -2529,7 +2593,7 @@ function* searchCore(spec, opts) {
     // RG-IGNORE-FILE-ERRORS: rg's message about an ignore file it read, which leaves the exit status be
     if (e.message) { err.push(Buffer.from(e.message + '\n')); continue; }
     if (e.streamed) {
-      const r = yield* streamEntry(spec, { ...e, withFilename }, t, out, state, { cwd, how: binaryHow(e, mmap), first, deadline: opts.deadline, readSize: opts.streamRead });
+      const r = yield* streamEntry(spec, { ...e, withFilename }, t, out, state, { cwd, how: binaryHow(e, mmap, spec), first, deadline: opts.deadline, readSize: opts.streamRead });
       if (r.error) { err.push(r.error); broke = true; }
       if (r.found) found = true;
       if (!r.whole) { if (out.len > state.limit) break; yield TICK; continue; }
@@ -2537,6 +2601,9 @@ function* searchCore(spec, opts) {
     }
     if (e.file && pathErrors.has(e.file)) { err.push(...pathErrors.get(e.file)); pathErrors.delete(e.file); broke = true; }
     if (t.multiLine) {
+      // RG-TEXT and RG-MAX-COUNT are not modelled in the multi-line searcher: refused by name (no upstream argv asks)
+      if (spec.text) return rgRefusal(untranslatableReason('--text with --multiline'));
+      if (spec.maxCount !== null) return rgRefusal(untranslatableReason('--max-count with --multiline'));
       // RG-MULTILINE: each file ugrep proposed (stdin always), read whole and searched as rg's multi-line
       // searcher does, a walked one with binary quit (RG-MULTILINE-BINARY)
       let bytes;
@@ -2559,7 +2626,7 @@ function* searchCore(spec, opts) {
       continue;
     }
     let v = null, m;
-    const how = binaryHow(e, mmap);
+    const how = binaryHow(e, mmap, spec);
     if (e.stdin) {
       v = rgView(e.wholeStdin || toBuf(yield { op: 'stdin' }), how, { stdin: true });
       m = yield { op: 'decide', text: v.text, t, first };
@@ -2569,7 +2636,7 @@ function* searchCore(spec, opts) {
       m = matches.get(e.file);
       if (!m || !m.length) continue;
       pastDeadline();
-      if (spec.mode === 'files' && e.walked) {
+      if (spec.mode === 'files' && e.walked && !spec.text) {
         // -l of a walked file reads only what rg's line buffer would have before it answers.
         let listed;
         try { listed = yield* walkedListed(e.file, cwd, m, spec); } catch (x) { err.push(Buffer.from(`rg: ${e.disp}: ${osErrorText(x)}\n`)); broke = true; continue; }
@@ -2587,7 +2654,7 @@ function* searchCore(spec, opts) {
     if (!m.length) continue;
     let fe = { ...e, matches: m, withFilename };
     if (v) {
-      const sel = yield* selectedLines(v.text, m);
+      const sel = capped(spec, yield* selectedLines(v.text, m), v.text);
       const o = yield* binaryOutcome(v, sel, spec);
       if (o.squash) continue;
       fe = { ...fe, text: o.text, sel: o.sel, bin: o.bin };
@@ -2970,4 +3037,4 @@ function rgExecFileSync(r, opts, file, args) {
 
 module.exports = { isRgExe, rgRefusal, parseRgRefusal, untranslatableReason, runRg, rgSpawnCwd, descriptorRefused, rgSpawn, rgExecFile, rgSpawnSync, rgExecFileSync, RG_MAX_BUFFER,
   UGREP_MIN, parseUgrepVersion, versionAtLeast, ugrepCapabilities, ugrepCapabilitiesAsync, ugrepMatchArgv, chunkFiles, parseUgrepRanges,
-  ugrepMatches, ugrepMatchesAsync, matchFilesAlone, parseRgSearch, UgrepError, rgText, searchStats, FILL_TICK_BYTES, osErrorText };
+  ugrepMatches, ugrepMatchesAsync, matchFilesAlone, parseRgSearch, UgrepError, rgText, searchStats, FILL_TICK_BYTES, osErrorText, RG_VALUE_FLAG_NAMES };

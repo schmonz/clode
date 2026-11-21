@@ -41,6 +41,8 @@ const ARGVS = [
   ['needle'], ['-n', 'needle'], ['-o', 'needle'], ['-n', '-C', '1', 'needle'], ['-B', '2', '-A', '1', 'needle'], ['-A', '3', '-n', 'needle'],
   ['-M', '20', 'needle'], ['-N', 'needle'], ['-c', 'needle'], ['-c', '-o', 'needle'], ['-l', 'needle'], ['--json', 'needle'],
   ['--json', '-C', '1', 'needle'], ['-n', 'zzz-absent'],
+  // RG-MAX-COUNT (2.1.330): the first N selected lines across windows, and the Nth line's after-context with its tails
+  ['-m', '3', '-n', 'needle'], ['-m', '2', '-A', '2', '-n', 'needle'], ['-m', '1', '-c', 'needle'], ['-a', '-n', 'needle'],
 ];
 const norm = (b) => String(Buffer.from(b).toString('latin1')).replace(/"(elapsed|elapsed_total)":\{[^{}]*\}/g, '"$1":{}');
 

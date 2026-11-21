@@ -301,7 +301,11 @@ function refusalDrift(text) {
 const RG_VALUE_FLAGS = new Map([['--glob', 'x*'], ['-g', 'x*'], ['--iglob', 'x*'], ['--max-depth', '4'], ['--maxdepth', '4'], ['-d', '4'],
   ['-j', '1'], ['--threads', '1'], ['--type', 'ts'], ['-t', 'ts'], ['--type-not', 'ts'], ['-T', 'ts'], ['--sort', 'modified'],
   ['--sortr', 'modified'], ['-e', 'x'], ['--regexp', 'x'], ['-A', '1'], ['-B', '1'], ['-C', '1'], ['-M', '500'], ['--max-columns', '500'],
-  ['--max-filesize', '4M']]);
+  ['--max-filesize', '4M'], ['--after-context', '1'], ['--before-context', '1'], ['--context', '1'], ['--color', 'never'],
+  ['--max-count', '1'], ['-m', '1']]);
+// (Every flag quaude's rg reads a value for is here, held by test/rg-probe-value-flags.test.cjs against rg-native.cjs's
+// RG_VALUE_FLAG_NAMES: 2.1.330's `"--max-count","20"` was read as a bare --max-count, its 20 dropped, because this map
+// lacked it, and the guard reported quaude's rg refusing an argv the carve never builds.)
 // The string and template literals of a stretch of carve text, in order: [{ value, start, end, template }].
 function jsLiterals(src) {
   const out = [];
@@ -1107,6 +1111,6 @@ function runBashRoutes(routes, cells, { env, dir }) {
 }
 
 module.exports = { RG_TREE_KINDS, makeRgTree, treeEntries, RG_MATRIX, cellArgv, grepArgv, globArgv, VCS_DIRS, flagLiterals, builderFlagLiterals, matrixDrift,
-  consumerUsageErrorRegex, refusalDrift, carveRgArgvShapes, carveRunners, rgResolutionReferences, rgRunnerCalls, RG_RESOLUTION_NON_RUNNERS, pathScannedRunners,
+  consumerUsageErrorRegex, refusalDrift, carveRgArgvShapes, RG_VALUE_FLAGS, carveRunners, rgResolutionReferences, rgRunnerCalls, RG_RESOLUTION_NON_RUNNERS, pathScannedRunners,
   runNativeRg, nativeRgVersion, runOursRg, cellInput, assertNoAncestorRules, runOursRgBatch, compareRg, normalizeRg, rgOneThread, MMAP_EVERYWHERE, mmapEverywhere, inTree,
   BASH_ROWS, BASH_CELLS, BASH_PIPE_INPUT, BASH_IO, bashIoCells, writeBigFile, bashToolCommand, writeQuaudeSnapshot, writeNativeSnapshot, runBashRoutes };
