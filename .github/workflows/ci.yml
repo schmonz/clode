@@ -1219,8 +1219,8 @@ jobs:
       # native; every text gate SKIPS against any other version (ruling R11), so without
       # this step they skipped here forever. It judges, it is never built from, so it is
       # independent of UPSTREAM_PIN and read from the header, the one place that says which
-      # native the tables came from. The two name the same version (2.1.283, both moved on
-      # 2026-09-26) only because each was measured there; neither follows the other. A header
+      # native the tables came from. The two name the same version (2.1.330, both moved on
+      # 2026-11-21) only because each was measured there; neither follows the other. A header
       # that names no version refuses (exit 2) rather than install `@undefined`.
       - name: Install the TEXT ORACLE native (the Claude version the unicode table was generated from)
         id: oracle
@@ -1325,7 +1325,7 @@ jobs:
       #   3. reset-invisibility        a quaude whose CellSegmenter pool resets fire before every
       #                                segment() call vs the unpatched one, and the check that the
       #                                patch landed.
-      # THE PIN'S BUNDLE PAINTS WITH CellSegmenter (2.1.283 since 2026-09-26), so all three RUN
+      # THE PIN'S BUNDLE PAINTS WITH CellSegmenter (since 2.1.283; the pin is 2.1.330), so all three RUN
       # and this step accepts NO skip: a session gate that skipped (a missing harness, native,
       # engine or quaude; the full-suite marker CLODE_TEST_FULL_SUITE, which only test/run.mjs
       # sets; or the reset guards' no-consumer reason, scripts/lib/reset-patch.cjs's NO_CONSUMER,

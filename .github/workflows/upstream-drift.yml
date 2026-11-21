@@ -259,7 +259,7 @@ jobs:
   # it" failure the --strict discussion in upstream-drift-check.mjs's header already
   # rejected. The honest replacement is the engine-backed probe that asserts the RECORDED
   # state and goes red when it CHANGES (the `carve` job above). That blocker is gone: the
-  # pin moved to 2.1.283 on 2026-09-26, `next` that day. This job still boots the PIN,
+  # pin moved to 2.1.283 on 2026-09-26 and to 2.1.330 on 2026-11-21, `next` each day. This job still boots the PIN,
   # which falls behind `next` again as upstream publishes; the `carve` job looks past it.
   #
   # What this job still genuinely buys, unchanged: the pinned bundle's shim surface is

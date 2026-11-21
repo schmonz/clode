@@ -139,30 +139,39 @@ phase timestamps in a scratch copy of rg-native.cjs, alone and beside 16 CPU hog
 30.6 MB reached the tjs reader within 0.9 s every run, and 4 of 4 loaded runs hit a 20 s timeout before printing
 (2026-11-19)
 
-## upstream-drift.yml has been red every day since 2026-10-23: five anchor steps no longer read `next` (2026-11-19)
+## 2.1.330 absorbed except three gaps: the shim differential, two rg flags, and NetBSD evidence (2026-11-21)
 
-Its last green run was 2026-10-22 (39762109769). In the newest red run (44544547103, `next` = 2.1.328, pin 2.1.283), the
-`carve` job passes (2.1.328 carves, merges and compiles), and the `anchors` job fails five steps:
+The pin moved 2.1.283 -> 2.1.330 (UPSTREAM_PIN). upstream-drift.yml's five red anchor steps (red since 2026-10-23)
+were each re-pinned to the 2.1.330 shape, not loosened: the Remote Control and snapshot-generator hooks (bc7758c),
+the text tripwires and the text oracle (4c9899b), shadow-writer-from-carve plus the flagged shadows it found
+(582cbf2), rg-matrix-from-carve (764f694), and the regexp census (588 groups is no finding: the engine allows
+native's 32,768, c7c3983; lead-scrub retired, 52c0306). What 2.1.330 still asks that quaude does not answer:
 
-1. Hook anchors: `remote_control_hook_anchor_present = false` (the Remote Control gate-off would not apply) and
-   `snapshot_generator_present = false` (the eager-snapshot bridge would not apply).
-2. Text tripwires: text-probe-caller-style VIOLATION (ansiCodes() no longer keeps an open code by one regex test and
-   pairs it with its close code) and text-probe-wrap-options BROKEN (0 call sites).
-3. shadow-writer-from-carve BROKEN (0 writer candidates, floor 3).
-4. rg-matrix-from-carve BROKEN (2 of 3 found: the Grep and Glob builders and the usage-error regex, one missing).
-5. regexp-capture-census BROKEN (examined 0, floor 300), WITH NO REASON in the log: checkGate dropped a BROKEN
-   verdict's findings, which for the census say which turn did not complete and its stderr. Fixed in guard.cjs
-   (2026-11-19), so the next daily run names it.
+1. **node-shim-differential is VIOLATION on 2.1.330** (darwin-arm64 and linux-x64 carves alike, node 24.21.0). The
+   table now drives every API the carve calls (buffer.isAscii and isUtf8 implemented; fs.close/write/read/readSync
+   argument handling fixed, test/node-shim-buffer-isascii.test.cjs), but these answers differ from node and no
+   cause in test/shim-differential/known.cjs claims them, so freeze.cjs refuses to list them:
+   `fs.lutimesSync` absent (63 fields); `fs.utimesSync` is a fire-and-forget async utime (the sync-fs patch has no
+   utime; 24); `fs.opendirSync` errors say readdir/path where node says opendir (18); `zlib.deflateRawSync`
+   unimplemented (12); `fs/promises.opendir` with `{recursive:true}` orders entries unlike node (12);
+   `fs.realpath` errors say realpath where node says stat/lstat (12); `fs/promises.lstat()` and `mkdtemp()` with
+   no argument do not throw node's ERR_INVALID_ARG_TYPE (11); `fs.open(p, O_WRONLY|O_APPEND|O_CREAT, 0o600)`
+   ignores the mode for NUMERIC flags (file made 644; 2); chmodSync's after-snapshot words scandir as readdir (6,
+   the DIFF-SCANDIR cause, unlisted for this case); `buffer.constants` lacks MAX_LENGTH and MAX_STRING_LENGTH.
+   Each wants a fix or a named cause; the known-divergences pairs for 2.1.330's new case ids (re-keyed options
+   like `{end:3,highWaterMark:4194304}`) then need a freeze on darwin AND linux (the linux half is CI's musl
+   node-shim-oracle).
+2. **rg-carve-argv-answered: quaude's rg refuses two NEW production searches.** `--text --fixed-strings --glob
+   *.jsonl* --regexp "type":"hybrid-organization"` (runner apo) and the environment scan's `--max-count N`
+   (runner rre, beside the already-answered --line-buffered). Until answered, those searches reach the model as
+   refusals. Both translate to ugrep (-a, -m) but need rg-differential rows first.
+3. **NetBSD/arm64 VM evidence** (test/fidelity/evidence/netbsd-arm64.json) names 9e20ba4 and the old pin; stale
+   by design until re-run.
 
-Steps 1 to 4 are the newest bundle's shapes moving under anchors that read the pinned 2.1.283 shapes: every one comes
-due at the pin bump past 2.1.283 (to 2.1.327 or later), and each must be re-pinned to the new shape then, not before
-(the pin is what CI and users run). Step 5 is NOT shown to be pin-related: the census runs a mock turn of `next` under
-node and its read went blind for a reason the run did not log. It may be a turn that does not complete on 2.1.328
-(pin-related) or the instrument itself (not).
-
-Measured: `gh api .../actions/jobs/135631487683/logs` (the anchors job of run 44544547103, 986 lines, ending at the
-job's completion), and `gh run list --workflow upstream-drift.yml -L 40`: 28 failures from 2026-10-23 to 2026-11-19,
-12 successes before (2026-11-19).
+Measured: CLODE_PROVIDER_BIN=<2.1.330 darwin-arm64 and linux-x64 from npm pack> CLODE_TJS=<engine with
+quickjs-ng-regexp-capture-u16.patch> node --test test/node-shim-differential.test.cjs (VIOLATION, 2092 calls
+examined, 130 findings) and test/build-gates/rg-carve-argv-gates.test.cjs (52 shapes, 4 findings); freeze.cjs on
+the darwin dump refuses 166 pairs (2026-11-21)
 
 ## upstream-drift.yml runs gates that no aggregator judges (release.yml: judged since 2026-11-19)
 

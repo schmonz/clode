@@ -44,7 +44,7 @@
 #            under tjs. Not luck we control — see the root cause below. Nothing is claimed
 #            here about booting it; only that the step the pin exists for now passes.
 #
-#   2.1.283  THE PIN since 2026-09-26. CARVES, MERGES AND COMPILES (2026-09-26,
+#   2.1.283  THE PIN from 2026-09-26 to 2026-11-21. CARVES, MERGES AND COMPILES (2026-09-26,
 #            darwin-arm64, real engine): scripts/carve-probe.mjs, run while the pin was
 #            still 2.1.251, staged 3 merged groups (3, 51, 4; 18 residual requires
 #            removed) and compiled all 2193 staged modules under tjs. Its Bun is 1.4.3, as
@@ -60,6 +60,21 @@
 #            with nothing; that one arrived by 2.1.282). A fourth only the live frame gate
 #            saw: a built-in plugin's hooks module taking upstream's dev-tree branch, which
 #            painted "agents-md: hooks module did not load" into every quaude TUI.
+#
+#   2.1.330  THE PIN since 2026-11-21, upstream's `latest` and `next` that day
+#            (`npm view @anthropic-ai/claude-code dist-tags`: stable 2.1.323, latest
+#            2.1.330, next 2.1.330). CARVES (darwin-arm64 and linux-x64 from npm pack, real
+#            engine): 3574 staged modules, merged groups 2/49/4; its Bun is 1.4.4. Its text
+#            matches native 2.1.330 under our shim (test/text-differential, 31 rows, 0
+#            failures), so the text oracle moved with it. Absorbing it took, beyond the five
+#            drift anchors re-pinned to its shapes (BACKLOG, "2.1.330 absorbed except three
+#            gaps"): an engine patch for capture groups past 254 (its artifact-lead scrub
+#            builds 588; quickjs-ng-regexp-capture-u16.patch), buffer.isAscii, readSync's
+#            options form, a builtin facade that dropped `import Ce,{ChildProcess as $t}`'s
+#            names (every naude turn died at link), quaude's rg taking --line-buffered, and
+#            the snapshot writer's new flagged shadows. STILL OPEN at the bump: the
+#            node-shim differential's unclaimed divergences and two rg flags it now passes
+#            (--text, --max-count), both in that BACKLOG entry.
 #
 # WHAT ACTUALLY BREAKS, measured 2026-09-21 on this box with a real engine, because
 # "QuickJS rejects the merged file" was true and told nobody where to look. The merged
@@ -104,10 +119,10 @@
 # context for a reader; the OUTCOME is what is compared. Grammar:
 #     carve-probe <version> carves
 #     carve-probe <version> blocked <stage> <reason substring>
-# The record below was measured on 2.1.283 while it was still newer than the pin (above).
-# With the pin at 2.1.283, which was also `next` that day, the probe SKIPS by name ("not
-# newer than the pin") until upstream publishes past it, then compares that carve with this.
-carve-probe 2.1.283 carves
+# The record below was measured on 2.1.330 before the pin moved to it (above). With the pin
+# at 2.1.330, which was also `next` that day, the probe SKIPS by name ("not newer than the
+# pin") until upstream publishes past it, then compares that carve with this.
+carve-probe 2.1.330 carves
 #
 # Bump or drop the pin by editing the version below — one line, one file.
-claude-code 2.1.283
+claude-code 2.1.330
