@@ -623,98 +623,15 @@ test('BUILTIN-PLUGIN-BUNDLED: a folder descriptor in the other key order is a de
   assert.ok(!r.benign, r.why);
 });
 
-// LEAD-SCRUB-POSSESSIVE (libexec/extract-claude-js.cjs patchLeadScrubPossessive). The artifact-lead
-// scrubber's builder (bracketedLeadScrubPattern) spells each phrase of a constant list one letter
-// at a time, with an ATOMIC separator between letters and between words, `(?=(X))(?:\N)`: a
-// lookahead captures the longest X and the backreference consumes exactly it. One capture group
-// per separator, 559 for the 2.1.283 list, and QuickJS allows 254, so under quaude the pattern
-// never compiles: a subagent answers "too many captures" and every turn logs the SyntaxError. The
-// hook builds each separator possessively instead, with no group, matching the one path the
-// atomic group allows. test/lead-scrub-oracle.cjs holds the builder verbatim from the 2.1.283
-// carve; test/fidelity/lead-scrub-equivalence.test.cjs judges the real carve against native.
-const LS = require('./lead-scrub-oracle.cjs');
-const { skipUnlessTjs, runLoader } = require('./node-shim-helper.cjs');
-const leadReport = (text) => transformGraph({ '/$bunfs/root/chunk-x.js': text }).report
-  .find((e) => e.key === 'lead_scrub_possessive');
-
-test('LEAD-SCRUB-POSSESSIVE: the 2.1.283 builder builds its pattern with no capture group, matching as the original', () => {
-  const [out, applied] = ex.patchLeadScrubPossessive(LS.MODULE_283);
-  assert.strictEqual(applied, true, 'the verbatim 2.1.283 builder must be recognised');
-  const spec = LS.sampleSpec();
-  const corpus = LS.sampleCorpus();
-  const original = LS.loadBuilder(LS.MODULE_283)(spec);
-  const patched = LS.loadBuilder(out)(spec);
-  assert.strictEqual(LS.captures(original), 66);
-  assert.strictEqual(LS.captures(patched), 0);
-  const truth = LS.matchesOver(original, corpus);
-  assert.ok(truth.filter((r) => !r.startsWith('|')).length >= 50, 'the corpus must hold matches');
-  assert.deepStrictEqual(LS.matchesOver(patched, corpus), truth);
-  // The controls: with either separator made one that backtracking may shorten, this corpus
-  // answers differently, so the equality above can fail for each of them.
-  for (const naive of [LS.NAIVE_RUN_283, LS.NAIVE_MU_283]) {
-    assert.notDeepStrictEqual(LS.matchesOver(LS.loadBuilder(naive)(spec), corpus), truth);
-  }
-});
-
-test('LEAD-SCRUB-POSSESSIVE: one 255-letter word, the smallest list QuickJS refuses, builds with no capture group', () => {
-  const [out] = ex.patchLeadScrubPossessive(LS.MODULE_283);
-  const original = LS.loadBuilder(LS.MODULE_283);
-  const patched = LS.loadBuilder(out);
-  // One group for the leading separator and one between each two letters: n groups for n letters.
-  assert.strictEqual(LS.captures(original([['a'.repeat(254)]])), 254, 'the most QuickJS compiles');
-  assert.strictEqual(LS.captures(original([['a'.repeat(255)]])), 255, 'one more than QuickJS compiles');
-  const re = patched([['a'.repeat(255)]]);
-  assert.strictEqual(LS.captures(re), 0);
-  const corpus = [`[${'a'.repeat(255)}`, `[${'a'.repeat(254)}`, `[ ${'a'.repeat(255)}!`, `[${'ax'.repeat(128)}`,
-    `[${'a\r'.repeat(255)}`, `[:: ${'a'.repeat(255)}`, `[\\${'a'.repeat(255)}`, `[${'a'.repeat(256)}`];
-  assert.deepStrictEqual(LS.matchesOver(re, corpus), LS.matchesOver(original([['a'.repeat(255)]]), corpus));
-});
-
-test('LEAD-SCRUB-POSSESSIVE: under quaude\'s engine the original refuses that word and the rewrite compiles', (t) => {
-  if (skipUnlessTjs(t)) return;
-  const [out] = ex.patchLeadScrubPossessive(LS.MODULE_283);
-  const dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'lead-qjs-'));
-  try {
-    const prog = path.join(dir, 'probe.cjs');
-    fs.writeFileSync(prog, `const LS = require(${JSON.stringify(path.join(__dirname, 'lead-scrub-oracle.cjs'))});\n`
-      + `const r = {};\n`
-      + `for (const [k, text] of [['original', ${JSON.stringify(LS.MODULE_283)}], ['patched', ${JSON.stringify(out)}]]) {\n`
-      + `  for (const n of [254, 255]) {\n`
-      + `    try { r[k + n] = LS.captures(LS.loadBuilder(text)([['a'.repeat(n)]])); } catch (e) { r[k + n] = String(e); }\n`
-      + `  }\n}\nconsole.log(JSON.stringify(r));\n`);
-    const res = runLoader(prog, [], { timeout: 120000 });
-    assert.strictEqual(res.status, 0, res.stderr);
-    assert.deepStrictEqual(JSON.parse(res.stdout.trim().split('\n').pop()), {
-      original254: 254, original255: 'SyntaxError: too many captures', patched254: 0, patched255: 0 });
-  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
-});
-
-test('LEAD-SCRUB-POSSESSIVE: a builder or helper the anchor cannot read is a dead hook, not benign', () => {
-  const changed = {
-    'the counter is read after it moves': LS.MODULE_283.replace('e=()=>mu(++d)', 'e=()=>mu(d++)'),
-    'a letter separator of one or more': LS.MODULE_283.replace('return`(?=([${u}]*))', 'return`(?=([${u}]+))'),
-    'a joiner separator that is not consumed': LS.MODULE_283.replace('return`(?=(${d}${e}))(?:\\\\${u})`}',
-      'return`(?=(${d}${e}))`}'),
-    'up to five joiners': LS.MODULE_283.replace('a<Q;', 'a<=Q;'),
-    // A builder local spelled like a free name the builder reads: the same tokens, another meaning
-    // (the joiner lookahead would read the local, not the whitespace class).
-    'a local that shadows a class': LS.MODULE_283.replace(',l=e(),', ',w=e(),').replace('(?=${l}(?:', '(?=${w}(?:'),
-  };
-  for (const [why, text] of Object.entries(changed)) {
-    assert.notStrictEqual(text, LS.MODULE_283, why);
-    assert.strictEqual(ex.patchLeadScrubPossessive(text)[1], false, why);
-    const r = leadReport(text);
-    assert.strictEqual(r.applied, false, why);
-    assert.ok(!r.benign, `${why}: ${r.why}`);
-  }
-  assert.strictEqual(leadReport('var x=1;').benign, true);
-});
-
-test('LEAD-SCRUB-POSSESSIVE: minified names the replacement syntax would read as group references are carried literally', () => {
-  // `$$` for the whitespace class, `$1` for the builder: both legal identifiers.
-  const dollar = LS.MODULE_283.split('${w}').join('${$$}').split('function _No(').join('function $1(');
-  const [out, applied] = ex.patchLeadScrubPossessive(dollar);
-  assert.strictEqual(applied, true);
-  assert.ok(out.includes('let __r=`[${$$}]*(?![${$$}])`'), out.slice(0, 400));
-  assert.ok(out.includes('function $1(u){let d=0,e=()=>__clodeLeadMu(),a=()=>__clodeLeadRun(`\\\\r\\\\n${_}`),'));
+// LEAD-SCRUB-POSSESSIVE is RETIRED (libexec/extract-claude-js.cjs says why): the engine accepts
+// native's capture-group limit (test/engine-regexp-captures.test.cjs), so quaude builds upstream's
+// own artifact-lead scrub pattern. No graph hook may rewrite the builder any more.
+test('LEAD-SCRUB-POSSESSIVE is retired: no graph hook touches the artifact-lead scrub builder', () => {
+  const builder = 'function s0l(u){let d=0,e=()=>mu(++d);'
+    + 'throw Error("bracketedLeadScrubPattern: words are lowercase ASCII")}'
+    + 'function mu(u){return`(?=([${h}]*))(?:\\\\${u})`}';
+  const { sources, report } = transformGraph({ '/$bunfs/root/chunk-x.js': builder });
+  assert.strictEqual(sources['/$bunfs/root/chunk-x.js'], builder);
+  assert.ok(!report.some((e) => /lead/.test(e.key)), JSON.stringify(report.map((e) => e.key)));
+  assert.strictEqual(ex.patchLeadScrubPossessive, undefined);
 });

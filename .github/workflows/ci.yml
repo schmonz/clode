@@ -1463,9 +1463,9 @@ jobs:
       #                       the CA globals gone from a built quaude and an unparseable NODE_EXTRA_CA_CERTS block dropped.
       #   rg-regex-gates, rg-types-gates   the generated rg tables are what their generators make from THIS native
       #                       run as rg (the suite's minimised provider does not run as rg, so they skipped there).
-      #   lead-scrub-equivalence, rg-spawn  need the engine AND a provider that runs here, or a POSIX shell for a
-      #                       ugrep stub as a non-root user; both skipped in the suite rows and ran in no job (observability
-      #                       Task 5). Measured before adding all four, on ubuntu:24.04 as a non-root user with this native,
+      #   rg-spawn            needs the engine AND a POSIX shell for a ugrep stub as a non-root user; it skipped in
+      #                       the suite rows and ran in no job (observability Task 5; lead-scrub-equivalence, which
+      #                       ran here beside it, was retired 2026-11-21 with its hook). Measured before adding all four, on ubuntu:24.04 as a non-root user with this native,
       #                       ugrep 5.0.0 and the musl engine: 43 tests, 43 pass, 0 skipped. That count is history: the step
       #                       has since grown (tools-local, webfetch), and what holds it now is the by-name skip rule below.
       # postject into deps/clode because the gate builds a naude (test/built-binary.cjs builtNaude), which also
@@ -1505,7 +1505,6 @@ jobs:
               test/tjs-tls-trust.test.cjs \
               test/build-gates/rg-regex-gates.test.cjs \
               test/build-gates/rg-types-gates.test.cjs \
-              test/fidelity/lead-scrub-equivalence.test.cjs \
               test/rg-spawn.test.cjs 2>&1 | tee rg-gates.out
           SKIPPED=$(sed -nE 's/^(ℹ|#) skipped ([0-9]+)$/\2/p' rg-gates.out | tail -1)
           NAMED=$(grep -cE '# macOS only$' rg-gates.out || true)

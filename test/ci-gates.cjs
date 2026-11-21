@@ -126,8 +126,6 @@ const PLACED = {
   'rg-differential': { jobs: ['linux-x64-pty'], why: NO_ENGINE },
   'rg-every-surface-tjs': { jobs: ['linux-x64-pty'],
     why: `${NO_ENGINE}; and not node-shim-oracle, whose container runs as root (rg-spawn's unreadable-file row skips there)` },
-  'lead-scrub-equivalence': { jobs: ['linux-x64-pty'],
-    why: `${NO_ENGINE}; and its provider must RUN here (the pinned native, not the minimised carve)` },
   'rg-regex-data-fresh': { jobs: ['linux-x64-pty'], why: MINIMISED },
   'rg-regex-oracle-fresh': { jobs: ['linux-x64-pty'], why: MINIMISED },
   'rg-bundle-line-fresh': { jobs: ['linux-x64-pty'], why: MINIMISED },
@@ -239,7 +237,6 @@ const FILES = {
   'test/fidelity/webfetch.test.cjs': { jobs: ['linux-x64-pty', 'node-shim-oracle-darwin'] },
   'test/build-gates/rg-regex-gates.test.cjs': { jobs: ['linux-x64-pty'] },
   'test/build-gates/rg-types-gates.test.cjs': { jobs: ['linux-x64-pty'] },
-  'test/fidelity/lead-scrub-equivalence.test.cjs': { jobs: ['linux-x64-pty'] },
   'test/rg-spawn.test.cjs': { jobs: ['linux-x64-pty'] },
   'test/fidelity/agentic-sandbox-fail-closed.test.cjs': { jobs: ['linux-x64-pty'], skips: {
     'where native would not sandbox, quaude does as native does (D2): its warning, and every call runs':

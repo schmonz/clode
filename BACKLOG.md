@@ -1383,19 +1383,14 @@ Bash tool instead".
   or a longer one, at an upstream bump, and quaude refuses it the same way. The census is now a
   guard, test/fidelity/regexp-capture-census.test.cjs: it fails on any pattern above 254 groups
   and its verdict names the headroom (3 at 2.1.283). It runs in the suite and daily in
-  upstream-drift.yml against `next`. The same possessive rewrite would apply.
-- **What watches the lead-scrub hook, and where.** Recorded 2026-09-27, not fixed:
-  - The dead-hook canary goes by the builder's WORDS (bracketedLeadScrubPattern, the two
-    Symbol descriptions), not its structure. A reworded builder the anchor also misses reads as
-    "absent", benign.
-  - The only backstop for that is the subagent row (test/fidelity/agentic-subagent-diff), and
-    it runs only on dev boxes. CI's jobs that have tjs and a provider run only
-    test/node-shim-*.test.cjs, and the suite job has no engine, so the row skips there.
-  - test/fidelity/lead-scrub-equivalence skips on CI: it needs a provider that runs on the
-    host, which is the native oracle, and CI's provider is minimised.
-  - The subagent row gives each engine 90 s. Under a load average of 150 on the dev Mac
-    (2026-09-27, other sessions compiling) that killed quaude once: "quaude did not exit 0";
-    it passed in 56 s when rerun under the same load.
+  upstream-drift.yml against `next`. RESOLVED 2026-11-21 in the engine: the limit is now
+  native's 32,768 groups (quickjs-ng-regexp-capture-u16.patch), and the census judges that.
+- **The lead-scrub hook is RETIRED (2026-11-21).** At 2.1.327 upstream changed the builder (a
+  LEAD_OPEN_END token) and the anchor stopped matching, so regexp-capture-census went red on a
+  588-group pattern. The engine now accepts native's limit, 32,768 groups
+  (spike/quickjs/patches/quickjs-ng-regexp-capture-u16.patch, test/engine-regexp-captures.test.cjs),
+  so quaude builds upstream's own pattern and the hook, test/fidelity/lead-scrub-equivalence and
+  test/lead-scrub-oracle.cjs were deleted. The h6() siblings are covered by the same engine fix.
 - **tjs's TextDecoder drops U+FEFF anywhere in the text, not only a leading BOM.**
   `new TextDecoder().decode(new TextEncoder().encode("a" + String.fromCharCode(0xfeff) + "b"))`
   has length 2 under tjs and 3 under node; with `{ ignoreBOM: true }` it is 3 under both. The

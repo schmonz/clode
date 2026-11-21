@@ -2,8 +2,9 @@
 // Every RegExp the bundle BUILDS at run time, with its capture-group count: the instrument behind
 // test/fidelity/regexp-capture-census.test.cjs.
 //
-// WHY RUN TIME, AND WHY NAUDE. QuickJS refuses a pattern with more than 254 capture groups
-// (CAPTURE_COUNT_MAX 255 counts the whole match; the index is a byte in its bytecode). A regex
+// WHY RUN TIME, AND WHY NAUDE. QuickJS-ng refused a pattern with more than 254 capture groups
+// (the index was a byte in its bytecode); since quickjs-ng-regexp-capture-u16.patch the engine
+// allows native's 32,768 (QUICKJS_CAPTURE_LIMIT, below). A regex
 // LITERAL that big fails when quaude's build compiles the graph, loudly. A pattern the bundle
 // BUILDS with `new RegExp(...)` fails only when that code runs: the artifact-lead scrubber's did,
 // at 559 groups, and no subagent could finish (BACKLOG.md). Its tag-scrub siblings (h6(), the
@@ -113,4 +114,11 @@ if (require.main === module) {
     (e) => { process.stderr.write(String(e && e.stack || e)); process.exit(1); });
 }
 
-module.exports = { PRELOAD, PROBE_MARK, censusOf };
+// THE ENGINE'S LIMIT, which is native's: JavaScriptCore inside native Claude Code 2.1.330 accepts
+// 32,768 groups and refuses 32,769 (measured 2026-11-21), and spike/quickjs/patches/
+// quickjs-ng-regexp-capture-u16.patch sets CAPTURE_COUNT_MAX to match. ONE constant for both
+// readers: test/engine-regexp-captures.test.cjs proves the engine accepts exactly this many and
+// refuses one more, so the census below cannot judge against a limit the engine does not have.
+const QUICKJS_CAPTURE_LIMIT = 32768;
+
+module.exports = { PRELOAD, PROBE_MARK, censusOf, QUICKJS_CAPTURE_LIMIT };

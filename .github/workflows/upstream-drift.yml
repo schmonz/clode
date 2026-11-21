@@ -132,12 +132,12 @@ jobs:
           CLODE_PROVIDER_BIN="$PROV" node --require ./test/file-watchdog-preload.cjs --test --test-concurrency=1 \
             test/build-gates/rg-probe-gates.test.cjs
 
-      # THE CAPTURE-GROUP HEADROOM, against the same `next` bundle. QuickJS refuses a RegExp with
-      # more than 254 capture groups, and the bundle BUILDS some with one group per letter of a
-      # word list: at 2.1.283 the artifact-lead scrub pattern had 559 (no subagent could finish
-      # until the LEAD-SCRUB-POSSESSIVE hook), and the harness-tag scrub patterns (h6()) 251 and
-      # 229. One more tag name upstream and quaude refuses the next one the same way, so this asks
-      # every day, on the channel that moves first. The census runs a plain and a Task turn under
+      # THE CAPTURE-GROUP HEADROOM, against the same `next` bundle. The bundle BUILDS RegExps with
+      # one capture group per letter of a word list: the artifact-lead scrub pattern had 559 at
+      # 2.1.283 and 588 at 2.1.327, the harness-tag scrub patterns (h6()) 251 and 229 at 2.1.283.
+      # QuickJS-ng refused anything past 254; since 2026-11-21 the engine allows native's 32,768
+      # (quickjs-ng-regexp-capture-u16.patch), and this asks every day, on the channel that moves
+      # first, that no pattern passes that limit. The census runs a plain and a Task turn under
       # naude against the canned mock and counts every pattern built; its verdict names the
       # headroom and where the largest pattern is built. Staging `next` needs an engine for module
       # metadata (the bootstrap slice, as the carve job resolves it) and naude needs Claude Code's

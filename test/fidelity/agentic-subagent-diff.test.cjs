@@ -56,7 +56,9 @@ function handBack(m) {
 // also logged `SyntaxError ... at RegExp (native) ... at get lead` under --debug-to-stderr, three
 // times on this row's turn. This row now runs both engines with --debug-to-stderr and holds
 // quaude's log free of any RegExp QuickJS refused, whichever pattern it is: the next one upstream
-// builds past QuickJS's limits fails here by name, not as a missing answer.
+// builds past QuickJS's limits fails here by name, not as a missing answer. (The hook was retired
+// 2026-11-21: the engine now allows native's 32,768 groups, quickjs-ng-regexp-capture-u16.patch,
+// so quaude builds upstream's own pattern; this row is that fix's end-to-end check.)
 const REGEXP_REFUSED = /SyntaxError[^\n]*?at RegExp \(native\)|too many captures/;
 // ITS CONTROL: two lines, verbatim, from quaude's --debug-to-stderr log of this row's turn before
 // the hook (2026-09-27, 2.1.283): the per-turn stack (the logger writes the stack JSON-escaped,

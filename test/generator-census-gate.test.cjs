@@ -67,7 +67,6 @@ const EXEMPT = [
 const CENSUS_IN = [
   { file: 'scripts/gen-rg-regex-oracle.cjs', census: 'test/rg-regex.test.cjs' },
   { file: 'test/rg-bundle-line.cjs', census: 'test/rg-regex.test.cjs' },
-  { file: 'test/lead-scrub-oracle.cjs', census: 'test/fidelity/lead-scrub-equivalence.test.cjs' },
   { file: 'test/shape-census.cjs', census: 'test/shape-census.test.cjs' },
 ];
 // Measured 2026-11-19: 14 drawing files of 506. Fewer than this many drawing files means DRAW_RES went blind.

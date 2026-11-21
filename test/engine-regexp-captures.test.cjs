@@ -26,6 +26,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const { spawnSync } = require('node:child_process');
 const { engineSpawn, skipUnlessTjs } = require('./node-shim-helper.cjs');
+const { QUICKJS_CAPTURE_LIMIT } = require('./regexp-census.cjs');
 
 function run(cmd, argv) {
   const r = spawnSync(cmd, argv, { encoding: 'utf8', timeout: 300000, maxBuffer: 64 * 1024 * 1024 });
@@ -41,6 +42,8 @@ const underNode = (fn) => run(process.execPath, ['-e', `(${fn})()`]);
 // N <= 32,768 and throws "Invalid regular expression: too many captures" for 32,769. node 24.21.0
 // (V8) stops at 32,767, which is why this number is not read from node.
 const NATIVE_MAX_GROUPS = 32768;
+// The census judges every pattern a real turn builds against this same number.
+assert.strictEqual(QUICKJS_CAPTURE_LIMIT, NATIVE_MAX_GROUPS);
 
 function limitProbe(max) {
   const pattern = (n) => Array.from({ length: n }, () => '(a)').join('');

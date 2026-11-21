@@ -47,16 +47,10 @@ test('firstSighting: a generator caught in a cycle shows as few distinct inputs'
   assert.strictEqual(r.findings.length, 1);
 });
 
-test('mulberry32 is the function test/lead-scrub-oracle.cjs held inline (its corpus is unchanged)', () => {
+test('mulberry32 is the function the lead-scrub corpus held inline (retired 2026-11-21 with its hook)', () => {
   let seed = 20260927;
   const inline = () => { seed = (seed + 0x6D2B79F5) >>> 0; let t = seed; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
   const f = mulberry32(20260927);
   for (let i = 0; i < 1000; i++) assert.strictEqual(f(), inline());
 });
 
-test('the lead-scrub corpus census fails a corpus without its shapes (its control; the real corpus needs the carve)', () => {
-  const { corpusCensus } = require('./lead-scrub-oracle.cjs');
-  const [shapes, bias] = corpusCensus({ plain: ['[a b]', '[a b]'] }, [0x2d0]);
-  assert.ok(shapes.findings.length >= 5, shapes.findings.join('\n'));
-  assert.deepStrictEqual(bias.findings, []);
-});

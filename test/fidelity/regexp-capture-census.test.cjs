@@ -2,17 +2,17 @@
 // NO PATTERN THE BUNDLE BUILDS HAS MORE CAPTURE GROUPS THAN QUICKJS ALLOWS, and how close the
 // nearest one is.
 //
-// QuickJS refuses a RegExp with more than 254 capture groups (vendored libregexp.c:
-// CAPTURE_COUNT_MAX 255, which counts the whole match; the index is a byte in its bytecode, so
-// the limit is a format, not a setting). JavaScriptCore and V8 accept far more, so upstream never
-// sees it. From 2.1.278 the artifact-lead scrub pattern had 559, and under quaude no subagent
-// could finish (BACKLOG.md; the LEAD-SCRUB-POSSESSIVE hook, libexec/extract-claude-js.cjs, builds
-// it with none). Its siblings from the same builder module, the harness-tag scrub patterns
-// (h6()), use the same one-group-per-letter separator and sat at 251 and 229 at 2.1.283: one
-// more tag name upstream and quaude refuses the next one the same way.
+// QuickJS-ng refused a RegExp with more than 254 capture groups (its capture index was a byte in
+// its bytecode). From 2.1.278 the artifact-lead scrub pattern had 559, and under quaude no
+// subagent could finish; an extractor hook (LEAD-SCRUB-POSSESSIVE) rewrote that one builder until
+// 2.1.327 moved it out from under the anchor with 588. Its siblings (h6(), the harness-tag scrub
+// patterns) sat at 251 and 229 at 2.1.283. Since 2026-11-21 the ENGINE allows native's limit,
+// 32,768 groups (spike/quickjs/patches/quickjs-ng-regexp-capture-u16.patch; QUICKJS_CAPTURE_LIMIT
+// in test/regexp-census.cjs, which test/engine-regexp-captures.test.cjs proves against the real
+// engine), and the hook is retired.
 //
 // This census (test/regexp-census.cjs) counts every pattern naude builds on a plain turn and on a
-// synchronous Task turn, against the canned mock, and fails on any above 254. Its note says the
+// synchronous Task turn, against the canned mock, and fails on any above the engine's limit. Its note says the
 // HEADROOM, the largest count and where it was built, so a creeping count is visible before it
 // is a failure. It covers every pattern built on those turns, not only h6's call sites: which
 // pattern crosses next is not something to guess.
@@ -23,10 +23,9 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 const { defineGuard, guardTests } = require('../guard.cjs');
-const { censusOf, PROBE_MARK } = require('../regexp-census.cjs');
+const { censusOf, PROBE_MARK, QUICKJS_CAPTURE_LIMIT } = require('../regexp-census.cjs');
 const { stageProviderCli } = require('../oracle-models.cjs');
 
-const QUICKJS_CAPTURE_LIMIT = 254;
 // A plain turn builds about 1,540 patterns at 2.1.283; far fewer means the preload did not see
 // the turn.
 const CONSTRUCTED_FLOOR = 300;
@@ -82,12 +81,11 @@ const guard = defineGuard({
   },
   scan: census,
   control() {
-    // 2.1.283's three largest patterns as the census recorded them before the hook: the lead
-    // pattern's 559 must be a finding, the tag-scrub patterns' 251 and 229 must not.
+    // 2.1.327's largest pattern as the census recorded it (588 groups, within the engine's limit,
+    // no finding), beside one past the limit, which must be.
     return { turns: [turnOf('plain', [
-      { captures: 251, length: 191957, flags: 'giu', at: 'H (chunk-v297v4sm.js:12:26453)', times: 1 },
-      { captures: 229, length: 175475, flags: 'giu', at: 'H (chunk-v297v4sm.js:12:26453)', times: 1 },
-      { captures: 559, length: 879796, flags: 'giu', at: '_No (chunk-v297v4sm.js:12:34474)', times: 1 },
+      { captures: 588, length: 980559, flags: 'giu', at: 'AQa (chunk-21zx92hg.js:6:34624)', times: 1 },
+      { captures: QUICKJS_CAPTURE_LIMIT + 1, length: 98307, flags: '', at: 'past the limit', times: 1 },
     ])] };
   },
 });
@@ -96,9 +94,11 @@ guardTests(guard, { test, assert });
 
 test('regexp-capture-census: the limit is counted exactly, and a blind or failed turn is a finding', () => {
   const at = (n) => ({ captures: n, length: 10, flags: 'u', at: `f${n}`, times: 1 });
-  assert.deepStrictEqual(census({ turns: [turnOf('plain', [at(254)])] }).findings, []);
-  assert.strictEqual(census({ turns: [turnOf('plain', [at(255)])] }).findings.length, 1);
-  assert.match(census({ turns: [turnOf('plain', [at(254), at(3)])] }).note, /^headroom 0 group\(s\): the largest has 254/);
+  const L = QUICKJS_CAPTURE_LIMIT;
+  assert.strictEqual(L, 32768, 'native\'s limit (test/regexp-census.cjs)');
+  assert.deepStrictEqual(census({ turns: [turnOf('plain', [at(L)])] }).findings, []);
+  assert.strictEqual(census({ turns: [turnOf('plain', [at(L + 1)])] }).findings.length, 1);
+  assert.match(census({ turns: [turnOf('plain', [at(L), at(3)])] }).note, new RegExp(`^headroom 0 group\\(s\\): the largest has ${L}`));
   const blind = turnOf('plain', []);
   blind.census.patterns = [];
   assert.match(census({ turns: [blind] }).findings[0], /the instrument is blind/);

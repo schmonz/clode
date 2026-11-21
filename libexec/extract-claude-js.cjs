@@ -1054,152 +1054,17 @@ function patchBuiltinPluginBundled(body) {
   return [body.replace(m[0], () => `var ${name}=(${folder},${mod},${scan})=>${bundled}(${mod},${scan}(),${folder});`), true];
 }
 
-// --- LEAD-SCRUB-POSSESSIVE: the artifact-lead scrub pattern fits QuickJS ----------------------
-// From 2.1.278, `get lead()` (the artifact-lead scrubber, exported as artifactLeadScrubPattern)
-// hands a CONSTANT list of phrases to a builder (bracketedLeadScrubPattern) that spells every word
-// one letter at a time. Between letters and between words it puts an ATOMIC separator, JavaScript's
-// stand-in for an atomic group: a lookahead captures the longest run and a backreference consumes
-// exactly it,
-//
-//     letters:  (?=([C]*))(?:\N)                 C: newlines and invisible characters
-//     words:    (?=(W*(?:JW*(?:JW*(?:JW*(?:JW*)?)?)?)?))(?:\N)      W: whitespace, J: joiners
-//
-// one capture group each: 559 for the 2.1.283 list (24 phrases, 104 words, 554 letters, the same
-// at .278/.280/.281). QuickJS allows 254 (CAPTURE_COUNT_MAX 255 counts the whole match, and the
-// capture index is a byte in its regexp bytecode, so raising it is a bytecode format change);
-// JavaScriptCore and V8 accept 559. So under quaude `new RegExp` threw "too many captures" every
-// time `lead` was read: a subagent could not finish (its completion path scrubs the report), and
-// every turn logged the SyntaxError from the harness-content scan of the model's text.
-//
-// The rewrite builds each separator POSSESSIVELY, with no group:
-//
-//     letters:  [C]*(?![C])
-//     words:    W*(?!W)(?:JW*(?!W)(?:JW*(?!W)(?:JW*(?!W)(?:JW*(?!W)|(?!J))|(?!J))|(?!J))|(?!J))
-//
-// EQUIVALENT FOR EVERY INPUT, in every context, because each form matches exactly one path at a
-// given position, the same one. The atomic form: nothing inside the lookahead can fail (every part
-// may match empty), so its first match is the greedy one, the longest W run, then a joiner if one
-// follows and the longest run after it, up to four; the lookahead keeps it, the backreference
-// consumes exactly that text (the same characters at the same place, so it matches, under `i`
-// too), and neither a lookahead nor a backreference can be re-entered on backtracking. The
-// possessive form: `W*(?!W)` can only stop where the next character is not W, which is the
-// longest run; `(?:J...|(?!J))` takes the joiner exactly when one is there, since its two branches
-// exclude each other. Same classes, same flags, so the same characters count. The builder
-// reads no capture except through these backreferences, and the scrubber's callers take only the
-// whole match (a replace callback's first argument, matchAll counts, a clone through .source):
-// with no group left, nothing is renumbered. The pattern's source text differs from native's; its
-// matches do not. test/fidelity/lead-scrub-equivalence.test.cjs judges the real carve's pattern
-// under quaude against the original under native, over a corpus a backtracking separator fails.
-//
-// THE ANCHOR IS THE BUILDER'S TEXT AND BOTH HELPERS', minified names aside: the helpers are those
-// two atomic forms, every separator the builder emits comes from them, and nothing quantifies a
-// separator. Any change there is a dead hook, loud; leadScrubShape() is the canary.
-// WHAT IT DOES NOT PIN: the CONTENTS of the free names the builder reads. The class strings (W, J,
-// the invisibles, the dashes, the confusable letters) are bound by name only; the proof does not
-// need them, since each rewritten separator reuses the same class text. The span pattern Lu is
-// inserted raw into every phrase that has a span, and it is bound by name only too. At 2.1.278
-// through 2.1.283 it holds no capturing group, so the rewrite leaves the pattern with none. Were
-// upstream to put one there, that group would be the only one left and would renumber. Nothing
-// in the builder refers to a group by number except the separators the rewrite removes, and Lu,
-// one constant spliced in at several positions, has no number it could refer to; so the matches
-// would stand, but the rewrite's "no capture groups" would not, and
-// test/fidelity/regexp-capture-census.test.cjs counts every pattern's groups on a real turn.
-// The shapes are verbatim 2.1.283 text with each minified binding as @{NAME}: the first
-// occurrence binds an identifier, every later one must repeat it (a regex backreference).
-function compileShape(template) {
-  const esc = (s) => s.replace(/[\\^$.*+?()[\]{}|/]/g, '\\$&');
-  const seen = new Set();
-  let src = '(?<![\\w$])';
-  let last = 0;
-  for (const m of template.matchAll(/@\{(\w+)\}/g)) {
-    if (/[\w$]/.test(template[m.index - 1] || '') || /[\w$]/.test(template[m.index + m[0].length] || '')) {
-      throw new Error(`compileShape: @{${m[1]}} touches an identifier character`);
-    }
-    src += esc(template.slice(last, m.index)) + (seen.has(m[1]) ? `\\k<${m[1]}>` : `(?<${m[1]}>[\\w$]+)`);
-    seen.add(m[1]);
-    last = m.index + m[0].length;
-  }
-  return new RegExp(src + esc(template.slice(last)), 'g');
-}
-const LEAD_SCRUB_SHAPES = {
-  builder: compileShape(
-    'function @{NO}(@{U}){let @{D}=0,@{E}=()=>@{MU}(++@{D}),@{A}=()=>@{PRE}(`\\\\r\\\\n${@{CTL}}`,++@{D}),'
-    + '@{C}=()=>`(?=[${@{W}}${@{J}}])`+@{E}(),'
-    + '@{N}=()=>`(?=[${@{Y}}]{0,${@{Q}}}[${@{W}}${@{IPT}}])`+@{E}(),'
-    + '@{DIGITS}=`0-9\\\\uff10-\\\\uff19\\\\u{1d7ce}-\\\\u{1d7ff}\\\\u2070\\\\u00b9\\\\u00b2\\\\u00b3'
-    + '\\\\u2074-\\\\u2079\\\\u2080-\\\\u2089${[..."abcdef"].map(@{YV}).join("")}`,'
-    + '@{WORD}=(@{S1})=>{if(!/^[a-z]+$/.test(@{S1}))throw Error("bracketedLeadScrubPattern: words are '
-    + 'lowercase ASCII");return[...@{S1}].map((@{E1},@{G1})=>(@{G1}===0?"":@{A}())+`[${@{YV}(@{E1})}]`)'
-    + '.join("")},'
-    + '@{HEXRUN}=(@{S2})=>Array.from({length:@{S2}},(@{E2},@{G2})=>(@{G2}===0?"":@{A}())+`[${@{DIGITS}}]`)'
-    + '.join("")+@{A}()+`[${@{IPT}}]`,'
-    + '@{HEX}=()=>@{HEXRUN}(8)+@{E}()+@{HEXRUN}(4)+@{E}()+@{HEXRUN}(4),'
-    + '@{BOUND}="(?![0-9A-Za-z_])",@{LEAD}=@{E}(),'
-    + '@{ALTS}=@{U}.map((@{S3})=>{let @{E3}=@{S3}.map((@{G3},@{R3})=>(@{R3}===0?"":typeof @{G3}!=="string"'
-    + '?@{E}():@{S3}[@{R3}-1]===@{SPAN}?@{N}():@{C}())+(@{G3}===@{HEXID}?@{HEX}():@{G3}===@{SPAN}?@{LU}'
-    + ':@{WORD}(@{G3})+(@{S3}[@{R3}+1]===@{SPAN}?@{BOUND}:""))).join("");'
-    + 'return @{S3}.at(-1)===@{HEXID}?@{E3}:`${@{E3}}${@{BOUND}}`});'
-    + 'return new RegExp(`[${@{OPEN}}](?!\\\\\\\\)(?=${@{LEAD}}(?:${@{ALTS}.join("|")}))`,"giu")}'),
-  mu: compileShape(
-    'function @{MU}(@{MU_U}){let @{MU_D}=`[${@{W}}]*`,@{MU_E}="";for(let @{MU_A}=0;@{MU_A}<@{Q};@{MU_A}++)'
-    + '@{MU_E}=`(?:[${@{J}}]${@{MU_D}}${@{MU_E}})?`;return`(?=(${@{MU_D}}${@{MU_E}}))(?:\\\\${@{MU_U}})`}'),
-  run: compileShape('function @{PRE}(@{PRE_C},@{PRE_N}){return`(?=([${@{PRE_C}}]*))(?:\\\\${@{PRE_N}})`}'),
-};
-// Scopes, as [bindings, outer names the scope reads]: a binding must differ from the others in its
-// scope and from every outer name its scope reads. Otherwise the same tokens mean something else
-// (a builder local spelled like the whitespace class would shadow it).
-const LEAD_SCRUB_SCOPES = [
-  [['U', 'D', 'E', 'A', 'C', 'N', 'DIGITS', 'WORD', 'HEXRUN', 'HEX', 'BOUND', 'LEAD', 'ALTS'],
-    ['NO', 'MU', 'PRE', 'CTL', 'W', 'J', 'Y', 'Q', 'IPT', 'YV', 'SPAN', 'HEXID', 'LU', 'OPEN']],
-  [['S1'], ['A', 'YV']], [['E1', 'G1'], ['A', 'YV']],
-  [['S2'], ['A', 'DIGITS', 'IPT']], [['E2', 'G2'], ['A', 'DIGITS']],
-  [['S3', 'E3'], ['E', 'N', 'C', 'SPAN', 'HEXID', 'HEX', 'LU', 'WORD', 'BOUND']],
-  [['G3', 'R3'], ['S3', 'E', 'N', 'C', 'SPAN', 'HEXID', 'HEX', 'LU', 'WORD', 'BOUND']],
-  [['MU_U', 'MU_D', 'MU_E', 'MU_A'], ['W', 'J', 'Q']],
-  [['PRE_C', 'PRE_N'], []],
-];
-// The canary, from the builder's own words and symbols, not from the anchor's patterns. Measured
-// 2026-09-27 before the hooks run: one module in each carve from 2.1.278 on (darwin-arm64 .278/.280/
-// .281/.283; linux .278, .283 x64, x64-musl, arm64; win32 .283 x64, arm64), always the one the
-// anchor matches; none in .251, .252 or .257, and no binary before .278 holds the words at all.
-function leadScrubShape(body) {
-  return /bracketedLeadScrubPattern|Symbol\("LEAD_(?:SPAN|HEX_ID)"\)/.test(body);
-}
-
-// The builder's own error text, which LEAD_SCRUB_SHAPES.builder spells verbatim: a module without it
-// cannot match, so the three anchor scans run on one module per graph instead of every module
-// (about 2.0 s of 40 M characters under tjs, measured 2026-09-27, against under 0.1 s). The canary
-// is separate and still reads every module.
-const LEAD_SCRUB_WORDS = 'bracketedLeadScrubPattern: words are lowercase ASCII';
-
-function patchLeadScrubPossessive(body) {
-  if (!body.includes(LEAD_SCRUB_WORDS)) return [body, false];
-  const one = (re) => { const all = [...body.matchAll(re)]; return all.length === 1 ? all[0] : null; };
-  const builder = one(LEAD_SCRUB_SHAPES.builder);
-  const mu = builder && one(LEAD_SCRUB_SHAPES.mu);
-  const run = mu && one(LEAD_SCRUB_SHAPES.run);
-  if (!run) return [body, false];
-  const g = { ...mu.groups, ...run.groups };
-  for (const [k, v] of Object.entries(builder.groups)) if (k in g && g[k] !== v) return [body, false];
-  Object.assign(g, builder.groups);
-  for (const [bound, read] of LEAD_SCRUB_SCOPES) {
-    const names = bound.map((k) => g[k]);
-    if (new Set(names).size !== names.length || read.some((k) => names.includes(g[k]))) return [body, false];
-  }
-  // The two helpers the builder calls instead, at module level (so nothing in the builder can
-  // shadow the classes they read) under names no minifier emits. Built by concatenation: a
-  // minified name like `$1` is carried literally.
-  const helpers = 'function __clodeLeadRun(__c){return`[${__c}]*(?![${__c}])`}'
-    + 'function __clodeLeadMu(){let __r=`[${' + g.W + '}]*(?![${' + g.W + '}])`,__s="";'
-    + 'for(let __i=0;__i<' + g.Q + ';__i++)__s=`(?:[${' + g.J + '}]${__r}${__s}|(?![${' + g.J + '}]))`;'
-    + 'return __r+__s}';
-  const from = `${g.E}=()=>${g.MU}(++${g.D}),${g.A}=()=>${g.PRE}(\`\\\\r\\\\n\${${g.CTL}}\`,++${g.D}),`;
-  const to = `${g.E}=()=>__clodeLeadMu(),${g.A}=()=>__clodeLeadRun(\`\\\\r\\\\n\${${g.CTL}}\`),`;
-  const text = builder[0];
-  if (text.split(from).length !== 2) return [body, false];
-  return [body.slice(0, builder.index) + helpers + text.split(from).join(to)
-    + body.slice(builder.index + text.length), true];
-}
+// --- LEAD-SCRUB-POSSESSIVE: RETIRED 2026-11-21 ---------------------------------------------------
+// From 2.1.278 the artifact-lead scrub pattern (bracketedLeadScrubPattern) had more capture groups
+// than QuickJS allowed (559 at 2.1.283, 588 at 2.1.327; QuickJS stopped at 254), and this hook
+// rewrote its builder's atomic separators to a group-free possessive form. The ENGINE now accepts
+// native's limit, 32,768 groups (spike/quickjs/patches/quickjs-ng-regexp-capture-u16.patch,
+// test/engine-regexp-captures.test.cjs), so quaude builds upstream's own pattern text and no
+// rewrite is needed: matching upstream by default. The hook's anchor had also stopped matching
+// at 2.1.327, when upstream added a LEAD_OPEN_END token to the builder; it never covered the
+// builder's siblings (the h6() harness-tag patterns, 251 and 229 groups at 2.1.283), which the
+// engine fix covers too. test/fidelity/regexp-capture-census.test.cjs counts every pattern a real
+// turn builds against the engine's limit.
 
 // if-present hooks: the structure that says the hook's subject IS present, and what an absent
 // subject means. A present subject the anchor missed is reported as a dead hook, never benign.
@@ -1212,10 +1077,6 @@ const IF_PRESENT_SHAPES = {
     'a module builds a built-in plugin folder descriptor, but the anchor did not match its '
       + 'decision: upstream changed it',
     'this provider has no built-in plugin hooks modules (2.1.251 had none)'],
-  lead_scrub_possessive: [leadScrubShape,
-    'a module builds the artifact-lead scrub pattern (bracketedLeadScrubPattern), but the anchor '
-      + 'did not match its builder and both helpers: upstream changed them',
-    'this provider has no artifact-lead scrub pattern (pre-2.1.278)'],
 };
 
 const GRAPH_HOOKS = [
@@ -1234,7 +1095,6 @@ const GRAPH_HOOKS = [
   // filesystem (everything up to 2.1.250), so it must not warn; two or more still fails loud.
   ['embedded_asset_reader', patchEmbeddedAssetReader, 'if-present'],
   ['builtin_plugin_bundled', patchBuiltinPluginBundled, 'if-present'],
-  ['lead_scrub_possessive', patchLeadScrubPossessive, 'if-present'],
 ];
 
 function transformGraph(sources) {
@@ -2008,8 +1868,6 @@ module.exports = {
   contentChecks,
   patchEmbeddedAssetReader,
   patchBuiltinPluginBundled,
-  patchLeadScrubPossessive,
-  LEAD_SCRUB_SHAPES,
   graphReferences,
   unservedReferences,
   assertGraphServesWhatItReferences,
