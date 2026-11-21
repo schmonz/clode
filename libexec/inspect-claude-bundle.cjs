@@ -182,6 +182,45 @@ const KNOWN_BUN_ANT = new Map([
     + 'nothing else changes. txiki.js has no prctl binding at all (grepped: zero hits), '
     + 'so there is nothing to implement it with short of a new C primitive. '
     + 'THIS MEMBER DOES NOT EXIST IN THE DARWIN OR WIN32 CARVES -- see the union note above.'],
+  // The ten below were reviewed at the 2.1.330 pin. Each is quoted from its call
+  // sites; every one is behind a typeof/undefined gate or a try/catch, so absence
+  // takes an existing, reported fallback.
+  ['loginTty', 'MEASURED on the darwin-arm64 2.1.330 carve (2026-11-21), not inferred: one call site, the background-session '
+    + 'controlling-tty step: `try{e=Bun.ant.loginTty(0)}catch(o){return __m12_t("[bg-ctty] Bun.ant.loginTty '
+    + 'unavailable: ...") ,"ffi_unavailable"}`. Absence is the "ffi_unavailable" outcome, logged: no '
+    + 'controlling tty is acquired for a backgrounded session; Windows takes "unsupported" before it.'],
+  ['posixFsAt', 'MEASURED on the darwin-arm64 2.1.330 carve (2026-11-21), not inferred: read only as `globalThis.Bun?.ant?.posixFsAt` '
+    + 'with `typeof e?.openat==="function"?e:null`; null warns once ("anchor: this runtime has no '
+    + 'Bun.ant.posixFsAt, so the macOS backend cannot come up") and the held-directory file backend answers '
+    + '{unavailable:"no_ffi"}, the same shape Linux answers without /proc ({unavailable:"no_procfs"}), '
+    + 'which its callers already branch on. An openat family is a new C primitive; not now.'],
+  ['stringifyToBytes', 'MEASURED on the darwin-arm64 2.1.330 carve (2026-11-21), not inferred: one call site, the request-body fast '
+    + 'path: `let r=Bun.ant?.stringifyToBytes,g=Bun.ant?.stringifyToBytesFallbacks;...if(r===void 0||g===void '
+    + '0||...)return;`. Absent, the function returns undefined and the body is serialised as it always was '
+    + '(JSON.stringify); upstream itself switches the fast path off when its bytes differ.'],
+  ['stringifyToBytesFallbacks', 'the counter read beside stringifyToBytes, at the same one call site and '
+    + 'under the same `===void 0` gate; see stringifyToBytes.'],
+  ['ttyName', 'MEASURED on the darwin-arm64 2.1.330 carve (2026-11-21), not inferred: one call site, '
+    + '`function I(e){try{return Bun.ant.ttyName(e)??void 0}catch{return}}`, a datapoint for the '
+    + 'non-blocking-stdout telemetry. Absent: undefined, nothing else.'],
+  ['withThreadWorkingDirectory', 'MEASURED on the darwin-arm64 2.1.330 carve (2026-11-21), not inferred: Grep/Glob on macOS start '
+    + 'ripgrep inside an OPEN directory with it, gated on `typeof Bun.ant?.withThreadWorkingDirectory==="function"`; '
+    + 'absent, upstream warns once ("this runtime lacks Bun.ant.withThreadWorkingDirectory, so ripgrep starts at '
+    + 'the search directory path, re-checked just before it starts") and spawns with the path as cwd, the '
+    + 'held-directory branch never taken (the "cannot start ripgrep inside an open directory" error is inside '
+    + 'that branch only). A per-thread cwd needs a C primitive; quaude keeps the path-and-recheck branch.'],
+  ['windowsFolderSecurity', 'MEASURED on the darwin-arm64 2.1.330 carve (2026-11-21), not inferred: `if(x()!=="windows")return null` '
+    + 'comes first, then `Bun.ant?.windowsFolderSecurity` with `if(e===void 0)` warning and answering null; the '
+    + 'sandbox-ACL step then reports "ffi_unavailable". Windows-only, and gated.'],
+  ['windowsProcessCreationTime', 'MEASURED on the darwin-arm64 2.1.330 carve (2026-11-21), not inferred: `try{return '
+    + 'Bun.ant.windowsProcessCreationTime(e)??void 0}catch{return}`; callers treat undefined as "unknown" (the '
+    + 'process-tree walk keeps a child whose time is unknown). Windows-only data.'],
+  ['windowsProcessList', 'MEASURED on the darwin-arm64 2.1.330 carve (2026-11-21), not inferred: both call sites open with '
+    + '`if(typeof Bun>"u"||typeof Bun.ant?.windowsProcessList!=="function")return;`, so the process-tree walk falls '
+    + 'back to its PowerShell query (`ip(k)??await sp(k,...)`). Windows-only.'],
+  ['windowsSandboxDeniesArg', 'MEASURED on the darwin-arm64 2.1.330 carve (2026-11-21), not inferred: `x()==="windows"&&typeof '
+    + 'Bun<"u"?Bun.ant?.windowsSandboxDeniesArg?.():void 0`, then `if(typeof e!=="string")return;`: no denies '
+    + 'helper is built. Windows-only, and gated.'],
 ]);
 
 // Every Bun.ant.<member> the bundle references, deduplicated, in source order of

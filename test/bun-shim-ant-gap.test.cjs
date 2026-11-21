@@ -12,8 +12,12 @@
 //
 // 2.1.278 added a member whose absence is NOT survivable, CellSegmenter (the
 // TUI's screen model; see test/bun-shim-cell-segmenter.test.cjs), so Bun.ant now
-// EXISTS with exactly that one member. The first test pins the membership
-// exactly: a second member is a failure here, not a quiet capability change.
+// EXISTS. 2.1.330 added a second unsurvivable one, isVmContextGlobal: its sandbox
+// builder refuses to make a node:vm context unless `Bun.ant.isVmContextGlobal(g)
+// === true`, which killed every Workflow (test/bun-shim-vm-context-global.test.cjs).
+// It is pure-JS bookkeeping of the contexts the shim's vm made, not a stub of a
+// syscall. The first test pins the membership exactly: a third member is a failure
+// here, not a quiet capability change.
 //
 // The reason it is acceptable to leave absent is REACHABILITY, and reachability
 // is a fact about OTHER code that can change without anyone thinking about
@@ -40,7 +44,14 @@ function writeProg(body) {
   return f;
 }
 
-test('Bun.ant carries CellSegmenter and NOTHING else, so every capability probe reads false', (t) => {
+// Members upstream feature-detects (typeof / === undefined) whose absence takes a reported fallback; a stub would
+// switch the fallback off and claim a capability the shim lacks. Each is reviewed in
+// libexec/inspect-claude-bundle.cjs KNOWN_BUN_ANT with its call site.
+const MUST_STAY_ABSENT = ['getPeerUid', 'getPeerPid', 'setDumpable', 'memoryPressureLevel', 'waitForUrlEvent',
+  'loginTty', 'posixFsAt', 'stringifyToBytes', 'stringifyToBytesFallbacks', 'ttyName', 'withThreadWorkingDirectory',
+  'windowsFolderSecurity', 'windowsProcessCreationTime', 'windowsProcessList', 'windowsSandboxDeniesArg'];
+
+test('Bun.ant carries CellSegmenter and isVmContextGlobal and NOTHING else, so every capability probe reads false', (t) => {
   if (skipUnlessTjs(t)) return;
   const f = writeProg(`
     console.log('members:' + JSON.stringify(Object.keys(Bun.ant).sort()));
@@ -49,14 +60,14 @@ test('Bun.ant carries CellSegmenter and NOTHING else, so every capability probe 
     //   function D9(){ if(P()==="windows")return!1;
     //     return typeof Bun<"u" && typeof Bun.ant?.getPeerPid==="function" }
     console.log('probe:' + (typeof Bun < "u" && typeof Bun.ant?.getPeerPid === "function"));
-    for (const k of ['getPeerUid', 'getPeerPid', 'setDumpable', 'memoryPressureLevel', 'waitForUrlEvent'])
+    for (const k of ${JSON.stringify(MUST_STAY_ABSENT)})
       console.log(k + ':' + typeof Bun.ant[k]);
   `);
   const r = runLoader(f);
   assert.strictEqual(r.status, 0, r.stderr);
-  assert.match(r.stdout, /members:\["CellSegmenter"\]/,
-    'Bun.ant must hold exactly CellSegmenter: any other member is a stub of a syscall-backed'
-    + ' method, and upstream feature-detects those');
+  assert.match(r.stdout, /members:\["CellSegmenter","isVmContextGlobal"\]/,
+    'Bun.ant must hold exactly CellSegmenter and isVmContextGlobal: any other member is a stub of a'
+    + ' syscall-backed method, and upstream feature-detects those');
   assert.match(r.stdout, /segmenter:function/);
   // inspect-claude-bundle derives "what bun-shim provides" from bun-shim's SOURCE TEXT
   // (it must not require() the shim). That derivation is only trustworthy if it agrees
@@ -67,7 +78,7 @@ test('Bun.ant carries CellSegmenter and NOTHING else, so every capability probe 
     'shimBunAntMembers() (text-derived) disagrees with Object.keys(Bun.ant) at runtime');
   assert.match(r.stdout, /probe:false/,
     'upstream\'s peer-credential capability probe must evaluate false under the shim');
-  for (const k of ['getPeerUid', 'getPeerPid', 'setDumpable', 'memoryPressureLevel', 'waitForUrlEvent']) {
+  for (const k of MUST_STAY_ABSENT) {
     assert.match(r.stdout, new RegExp(`${k}:undefined`), `Bun.ant.${k} must stay absent`);
   }
 });
