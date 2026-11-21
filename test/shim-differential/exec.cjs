@@ -174,7 +174,10 @@ async function post(kind, r, ctx, args) {
     const end = await new Promise((res) => {
       r.on('error', (e) => res(errShape(e)));
       r.write('written\n');
-      r.end(() => res('finish'));
+      // end's callback gets the error too (node calls it with the stream's error): taking it as 'finish' made the
+      // answer depend on whether 'error' or the callback ran first, which load decides (an fd opened read-only:
+      // node said "finish" alone and EBADF in the suite, 2026-11-21). Both now give the error's shape.
+      r.end((e) => res(e ? errShape(e) : 'finish'));
     });
     return { end };
   }
