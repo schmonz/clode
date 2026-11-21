@@ -124,6 +124,18 @@ const ENGINE_API_FLOOR = [
       + 'CLODE_ENGINE_FLOOR_LOG, so the gates listed above refuse a build path that ever reaches it',
   },
   {
+    // Without it node-shim's os.machine() can only guess from process.arch ("x64" where node says "x86_64").
+    name: '__tjs_uname',
+    expr: 'globalThis.__tjs_uname',
+    kind: 'function',
+    from: 'txiki-uname-global.patch',
+    why: 'node-shim os.machine(): uname\'s machine, as node answers it (libuv uv_os_uname)',
+    buildHost: false,
+    notForBuildHost: 'nothing the build runs calls os.machine(): no caller in scripts/, libexec/ (outside node-shim\'s '
+      + 'os.cjs) or build.sh. On an engine without it node-shim REFUSES the call (ERR_CLODE_ENGINE_FLOOR) and appends '
+      + 'it to CLODE_ENGINE_FLOOR_LOG, so the gates listed above refuse a build path that ever reaches it',
+  },
+  {
     // Without it node-shim's Timeout#unref STOPS the timer (the old route), so an unref'd timer never fires while
     // the loop stays alive: the TUI's nonblocking stdout then holds a turn's answer until the next keystroke.
     name: '__tjs_timer_setref',

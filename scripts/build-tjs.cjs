@@ -507,6 +507,7 @@ const TXIKI_PATCH_ORDER = [
   'txiki-timer-ref-global.patch',             // globalThis.__tjs_timer_setref(id, ref): timer-unref's id-keyed uv_ref/uv_unref where the node-shim can reach it, so an unref'd timer still FIRES while the loop is alive (node-shim loader.cjs, TIMER-UNREF-STILL-FIRES). timers.c's init function, beside timer-unref's table: after timer-unref
   'txiki-ws-close-frame.patch',
   'txiki-ca-bundle-global.patch',             // globalThis.__tjs_set_ca_bundle_path(path): core.setCABundlePath where a standalone binary can reach it, for NODE_EXTRA_CA_CERTS (quaude-bootstrap.mjs applyExtraCaCerts). vm.c only; order-independent
+  'txiki-uname-global.patch',                 // globalThis.__tjs_uname(): libuv's uv_os_uname for node-shim's os.machine() (node says "x86_64" where process.arch says "x64"). vm.c, beside ca-bundle-global's globals: after it
   'txiki-engine-module-meta.patch',          // PROBE: engine.moduleMeta(mod) — requires/exports/top-level locals, read-only               // ws.close() sends an RFC6455 CLOSE frame (opcode 0x8) instead of just dropping the TCP connection: lws only emits one via close_via_role_protocol, which the old PENDING_TIMEOUT_USER_OK path skipped (ws.c; after ws-root-path, same file)
 ];
 

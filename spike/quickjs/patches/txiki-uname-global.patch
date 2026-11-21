@@ -1,0 +1,51 @@
+# UNAME-GLOBAL: __tjs_uname() -> { sysname, release, version, machine }, libuv's uv_os_uname, where node-shim can reach it.
+#
+# WHY. node's os.machine() is uname's machine ("x86_64" on x86_64 Linux, "arm64" on Apple silicon), and 2.1.330
+# calls it. txiki has uv_os_uname as core.uname on tjs:internal/core, which only the engine's own tjs: modules may
+# import; navigator.platform folds it into a browser string ("MacIntel" on any Mac). So node-shim answered
+# process.arch, and the node-shim differential on linux-x64-musl read node "x86_64", quaude "x64" (2026-11-21). A
+# table from arch to machine would be a hand-written platform table; the engine reports it instead.
+# os.release() and os.version() read the same struct; node-shim still answers '' for them (BACKLOG).
+# vm.c only, beside ca-bundle-global's globals, so after it (TXIKI_PATCH_ORDER, last).
+#
+diff --git a/src/vm.c b/src/vm.c
+--- a/src/vm.c
++++ b/src/vm.c
+@@ -245,6 +245,25 @@
+         snprintf(why, sizeof(why), "expected one certificate, found %d", n);
+     }
+     return JS_NewString(ctx, why);
++}
++
++/* CLODE: __tjs_uname() -> { sysname, release, version, machine }, libuv's uv_os_uname, which node's os.machine(),
++ * os.release() and os.version() read. txiki has it as core.uname on tjs:internal/core, which only the engine's own
++ * modules may import (navigator.platform folds machine into a browser string), so node-shim could not answer
++ * os.machine() honestly: it said process.arch, "x64" on x86_64 Linux where node says "x86_64". */
++static JSValue tjs__uname_global(JSContext *ctx, JSValue this_val, int argc, JSValue *argv) {
++    uv_utsname_t u;
++    int r = uv_os_uname(&u);
++    if (r != 0) {
++        return tjs_throw_errno(ctx, r);
++    }
++
++    JSValue obj = JS_NewObjectProto(ctx, JS_NULL);
++    JS_DefinePropertyValueStr(ctx, obj, "sysname", JS_NewString(ctx, u.sysname), JS_PROP_C_W_E);
++    JS_DefinePropertyValueStr(ctx, obj, "release", JS_NewString(ctx, u.release), JS_PROP_C_W_E);
++    JS_DefinePropertyValueStr(ctx, obj, "version", JS_NewString(ctx, u.version), JS_PROP_C_W_E);
++    JS_DefinePropertyValueStr(ctx, obj, "machine", JS_NewString(ctx, u.machine), JS_PROP_C_W_E);
++    return obj;
+ }
+ 
+ static JSValue tjs__js_drain_microtasks(JSContext *ctx, JSValue this_val, int argc, JSValue *argv) {
+@@ -400,6 +419,11 @@
+                                   "__tjs_x509_parse_error",
+                                   JS_NewCFunction(ctx, tjs__x509_parse_error_global, "__tjs_x509_parse_error", 1),
+                                   JS_PROP_C_W_E);
++        JS_DefinePropertyValueStr(ctx,
++                                  global,
++                                  "__tjs_uname",
++                                  JS_NewCFunction(ctx, tjs__uname_global, "__tjs_uname", 0),
++                                  JS_PROP_C_W_E);
+         JS_FreeValue(ctx, global);
+     }
+     JS_DefinePropertyValueStr(ctx,

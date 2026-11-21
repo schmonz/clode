@@ -106,7 +106,20 @@ module.exports = {
   // arm64/x64 are little-endian; process.arch is now leg-scoped (arm64 on
   // most legs, x64 on win32 — see process.cjs), and both are LE.
   endianness: () => 'LE',
-  machine: () => process.arch,
+  // os.machine(): uname's machine, as node answers it ("x86_64" on x86_64 Linux, "arm64" on Apple silicon), from the
+  // engine's __tjs_uname (txiki-uname-global.patch). It was process.arch, which is not the same string ("x64"): the
+  // node-shim differential on linux-x64-musl read node "x86_64", quaude "x64" (2026-11-21). An engine without it is
+  // REFUSED by name, never answered from a guessed arch-to-machine table (scripts/engine-api-floor.cjs).
+  machine: () => {
+    if (typeof globalThis.__tjs_uname !== 'function') {
+      const e = new Error('node-shim: this engine has no __tjs_uname (it predates txiki-uname-global.patch), so '
+        + 'os.machine() cannot answer uname\'s machine; rebuild it: ./build.sh --only engine.compile');
+      e.code = 'ERR_CLODE_ENGINE_FLOOR';
+      require('../internal/engine-floor-log.cjs').engineFloorLog(e.message);
+      throw e;
+    }
+    return globalThis.__tjs_uname().machine;
+  },
   // Memory figures: tjs exposes no free/total memory API. DIVERGENCE: return 0 so
   // callers that only read `.length`/compare-to-0 don't crash; a path needing real
   // memory sizing is a future wall.
