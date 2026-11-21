@@ -93,3 +93,39 @@ test('crypto.randomInt matches node on bounds, both call shapes, and error class
   assert.strictEqual(r.status, 0, r.stderr);
   assert.strictEqual(r.stdout.trim(), nodeOut);
 });
+
+// hash.copy(), as 2.1.330's requestDigest uses it: hash a shared prefix once, copy() it per continuation, and
+// each copy goes its own way without disturbing the original. Missing, every request logged "TypeError: not a
+// function at t8t" (requestDigest) on the Windows agentic legs and recorded no digest. Also: data mutated after
+// update() does not change the hash (node hashes what it was given), and copy() after digest() throws
+// ERR_CRYPTO_HASH_FINALIZED.
+const COPY_PROG = `
+const crypto = require('node:crypto');
+const out = [];
+const h = crypto.createHash('sha256').update('{"messages":[');
+const a = h.copy().update('1]}');
+const b = h.copy();
+b.update('2'); b.update(']}');
+out.push(a.digest('hex'), b.digest('hex'));
+const c = h.copy();
+out.push(h.update('3]}').digest('hex'), c.update('3]}').digest('hex'));
+const buf = Buffer.from('abc');
+const m = crypto.createHash('sha256').update(buf);
+buf[0] = 0x7a;
+out.push(m.digest('hex'));
+try { h.copy(); out.push('no throw'); } catch (e) { out.push(e.code); }
+console.log(JSON.stringify(out));
+`;
+
+test('crypto Hash.copy() forks the running state exactly as node does', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-crypto-copy-'));
+  const f = path.join(dir, 'prog.cjs');
+  fs.writeFileSync(f, COPY_PROG);
+  const nodeOut = require('node:child_process')
+    .execFileSync(process.execPath, [f], { encoding: 'utf8' }).trim();
+  assert.match(nodeOut, /ERR_CRYPTO_HASH_FINALIZED/, 'the host node oracle answered as expected');
+  const r = runLoader(f);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.strictEqual(r.stdout.trim(), nodeOut);
+});

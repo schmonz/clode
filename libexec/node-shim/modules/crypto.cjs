@@ -27,10 +27,23 @@ function encodeDigest(d, enc) {
 function createHash(alg) {
   const a = String(alg).toLowerCase();
   if (a !== 'sha256') throw new Error(`node-shim: crypto.createHash('${alg}') not implemented (only sha256)`);
-  const chunks = [];
+  return sha256Hash([]);
+}
+
+// hash.copy(): a new Hash with this one's state so far, which then goes its own way. 2.1.330's request
+// digest (requestDigest) hashes a shared message prefix once and copy()s it for each continuation; without
+// copy() every request logged "TypeError: not a function" and recorded no digest. Like node, copying a hash
+// that has already been digested throws ERR_CRYPTO_HASH_FINALIZED.
+function sha256Hash(chunks) {
+  let finalized = false;
   return {
-    update(data, enc) { chunks.push(toBytes(data, enc)); return this; },
+    update(data, enc) { chunks.push(toBytes(data, enc).slice()); return this; },
+    copy() {
+      if (finalized) throw Object.assign(new Error('Digest already called'), { code: 'ERR_CRYPTO_HASH_FINALIZED' });
+      return sha256Hash(chunks.slice());
+    },
     digest(enc) {
+      finalized = true;
       const total = chunks.reduce((n, c) => n + c.length, 0);
       const all = new Uint8Array(total);
       let o = 0; for (const c of chunks) { all.set(c, o); o += c.length; }
