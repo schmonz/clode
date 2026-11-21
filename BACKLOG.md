@@ -218,9 +218,14 @@ Bun.SHA256/gzipSync. STILL RED, beyond 1 and 2 above, by gate:
 10. **shim-surface**: golden.json was measured on 2.1.283; re-measure with UPDATE_GOLDEN=1 on 2.1.330 and review.
 11. **paint-probe-damage-packing BROKEN**: 0 damage-decode sites in the 2.1.330 carve; re-derive the anchor.
 12. **Workflow under quaude** (agentic-workflow-complete): no wf_<id>.json, even with main's job-realm engine fix.
-13. **sandboxed Bash fails closed** (one row differs), **/status in -p** (naude says "/status isn't available in
-    this environment.", quaude prints nothing), and **WebFetch over TLS 1.2 rsa_pss_rsae_sha256** (quaude:
-    "X509 - Certificate verification failed").
+13. FIXED since: WebFetch over TLS 1.2 (tls.createSecureContext, 4ae7fc5), Workflow (Bun.ant.isVmContextGlobal,
+    3b2100f), /status in -p (a load timeout read as an empty answer, ac28804). Sandboxed Bash: RULING NEEDED, the
+    entry above.
+14. **quaude -p is slow and two node APIs it reaches are missing** (seen in /status's --debug log, 2026-11-21):
+    `-p /status` takes 23-48 s wall, ~12 s user CPU, where naude takes ~10 s; 1P telemetry export fails every session
+    on zlib.gzipSync (node-shim has no gzip; Bun.gzipSync refuses with it); the event-loop-stall detector logs
+    "process.resourceUsage() failed: not a function". crypto.X509Certificate is absent too (2.1.330 reads it in 11
+    modules, its CA-trust builder inside try/catch).
 
 Measured: CLODE_PROVIDER_BIN=<2.1.330 darwin-arm64 and linux-x64 from npm pack> CLODE_TJS=<engine with
 quickjs-ng-regexp-capture-u16.patch> node --test test/node-shim-differential.test.cjs (VIOLATION, 2092 calls
