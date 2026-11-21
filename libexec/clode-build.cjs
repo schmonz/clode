@@ -522,6 +522,15 @@ const KNOWN_UNREACHABLE = {
   // own process executes (a package cannot resolve its own name as a dependency of
   // itself). Same doc/guidance-text shape as every other entry in this block.
   'claude-code': 'guidance TEXT (a `.d.ts`-generation help string) telling a developer to `import type {...} from "claude-code"` in their OWN generated TypeScript file — quoting the package\'s own name back at the reader, never a require()/import() cli.cjs itself executes',
+  // 2.1.330 (2026-11-21), all three inside string literals, traced by module:
+  // /$bunfs/root/chunk-6vxdmxtw.js holds a JXA (JavaScript for Automation) script as a template literal
+  // (`var Yr=\`ObjC.import('Cocoa');ObjC.import('CoreGraphics');ObjC.bindFunction('CGWindowListCopyWindowInfo',...`)
+  // that the computer-use feature hands to osascript: ObjC.import names macOS frameworks to the JXA bridge, in
+  // another process. /$bunfs/root/chunk-mk44m07h.js is vendored TypeScript's diagnostic table, whose message 1202
+  // reads "Consider using 'import * as ns from \"mod\"'": an example module name in an error string.
+  Cocoa: "a macOS framework named by `ObjC.import('Cocoa')` inside a JXA script TEMPLATE LITERAL the computer-use feature passes to osascript; JXA's bridge, another process, never a require()/import() cli.cjs runs",
+  CoreGraphics: "same JXA script TEMPLATE LITERAL as Cocoa above (`ObjC.import('CoreGraphics')`, for CGWindowListCopyWindowInfo)",
+  mod: "an example module name inside vendored TypeScript's diagnostic 1202 STRING (\"Consider using 'import * as ns from \\\"mod\\\"'...\"); message text, never a require()/import() cli.cjs runs",
 };
 
 // THE GATE: every bare package specifier `files` reference must be explained —
