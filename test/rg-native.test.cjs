@@ -1864,3 +1864,21 @@ test('a refusal survives the consumer\'s --no-messages retry, byte for byte, sti
     }
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+// 2.1.330's environment listing passes --line-buffered (rg-carve-argv-answered refused it as an unknown flag): it says
+// when rg flushes, never what it prints, so a listing answers the same bytes with it, without it, and block-buffered.
+test('--line-buffered and --block-buffered change nothing quaude\'s rg prints', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-linebuf-'));
+  try {
+    fs.writeFileSync(path.join(dir, 'a.txt'), 'hello\n');
+    fs.mkdirSync(path.join(dir, 'sub'));
+    fs.writeFileSync(path.join(dir, 'sub', 'b.txt'), 'x\n');
+    const base = rgn.runRg(['--files', '--hidden', '--no-config', '--max-depth', '4', '.'], { cwd: dir });
+    assert.strictEqual(base.status, 0, String(base.stderr));
+    for (const flag of ['--line-buffered', '--block-buffered']) {
+      const r = rgn.runRg(['--files', '--hidden', '--no-config', flag, '--max-depth', '4', '.'], { cwd: dir });
+      assert.strictEqual(r.status, 0, `${flag}: ${r.stderr}`);
+      assert.strictEqual(String(r.stdout), String(base.stdout), flag);
+    }
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});

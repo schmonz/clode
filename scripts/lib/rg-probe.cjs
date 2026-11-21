@@ -382,7 +382,8 @@ function enclosingFunction(t, at) {
 }
 function carveRunners(t) {
   const runners = new Map();   // name -> where defined
-  for (const m of t.matchAll(new RegExp(`function (${ID})\\([^)]*\\)\\{let\\{rgPath:${ID},rgArgs:${ID},argv0:${ID}\\}=${ID}\\(\\)`, 'g'))) runners.set(m[1], m.index);
+  // 2.1.330 opens each runner with one argument-less call first (`function Be(...){iC();let{rgPath:...`)
+  for (const m of t.matchAll(new RegExp(`function (${ID})\\([^)]*\\)\\{(?:${ID}\\(\\);)?let\\{rgPath:${ID},rgArgs:${ID},argv0:${ID}\\}=${ID}\\(\\)`, 'g'))) runners.set(m[1], m.index);
   for (const m of t.matchAll(new RegExp(`function (${ID})\\(${ID},[^)]*${ID}=\\{command:"rg"\\}\\)\\{let\\{command:`, 'g'))) runners.set(m[1], m.index);
   // wrappers, to a fixpoint: a function that passes its own first parameter to a runner, near that runner
   for (let grew = true; grew;) {
@@ -539,6 +540,9 @@ const RG_RESOLUTION_NON_RUNNERS = [
     re: `\\{rgPath:${ID},rgArgs:${ID}\\}=${ID}\\(\\),${ID}=(?:await )?${ID}\\.checkDependencies(?:Async)?\\(\\{command:${ID},args:${ID}\\}\\)` },
   { name: 'the shell snapshot\'s rg (aAn)', why: 'writes the Bash tool\'s `alias rg=<rgPath>` into the snapshot (bun-shim\'s rewriteSnapshot answers `rg` there); it runs nothing',
     re: `if\\(${ID}\\.argv0\\)return\\{type:"function",snippet:${ID}\\("rg",${ID}\\.argv0\\)\\};let ${ID}=${ID}\\(\\[${ID}\\.rgPath\\]\\)` },
+  // 2.1.330: three Windows-only branches (behind tengu_* flags) ask whether the resolution is the EMBEDDED rg
+  { name: 'the Windows embedded-mode tests (2.1.330)', why: 'reads the accessor\'s mode on Windows to pick an in-process path; it runs nothing',
+    re: `${ID}\\(\\)==="windows"&&(?:(?:!${ID}\\(\\)|${ID}\\("tengu_\\w+",!0\\)!==!1)&&){0,2}${ID}\\(\\)\\.mode==="embedded"` },
   { name: 'the ENOENT advice (YE)', why: 'reads the accessor\'s mode to word a spawn\'s ENOENT; it runs nothing',
     re: `if\\(${ID}\\.code==="ENOENT"&&${ID}\\(\\)\\.mode==="system"\\)` },
   { name: 'the status (uTo)', why: 'reports {mode,path,working} for /doctor; it runs nothing',
@@ -589,7 +593,7 @@ const around = (t, i) => JSON.stringify(t.slice(Math.max(0, i - 60), i + 60));
 function rgResolutionReferences(text) {
   const t = String(text), runners = carveRunners(t), chunks = carveChunks(t);
   const spans = [];
-  for (const m of t.matchAll(new RegExp(`function (${ID})\\([^)]*\\)\\{let\\{rgPath:${ID},rgArgs:${ID},argv0:${ID}\\}=${ID}\\(\\)`, 'g'))) {
+  for (const m of t.matchAll(new RegExp(`function (${ID})\\([^)]*\\)\\{(?:${ID}\\(\\);)?let\\{rgPath:${ID},rgArgs:${ID},argv0:${ID}\\}=${ID}\\(\\)`, 'g'))) {
     if (runners.has(m[1])) spans.push({ start: m.index, end: m.index + m[0].length, cls: `the runner ${m[1]}` });
   }
   let accessor = null;
@@ -615,6 +619,15 @@ function rgResolutionReferences(text) {
   }
   return refs.sort((a, b) => a.at - b.at);
 }
+// `NAME([X,...FIRST],` where FIRST is the enclosing runner's own first parameter and X is bound, nearest before the
+// call, to a string literal that is a flag: that flag, or null.
+function prependedFlag(t, i, local, f) {
+  const esc = (n) => n.replace(/\$/g, '\\$');
+  const m = new RegExp(`^${esc(local)}\\(\\[(${ID}),\\.\\.\\.${esc(f.first)}\\],`).exec(t.slice(i, i + 200));
+  if (!m) return null;
+  const defs = [...t.slice(Math.max(0, i - 20000), i).matchAll(new RegExp(`(?<![\\w$.])${esc(m[1])}="(-[\\w-]+)"`, 'g'))];
+  return defs.length ? defs[defs.length - 1][1] : null;
+}
 // Every call of a found runner: [{ at, runner, kind }], kind 'shape' | 'forward' | null.
 function rgRunnerCalls(text) {
   const t = String(text), runners = carveRunners(t), chunks = carveChunks(t);
@@ -626,6 +639,10 @@ function rgRunnerCalls(text) {
         if (!kind) {
           const f = enclosingFunction(t, i);
           if (f && f.first && runners.has(f.name) && t.startsWith(`${local}(${f.first},`, i)) kind = `forward (${f.name} hands its argv on)`;
+          // 2.1.330's usage-error retry: the runner calls itself with its own argv and one flag literal first
+          // (`rre([De,...e],n,r,o)`, De="--no-messages"); read as that runner's argv with the flag prepended
+          const pre = f && f.first && runners.has(f.name) ? prependedFlag(t, i, local, f) : null;
+          if (!kind && pre) kind = `forward with ${pre} first (${f.name} retries its argv)`;
         }
         calls.push({ at: i, runner: name, local, kind, context: around(t, i) });
       }

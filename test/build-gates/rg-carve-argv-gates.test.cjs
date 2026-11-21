@@ -264,3 +264,26 @@ test('runner calls are scoped to the runner\'s chunk and the chunks importing it
   assert.ok(tw.includes('import.meta.url = "file:///B:/~BUN/root/chunk-b.js"') && tw.includes('from"B:/~BUN/root/chunk-a.js"'));
   assert.deepStrictEqual(P.rgRunnerCalls(tw).map((c) => [c.local, c.kind]), calls.map((c) => [c.local, c.kind]));
 });
+
+// 2.1.330's spellings, from its darwin-arm64 binary (heads verbatim; bodies cut to what the scan reads): each runner
+// opens with an argument-less call (`iC();`) before it destructures the resolution; Windows-only branches ask
+// whether the resolution is the embedded rg; the usage-error retry hands the runner its own argv with
+// `--no-messages` (bound to `De`) first.
+const SNIPPETS_2_1_330 = 'function nre(){let e=gsn();return{rgPath:e.command,rgArgs:e.args,argv0:e.argv0}}'
+  + ';var De="--no-messages";function Be(e,n,r,o,c=!1,d,u,R,E=!1,l){iC();let{rgPath:h,rgArgs:v,argv0:p}=nre(),f=d}'
+  + ';async function rre(e,n,r,o){let c=x()==="windows"&&gsn().mode==="embedded"&&b("tengu_toasty_robin",!0)!==!1;'
+  + 'Be(e,n,r,o);return new Promise((d,u)=>{if(e[0]!==De){d(rre([De,...e],n,r,o));return}})}'
+  + ';async function Ve(){if(x()==="windows"&&b("tengu_kind_barto",!0)!==!1&&gsn().mode==="embedded")return;'
+  + 'let f=await rre(["--files","--hidden"],".",s)}';
+test('2.1.330: a runner that opens with a call, the Windows embedded-mode tests and the --no-messages retry are all accounted', () => {
+  assert.deepStrictEqual([...P.carveRunners(SNIPPETS_2_1_330).keys()].sort(), ['Be', 'rre']);
+  const refs = P.rgResolutionReferences(SNIPPETS_2_1_330);
+  assert.deepStrictEqual(refs.filter((r) => r.cls === null).map((r) => r.context), [], 'every reference classified');
+  assert.deepStrictEqual(refs.map((r) => r.cls).sort(), ['the Windows embedded-mode tests (2.1.330)', 'the Windows embedded-mode tests (2.1.330)',
+    'the resolution (Q4)', 'the resolution (Q4)', 'the runner Be']);
+  const kinds = P.rgRunnerCalls(SNIPPETS_2_1_330).map((c) => `${c.local}:${c.kind}`).sort();
+  assert.deepStrictEqual(kinds, ['Be:forward (rre hands its argv on)', 'rre:forward with --no-messages first (rre retries its argv)', 'rre:shape']);
+  // a retry whose prepended name is not bound to a flag literal is NOT read as one
+  const unbound = SNIPPETS_2_1_330.replace('var De="--no-messages";', '');
+  assert.ok(P.rgRunnerCalls(unbound).some((c) => c.local === 'rre' && c.kind === null));
+});

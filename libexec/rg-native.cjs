@@ -887,6 +887,9 @@ const LONG_BOOL = {
   // to a pipe anyway (as quaude's rg always prints)
   '--no-messages': (s) => { s.noMessages = true; }, '--messages': (s) => { s.noMessages = false; },
   '--no-heading': () => {},
+  // RG-LINE-BUFFERED (2.1.330's environment listing passes --line-buffered): when rg flushes its output, never what it
+  // prints; quaude's rg hands each answer on whole, so both buffering modes print the same bytes
+  '--line-buffered': () => {}, '--block-buffered': () => {},
   // RG-CONFIG (rg-entry.cjs): quaude's rg reads no config file, so --no-config changes nothing it does; the command
   // reads it to know that native's rg would not read RIPGREP_CONFIG_PATH either
   '--no-config': (s) => { s.noConfig = true; },
