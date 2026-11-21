@@ -8,7 +8,7 @@
 // that product (about 2^61) is past a double's 53 bits and rounds, so the state fell into a cycle of 10,466 states
 // (measured 2026-11-19: a 4,003-draw lead-in, then the cycle), and the "5 MB line" was one ~47 KB stretch of tokens
 // repeated about 100 times: 14,469 distinct 8-token runs in 1,289,171. It now draws from test/shape-census.cjs's
-// intRng, and the census counts the distinct runs. NATIVE_BUNDLE_LINE was re-measured from native 2.1.283's embedded rg over the new line the same day.
+// intRng, and the census counts the distinct runs. NATIVE_BUNDLE_LINE was re-measured from native 2.1.283's embedded rg over the new line the same day, and from 2.1.330's on 2026-11-21 (same rows).
 const { intRng, census, rngBias, firstSighting } = require('./shape-census.cjs');
 
 const SEED = 7;
@@ -26,10 +26,10 @@ function bundleLine(n = 5000000) {
   return Buffer.from(bundleTokens(n).map((i) => T[i]).join('').slice(0, n) + '\n');
 }
 
-// native 2.1.283's --json over that line: [pattern, submatches, sha256(JSON [[start,end]...]) prefix]. Re-proven
+// native 2.1.330's --json over that line (2.1.283's rg, rev 7c1d0ed28a, answered every row identically; re-measured 2026-11-21): [pattern, submatches, sha256(JSON [[start,end]...]) prefix]. Re-proven
 // against native by `node test/rg-bundle-line.cjs --native BIN --check` and by the rg-bundle-line-fresh guard
 // (test/build-gates/rg-regex-gates.test.cjs), which runs it whenever the pinned provider runs here.
-const NATIVE_BUNDLE_RG = 'ripgrep 14.1.1 (rev 7c1d0ed28a)';
+const NATIVE_BUNDLE_RG = 'ripgrep 14.1.1 (rev 6634fc3b5b)';
 const NATIVE_BUNDLE_LINE = [
   ['\\w+Error', 64660, '23ef86fe587776a79663'], ['import.*from', 1, '4a958576355f9660d9cf'], ['"[^"]*"', 70013, 'e4349df8f56b6d30a9d2'],
   ['[a-zA-Z_]\\w*\\(', 43715, '245bb4e298716816e51b'], ['\\w+', 711795, '46a3c478b8a8ab6af1aa'], ['x|', 4894633, '6959e2ed75bd3b0b2e9d'],

@@ -287,7 +287,7 @@ test('RG-ARGV0: the quaude invoked as rg answers as rg, before its bundle or its
   for (const [label, o] of [['argv[0] rg', {}], ['argv[0] /x/rg', { argv0: '/x/rg' }], ['ARGV0=rg', { argv0: QUAUDE, env: { ARGV0: 'rg' } }]]) {
     const v = runAsRg(['--version'], o);
     assert.strictEqual(v.status, 0, `${label}: ${v.stderr}`);
-    assert.ok(v.stdout.startsWith('ripgrep 14.1.1 (rev 7c1d0ed28a)\n'), `${label}: ${v.stdout}`);
+    assert.ok(v.stdout.startsWith('ripgrep 14.1.1 (rev 6634fc3b5b)\n'), `${label}: ${v.stdout}`);
     const c = runAsRg(['-c', 'needle', '-'], { ...o, input: 'a needle\nb\nneedle c\n' });
     assert.deepStrictEqual([c.status, c.stdout], [0, '2\n'], `${label}: ${c.stderr}`);
   }
