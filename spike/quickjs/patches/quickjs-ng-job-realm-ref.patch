@@ -21,10 +21,11 @@
 #
 # THE CHANGE. JS_EnqueueJob takes a reference (JS_DupContext); JS_ExecutePendingJob drops
 # it after the job and its arguments are freed; JS_FreeRuntime drops the references of
-# jobs still queued at teardown. A quickjs-ng upstream candidate. *pctx still names the
-# job's context, which may be freed by the
-# time JS_ExecutePendingJob returns unless the caller holds its own reference (txiki's
-# callers do not read it).
+# jobs still queued at teardown. *pctx names the job's context
+# only while it outlives the call, else NULL: the guard Bellard's QuickJS applies to its
+# JSJobEntry.realm, never a maybe-freed pointer (txiki's callers do not read it).
+# UNFIXED UPSTREAM in quickjs-ng (master and v0.18.0, 2026-11-21): a candidate to file,
+# with Bellard's QuickJS as the reference implementation.
 diff --git a/quickjs.c b/quickjs.c
 --- a/quickjs.c
 +++ b/quickjs.c
@@ -37,15 +38,17 @@ diff --git a/quickjs.c b/quickjs.c
      e->job_func = job_func;
      e->argc = argc;
      for(i = 0; i < argc; i++) {
-@@ -2206,6 +2206,7 @@
+@@ -2206,6 +2206,8 @@
      JS_FreeValue(ctx, res);
      js_free(ctx, e);
-     *pctx = ctx;
+-    *pctx = ctx;
++    /* never hand back a context this call is about to free (Bellard's QuickJS guard) */
++    *pctx = ctx->header.ref_count > 1 ? ctx : NULL;
 +    JS_FreeContext(ctx);
      return ret;
  }
 
-@@ -2306,6 +2307,7 @@
+@@ -2306,6 +2308,7 @@
          JSJobEntry *e = list_entry(el, JSJobEntry, link);
          for(i = 0; i < e->argc; i++)
              JS_FreeValueRT(rt, e->argv[i]);

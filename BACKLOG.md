@@ -602,6 +602,12 @@ AddressSanitizer engine running a vm workflow shape (darwin-arm64): heap-use-aft
 js_async_function_resume, freed by JS_FreeContext <- js_c_function_finalizer <- gc_free_cycles. With both patches,
 the same loop in the VM: 0 in 40, no cores (2026-11-21).
 
+UPSTREAM: the job-realm bug is unfixed in quickjs-ng (master and v0.18.0, 2026-11-21); Bellard's QuickJS holds the
+reference (JSJobEntry.realm, and hands back *pctx only while ref_count > 1, the guard our patch copies) and is the
+reference implementation to cite when filing it. OPEN DIVERGENCE the opaque fix leaves: import() inside a vm context
+now loads through txiki's module loader, where node throws ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING (no
+importModuleDynamically given). Better than the old abort, but not node's answer.
+
 OPEN, an observability gap the crash showed: scripts/netbsd-arm64-evidence.mjs keeps no crash evidence in the guest.
 A quaude that dies of a signal leaves only `the turn exited null (SIGSEGV)` with empty stderr in the lane log; no core
 is kept (NetBSD writes `%n.core` in the process's cwd, which is the test's temp dir, removed after the test) and no
