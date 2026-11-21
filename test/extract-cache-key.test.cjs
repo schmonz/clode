@@ -118,3 +118,26 @@ test('extractorSigOf still changes when the extractor actually changes', () => {
     fs.rmSync(d, { recursive: true, force: true });
   }
 });
+
+// bun-graph-plan.cjs writes each builtin's facade into the staged graph, and was not in the signature: its
+// 2.1.330 fix (a default import before named ones) left every warm cache serving the old facade, and naude
+// died at link ("does not provide an export named 'ChildProcess'") until the cache was wiped by hand.
+test('extractorSigOf covers every libexec file the extractor requires, and changes when one of them does', () => {
+  const os = require('node:os');
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const { extractorSourcesOf } = require('../libexec/clode-extract.cjs');
+  const LIBEXEC = path.join(__dirname, '..', 'libexec');
+  const sources = extractorSourcesOf(LIBEXEC);
+  for (const f of ['bun-graph-plan.cjs', 'bun-graph.cjs', 'bundle-carve.cjs']) assert.ok(sources.includes(f), f);
+  assert.ok(!sources.includes('bun-shim.cjs'), 'the runtime prelude refreshes as a companion, not by re-extracting');
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-extractor-sig-dep-'));
+  try {
+    for (const f of sources) fs.writeFileSync(path.join(d, f), fs.readFileSync(path.join(LIBEXEC, f)));
+    const before = extractorSigOf(d);
+    fs.appendFileSync(path.join(d, 'bun-graph-plan.cjs'), '\n// touched\n');
+    assert.notStrictEqual(extractorSigOf(d), before, 'editing the facade planner must invalidate the cache');
+  } finally {
+    fs.rmSync(d, { recursive: true, force: true });
+  }
+});

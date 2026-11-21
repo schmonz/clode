@@ -71,8 +71,30 @@ function sigOrAbsent(p) {
 // EXPORTED so the tests that assert on .extractor-sig compose it the same way this does.
 // They used to spell `sigOf(libexec/extract-claude-js.cjs)` out inline, which is a copy
 // that goes stale the moment the real composition changes — and it did.
+//
+// DERIVED, NOT LISTED (2026-11-21): the three roots plus every libexec file they reach by a static
+// `require('./x')`. A hand-kept list of the three missed bun-graph-plan.cjs, which writes each builtin's
+// facade into the staged graph: fixing it (2.1.330's `import Ce,{ChildProcess as $t}from"child_process"`)
+// changed no signature, so every warm cache kept the broken facade and naude died at link on that machine
+// only. `require(__dirname + '/x')` is NOT followed: that form is the runtime prelude (bun-shim.cjs and its
+// companions), which the companion refresh below keeps current without a re-extract.
+const EXTRACTOR_ROOTS = ['extract-claude-js.cjs', 'scc-merge.cjs', 'graph-scc-merge.cjs'];
+function extractorSourcesOf(libexec) {
+  const seen = new Set();
+  const visit = (f) => {
+    if (seen.has(f)) return;
+    seen.add(f);
+    let src;
+    try { src = fs.readFileSync(path.join(libexec, f), 'utf8'); } catch { return; }
+    const re = /\brequire\('\.\/([\w.-]+\.c?js)'\)/g;
+    let m;
+    while ((m = re.exec(src))) visit(m[1]);
+  };
+  EXTRACTOR_ROOTS.forEach(visit);
+  return [...EXTRACTOR_ROOTS, ...[...seen].filter((f) => !EXTRACTOR_ROOTS.includes(f)).sort()];
+}
 function extractorSigOf(libexec) {
-  return ['extract-claude-js.cjs', 'scc-merge.cjs', 'graph-scc-merge.cjs']
+  return extractorSourcesOf(libexec)
     .map((f) => sigOrAbsent(path.join(libexec, f)))
     .join('+');
 }
@@ -393,4 +415,4 @@ function cacheSignature({ extractorSig, providerPlatform }) {
 // it already composes that answer into the cache key, and the blobulate path needs the same answer
 // to record in the built artifact's manifest. Two callers, one function, no chance of a
 // manifest that disagrees with the cache key it was carved under.
-module.exports = { extractIfNeeded, cacheSignature, extractorSigOf, providerPlatformOf };
+module.exports = { extractIfNeeded, cacheSignature, extractorSigOf, extractorSourcesOf, providerPlatformOf };
