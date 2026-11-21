@@ -5,42 +5,52 @@
     "Regenerate with UPDATE_GOLDEN=1, and add a note below for anything new.",
     "Measured against the EXTRACTED cli.cjs (~21MB), never the 255MB Bun binary."
   ],
-  "_measured_against_bundle": "2.1.283",
-  "_measured_on": "2026-09-26",
+  "_measured_against_bundle": "2.1.330",
+  "_measured_on": "2026-11-21",
   "layer1_bun_props_missing": [
-    "Bun.WebView",
     "Bun.Image",
-    "Bun.FetchSession"
+    "Bun.Archive",
+    "Bun.FetchSession",
+    "Bun.$",
+    "Bun.WebView"
   ],
   "layer1_bun_modules_missing": [
-    "bun:jsc"
+    "bun:jsc",
+    "bun:wrap"
   ],
   "layer1_bun_modules_intercepted_but_unused": [
+    "bun:ffi",
     "bun:sqlite"
   ],
   "layer2_node_apis_missing": [
     "crypto.X509Certificate",
+    "fs.statfsSync",
     "crypto.createSign",
     "crypto.createVerify",
+    "crypto.createPrivateKey",
     "crypto.pbkdf2Sync",
     "crypto.pbkdf2",
-    "crypto.createPrivateKey",
+    "tls.setDefaultCACertificates",
     "crypto.createPublicKey",
-    "child_process.ChildProcess",
+    "crypto.verify",
+    "fs.ftruncateSync",
     "crypto.sign",
+    "fs.exists",
     "crypto.generateKeyPairSync",
     "crypto.KeyObject",
-    "crypto.verify",
+    "crypto.subtle",
     "fs.fchmod",
-    "fs.ftruncateSync",
-    "https.createServer",
-    "perf_hooks.monitorEventLoopDelay",
-    "v8.getHeapSpaceStatistics",
-    "v8.getHeapStatistics",
     "zlib.createZstdDecompress",
     "crypto.createCipheriv",
     "crypto.createDecipheriv",
-    "fs.statfsSync"
+    "crypto.scrypt",
+    "crypto.scryptSync",
+    "dns.ADDRCONFIG",
+    "fs.fchown",
+    "http.maxHeaderSize",
+    "perf_hooks.monitorEventLoopDelay",
+    "v8.getHeapSpaceStatistics",
+    "v8.getHeapStatistics"
   ],
   "unenumerable_allowed": [
     "intl"
@@ -76,6 +86,16 @@
     "crypto.createCipheriv / crypto.createDecipheriv": "BENIGN (a cache that stays empty), reviewed 2026-09-26: new in 2.1.283, one module (the MCP discovery cache, merged into __clode-scc-1.js on the darwin-arm64 carve) that seals each cached entry with AES-256-GCM and opens it again. The cache is OFF unless the MCP_DISCOVERY_CACHE env flag or its remote kill-switch gate turns it on. Every write runs inside the cache's serialized-write wrapper, whose `.catch` logs \"discovery-cache: write op failed\" (all three write sites, read from the carve), and the open is inside its own try/catch, so under quaude, where both are absent, a write throws and is logged, nothing is ever cached, and every MCP server's tools are discovered live: the path with the cache off. Not driven.",
     "fs.statfsSync": "BENIGN, reviewed 2026-09-26: new in 2.1.283 and never CALLED. Its one importer (chunk-hzevqd7x.js on the darwin-arm64 carve) imports `statfsSync as kU` and uses `kU` nowhere else. The shim provides fs.statfs, not the sync form.",
     "fs.writev": "GONE 2026-09-26: 2.1.283 references it 0 times, so it left the list (kept here as history; it was one bare read, see the NEWLY VISIBLE 2026-08-29 note).",
-    "os.devNull": "FIXED 2026-10-04 (no longer a layer2 gap, kept as history; ruling G18 round 2). Found by DRIVING dirSync's stamp (M8 in chunk-hzevqd7x.js) through the real graph after the stat identity fix: it stats os.devNull to tell the null device from any other character device, so with devNull undefined /dev/null and /dev/zero both stamped 'undigested'. node-shim's os now has node's value; pinned by test/node-shim-os-devnull.test.cjs."
+    "os.devNull": "FIXED 2026-10-04 (no longer a layer2 gap, kept as history; ruling G18 round 2). Found by DRIVING dirSync's stamp (M8 in chunk-hzevqd7x.js) through the real graph after the stat identity fix: it stats os.devNull to tell the null device from any other character device, so with devNull undefined /dev/null and /dev/zero both stamped 'undigested'. node-shim's os now has node's value; pinned by test/node-shim-os-devnull.test.cjs.",
+    "PIN 2.1.330 (2026-11-21)": "Re-measured at the pin bump 2.1.283 -> 2.1.330 (UPDATE_GOLDEN=1 against the darwin-arm64 2.1.330 carve), each NEW entry located with the scanner's own bundle-refs.cjs (referencesIn, module by module) and read at its site. GONE: child_process.ChildProcess and https.createServer (2.1.330 references neither; the shim still provides neither), and Bun.zstdDecompress/Sync stay listed only under layer1_bun_props_missing_deferred. The new entries follow, one note each.",
+    "Bun.Archive": "REVIEWED 2026-11-21, new in 2.1.330: the hosted project folder's .tgz (`new Bun.Archive(files,{compress:\"gzip\"}).bytes()`), gated on CLODE_CODE_RESTRICT_PERSONAL_CONFIG with CLAUDE_PROJECT_UUID, its failure caught as \"container_failed\". Accepted missing by name in libexec/inspect-claude-bundle.cjs ACCEPTED_UNRECOGNIZED_BUN; it waits on a gzip compressor (BACKLOG, the 2.1.330 entry, item 14).",
+    "Bun.$": "TEXT ONLY, 2026-11-21: the one occurrence is inside a string, the REPL tool's message \"($ throws on a non-zero exit, as Bun.$ does; ...)\" (chunk-v7j43e2p.js on the darwin-arm64 carve). Nothing reads Bun.$.",
+    "bun:wrap": "TEXT ONLY, 2026-11-21: `G=\"bun:wrap\"` names where a parse error is placed in the REPL script checker (chunk-zg2mw0h6.js); it is never imported.",
+    "bun:ffi": "DRIFT, not a gap (2026-11-21): bun-shim intercepts bun:ffi in PROVIDES (the dlopen that throws, see util.getSystemErrorName below), and 2.1.330 no longer imports it. Listed so the declaration's drift stays visible, as bun:sqlite's is.",
+    "crypto.scrypt / crypto.scryptSync": "NOT on the -p or interactive routes, read 2026-11-21 (chunk-g3a1gwww.js): a background session's credential pin. scryptSync seals the session's env credential into CLAUDE_BG_SESSION_CREDENTIAL when a background session is started (khs(), from the bg-session env builder in chunk-95amtstn.js), and checks it in that session (o() reads it only when Qt(), a background session) and in the background daemon (holdsCredential: ipl). Starting one goes through the daemon, which needs net.createServer, the declared wall. If that wall falls, a missing scryptSync throws when a bg session is spawned with an env credential: re-take this then.",
+    "crypto.subtle / tls.setDefaultCACertificates / http.maxHeaderSize": "The `claude gateway` subcommand, read 2026-11-21 (chunk-xnzxknv5.js: `import{subtle as Un}from\"crypto\"`, `I_.maxHeaderSize=262144` on http before its Bun.serve, and its config load calling tls.setDefaultCACertificates). The same enterprise server Bun.SQL serves (see Bun.SQL above): not on the -p or interactive routes. The OTHER setDefaultCACertificates site (chunk-3jjr3wje.js, the CA-list loader every connection uses) FEATURE-DETECTS it (`typeof Xt.setDefaultCACertificates!==\"function\"` returns early), so it degrades to no extra CA list, as on a node without it.",
+    "dns.ADDRCONFIG": "BENIGN, read 2026-11-21 (chunk-j2ybpxmz.js): the telemetry logs exporter's egress look-ahead passes it as a lookup hint (`dns.promises.lookup(host,{hints:ADDRCONFIG})`); absent, the hint is undefined and the lookup is a plain one.",
+    "fs.fchown": "BENIGN, read 2026-11-21: imported (`fchown as ln`) by one atomic-write module (chunk-n1eez895.js) and never called there.",
+    "fs.exists": "A SCANNER FALSE POSITIVE, read 2026-11-21: the three reads are `s.exists=...` on a TypeScript project-service object in the vendored TypeScript language service (chunk-mk44m07h.js), where a binding of fs shares the minified name. Nothing calls fs.exists."
   }
 }
