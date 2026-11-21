@@ -166,10 +166,10 @@ Measured: test/fidelity/agentic-sandbox-fail-closed.test.cjs on darwin-arm64, na
 ## 2.1.330 is the pin and the suite is RED on it: 39 failures, each named here (2026-11-21)
 
 The pin moved 2.1.283 -> 2.1.330 (UPSTREAM_PIN). upstream-drift.yml's five red anchor steps (red since 2026-10-23)
-were each re-pinned to the 2.1.330 shape, not loosened: the Remote Control and snapshot-generator hooks (bc7758c),
-the text tripwires and the text oracle (4c9899b), shadow-writer-from-carve plus the flagged shadows it found
-(582cbf2), rg-matrix-from-carve (764f694), and the regexp census (588 groups is no finding: the engine allows
-native's 32,768, c7c3983; lead-scrub retired, 52c0306). What 2.1.330 still asks that quaude does not answer:
+were each re-pinned to the 2.1.330 shape, not loosened: the Remote Control and snapshot-generator hooks (5900e8e),
+the text tripwires and the text oracle (d7a5a6b), shadow-writer-from-carve plus the flagged shadows it found
+(0f1f334), rg-matrix-from-carve (813c3f4), and the regexp census (588 groups is no finding: the engine allows
+native's 32,768, 7a707d6; lead-scrub retired, ded6a49). What 2.1.330 still asks that quaude does not answer:
 
 1. **node-shim-differential: darwin GREEN at 2.1.330; LINUX STILL TO FREEZE.** Fixed in node-shim fs
    (test/node-shim-fs-2-1-330.test.cjs, node against quaude with no provider needed): fs.open's callback form
