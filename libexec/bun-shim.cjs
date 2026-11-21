@@ -1412,6 +1412,50 @@ class SHA256 {
 }
 SHA256.byteLength = 32;
 
+// --- Bun.ant.isVmContextGlobal ----------------------------------------------
+// 2.1.330's sandbox builder (the Workflow tool's script runner among its users) makes a context, reads its global
+// with `vm.runInContext("this", ctx)`, and refuses to go on unless the runtime recognizes that object as a context's
+// global: `vm.isContext(g) || Bun.ant.isVmContextGlobal(g) === true`, else "Refusing to make a node:vm context: this
+// Bun cannot recognize a context's global". Node's isContext answers false for a context's global (only the
+// contextified sandbox is a "context"), so without this member every Workflow failed, under naude AND quaude.
+// NATIVE'S ANSWERS, measured through the preload oracle on 2.1.330 (Bun 1.4.4): true for the global of every
+// context (createContext with or without a sandbox, runInNewContext with or without one, Script#runInNewContext);
+// false for the contextified sandbox itself, this realm's global, an object made inside a context, and non-objects.
+// HOW: the globals are recorded as contexts are made, by wrapping the vm module's createContext and the two
+// runInNewContext forms (the module object is shared, so the bundle's facades read the wrapped functions). The
+// runInNewContext wrappers hand node's own default sandbox, `{}`, in explicitly when none is given, so its context is
+// one we saw. ONE implementation for both engines: it sits on whatever `require('vm')` is (node's, node-shim's).
+const _vmContextGlobals = new WeakSet();
+{
+  const vm = require('vm');
+  const record = (ctx) => {
+    if (ctx === null || typeof ctx !== 'object') return;
+    try { const g = vm.runInContext('this', ctx); if (g !== null && typeof g === 'object') _vmContextGlobals.add(g); } catch (_) { /* EvalError etc.: not one we can name */ }
+  };
+  const origCreate = vm.createContext;
+  if (typeof origCreate === 'function' && !origCreate.__clodeRecordsGlobal) {
+    const createContext = function createContext() { const c = origCreate.apply(this, arguments); record(c); return c; };
+    createContext.__clodeRecordsGlobal = true;
+    vm.createContext = createContext;
+    const origRun = vm.runInNewContext;
+    if (typeof origRun === 'function') {
+      vm.runInNewContext = function runInNewContext(code, contextObject, ...rest) {
+        const sandbox = contextObject === undefined ? {} : contextObject;
+        try { return origRun.call(this, code, sandbox, ...rest); } finally { if (vm.isContext(sandbox)) record(sandbox); }
+      };
+    }
+    const proto = vm.Script && vm.Script.prototype;
+    const origScriptRun = proto && proto.runInNewContext;
+    if (typeof origScriptRun === 'function') {
+      proto.runInNewContext = function runInNewContext(contextObject, ...rest) {
+        const sandbox = contextObject === undefined ? {} : contextObject;
+        try { return origScriptRun.call(this, sandbox, ...rest); } finally { if (vm.isContext(sandbox)) record(sandbox); }
+      };
+    }
+  }
+}
+const _isVmContextGlobal = (v) => v !== null && typeof v === 'object' && _vmContextGlobals.has(v);
+
 const Bun = {
   version: process.versions.bun || '1.4.0',
   revision: '0000000000000000000000000000000000000000',
@@ -1629,7 +1673,7 @@ const Bun = {
   //
   // Recorded in test/shim-surface/golden.json, which no longer lists Bun.ant as
   // a layer-1 gap because the property now exists.
-  ant: { CellSegmenter: _CellSegmenter },
+  ant: { CellSegmenter: _CellSegmenter, isVmContextGlobal: _isVmContextGlobal },
   spawnSync: spawn.sync,
 };
 
