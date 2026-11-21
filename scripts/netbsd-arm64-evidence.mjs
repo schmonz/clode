@@ -63,6 +63,25 @@ const runArgs = (r) => [...(r.names || []).map((p) => `--test-name-pattern=${p}`
 // tracked by mistake. `files`: what `git ls-files` lists; `listed`: what the archive holds. test/build-gates/
 // evidence-tarball-gates.test.cjs holds it to the real tree and to a planted secret.
 export const SECRET = /(^|\/)(clode_gh_token|\.env(\..*)?|\.?credentials\.json|\.netrc|id_(rsa|ed25519|ecdsa))$/;
+// A RE-RUN UNTIL GREEN IS VISIBLE. The record already in the tree (committed, or a red run's left uncommitted) at the
+// same engine and quaude (the product under test; a driver edit does not reset it) hands on its attempts and failures:
+// this run is attempt N+1, and a red previous record joins priorFailures as { when, commit, failedLanes, failedTests }.
+export function failureOf(ev) {
+  const failedLanes = (ev.lanes || []).filter((l) => l.status !== 0 || l.signal).map((l) => ({ id: l.id, status: l.status ?? null, signal: l.signal || null }));
+  const failedTests = (ev.tests || []).filter((r) => r.type === 'test:fail').map((r) => r.name);
+  return failedLanes.length || failedTests.length ? { when: ev.when || ev.date, commit: ev.commit, failedLanes, failedTests } : null;
+}
+export function carryAttempts(prev, inputs) {
+  const same = prev && prev.inputs && prev.inputs.engine === inputs.engine && prev.inputs.quaude === inputs.quaude;
+  if (!same) return { attempts: 1, priorFailures: [] };
+  const red = failureOf(prev);
+  return { attempts: (Number.isInteger(prev.attempts) ? prev.attempts : 1) + 1,
+    priorFailures: [...(Array.isArray(prev.priorFailures) ? prev.priorFailures : []), ...(red ? [red] : [])] };
+}
+function readPrevious() {
+  try { return JSON.parse(fs.readFileSync(path.join(REPO, ...EVIDENCE.split('/')), 'utf8')); } catch { return null; }
+}
+
 export function tarballFindings({ files, listed }) {
   const findings = files.filter((f) => SECRET.test(f)).map((f) => `${f}: a secret's name; it must never leave this machine`);
   const want = new Set(files);
@@ -194,12 +213,15 @@ async function main(argv) {
   const port = opt('--port', '2230');
   const host = opt('--host', 'localhost');
   const keep = argv.includes('--keep');
-  const dirty = git(['status', '--porcelain', '--untracked-files=no']).trim();
+  // the evidence file itself may be dirty: a red run leaves its record there, for the next run to carry (below)
+  const dirty = git(['status', '--porcelain', '--untracked-files=no']).split('\n').filter((l) => l.trim() && l.slice(3) !== EVIDENCE).join('\n');
   if (dirty) die(`the tree has uncommitted tracked changes, and the evidence names the commit it ran; commit first:\n${dirty}`);
   const commit = git(['rev-parse', 'HEAD']).trim();
   const date = new Date().toISOString().slice(0, 10);
   const require = createRequire(import.meta.url);
   const inputs = require(path.join(REPO, 'scripts', 'lib', 'evidence-inputs.cjs')).evidenceInputs(REPO, FILES);
+  const { attempts, priorFailures } = carryAttempts(readPrevious(), inputs);
+  if (priorFailures.length) say(`attempt ${attempts} at this engine and quaude, after ${priorFailures.length} prior failure(s); they ride in the record`);
   const ssh = (cmd, { timeout, input, inherit } = {}) => {
     const r = spawnSync('ssh', ['-p', port, '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15', '-o', 'ServerAliveInterval=30',
       '-o', 'ServerAliveCountMax=10', host, cmd], { input, timeout, killSignal: 'SIGKILL', maxBuffer: 1 << 30,
@@ -244,7 +266,7 @@ async function main(argv) {
     if (logs.status === 0) { fs.writeFileSync(path.join(local, 'logs.tgz'), logs.stdout); say(`guest logs: ${path.join(local, 'logs.tgz')}`); }
     if (g.status !== 0) fail(`the guest run exited ${g.status}; its logs are in ${path.join(local, 'logs.tgz')}`);
     const result = JSON.parse(must(`cat ${dir}/result.json`, { timeout: 5 * MIN }));
-    const draft = { run: RUN, engine: ENGINE, commit, date, host: result.host, quaude: result.quaude, inputs, command: COMMAND,
+    const draft = { run: RUN, engine: ENGINE, commit, date, when: new Date().toISOString(), attempts, priorFailures, host: result.host, quaude: result.quaude, inputs, command: COMMAND,
       timeoutScale: TIMEOUT_SCALE, seconds: result.seconds, steps: result.steps,
       lanes: LANES.map((lane, i) => lane.map((r) => ({ lane: i + 1, id: r.id, file: r.file, ...(r.names ? { names: r.names } : {}),
         ...(r.skips ? { skips: r.skips } : {}), ...(result.runs.find((x) => x.id === r.id) || {}) }))).flat(),
@@ -268,6 +290,7 @@ async function main(argv) {
       { cwd: REPO, env: { ...process.env, CLODE_EVIDENCE_RELEASE: '1' }, encoding: 'utf8', timeout: 10 * MIN });
     process.stdout.write(judge.stdout.split('\n').filter((l) => /^(✔|✖)|VIOLATION|examined/.test(l)).join('\n') + '\n');
     ok = judge.status === 0;
+    if (!ok) say(`the red record stays in ${EVIDENCE} (do not commit it): the next run carries it as a prior failure`);
   } finally {
     if (keep) say(`kept ${dir} on the guest (--keep)`);
     else ssh(`rm -rf ${dir}`, { timeout: 15 * MIN });

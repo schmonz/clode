@@ -39,30 +39,49 @@ function treeHash(root, entries) {
   return sha256(files.map((f) => `${f} ${sha256(fs.readFileSync(path.join(root, ...f.split('/'))))}\n`).join(''));
 }
 
-// The local require closure of `files` (repo-relative POSIX): each file, and every file a relative require literal in
-// it names (`require('../tool-driver.cjs')`), resolved as node does for a relative path (exact, then .js/.cjs/.mjs/
-// .json, then index.*), followed until nothing new appears. Sorted.
+// The local closure of `files` (repo-relative POSIX): each file, and every file it names by a path the source spells
+// out in literals, followed until nothing new appears:
+//   - a relative require literal (`require('../tool-driver.cjs')`), resolved as node does (exact, then .js/.cjs/.mjs/
+//     .json, then index.*);
+//   - a path built from __dirname and string literals only, directly or through a binding made that way
+//     (`const ROOT = path.resolve(__dirname, '..')`, then `path.join(ROOT, 'test', 'x.cjs')`): a require through it, a
+//     script a driver spawns, a fixture it reads. Only a path naming a FILE counts (a directory is a search root, not
+//     an input).
+// NOT followed (EVIDENCE_UNHASHED, said in BACKLOG): a path with any non-literal part (a variable, a template, a value
+// from the environment), and anything under node_modules.
 const REL_REQUIRE = /\brequire\(\s*(['"])(\.{1,2}\/[^'"]+)\1\s*\)/g;
+const LIT = String.raw`(?:'[^'\\\n]*'|"[^"\\\n]*")`;
+const BASE_BINDING = new RegExp(String.raw`\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*path\.(?:resolve|join)\(\s*__dirname\s*((?:,\s*${LIT}\s*)*)\)`, 'g');
+const PATH_CALL = (bases) => new RegExp(String.raw`\bpath\.(?:resolve|join)\(\s*(${bases.join('|')})\s*((?:,\s*${LIT}\s*)+)\)`, 'g');
+const lits = (argText) => [...argText.matchAll(new RegExp(LIT, 'g'))].map((m) => m[0].slice(1, -1));
+const EVIDENCE_UNHASHED = 'a path built with any non-literal part (a variable, a template, an environment value), and node_modules';
 function requireClosure(root, files) {
   const seen = new Set();
   const todo = [...files];
   const abs = (rel) => path.join(root, ...rel.split('/'));
+  const isFile = (rel) => { try { return fs.statSync(abs(rel)).isFile(); } catch { return false; } };
   const resolve = (fromRel, spec) => {
     const base = path.posix.normalize(path.posix.join(path.posix.dirname(fromRel), spec));
     for (const c of [base, ...['.js', '.cjs', '.mjs', '.json'].map((e) => base + e), ...['index.js', 'index.cjs'].map((i) => `${base}/${i}`)]) {
-      try { if (fs.statSync(abs(c)).isFile()) return c; } catch { /* next candidate */ }
+      if (isFile(c)) return c;
     }
     return null;
   };
+  const add = (r) => { if (r && !r.startsWith('../') && !r.split('/').includes('node_modules') && !seen.has(r)) todo.push(r); };
   while (todo.length) {
     const f = todo.pop();
     if (seen.has(f)) continue;
     seen.add(f);
     if (!/\.(c|m)?js$/.test(f)) continue;
     const text = fs.readFileSync(abs(f), 'utf8');
-    for (const m of text.matchAll(REL_REQUIRE)) {
-      const r = resolve(f, m[2]);
-      if (r && !r.split('/').includes('node_modules') && !seen.has(r)) todo.push(r);
+    for (const m of text.matchAll(REL_REQUIRE)) add(resolve(f, m[2]));
+    const dir = path.posix.dirname(f);
+    const bases = new Map([['__dirname', dir]]);
+    for (const m of text.matchAll(BASE_BINDING)) bases.set(m[1], path.posix.normalize(path.posix.join(dir, ...lits(m[2]))));
+    const names = [...bases.keys()].map((k) => k.replace(/\$/g, '\\$'));
+    for (const m of text.matchAll(PATH_CALL(names))) {
+      const rel = path.posix.normalize(path.posix.join(bases.get(m[1]), ...lits(m[2])));
+      if (isFile(rel)) add(rel);
     }
   }
   return [...seen].sort();
@@ -76,4 +95,4 @@ function evidenceInputs(root = REPO, driverFiles = []) {
     drivers: treeHash(root, requireClosure(root, driverFiles)) };
 }
 
-module.exports = { evidenceInputs, treeHash, requireClosure, QUAUDE_INPUTS };
+module.exports = { evidenceInputs, treeHash, requireClosure, QUAUDE_INPUTS, EVIDENCE_UNHASHED };

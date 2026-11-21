@@ -557,9 +557,15 @@ CI job's four lanes, and the committed evidence test/fidelity/evidence/netbsd-ar
 quaude/engine sha256, this tree's engine, quaude and driver input hashes, every lane's exit status, every test record,
 the cells they prove). The gate counts those cells apart (DRIVEN-LOCAL) while the evidence is FRESH: at most 30 days
 old AND recorded at a tree with the same engine recipe, quaude inputs (libexec/, scripts/stage0.mjs, UPSTREAM_PIN) and
-driver inputs (the three claimed driver files plus their require closure, derived from their relative require literals:
-55 files, test/tool-driver.cjs, the mock helper, scripts/lib/tool-result.cjs among them). Cell rows carry no line
-numbers. STALE IS RED ONLY AT RELEASE (USER RULING 2026-11-21): in CI and the local suite a stale record is a WARNING
+driver inputs (the three claimed driver files plus their closure, derived from the source: relative require literals
+and paths built from __dirname, or a binding of it, and string literals only, naming a file: 63 files,
+test/tool-driver.cjs, the mock helper, scripts/lib/tool-result.cjs, test/fixtures/snapshot-2.1.283.sh among them).
+NOT HASHED (scripts/lib/evidence-inputs.cjs EVIDENCE_UNHASHED): a file named by a path with any non-literal part (a
+variable, a template string, an environment value, a function's return), and anything under node_modules (the
+harness's node-pty and its kin, installed on the guest by `npm install --prefix test`). Cell rows carry no line
+numbers. Each record carries `attempts` and `priorFailures` at the same engine and quaude, and the verdict prints
+them by test name; at a release (full clone) the inputs are also recomputed at the record's own commit (`git archive`)
+and must equal the record's, so hashes copied from another tree are red there. STALE IS RED ONLY AT RELEASE (USER RULING 2026-11-21): in CI and the local suite a stale record is a WARNING
 printed every run ("NetBSD/arm64 VM record stale since <commit> (<what changed>); run node
 scripts/netbsd-arm64-evidence.mjs"), and its cells a separate drivenLocalStale count; release.yml's
 gates-ran-in-release runs driven-local-evidence with CLODE_EVIDENCE_RELEASE=1 on a full clone, and refuses it. A

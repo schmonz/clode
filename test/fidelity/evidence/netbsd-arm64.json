@@ -3,6 +3,24 @@
   "engine": "netbsd-arm64",
   "commit": "9e20ba4c5df826221b572432f2e0ff893489771f",
   "date": "2026-11-21",
+  "attempts": 2,
+  "priorFailures": [
+    {
+      "when": "2026-11-21T09:39:50Z",
+      "commit": "9e20ba4c5df826221b572432f2e0ff893489771f",
+      "failedLanes": [
+        {
+          "id": "rest-tools",
+          "status": 1,
+          "signal": null
+        }
+      ],
+      "failedTests": [
+        "ReportFindings, Workflow and ListAgents in a built quaude: every tool_result equals native's (ListAgents: the named divergence)"
+      ],
+      "why": "quaude died of SIGSEGV mid-turn (the Workflow tool_use; ListAgents and Agent never answered); backfilled 2026-11-21 from that run's kept record"
+    }
+  ],
   "host": {
     "platform": "netbsd",
     "arch": "arm64",

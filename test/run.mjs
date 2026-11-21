@@ -706,6 +706,10 @@ const gatesReport = process.env.CLODE_GATES_REPORT
     '--test-reporter-destination', path.join(process.env.CLODE_GATES_REPORT, 'suite.jsonl')])
   : [];
 const mainSince = Date.now();
+// GitHub Actions annotations a test raised (test/gha-annotate.cjs): the TAP reporter would bury them behind "# ", so
+// they are collected here and printed raw after the run, where GitHub reads them.
+const GHA_ANNOTATIONS = path.join(RUN_TMP || os.tmpdir(), `gha-annotations-${process.pid}.txt`);
+process.env.CLODE_GHA_ANNOTATIONS = GHA_ANNOTATIONS;
 const res = spawnSync(process.execPath, [
   ...DIAG_ARGS,
   '--require', WATCHDOG,
@@ -719,6 +723,7 @@ const res = spawnSync(process.execPath, [
   ...files,
 ], { stdio: 'inherit' });
 let fails = res.status === 0 ? 0 : 1;
+try { process.stdout.write(fs.readFileSync(GHA_ANNOTATIONS, 'utf8')); fs.unlinkSync(GHA_ANNOTATIONS); } catch { /* none raised */ }
 
 let tapText = null;
 try { tapText = fs.readFileSync(tapCopy, 'utf8'); } catch { /* runner never wrote it — handled below */ }
