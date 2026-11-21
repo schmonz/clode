@@ -201,13 +201,17 @@ Bun.SHA256/gzipSync. STILL RED, beyond 1 and 2 above, by gate:
    (re-record them against native 2.1.330 and review each diff), and quaude now differs from native too, e.g.
    CronCreate's "Next run: 01/01/2027 02:59:00am" where native says "Jan 1 2:59am" (a date-formatting path 2.1.330
    took), ReportFindings and Workflow input validation.
-5. **every-tool-driven BROKEN** (and forced-win32's "the pinned carve spelled the win32 way" row, 0 tools): 2.1.330's
-   getAllBaseTools is no longer `let ...; return [...]`, and the Bash tool's shell discovery
-   (`C?["bash","zsh"]:["zsh","bash"]).flatMap(`) is spelled differently: re-derive both scans.
+5. FIXED: **every-tool-driven** and forced-win32's row read the 2.1.330 registry (101 tools) and modes again; the
+   scans were re-derived for its shapes, each with a fixture. NEEDS REVIEW: 2.1.330 added 12 tools, and each got an
+   exemption read from its isEnabled, its phase following its peers' (tool-coverage-gates.test.cjs, PIN_330):
+   GetGoal, PauseGoal, WrapUp, Yield, REPL and OfferChromeSetup go to Phase B. PublishPlugin, SendToProject and
+   SendToProjectContext (claude.ai) and ReadWidgetContext and McpTaskResumePolling (MCP) go to Phase C.
+   ProposeGoal became SetGoal (ProposeGoal is its alias now), and its exemption moved with it.
 6. **bun-ant-member-surface**: 11 Bun.ant members new in 2.1.330 with no review (isVmContextGlobal, loginTty,
    posixFsAt, stringifyToBytes, stringifyToBytesFallbacks, ttyName, windowsFolderSecurity,
    windowsProcessCreationTime, windowsProcessList, windowsSandboxDeniesArg, withThreadWorkingDirectory).
-7. **The rg tables**: rg-regex-data-fresh, rg-regex-oracle-fresh, rg-bundle-line-fresh and rg-types-fresh: 2.1.330's
+7. FIXED (the tables, 8a1b1c8; --text, --fixed-strings and --max-count, which 2.1.330 passes in production and
+   rg-carve-argv-answered found refused, 58bbf87). **The rg tables**: rg-regex-data-fresh, rg-regex-oracle-fresh, rg-bundle-line-fresh and rg-types-fresh: 2.1.330's
    embedded rg is ripgrep 14.1.1 rev 6634fc3b5b, the tables were generated from rev 7c1d0ed28a; regenerate from it.
    rg-differential also red on this.
 8. **API surface** (node-shim-api-surface-gate): Bun.Archive (live: `new Bun.Archive(G,{compress:"gzip"}).bytes()`
@@ -216,7 +220,7 @@ Bun.SHA256/gzipSync. STILL RED, beyond 1 and 2 above, by gate:
 9. **node-shim-wall-tripwires**: net.connect/createConnection reach rose 11 -> 16 modules; review the five new
    sites before the baseline moves.
 10. **shim-surface**: golden.json was measured on 2.1.283; re-measure with UPDATE_GOLDEN=1 on 2.1.330 and review.
-11. **paint-probe-damage-packing BROKEN**: 0 damage-decode sites in the 2.1.330 carve; re-derive the anchor.
+11. FIXED: **paint-probe-damage-packing** reads 2.1.330's two damage-decode sites (re-derived, both carves measured).
 12. **Workflow under quaude** (agentic-workflow-complete): no wf_<id>.json, even with main's job-realm engine fix.
 13. FIXED since: WebFetch over TLS 1.2 (tls.createSecureContext, 4ae7fc5), Workflow (Bun.ant.isVmContextGlobal,
     3b2100f), /status in -p (a load timeout read as an empty answer, ac28804). Sandboxed Bash: RULING NEEDED, the

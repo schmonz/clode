@@ -56,7 +56,8 @@
 //     sandbox:required  .describe("Exit with an error at startup if sandbox.enabled is true...`:
 //                     enabled, and enabled with failIfUnavailable.
 //     shell:<s>       the shells the Bash tool's discovery tries by name, the one
-//                     `(C?["bash","zsh"]:["zsh","bash"]).flatMap(` (2.1.283: bash, zsh).
+//                     `(C?["bash","zsh"]:["zsh","bash"]).flatMap(` (2.1.283: bash, zsh), or through a
+//                     variable, `h=n?["bash","zsh"]:["zsh","bash"],...h.flatMap(` (2.1.330).
 //     the opt-ins     the tools a launch registers only when --tools/--allowedTools names them:
 //                     the list handed to the setter of launchOptions.replaceSearchToolsOptIn
 //                     (searchToolsOptIn: Glob, Grep) and of replaceTodoToolsOptIn.
@@ -406,7 +407,11 @@ class Resolver {
     let aliases = [];
     if (al && this.expr(al.mod, al.text, seen).kind !== 'null') {        // the Artifact head: aliases:void 0
       const els = al.text[0] === '[' ? splitTop(al.text.slice(1, -1)) : null;
-      aliases = els ? els.map((el) => { const v = this.expr(al.mod, el, seen); return v.kind === 'string' ? v.value : null; }) : [null];
+      // an element spread from a named list (2.1.330's TaskStop: `aliases:[...Uin]`, `Uin=["KillShell","KillBash"]`)
+      aliases = els ? els.flatMap((el) => {
+        if (el.startsWith('...')) { const r = stringsOf(this, al.mod, el.slice(3)); return r.list ? r.list : [null]; }
+        const v = this.expr(al.mod, el, seen); return [v.kind === 'string' ? v.value : null];
+      }) : [null];
     }
     return { kind: 'tool', name: nv.value, aliases, gates: gate ? [gate] : [] };
   }
@@ -419,6 +424,15 @@ class Resolver {
     const stmts = splitTop(v.body, ';');
     if (!stmts || !stmts.length) return UNKNOWN('a function body that does not lex');
     const items = [];
+    // `if(C){...}return X` lexes as ONE statement (no `;` after a block): the block ends the if, the rest is the next
+    for (let k = 0; k < stmts.length; k++) {
+      const st = stmts[k];
+      if (!/^if\s*\(/.test(st)) continue;
+      const m = masked(st), close = closeOf(m, st.indexOf('('));
+      if (close < 0 || st[close] !== '{') continue;
+      const end = closeOf(masked(st), close);
+      if (end > 0 && end < st.length) stmts.splice(k, 1, st.slice(0, end), st.slice(end).trim());
+    }
     for (const s of stmts) {
       let cond = null, ret = s;
       if (/^if\s*\(/.test(s)) {
@@ -429,10 +443,32 @@ class Resolver {
         cond = s.slice(open + 1, close - 1);
         ret = s.slice(close).trim();
       }
+      // 2.1.330's EvalTool getter: `if(ue()){let e=__clodeReq36;return e.registerEvalToolSeams(),e.EvalTool}return n`. A
+      // block of declarations ending in one return is read with those declarations as locals; anything else in it is not.
+      let blockLocals;
+      if (cond !== null && ret[0] === '{' && closeOf(masked(ret), 0) === ret.length) {
+        const inner = splitTop(ret.slice(1, -1), ';');
+        if (!inner || !inner.length) return UNKNOWN(`a block this scan does not read: ${ret.slice(0, 80)}`);
+        blockLocals = new Map();
+        for (const st of inner.slice(0, -1)) {
+          const dm = /^(?:let|const|var)\s+/.exec(st);
+          const decls = dm && splitTop(st.slice(dm[0].length));
+          const pairs = decls && decls.map((dcl) => /^([\w$]+)=([\s\S]+)$/.exec(dcl));
+          if (!pairs || pairs.some((x) => !x)) return UNKNOWN(`a block statement this scan does not read: ${st.slice(0, 80)}`);
+          for (const x of pairs) blockLocals.set(x[1], x[2]);
+        }
+        ret = inner[inner.length - 1];
+      }
       const r = /^return\b\s*/.exec(ret);
       if (!r) return UNKNOWN(`a function whose body is more than returns: ${s.slice(0, 80)}`);
-      const rest = ret.slice(r[0].length);
-      const val = rest === '' ? { kind: 'null' } : this.expr(v.mod, rest, seen);
+      let rest = ret.slice(r[0].length);
+      // `return a(),b` is b
+      const seq = rest && splitTop(rest);
+      if (seq && seq.length > 1) rest = seq[seq.length - 1];
+      // a block local's member (`e.EvalTool`, e=__clodeReq36) is that value's member
+      const lm = blockLocals && /^([\w$]+)((?:\.[\w$]+)+)$/.exec(rest);
+      if (lm && blockLocals.has(lm[1]) && /^[\w$]+(?:\.[\w$]+)*$/.test(blockLocals.get(lm[1]))) rest = blockLocals.get(lm[1]) + lm[2];
+      const val = rest === '' ? { kind: 'null' } : this.expr(v.mod, rest, seen, blockLocals);
       if (val.kind === 'unknown') return val;
       items.push(...(cond ? gated(val, `returned when ${cond}`) : toolsOf(val)));
     }
@@ -577,6 +613,8 @@ function functionBody(R, modName, id) {
   return v.kind === 'fn' && v.body !== undefined ? { params: v.params, body: v.body } : null;
 }
 
+// `a.b=c,d.e=f`: a statement of member assignments, each value an identifier.
+const MEMBER_ASSIGNMENTS = /^[\w$]+(?:\.[\w$]+)+=[\w$]+(?:,[\w$]+(?:\.[\w$]+)+=[\w$]+)*$/;
 function extractRegistry(text) {
   const R = new Resolver(text);
   const findings = [];
@@ -612,6 +650,9 @@ function extractRegistry(text) {
   const locals = new Map();
   let shapeOk = !!ret;
   for (const s of (stmts || []).slice(0, -1)) {
+    // 2.1.330 opens getAllBaseTools with `jbe.loadWriters=nu,r1i.load=iu;`: assignments to MEMBERS only, which declare
+    // no name an element could read, so they are passed over (anything else still fails the shape)
+    if (MEMBER_ASSIGNMENTS.test(s)) continue;
     const dm = /^(?:let|const|var)\s+/.exec(s);
     const decls = dm && splitTop(s.slice(dm[0].length));
     if (!decls) { shapeOk = false; break; }
@@ -620,7 +661,7 @@ function extractRegistry(text) {
   const arr = ret && ret.slice(ret.indexOf('['));
   const elements = shapeOk && arr && splitTop(arr.slice(1, -1));
   if (!elements) {
-    findings.push(`getAllBaseTools (${anchor[1]}) is no longer \`let ...; return [...]\` in ${home}: re-derive this scan`);
+    findings.push(`getAllBaseTools (${anchor[1]}) is no longer \`[a.b=c;] let ...; return [...]\` in ${home}: re-derive this scan`);
     return { tools, findings, note: note() };
   }
   for (const el of elements) {
@@ -699,7 +740,8 @@ function extractRegistry(text) {
 // ==========================================================================
 const PERMISSION_ANCHOR = /Cannot set permission mode: must be one of \$\{([\w$]+)\.join\(/g;
 const SANDBOX_ANCHOR = /\{enabled:[^{},]*,failIfUnavailable:[^{}]*?\.describe\("Exit with an error at startup if sandbox\.enabled is true/g;
-const SHELLS_ANCHOR = /\?\[("\w+"(?:,"\w+")+)\]:\[("\w+"(?:,"\w+")+)\]\)\.flatMap\(/g;
+// `(C?[A]:[B]).flatMap(` (2.1.283), or `X=C?[A]:[B],...X.flatMap(` within the next 300 bytes (2.1.330).
+const SHELLS_ANCHOR = /\?\[("\w+"(?:,"\w+")+)\]:\[("\w+"(?:,"\w+")+)\]\)\.flatMap\(|(?<![\w$.])([\w$]+)=[\w$]+\?\[("\w+"(?:,"\w+")+)\]:\[("\w+"(?:,"\w+")+)\][,;][\s\S]{0,300}?(?:\.\.\.|(?<![\w$.]))\3\.flatMap\(/g;
 const OPT_IN_SETTER = (method) => new RegExp(`function ([\\w$]+)\\(([\\w$]+)\\)\\{[\\w$.()]*\\.launchOptions\\.${method}\\(\\2\\)\\}`, 'g');
 const OPT_INS = [['search', 'replaceSearchToolsOptIn'], ['todo', 'replaceTodoToolsOptIn']];
 
@@ -767,7 +809,7 @@ function extractModes(text) {
   let shells = [];
   const sh = once(codeMatches(R, SHELLS_ANCHOR, '.flatMap('), 'the Bash tool\'s shell discovery (`C?["bash","zsh"]:["zsh","bash"]).flatMap(`)');
   if (sh) {
-    const a = JSON.parse(`[${sh.x[1]}]`).sort(), b = JSON.parse(`[${sh.x[2]}]`).sort();
+    const a = JSON.parse(`[${sh.x[1] ?? sh.x[4]}]`).sort(), b = JSON.parse(`[${sh.x[2] ?? sh.x[5]}]`).sort();
     if (JSON.stringify(a) !== JSON.stringify(b)) findings.push(`the shell discovery's two orders name different shells (${a} / ${b})`);
     else shells = a;
   }
@@ -1802,6 +1844,10 @@ const LOCAL_CELL_RUNS = [
 ];
 const LOCAL = 'deferred, no plan yet: it runs on this machine, so a canned-mock turn could drive it, and no live check '
   + 'judges its tool_result';
+// The tools 2.1.330 added (USER REVIEW: their phase follows their peers' here; BACKLOG, the 2.1.330 entry).
+const PIN_330 = '2026-11-21';
+const GOAL = (what) => `deferred, no plan yet: ${what}; off in every non-interactive (-p) session and in a remote `
+  + 'workspace, and behind the GrowthBook flag tengu_propose_goal (default off)';
 const INTERACTIVE = 'deferred, no plan yet: disabled in a non-interactive (-p) session without a permission-prompt tool, '
   + 'which is how every live check runs, so a driver needs a pty turn (test/e2e-pty.cjs)';
 const FLAG_OFF = (flag, what) => `deferred, no plan yet: ${what}, enabled only by the GrowthBook flag ${flag} (default off), `
@@ -1930,8 +1976,28 @@ const EXEMPTIONS = [
   { tool: 'AskUserQuestion', reason: INTERACTIVE, date: RECORDED, until: UNTIL_PHASE_B },
   { tool: 'ExitPlanMode', reason: INTERACTIVE, date: RECORDED, until: UNTIL_PHASE_B },
   { tool: 'EnterPlanMode', reason: `${INTERACTIVE} (its isEnabled is ExitPlanMode's)`, date: RECORDED, until: UNTIL_PHASE_B },
-  { tool: 'ProposeGoal', reason: 'deferred, no plan yet: off in every non-interactive (-p) session and in a remote '
-    + 'workspace, and behind the GrowthBook flag tengu_propose_goal (default off)', date: RECORDED, until: UNTIL_PHASE_B },
+  // 2.1.330 renamed ProposeGoal to SetGoal (ProposeGoal is its alias now) and added GetGoal and PauseGoal, all three
+  // enabled by the same Sgt(): undefined in a non-interactive or remote session, and unless tengu_propose_goal is on.
+  { tool: 'SetGoal', reason: GOAL('its name since 2.1.330; it was ProposeGoal, now its alias'), date: RECORDED, until: UNTIL_PHASE_B },
+  { tool: 'GetGoal', reason: GOAL('new in 2.1.330: it reads the session goal'), date: PIN_330, until: UNTIL_PHASE_B },
+  { tool: 'PauseGoal', reason: GOAL('new in 2.1.330: it pauses the session goal when blocked'), date: PIN_330, until: UNTIL_PHASE_B },
+  // New in 2.1.330, each read from its isEnabled in the darwin-arm64 carve.
+  { tool: 'WrapUp', reason: 'deferred, no plan yet: offers the user a next step when a turn ends; enabled only when the host '
+    + 'launch option wrapUpOffered() is set (and its GrowthBook gates), which no live check sets', date: PIN_330, until: UNTIL_PHASE_B },
+  { tool: 'Yield', reason: 'deferred, no plan yet: waits for the session\'s background work; enabled by a session condition '
+    + '(its isEnabled G0n: a background-work description present, not in code mode) not decoded here', date: PIN_330, until: UNTIL_PHASE_B },
+  { tool: 'REPL', reason: 'deferred, no plan yet: runs JavaScript with programmatic tool access; enabled only in REPL mode '
+    + '(isEnabled Oa(), which also filters the other tools), which no live check turns on', date: PIN_330, until: UNTIL_PHASE_B },
+  { tool: 'OfferChromeSetup', reason: `${INTERACTIVE}; it offers Claude in Chrome setup, and only under the chromeSetupOffer `
+    + 'GrowthBook arm', date: PIN_330, until: UNTIL_PHASE_B },
+  { tool: 'PublishPlugin', reason: CLAUDE_AI("publishing a plugin to the organisation's claude.ai library (allow_plugin_publish)"),
+    date: PIN_330, until: UNTIL_PHASE_C },
+  { tool: 'SendToProject', reason: CLAUDE_AI('/send-to-project, a session sent to a Claude Project'), date: PIN_330, until: UNTIL_PHASE_C },
+  { tool: 'SendToProjectContext', reason: CLAUDE_AI('/send-to-project\'s folder context (SendToProject\'s isEnabled)'),
+    date: PIN_330, until: UNTIL_PHASE_C },
+  { tool: 'ReadWidgetContext', reason: MCP('it reads the state an MCP App view shared'), date: PIN_330, until: UNTIL_PHASE_C },
+  { tool: 'McpTaskResumePolling', reason: MCP('it resumes tracking a background MCP task (allow_mcp_task_worker_wake)'),
+    date: PIN_330, until: UNTIL_PHASE_C },
   // Off by default behind a GrowthBook flag.
   { tool: 'GetTask', reason: FLAG_OFF('tengu_violin_rosin', 'a local tool (it checks on a background shell)'),
     date: RECORDED, until: UNTIL_PHASE_B },
@@ -2462,6 +2528,28 @@ test('extractModes reads every mode the carve spells', () => {
   assert.deepStrictEqual(r.sandbox, ['on', 'required']);
   assert.deepStrictEqual(r.shells, ['bash', 'zsh']);
   assert.deepStrictEqual(r.optIn, { search: ['Glob', 'Grep'], todo: ['Read'] });
+});
+
+test('2.1.330\'s shapes: getAllBaseTools opening with member assignments, and the shell order held in a variable', () => {
+  const regMod = (c) => c.replace('function Jw(){let e=Ms();', 'function Jw(){jbe.loadWriters=nu,r1i.load=iu;let e=Ms();')
+    .replace('Ms=()=>{if(It())return null;return uVt}', 'Ms=()=>{if(It()){let q=__clodeReq0;return q.seams(),q.MonitorTool}return uVt}')
+    .replace('aliases:["Task"]', 'aliases:[...TA]').replace('var uVt=', 'var TA=["Task"],uVt=');
+  const base = extractRegistry(miniCarve()), r = extractRegistry(regMod(miniCarve()));
+  assert.deepStrictEqual(r.findings, []);
+  assert.deepStrictEqual([...r.tools.keys()].sort(), [...base.tools.keys()].sort());
+  assert.deepStrictEqual(r.tools.get('Agent').aliases, ['Task'], 'aliases spread from a named list');
+  assert.ok(r.tools.get('Monitor').gates.some((g) => /It\(\)/.test(g)), 'a tool returned from a block of declarations, gated by its if');
+  // anything else before the declarations still fails the shape
+  const other = extractRegistry(miniCarve().replace('function Jw(){let e=Ms();', 'function Jw(){if(x)y();let e=Ms();'));
+  assert.match(other.findings.join('\n'), /is no longer/);
+  const viaVar = MINI_MODE_CHUNK.replace('D=(s?["bash","zsh"]:["zsh","bash"]).flatMap((W)=>[W])', 'h=s?["bash","zsh"]:["zsh","bash"],[u,f]=s?[1,2]:[2,1];D=[u,...h.flatMap((W)=>[W]),f]');
+  assert.notStrictEqual(viaVar, MINI_MODE_CHUNK);
+  const m = extractModes(miniCarve({ modes: viaVar }));
+  assert.deepStrictEqual(m.findings, []);
+  assert.deepStrictEqual(m.shells, ['bash', 'zsh']);
+  // the variable must be the one flatMapped
+  const elsewhere = extractModes(miniCarve({ modes: viaVar.replace('...h.flatMap(', '...g.flatMap(') }));
+  assert.match(elsewhere.findings.join('\n'), /shell discovery .* found 0 time/);
 });
 
 test('extractModes never reads a missing or doubled anchor as "no such mode"', () => {
