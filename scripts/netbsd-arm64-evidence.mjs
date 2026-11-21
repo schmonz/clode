@@ -72,6 +72,10 @@ export function tarballFindings({ files, listed }) {
   return { findings, examined: listed.length };
 }
 
+// An executable's name on this host (the guest is NetBSD today; nothing here assumes it).
+const EXE = process.platform === 'win32' ? '.exe' : '';
+// clode's canonical storage name for a fetched provider (libexec/clode-update.cjs binaryFor): carved, never executed.
+const PROVIDER_FILE = 'claude';
 const sha256File = (f) => crypto.createHash('sha256').update(fs.readFileSync(f)).digest('hex');
 const die = (msg) => { process.stderr.write(`netbsd-arm64-evidence: ${msg}\n`); process.exit(1); };
 // inside the guest-directory try: a failure must still reach the cleanup in its finally, so it throws
@@ -114,16 +118,16 @@ async function inGuest(dir) {
   // 1. the engine, from this tree's sources
   step('engine', node, ['scripts/build-tjs.cjs'], { timeout: 60 * MIN, env: { CLODE_TJS_VENDOR: path.join(dir, 'vendor'),
     CLODE_TJS_OUT: path.join(dir, 'eng'), CLODE_TJS_BUILD: path.join(dir, 'engbuild') } });
-  const tjs = path.join(dir, 'eng', 'tjs');
+  const tjs = path.join(dir, 'eng', `tjs${EXE}`);
   if (!fs.existsSync(tjs)) throw new Error(`the engine build left no ${tjs}`);
   // 2. the pinned provider, into its own store (the lanes' store stays empty, so native resolves nowhere and skips)
   const pin = /^claude-code (\S+)$/m.exec(fs.readFileSync(path.join(repo, 'UPSTREAM_PIN'), 'utf8'))[1];
   step('provider', node, ['scripts/stage0.mjs', 'fetch', 'claude', pin], { timeout: 30 * MIN, env: { CLODE_STATE_ROOT: path.join(dir, 'fetch-state') } });
   const provRoot = path.join(dir, 'fetch-state', 'share', 'clode', 'providers', pin);
-  const prov = fs.existsSync(provRoot) ? fs.readdirSync(provRoot).map((p) => path.join(provRoot, p, 'claude')).find((f) => fs.existsSync(f)) : null;
+  const prov = fs.existsSync(provRoot) ? fs.readdirSync(provRoot).map((p) => path.join(provRoot, p, PROVIDER_FILE)).find((f) => fs.existsSync(f)) : null;
   if (!prov) throw new Error(`clode fetch claude ${pin} left no provider under ${provRoot}`);
   // 3. the quaude
-  const quaude = path.join(dir, 'quaude');
+  const quaude = path.join(dir, `quaude${EXE}`);
   step('quaude', node, ['scripts/stage0.mjs', 'build', '--out', quaude], { timeout: 60 * MIN,
     env: { CLODE_CLAUDE_BIN: prov, CLODE_TJS: tjs, CLODE_STATE_ROOT: path.join(dir, 'build-state') } });
   // 4. the PTY harness for the interactive turns: node-pty has no netbsd-arm64 prebuild, and its source build misses
