@@ -203,7 +203,9 @@ function scanOptionTable({ sources, table }) {
   let root = null;
   for (const src of sources) {
     if (!eager && src.includes('"--prefill"') && src.includes('"--settings"')) {
-      const sets = [...src.matchAll(/new Set\(\[([^\]]*)\]\)/g)].map((m) => new Set([...m[1].matchAll(/"([^"]+)"/g)].map((x) => x[1])));
+      // An array element may itself be a spread array literal: 2.1.330's value Set ends `,...[]])` (its strings are the
+      // Set's too), so one level of nested [...] is read as part of the list.
+      const sets = [...src.matchAll(/new Set\(\[((?:[^\]\[]|\[[^\]]*\])*)\]\)/g)].map((m) => new Set([...m[1].matchAll(/"([^"]+)"/g)].map((x) => x[1])));
       const value = sets.find((s) => s.has('--settings'));
       const variadic = sets.find((s) => s.has('--add-dir') && !s.has('--settings'));
       const optional = sets.find((s) => s.has('--resume'));

@@ -193,15 +193,15 @@ export { guardVerdict };
 // against the bundle by test/guard-subcommands-gate.test.cjs.
 const SUBCOMMANDS = new Set([
   'add', 'add-from-claude-desktop', 'add-json', 'agents', 'auth', 'auto-mode',
-  'autoremove', 'clear', 'config', 'critique', 'defaults', 'design-login', 'details',
+  'autoremove', 'clear', 'config', 'configure', 'critique', 'defaults', 'design-login', 'details',
   'disable', 'doctor', 'edit-chrome-settings', 'edit-hook', 'edit-memory-settings',
   'edit-permission-rules', 'edit-sandbox-settings', 'edit-skill-overrides', 'enable',
   'eval', 'gateway', 'get', 'i', 'import',
   'import-conversations', 'init', 'install', 'kill', 'list', 'login', 'logout',
   'marketplace', 'mcp', 'new', 'plugin', 'plugins', 'project', 'prune', 'purge',
-  'rc', 'remote-control', 'remove', 'reset', 'reset-project-choices', 'rm',
-  'sandbox', 'serve', 'setup', 'setup-token', 'show', 'status', 'tag',
-  'ultrareview', 'uninstall', 'update', 'upgrade', 'validate', 'xaa',
+  'rc', 'remote-control', 'remove', 'reset', 'reset-project-choices', 'restore-set-aside', 'rm',
+  'sandbox', 'serve', 'setup', 'setup-token', 'show', 'status', 'tag', 'test',
+  'ultrareview', 'uninstall', 'update', 'upgrade', 'validate', 'workspace-trust', 'worktree-hook', 'xaa',
 ]);
 // THE BUNDLE'S OWN ARGV RULE (grep-native sandbox round 3, I1). Which tokens are option VALUES decides where the
 // first positional is, and so whether argv names a subcommand: `quaude --add-dir config` is the model command with
@@ -229,6 +229,8 @@ const VALUE_OPTIONS = new Set([
   '--input-format', '--teammate-mode', '--messaging-socket-path', '--session-id', '--environment', '--pool', '--ref',
   '--on-branch', '--correlation-id', '--forward-home-settings',
   '--attach-serve', '--project-config-root',
+  // new at 2.1.330 (the eager scanner's value Set, or commander's root): each takes a value
+  '--fast-mode', '--initialize-fields', '--lead-verify-key', '--metadata', '--runner-declares', '--session-began-as-copy',
 ]);
 const VARIADIC_OPTIONS = new Set([
   '--allowedTools', '--allowed-tools', '--disallowedTools', '--disallowed-tools', '--tools', '--add-dir',
