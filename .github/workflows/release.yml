@@ -395,6 +395,7 @@ jobs:
       - uses: actions/checkout@v7.0.1
         with:
           submodules: false
+          fetch-depth: 0   # the NetBSD/arm64 VM record's commit must be an ancestor of HEAD, checked, not skipped as shallow
       - uses: actions/setup-node@v7.1.0
         with:
           node-version-file: .tool-versions
@@ -412,6 +413,16 @@ jobs:
           ls "$RUNNER_TEMP/gates-ran"
           CLODE_GATES_RAN="$RUNNER_TEMP/gates-ran" node --require ./test/file-watchdog-preload.cjs --test \
             --test-name-pattern=gates-ran-in-ci test/gates-ran-in-ci.test.cjs
+      # STALE IS RED ONLY AT RELEASE (USER RULING 2026-11-21): CI and the local suite only WARN on a stale NetBSD/arm64 VM
+      # record (test/fidelity/evidence/netbsd-arm64.json); a release refuses one, so it never ships NetBSD/arm64 unproven.
+      # A malformed, hand-edited or off-history record is red everywhere already. Re-run: node scripts/netbsd-arm64-evidence.mjs
+      - name: NetBSD/arm64 VM record — fresh, or no release (driven-local-evidence, CLODE_EVIDENCE_RELEASE=1)
+        if: ${{ !cancelled() }}
+        env:
+          CLODE_EVIDENCE_RELEASE: '1'
+        run: |
+          node --require ./test/file-watchdog-preload.cjs --test \
+            --test-name-pattern=driven-local-evidence test/build-gates/tool-coverage-gates.test.cjs
 
   release:
     needs: [leg, darwin-slices, darwin-universal, templates-pack, suite, be-bytecode-oracle, gates-ran-in-release]

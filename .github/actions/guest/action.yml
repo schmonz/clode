@@ -407,8 +407,9 @@ runs:
               *node*)                 cmd=node ;;
               gcc*)                   cmd=gcc ;;
               # pkgsrc's versioned pythons install python3.NN, never the package
-              # name (ci 44762976850 netbsd-arm64-cells: python313 installed, and this
-              # check called it missing). python3 itself falls through to *).
+              # name: a guest asking for python313 gets python3.13 (ci 44762976850, in
+              # the netbsd-arm64-cells job since removed for the local VM evidence;
+              # no leg asks for a python today). python3 itself falls through to *).
               python3[0-9]*)          cmd="python3.${base#python3}" ;;
               *)                      cmd=$base ;;
             esac

@@ -1196,7 +1196,7 @@ function checkExemptionTable(exemptions, today, { keys = EXEMPTION_KEYS, who: wh
 const cellKey = (tool, mode, engine) => `${tool}|${mode}|${engine}`;
 
 function scanCoverage({ carve, what, sources, exemptions, notApplicable = [], divergences = [], today, workflow, jobs, engines, published, enginesExemption,
-  localRuns = [], evidence = {}, inputs = null }) {
+  localRuns = [], evidence = {}, inputs = {}, ancestry = {}, release = false }) {
   const reg = extractRegistry(carve);
   const md = extractModes(carve);
   const { tools } = reg;
@@ -1286,26 +1286,29 @@ function scanCoverage({ carve, what, sources, exemptions, notApplicable = [], di
     for (const f of j.files) if (!d.drivers.some((x) => x.file === f)) findings.push(`CELL_JOBS ${j.job} claims ${f}, which holds no driver`);
   }
   // DRIVEN-LOCAL (USER RULING 2026-11-21): the cells committed VM evidence proves, apart from the CI-claimed ones.
-  const lc = checkLocalRuns({ runs: localRuns, sources, evidence, today, inputs });
+  const lc = checkLocalRuns({ runs: localRuns, sources, evidence, today, inputs, ancestry, release });
   findings.push(...lc.findings);
   for (const run of localRuns) {
     if (!engines.includes(run.engine)) findings.push(`LOCAL_CELL_RUNS ${run.run}: its engine ${run.engine} is not a shipping engine (${engines.join(', ')})`);
   }
   const local = new Map();                       // cellKey -> [run]
-  const localRunTag = new Map(lc.runs.map((r) => [r.run, `${r.run}, local VM evidence ${r.date} @ ${r.commit.slice(0, 7)}`]));
-  for (const c of lc.cells) {
+  const staleLocal = new Map();                  // cellKey -> [run], from STALE evidence (red only at release)
+  const localRunTag = new Map([...lc.runs.map((r) => [r.run, `${r.run}, local VM evidence ${r.date} @ ${r.commit.slice(0, 7)}`]),
+    ...lc.staleRuns.map((r) => [r.run, `${r.run}, STALE local VM evidence ${r.date} @ ${r.commit.slice(0, 7)}: ${r.why}`])]);
+  for (const c of [...lc.cells, ...lc.staleCells.map((x) => ({ ...x, stale: true }))]) {
     const name = tools.has(c.tool) ? c.tool : byAlias.get(c.tool);
     if (!name || !engines.includes(c.engine)) continue;
     if (c.na) {
       const k = `${name}|${c.mode}|${c.engine}`;
       if (!proofs.has(k)) proofs.set(k, []);
-      proofs.get(k).push({ driver: { file: c.tests[0].file, line: c.tests[0].line }, job: c.run, local: true });
+      proofs.get(k).push({ driver: { file: c.tests[0].file, line: 'evidence' }, job: c.run, local: true });
       continue;
     }
     if (!modesByTool.get(name).includes(c.mode)) continue;   // findDrivers' own finding above names a mode the tool lacks
     const k = cellKey(name, c.mode, c.engine);
-    if (!local.has(k)) local.set(k, []);
-    local.get(k).push(c.run);
+    const into = c.stale ? staleLocal : local;
+    if (!into.has(k)) into.set(k, []);
+    into.get(k).push(c.run);
   }
 
   // The exemptions, per cell.
@@ -1376,7 +1379,7 @@ function scanCoverage({ carve, what, sources, exemptions, notApplicable = [], di
 
   // The verdict, cell by cell; undriven, unexempted cells reported one line per tool x mode.
   const where = (xs) => [...new Set(xs.map((x) => `${x.job}: ${x.driver.file}:${x.driver.line}`))].sort().join(', ');
-  let nDriven = 0, nExempt = 0, nNone = 0, nNa = 0, nLocal = 0;
+  let nDriven = 0, nExempt = 0, nNone = 0, nNa = 0, nLocal = 0, nPinnedLocal = 0, nStale = 0;
   const matrix = [];
   for (const name of [...tools.keys()].sort()) {
     const rows = [];
@@ -1384,7 +1387,7 @@ function scanCoverage({ carve, what, sources, exemptions, notApplicable = [], di
       const none = [], states = [];
       for (const en of engines) {
         const k = cellKey(name, mo, en);
-        const dv = driven.get(k), lv = local.get(k), e = exempt.get(k), n = na.get(`${name}|${mo}`);
+        const dv = driven.get(k), lv = local.get(k), sv = staleLocal.get(k), e = exempt.get(k), n = na.get(`${name}|${mo}`);
         if (n) {
           nNa++;
           const pj = [...new Set((proofs.get(`${name}|${mo}|${en}`) || []).map((p) => p.job))];
@@ -1401,7 +1404,13 @@ function scanCoverage({ carve, what, sources, exemptions, notApplicable = [], di
         } else if (lv) {
           nLocal++;
           states.push(`${en} DRIVEN-LOCAL (${[...new Set(lv)].map(jobTag).join(', ')})`);
+          if (pinned.has(name)) nPinnedLocal++;   // M1: a pinned divergence held driven-local is no more equal to native
           if (e) findings.push(`${name} x ${mo} @ ${en}: exempted (${e.date}, until ${e.until}) but driven-local by ${lv.join(', ')}; narrow the exemption`);
+        } else if (sv) {
+          // STALE driven-local: a warning (checkLocalRuns'), counted apart, never as driven-local; a release refuses it
+          nStale++;
+          states.push(`${en} STALE DRIVEN-LOCAL (${[...new Set(sv)].map(jobTag).join(', ')})`);
+          if (pinned.has(name)) nPinnedLocal++;
         } else if (e) {
           nExempt++;
           states.push(`${en} ${today > e.until ? 'EXPIRED' : 'exempt'} until ${e.until}`);
@@ -1424,13 +1433,16 @@ function scanCoverage({ carve, what, sources, exemptions, notApplicable = [], di
   const files = new Set(d.drivers.map((x) => x.file)).size;
   const claimedOf = [...(placedJobs.size ? [`${nPlaced} of them only by ${[...placedJobs].join(', ')}, placed: not yet run`] : []),
     ...(pinned.size ? [`${nPinned} hold a pinned divergence: ${[...pinned.keys()].join(', ')}`] : [])];
-  return { findings, examined: cells, tools, drivers: d, declared, driven, foreign, matrix, jobs: jb.valid, notRegistered,
+  return { findings, warnings: lc.warnings, examined: cells, tools, drivers: d, declared, driven, foreign, matrix, jobs: jb.valid, notRegistered,
     counts: { driven: nDriven, exempted: nExempt, notApplicable: nNa, neither: nNone, ...(placedJobs.size ? { placed: nPlaced } : {}),
-      ...(localRuns.length ? { drivenLocal: nLocal } : {}),
+      ...(localRuns.length ? { drivenLocal: nLocal, drivenLocalStale: nStale } : {}), ...(localRuns.length && pinned.size ? { pinnedLocal: nPinnedLocal } : {}),
       ...(pinned.size ? { pinned: nPinned } : {}) },
     note: `${what}: ${reg.note}; ${md.note}; ${cells} cell(s) over ${engines.join(', ')} (${others.length} other published `
       + `engine(s) exempted as one): ${nDriven} claimed by a CI job${claimedOf.length ? ` (${claimedOf.join('; ')})` : ''}, `
-      + `${localRuns.length ? `${nLocal} driven-local (committed VM evidence, NOT CI: ${lc.runs.map((r) => `${r.run} ${r.date} @ ${r.commit.slice(0, 7)}`).join(', ') || 'none fresh'}), ` : ''}`
+      + `${localRuns.length ? `${nLocal} driven-local (committed VM evidence, NOT CI: ${lc.runs.map((r) => `${r.run} ${r.date} @ ${r.commit.slice(0, 7)}`).join(', ') || 'none fresh'}`
+        + `${lc.staleRuns.length ? `; plus ${nStale} STALE driven-local, not counted as driven-local: ${lc.warnings.join('; ')}` : ''}`
+        + `${pinned.size ? `; ${nPinnedLocal} hold a pinned divergence: ${[...pinned.keys()].join(', ')}` : ''}`
+        + `${lc.unchecked.length ? `; NOT CHECKED: ${lc.unchecked.join('; ')}` : ''}), ` : ''}`
       + `${nExempt} exempted, ${nNa} not applicable, ${nNone} neither; ${jb.valid.length} CI job(s) `
       + `report cells (CLAIMED is this static scan's word: only cells-ran-in-ci-job, gathered by gates-ran-in-ci on a green CI `
       + `run, shows a cell ran); ${d.drivers.length} driver(s) in ${files} file(s), ${d.scanned + d.skipped} file(s) scanned, `
@@ -1516,13 +1528,19 @@ function checkJobRan({ job, jobs, sources, records: records_, host }) {
 // the CI-claimed ones in the verdict, so they never read as CI proof. A cell counts only where:
 //   - the evidence is there and well-formed, names this run, its engine and its command, and ran on a host of that
 //     engine;
-//   - it is FRESH: at most LOCAL_EVIDENCE_MAX_DAYS old (by its `date`, against `today`), and recorded at a tree whose
-//     engine and quaude inputs (scripts/lib/evidence-inputs.cjs) are this tree's;
-//   - its `cells` are exactly what its `tests` say under this tree's drivers (no hand-edited pass);
+//   - it is FRESH: at most LOCAL_EVIDENCE_MAX_DAYS old (by its `date`, against `today`), recorded at a commit that is
+//     an ancestor of this tree's HEAD (not checked, and said so by name, in a shallow clone), and at a tree whose
+//     engine, quaude AND driver inputs (scripts/lib/evidence-inputs.cjs: the claimed files and their require closure,
+//     by content) are this tree's: a tightened assertion or a harness edit is a check the run never made;
+//   - its `cells` and `counts` are exactly what its `tests` say under this tree's drivers (no hand-edited pass), and
+//     every lane it records exited 0 (a lane that failed outside any cell fails the evidence);
 //   - at least one claimed driver's own test of that cell PASSED in it, and none of that cell's tests failed or is
 //     missing. A skip is not a pass: a cell whose tests only skipped counts nowhere.
 // Anything else is a finding naming the run's re-run command, and a cell it does not credit falls back to an
-// exemption or to NONE, as any undriven cell does.
+// exemption or to NONE, as any undriven cell does. EXCEPT STALENESS, which is red ONLY AT RELEASE (USER RULING
+// 2026-11-21): in CI and the local suite a merely stale record (too old, or another tree's inputs) is a WARNING printed
+// every run ("NetBSD/arm64 VM record stale since ..."), and its passed cells a separate STALE driven-local count;
+// release.yml's gates-ran-in-release (CLODE_EVIDENCE_RELEASE=1) refuses it.
 const LOCAL_EVIDENCE_MAX_DAYS = 30;
 const OUTCOME = (r) => (r.type === 'test:fail' ? 'failed' : r.skip !== undefined ? `skipped (${r.skip})`
   : r.todo !== undefined ? `todo (${r.todo})` : 'passed');
@@ -1540,7 +1558,8 @@ function recordsOf(records, x, t, mo) {
   return caps.filter((c) => c.caps.includes(mo)).map((c) => c.r);
 }
 // The cells a local run's records prove, per tool x mode on `engine`, from the drivers of `files` in `sources`.
-// -> [{ tool, mode, engine, na, passed, tests: [{ name, file, line, outcome }] }], sorted; tool is the driver's name
+// -> [{ tool, mode, engine, na, passed, tests: [{ name, file, outcome }] }], sorted (no line numbers: the driver inputs
+// hash binds the evidence to the drivers' content); tool is the driver's name
 // (an alias stays an alias here: scanCoverage maps it).
 function localCellsOf({ files, engine, sources, records }) {
   const d = findDrivers(sources.filter((s) => files.includes(s.file)));
@@ -1550,8 +1569,8 @@ function localCellsOf({ files, engine, sources, records }) {
     for (const mo of x.modes) {
       const rows = x.tests.flatMap((t) => {
         const rs = recordsOf(records, x, t, mo);
-        return rs.length ? rs.map((r) => ({ name: r.name, file: x.file, line: t.line, outcome: OUTCOME(r) }))
-          : [{ name: t.name || t.template || `line ${t.line}`, file: x.file, line: t.line, outcome: 'not run' }];
+        return rs.length ? rs.map((r) => ({ name: r.name, file: x.file, outcome: OUTCOME(r) }))
+          : [{ name: t.name || t.template || `line ${t.line}`, file: x.file, outcome: 'not run' }];
       });
       const k = `${x.name}|${mo}|${x.na ? 'na' : ''}`;
       if (!byCell.has(k)) byCell.set(k, { tool: x.name, mode: mo, engine, na: !!x.na, drivers: [] });
@@ -1569,12 +1588,41 @@ function localCellsOf({ files, engine, sources, records }) {
 const daysBetween = (from, to) => Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86400000);
 const EVIDENCE_KEYS = ['run', 'engine', 'commit', 'date', 'host', 'quaude', 'inputs', 'command', 'lanes', 'tests', 'cells', 'counts'];
 // `runs`: LOCAL_CELL_RUNS; `evidence`: { <evidence path>: parsed JSON | null (no file) | { unreadable: why } };
-// `inputs`: this tree's evidenceInputs(). -> { findings, cells: [{ ...cell, run }] (credited only), runs: [{ run, date,
-// commit, counts }] }
-function checkLocalRuns({ runs = [], sources, evidence = {}, today, inputs }) {
+// `inputs`: { <run>: this tree's evidenceInputs(REPO, run.files) }; `ancestry`: { <run>: 'ancestor' | 'not-ancestor' |
+// 'shallow' | 'no-git' }, whether the evidence's commit is an ancestor of HEAD (the last two: not checked); `release`:
+// judging for a release (CLODE_EVIDENCE_RELEASE=1, release.yml's gates-ran-in-release).
+// STALE IS RED ONLY AT RELEASE (USER RULING 2026-11-21). Evidence that is merely stale (too old, or another tree's
+// engine, quaude or driver inputs) is, outside a release, a WARNING printed every run, and its passed cells count as
+// their own STALE driven-local number; a release refuses it. Evidence that is missing, malformed, edited by hand, off
+// HEAD's history, or whose lanes failed is a finding everywhere.
+// -> { findings, warnings, cells: [{ ...cell, run }] (credited only), staleCells (likewise, from stale evidence), runs:
+// [{ run, date, commit, counts, cells }], staleRuns, unchecked, examined, note }
+const INPUT_KINDS = [['engine', 'engine sources (scripts/engine-recipe.cjs)', 'engine'], ['quaude', 'quaude inputs (libexec/, scripts/stage0.mjs, UPSTREAM_PIN)', 'quaude inputs'],
+  ['drivers', 'driver inputs (the claimed files and their require closure)', 'drivers']];
+function countsOf(cells, tests) {
+  const failing = (c) => c.tests.some((t) => t.outcome === 'failed' || t.outcome === 'not run');
+  return { cells: cells.length, passed: cells.filter((c) => c.passed).length,
+    failed: cells.filter((c) => !c.passed && failing(c)).length, skipped: cells.filter((c) => !c.passed && !failing(c)).length,
+    tests: { passed: tests.filter((r) => OUTCOME(r) === 'passed').length, failed: tests.filter((r) => r.type === 'test:fail').length,
+      skipped: tests.filter((r) => /^(skipped|todo)/.test(OUTCOME(r))).length } };
+}
+// Evidence true to ITSELF, needing no driver source (all a stale record can be held to): every cell row is a record in
+// its tests with that outcome, a passed cell has a passed row and no failed or unrun one, and the counts are its own.
+function selfConsistent(ev) {
+  const outcome = new Map(ev.tests.map((r) => [`${r.file}|${r.name}`, OUTCOME(r)]));
+  return ev.cells.every((c) => Array.isArray(c.tests) && c.tests.every((t) => (t.outcome === 'not run' ? !outcome.has(`${t.file}|${t.name}`)
+    : outcome.get(`${t.file}|${t.name}`) === t.outcome))
+    && (!c.passed || (c.tests.some((t) => t.outcome === 'passed') && !c.tests.some((t) => t.outcome === 'failed' || t.outcome === 'not run'))))
+    && JSON.stringify(countsOf(ev.cells, ev.tests)) === JSON.stringify(ev.counts);
+}
+function checkLocalRuns({ runs = [], sources, evidence = {}, today, inputs = {}, ancestry = {}, release = false }) {
   const findings = [];
+  const warnings = [];
   const credited = [];
+  const staleCells = [];
   const seen = [];
+  const staleRuns = [];
+  const unchecked = [];
   for (const run of runs) {
     const ev = evidence[run.evidence];
     const rerun = `re-run \`${run.command}\` (it rewrites ${run.evidence})`;
@@ -1592,23 +1640,47 @@ function checkLocalRuns({ runs = [], sources, evidence = {}, today, inputs }) {
     if (!ev.host || ev.host.platform !== want.platform || ev.host.arch !== want.arch) {
       bad.push(`it ran on ${ev.host ? `${ev.host.platform}-${ev.host.arch}` : 'an unnamed host'}, not a ${run.engine} host`);
     }
-    if (!Array.isArray(ev.tests) || !Array.isArray(ev.cells)) bad.push('its tests and cells are not lists');
+    if (!Array.isArray(ev.tests) || !Array.isArray(ev.cells) || !Array.isArray(ev.lanes)) bad.push('its tests, cells and lanes are not lists');
     if (!isIsoDate(ev.date)) bad.push('its date is not YYYY-MM-DD');
     if (bad.length) { findings.push(`${tag}: ${run.evidence} is not evidence of this run: ${bad.join('; ')}; ${rerun}`); continue; }
-    const stale = [];
+    const anc = ancestry[run.run];
+    if (anc === 'not-ancestor') {
+      findings.push(`${tag}: its commit ${ev.commit.slice(0, 12)} is not an ancestor of HEAD (another branch, or rewritten history); ${rerun}`);
+      continue;
+    }
+    if (anc !== 'ancestor') unchecked.push(`${run.run}: whether ${ev.commit.slice(0, 12)} is an ancestor of HEAD (${anc || 'not asked'})`);
+    const badLanes = ev.lanes.filter((l) => l.status !== 0 || l.signal);
+    if (!ev.lanes.length || badLanes.length) {
+      findings.push(`${tag}: ${ev.lanes.length ? `run(s) ${badLanes.map((l) => `${l.id} (exit ${l.status}${l.signal ? `, ${l.signal}` : ''})`).join(', ')} `
+        + 'did not exit 0' : 'it records no lanes'} in ${run.evidence}: a lane that failed fails the evidence, inside a cell or not; `
+        + `its cells count nowhere until you ${rerun}`);
+      continue;
+    }
+    const forged = `${tag}: ${run.evidence}'s cells or counts are not what its tests say`;
+    if (!selfConsistent(ev)) { findings.push(`${forged} (edited by hand); its cells count nowhere until you ${rerun}`); continue; }
+    const stale = [], why = [];
     const age = daysBetween(ev.date, today);
-    if (age > LOCAL_EVIDENCE_MAX_DAYS) stale.push(`it is ${age} days old (recorded ${ev.date}; the limit is ${LOCAL_EVIDENCE_MAX_DAYS})`);
-    if (age < 0) stale.push(`it is dated ${ev.date}, after today (${today})`);
-    for (const [k, what] of [['engine', 'engine sources (scripts/engine-recipe.cjs)'], ['quaude', 'quaude inputs (libexec/, scripts/stage0.mjs, UPSTREAM_PIN)']]) {
-      if (!inputs || !ev.inputs || ev.inputs[k] !== inputs[k]) {
-        stale.push(`the ${what} changed since it ran at ${ev.commit.slice(0, 12)} (${(ev.inputs && ev.inputs[k] || 'none').slice(0, 12)}, now ${(inputs && inputs[k] || 'unknown').slice(0, 12)})`);
+    if (age > LOCAL_EVIDENCE_MAX_DAYS) { stale.push(`it is ${age} days old (recorded ${ev.date}; the limit is ${LOCAL_EVIDENCE_MAX_DAYS})`); why.push(`${age} days old`); }
+    if (age < 0) { stale.push(`it is dated ${ev.date}, after today (${today})`); why.push('dated after today'); }
+    const now = inputs[run.run];
+    const changed = [];
+    for (const [k, what, short] of INPUT_KINDS) {
+      if (!now || !ev.inputs || ev.inputs[k] !== now[k]) {
+        stale.push(`the ${what} changed since it ran at ${ev.commit.slice(0, 12)} (${(ev.inputs && ev.inputs[k] || 'none').slice(0, 12)}, now ${(now && now[k] || 'unknown').slice(0, 12)})`);
+        changed.push(short);
       }
     }
-    if (stale.length) { findings.push(`${tag}: STALE: ${stale.join('; ')}; its cells count nowhere until you ${rerun}`); continue; }
+    if (changed.length) why.push(`${changed.join(', ')} changed`);
+    if (stale.length) {
+      if (release) { findings.push(`${tag}: STALE, and a release refuses a stale record: ${stale.join('; ')}; ${rerun}`); continue; }
+      warnings.push(`${run.label} VM record stale since ${ev.commit.slice(0, 12)} (${why.join('; ')}); run ${run.command}`);
+      for (const c of ev.cells) if (c.passed) staleCells.push({ ...c, engine: run.engine, run: run.run });
+      staleRuns.push({ run: run.run, date: ev.date, commit: ev.commit, counts: ev.counts, cells: ev.cells.length, why: why.join('; ') });
+      continue;
+    }
     const cells = localCellsOf({ files: run.files, engine: run.engine, sources, records: ev.tests });
     if (JSON.stringify(cells) !== JSON.stringify(ev.cells)) {
-      findings.push(`${tag}: ${run.evidence}'s cells are not what its tests say under this tree's drivers (edited by hand, `
-        + `or the drivers changed since ${ev.commit.slice(0, 12)}); its cells count nowhere until you ${rerun}`);
+      findings.push(`${forged} under this tree's drivers (edited by hand); its cells count nowhere until you ${rerun}`);
       continue;
     }
     const files = new Set(sources.map((s) => s.file));
@@ -1616,14 +1688,17 @@ function checkLocalRuns({ runs = [], sources, evidence = {}, today, inputs }) {
     for (const c of cells) {
       if (c.passed) { credited.push({ ...c, run: run.run }); continue; }
       findings.push(`${c.tool} x ${c.mode} @ ${c.engine}${c.na ? ' (not registered)' : ''}: ${c.tests.filter((t) => t.outcome !== 'passed')
-        .map((t) => `test "${t.name}" (${t.file}:${t.line}) ${t.outcome}`).join('; ')} in ${run.run}'s evidence (${ev.date} @ `
+        .map((t) => `test "${t.name}" (${t.file}) ${t.outcome}`).join('; ')} in ${run.run}'s evidence (${ev.date} @ `
         + `${ev.commit.slice(0, 12)}); a cell counts only where its own test passed, and a skip is not a pass`);
     }
     seen.push({ run: run.run, date: ev.date, commit: ev.commit, counts: ev.counts, cells: cells.length });
   }
-  return { findings, cells: credited, runs: seen, examined: runs.length,
-    note: `${runs.length} local run(s): ${seen.map((r) => `${r.run} ${r.date} @ ${r.commit.slice(0, 12)}, ${credited.filter((c) => c.run === r.run).length} `
-      + `of ${r.cells} cell(s) passed`).join('; ') || 'none fresh'} (DRIVEN-LOCAL: committed VM evidence, not CI)` };
+  return { findings, warnings, cells: credited, staleCells, runs: seen, staleRuns, examined: runs.length, unchecked,
+    note: `${runs.length} local run(s)${release ? ', judged for a release' : ''}: ${[...seen.map((r) => `${r.run} ${r.date} @ ${r.commit.slice(0, 12)}, `
+      + `${credited.filter((c) => c.run === r.run).length} of ${r.cells} cell(s) passed`),
+    ...staleRuns.map((r) => `${r.run} STALE (${r.why}) ${r.date} @ ${r.commit.slice(0, 12)}, ${staleCells.filter((c) => c.run === r.run).length} of ${r.cells} `
+      + 'cell(s) passed then')].join('; ') || 'none fresh'} (DRIVEN-LOCAL: committed VM evidence, not CI)`
+      + `${warnings.length ? `; WARNING: ${warnings.join('; ')}` : ''}${unchecked.length ? `; NOT CHECKED: ${unchecked.join('; ')}` : ''}` };
 }
 // Fill a fresh run's evidence draft with what its tests prove (scripts/netbsd-arm64-evidence.mjs, through
 // CLODE_LOCAL_EVIDENCE_WRITE): the cells, by the same localCellsOf the verdict re-derives them with, and their counts.
@@ -1631,12 +1706,7 @@ function fillEvidence(draft, sources, runs = LOCAL_CELL_RUNS) {
   const run = runs.find((r) => r.run === draft.run);
   if (!run) throw new Error(`evidence draft names run ${draft.run}, which LOCAL_CELL_RUNS does not (${runs.map((r) => r.run).join(', ')})`);
   const cells = localCellsOf({ files: run.files, engine: run.engine, sources, records: draft.tests });
-  const failing = (c) => c.tests.some((t) => t.outcome === 'failed' || t.outcome === 'not run');
-  const counts = { cells: cells.length, passed: cells.filter((c) => c.passed).length,
-    failed: cells.filter((c) => !c.passed && failing(c)).length, skipped: cells.filter((c) => !c.passed && !failing(c)).length,
-    tests: { passed: draft.tests.filter((r) => OUTCOME(r) === 'passed').length, failed: draft.tests.filter((r) => r.type === 'test:fail').length,
-      skipped: draft.tests.filter((r) => /^(skipped|todo)/.test(OUTCOME(r))).length } };
-  return { ...draft, cells, counts };
+  return { ...draft, cells, counts: countsOf(cells, draft.tests) };
 }
 
 // ==========================================================================
@@ -1699,7 +1769,7 @@ const CELL_JOBS = [
 // the committed evidence file; the gate judges that file (DRIVEN-LOCAL, above), never a CI run. Each test's native
 // half skips there by name (NetBSD has no native Claude Code); quaude is judged by the answers recorded from native.
 const LOCAL_CELL_RUNS = [
-  { run: 'netbsd-arm64-vm', engine: 'netbsd-arm64', files: ['test/fidelity/tools-local.test.cjs',
+  { run: 'netbsd-arm64-vm', label: 'NetBSD/arm64', engine: 'netbsd-arm64', files: ['test/fidelity/tools-local.test.cjs',
     'test/fidelity/agentic-grep-glob.test.cjs', 'test/fidelity/webfetch.test.cjs'],
     evidence: 'test/fidelity/evidence/netbsd-arm64.json', command: 'node scripts/netbsd-arm64-evidence.mjs' },
 ];
@@ -1961,8 +2031,29 @@ function readEvidence(runs = LOCAL_CELL_RUNS) {
   }
   return out;
 }
-const readEvidenceInputs = () => require(path.join(REPO, 'scripts', 'lib', 'evidence-inputs.cjs')).evidenceInputs();
-const readLocal = () => ({ localRuns: LOCAL_CELL_RUNS, evidence: readEvidence(), inputs: readEvidenceInputs() });
+const readEvidenceInputs = (runs = LOCAL_CELL_RUNS) => Object.fromEntries(runs.map((r) =>
+  [r.run, require(path.join(REPO, 'scripts', 'lib', 'evidence-inputs.cjs')).evidenceInputs(REPO, r.files)]));
+// Is each run's evidence commit an ancestor of HEAD? 'shallow' (a CI checkout of depth 1 lacks it) and 'no-git' are
+// NOT checked, and the verdict says so by name.
+function readAncestry(runs = LOCAL_CELL_RUNS, evidence = readEvidence(runs)) {
+  const git = (args) => spawnSync('git', args, { cwd: REPO, encoding: 'utf8' });
+  const out = {};
+  for (const r of runs) {
+    const ev = evidence[r.evidence];
+    if (!ev || !/^[0-9a-f]{40}$/.test(ev.commit || '')) continue;
+    const probe = git(['rev-parse', '--is-shallow-repository']);
+    if (probe.status !== 0) { out[r.run] = 'no-git'; continue; }
+    const a = git(['merge-base', '--is-ancestor', ev.commit, 'HEAD']);
+    if (a.status === 0) out[r.run] = 'ancestor';
+    else if (probe.stdout.trim() === 'true') out[r.run] = 'shallow';
+    else out[r.run] = 'not-ancestor';   // a full clone that does not hold it, or holds it off HEAD's history
+  }
+  return out;
+}
+// CLODE_EVIDENCE_RELEASE=1: judge for a release, where a STALE record is red (release.yml's gates-ran-in-release sets it).
+const RELEASE = () => process.env.CLODE_EVIDENCE_RELEASE === '1';
+const readLocal = () => { const evidence = readEvidence(); return { localRuns: LOCAL_CELL_RUNS, evidence, inputs: readEvidenceInputs(),
+  ancestry: readAncestry(LOCAL_CELL_RUNS, evidence), release: RELEASE() }; };
 let INPUTS = null;
 function readInputs() {
   if (!INPUTS) {
@@ -2800,57 +2891,95 @@ guardTests(defineGuard({
 // ==========================================================================
 // DRIVEN-LOCAL (USER RULING 2026-11-21)
 // ==========================================================================
-// The fixture run: drivers.test.cjs on a netbsd-arm64 VM. Its records sit three lines below the tests' lines, as a
-// tree edited since the run would have them: they are matched by NAME.
-const LFX_RUN = { run: 'fx-vm', engine: 'netbsd-arm64', files: ['test/synthetic/drivers.test.cjs'],
+// The fixture run: drivers.test.cjs on a netbsd-arm64 VM, run while the file had three more lines at its top (a
+// comment since deleted): the evidence holds that tree's lines, and is judged against this one's. No line is part of a
+// cell, so moved lines change nothing; what binds the evidence to the drivers is their content (inputs.drivers).
+const LFX_RUN = { run: 'fx-vm', label: 'NetBSD/arm64', engine: 'netbsd-arm64', files: ['test/synthetic/drivers.test.cjs'],
   evidence: 'test/synthetic/fx-evidence.json', command: 'node scripts/fx-evidence.mjs' };
-const LFX_INPUTS = { engine: 'e'.repeat(64), quaude: 'f'.repeat(64) };
+const LFX_INPUTS = { engine: 'e'.repeat(64), quaude: 'f'.repeat(64), drivers: 'd'.repeat(64) };
 const LFX_TODAY = '2026-09-28';
+const LFX_RUN_SOURCES = DRIVER_SOURCES.map((x) => (x.file === 'test/synthetic/drivers.test.cjs'
+  ? { ...x, text: `// one\n// two\n// three\n${x.text}` } : x));
 const LFX_NAMES = { 11: 'bash, scripted in place', 19: 'read, through a helper, judged by the id it was given',
   27: 'task, by its alias', 32: 'grep, which skips on its own outcome', 47: 'bash, sandboxed, its control in a helper' };
 const lfxTests = (over = {}) => Object.entries(LFX_NAMES).filter(([l]) => over[l] !== null).map(([l, name]) => ({
   type: 'test:pass', file: 'test/synthetic/drivers.test.cjs', line: Number(l) + 3, name, nesting: 0, ...(over[l] || {}) }));
+const LFX_LANES = [{ lane: 1, id: 'drivers', file: 'test/synthetic/drivers.test.cjs', status: 0, signal: null, seconds: 9 }];
 const lfxEvidence = ({ tests = lfxTests(), ...over } = {}) => ({ ...fillEvidence({ run: LFX_RUN.run, engine: LFX_RUN.engine,
   commit: 'a'.repeat(40), date: '2026-09-20', host: { platform: 'netbsd', arch: 'arm64', os: 'NetBSD 11.0_RC2 evbarm' },
-  quaude: { sha256: 'b'.repeat(64) }, inputs: LFX_INPUTS, command: LFX_RUN.command, lanes: [], tests }, DRIVER_SOURCES, [LFX_RUN]), ...over });
+  quaude: { sha256: 'b'.repeat(64) }, inputs: LFX_INPUTS, command: LFX_RUN.command, lanes: LFX_LANES, tests }, LFX_RUN_SOURCES, [LFX_RUN]), ...over });
 const lfxLocal = (ev = lfxEvidence(), over = {}) => ({ runs: [LFX_RUN], sources: DRIVER_SOURCES, evidence: { [LFX_RUN.evidence]: ev },
-  today: LFX_TODAY, inputs: LFX_INPUTS, ...over });
+  today: LFX_TODAY, inputs: { [LFX_RUN.run]: LFX_INPUTS }, ancestry: { [LFX_RUN.run]: 'ancestor' }, ...over });
 const LFX_CELLS = ['Bash|print', 'Bash|sandbox:on', 'Bash|shell:bash', 'Grep|print', 'Read|print', 'Task|print'];
 const creditedOf = (r) => r.cells.map((c) => `${c.tool}|${c.mode}`).sort();
 
-test('driven-local: fresh evidence whose every test passed credits its cells, matched to this tree\'s tests by name', () => {
-  const r = checkLocalRuns(lfxLocal());
+test('driven-local: fresh evidence whose every test passed credits its cells, though every line moved since the run', () => {
+  const ev = lfxEvidence();
+  assert.ok(ev.tests.every((t) => t.line !== Number(Object.keys(LFX_NAMES).find((l) => LFX_NAMES[l] === t.name))), 'the run\'s lines are not this tree\'s');
+  assert.ok(ev.cells.every((c) => c.tests.every((t) => !('line' in t))), 'no line in a cell row');
+  const r = checkLocalRuns(lfxLocal(ev));
   assert.deepStrictEqual(r.findings, []);
   assert.deepStrictEqual(creditedOf(r), LFX_CELLS);
   assert.ok(r.cells.every((c) => c.engine === 'netbsd-arm64' && c.run === 'fx-vm'));
-  assert.deepStrictEqual(lfxEvidence().counts, { cells: 6, passed: 6, failed: 0, skipped: 0, tests: { passed: 5, failed: 0, skipped: 0 } });
+  assert.deepStrictEqual(ev.counts, { cells: 6, passed: 6, failed: 0, skipped: 0, tests: { passed: 5, failed: 0, skipped: 0 } });
   // exactly LOCAL_EVIDENCE_MAX_DAYS old is still fresh
   assert.deepStrictEqual(checkLocalRuns(lfxLocal(lfxEvidence({ date: '2026-08-29' }))).findings, []);
 });
 
 // CONTROLS: each is a way local evidence could read as proof when it is not.
-test('driven-local: STALE evidence (past 30 days, or another tree\'s engine or quaude inputs) credits nothing and names the re-run command', () => {
+// STALE IS RED ONLY AT RELEASE: outside one, stale evidence is a named WARNING and its cells a separate STALE count.
+test('driven-local: STALE evidence (past 30 days, another tree\'s engine, quaude or driver inputs) warns, credits nothing as driven-local, and a release refuses it', () => {
+  const rel = { release: true };
   const old = checkLocalRuns(lfxLocal(lfxEvidence({ date: '2026-08-28' })));
-  assert.deepStrictEqual(old.findings, ['driven-local fx-vm (netbsd-arm64): STALE: it is 31 days old (recorded 2026-08-28; the limit is 30); '
-    + 'its cells count nowhere until you re-run `node scripts/fx-evidence.mjs` (it rewrites test/synthetic/fx-evidence.json)']);
+  assert.deepStrictEqual(old.findings, []);
+  assert.deepStrictEqual(old.warnings, ['NetBSD/arm64 VM record stale since aaaaaaaaaaaa (31 days old); run node scripts/fx-evidence.mjs']);
   assert.deepStrictEqual(old.cells, []);
-  const engine = checkLocalRuns(lfxLocal(lfxEvidence(), { inputs: { ...LFX_INPUTS, engine: '0'.repeat(64) } }));
-  assert.match(engine.findings[0], /STALE: the engine sources \(scripts\/engine-recipe\.cjs\) changed since it ran at aaaaaaaaaaaa \(eeeeeeeeeeee, now 000000000000\)/);
-  assert.deepStrictEqual(engine.cells, []);
-  const shim = checkLocalRuns(lfxLocal(lfxEvidence(), { inputs: { ...LFX_INPUTS, quaude: '1'.repeat(64) } }));
-  assert.match(shim.findings[0], /STALE: the quaude inputs \(libexec\/, scripts\/stage0\.mjs, UPSTREAM_PIN\) changed/);
+  assert.deepStrictEqual(old.staleCells.map((c) => `${c.tool}|${c.mode}`).sort(), LFX_CELLS);
+  assert.match(old.note, /fx-vm STALE \(31 days old\) 2026-08-28 @ aaaaaaaaaaaa, 6 of 6 cell\(s\) passed then .*WARNING: NetBSD\/arm64 VM record stale/);
+  const oldRel = checkLocalRuns(lfxLocal(lfxEvidence({ date: '2026-08-28' }), rel));
+  assert.deepStrictEqual(oldRel.findings, ['driven-local fx-vm (netbsd-arm64): STALE, and a release refuses a stale record: it is 31 days old '
+    + '(recorded 2026-08-28; the limit is 30); re-run `node scripts/fx-evidence.mjs` (it rewrites test/synthetic/fx-evidence.json)']);
+  assert.deepStrictEqual([oldRel.cells, oldRel.staleCells, oldRel.warnings], [[], [], []]);
+  const now = (k, v, over = {}) => ({ inputs: { [LFX_RUN.run]: { ...LFX_INPUTS, [k]: v } }, ...over });
+  const engine = checkLocalRuns(lfxLocal(lfxEvidence(), now('engine', '0'.repeat(64))));
+  assert.deepStrictEqual(engine.warnings, ['NetBSD/arm64 VM record stale since aaaaaaaaaaaa (engine changed); run node scripts/fx-evidence.mjs']);
+  assert.match(checkLocalRuns(lfxLocal(lfxEvidence(), now('engine', '0'.repeat(64), rel))).findings[0],
+    /STALE, and a release refuses a stale record: the engine sources \(scripts\/engine-recipe\.cjs\) changed since it ran at aaaaaaaaaaaa \(eeeeeeeeeeee, now 000000000000\)/);
+  const shim = checkLocalRuns(lfxLocal(lfxEvidence({ date: '2026-08-01' }), now('quaude', '1'.repeat(64))));
+  assert.deepStrictEqual(shim.warnings, ['NetBSD/arm64 VM record stale since aaaaaaaaaaaa (58 days old; quaude inputs changed); run node scripts/fx-evidence.mjs']);
+  // a tightened assertion or a harness edit is a check the run never made
+  const drivers = checkLocalRuns(lfxLocal(lfxEvidence(), now('drivers', '2'.repeat(64))));
+  assert.match(drivers.warnings[0], /stale since aaaaaaaaaaaa \(drivers changed\)/);
+  assert.deepStrictEqual([drivers.findings, drivers.cells], [[], []]);
+  assert.match(checkLocalRuns(lfxLocal(lfxEvidence(), now('drivers', '2'.repeat(64), rel))).findings[0],
+    /the driver inputs \(the claimed files and their require closure\) changed since it ran at aaaaaaaaaaaa/);
   const future = checkLocalRuns(lfxLocal(lfxEvidence({ date: '2026-10-01' })));
-  assert.match(future.findings[0], /dated 2026-10-01, after today \(2026-09-28\)/);
+  assert.match(future.warnings[0], /\(dated after today\)/);
+  // fresh evidence passes a release
+  assert.deepStrictEqual(checkLocalRuns(lfxLocal(lfxEvidence(), rel)).findings, []);
+  assert.deepStrictEqual(creditedOf(checkLocalRuns(lfxLocal(lfxEvidence(), rel))), LFX_CELLS);
+});
+
+// Only staleness is downgraded: off HEAD's history is red everywhere, and a shallow clone skips that one check by name.
+test('driven-local: evidence whose commit is not an ancestor of HEAD is red everywhere; a shallow clone skips that check by name', () => {
+  const offHead = checkLocalRuns(lfxLocal(lfxEvidence(), { ancestry: { [LFX_RUN.run]: 'not-ancestor' } }));
+  assert.match(offHead.findings[0], /^driven-local fx-vm \(netbsd-arm64\): its commit aaaaaaaaaaaa is not an ancestor of HEAD/);
+  assert.deepStrictEqual([offHead.cells, offHead.staleCells], [[], []]);
+  const offStale = checkLocalRuns(lfxLocal(lfxEvidence({ date: '2026-08-01' }), { ancestry: { [LFX_RUN.run]: 'not-ancestor' } }));
+  assert.match(offStale.findings[0], /not an ancestor of HEAD/);
+  const shallow = checkLocalRuns(lfxLocal(lfxEvidence(), { ancestry: { [LFX_RUN.run]: 'shallow' } }));
+  assert.deepStrictEqual(shallow.findings, []);
+  assert.match(shallow.note, /NOT CHECKED: fx-vm: whether aaaaaaaaaaaa is an ancestor of HEAD \(shallow\)/);
 });
 
 test('driven-local: a MISSING cell test, a FAILED one and a SKIPPED one each leave the cell uncredited, by name', () => {
   const missing = checkLocalRuns(lfxLocal(lfxEvidence({ tests: lfxTests({ 19: null }) })));
   assert.deepStrictEqual(missing.findings, ['Read x print @ netbsd-arm64: test "read, through a helper, judged by the id it was given" '
-    + '(test/synthetic/drivers.test.cjs:19) not run in fx-vm\'s evidence (2026-09-20 @ aaaaaaaaaaaa); a cell counts only where its own '
+    + '(test/synthetic/drivers.test.cjs) not run in fx-vm\'s evidence (2026-09-20 @ aaaaaaaaaaaa); a cell counts only where its own '
     + 'test passed, and a skip is not a pass']);
   assert.deepStrictEqual(creditedOf(missing), LFX_CELLS.filter((c) => c !== 'Read|print'));
   const failed = checkLocalRuns(lfxLocal(lfxEvidence({ tests: lfxTests({ 11: { type: 'test:fail' } }) })));
-  assert.match(failed.findings.join('\n'), /^Bash x print @ netbsd-arm64: test "bash, scripted in place" \(test\/synthetic\/drivers\.test\.cjs:11\) failed/);
+  assert.match(failed.findings.join('\n'), /^Bash x print @ netbsd-arm64: test "bash, scripted in place" \(test\/synthetic\/drivers\.test\.cjs\) failed/);
   assert.ok(!creditedOf(failed).includes('Bash|print'));
   const skipped = checkLocalRuns(lfxLocal(lfxEvidence({ tests: lfxTests({ 32: { skip: 'refused' } }) })));
   assert.match(skipped.findings.join('\n'), /^Grep x print @ netbsd-arm64: test "grep, which skips on its own outcome" .* skipped \(refused\) in fx-vm's evidence/);
@@ -2859,7 +2988,19 @@ test('driven-local: a MISSING cell test, a FAILED one and a SKIPPED one each lea
     { cells: 6, passed: 4, failed: 1, skipped: 1, tests: { passed: 3, failed: 1, skipped: 1 } });
 });
 
-test('driven-local: no evidence, evidence of another host or run, and hand-edited cells are findings, and credit nothing', () => {
+test('driven-local: a lane that did not exit 0 fails the evidence, though every cell test passed', () => {
+  const lanes = [...LFX_LANES, { lane: 2, id: 'other', file: 'test/synthetic/drivers.test.cjs', status: 1, signal: null, seconds: 3 }];
+  const r = checkLocalRuns(lfxLocal(lfxEvidence({ lanes })));
+  assert.match(checkLocalRuns(lfxLocal(lfxEvidence({ lanes, date: '2026-08-01' }))).findings[0], /did not exit 0/, 'red even when stale');
+  assert.match(r.findings[0], /run\(s\) other \(exit 1\) did not exit 0 in test\/synthetic\/fx-evidence\.json: a lane that failed fails the evidence/);
+  assert.deepStrictEqual(r.cells, []);
+  const killed = checkLocalRuns(lfxLocal(lfxEvidence({ lanes: [{ ...LFX_LANES[0], status: null, signal: 'SIGKILL' }] })));
+  assert.match(killed.findings[0], /drivers \(exit null, SIGKILL\) did not exit 0/);
+  const none = checkLocalRuns(lfxLocal(lfxEvidence({ lanes: [] })));
+  assert.match(none.findings[0], /it records no lanes/);
+});
+
+test('driven-local: no evidence, evidence of another host or run, and hand-edited cells or counts are findings, and credit nothing', () => {
   const none = checkLocalRuns(lfxLocal(null));
   assert.deepStrictEqual(none.findings, ['driven-local fx-vm (netbsd-arm64): no evidence at test/synthetic/fx-evidence.json; '
     + 're-run `node scripts/fx-evidence.mjs` (it rewrites test/synthetic/fx-evidence.json)']);
@@ -2867,13 +3008,20 @@ test('driven-local: no evidence, evidence of another host or run, and hand-edite
   assert.match(host.findings[0], /is not evidence of this run: it ran on darwin-arm64, not a netbsd-arm64 host; re-run/);
   const cmd = checkLocalRuns(lfxLocal(lfxEvidence({ command: 'node elsewhere.mjs' })));
   assert.match(cmd.findings[0], /it was written by `node elsewhere\.mjs`, not `node scripts\/fx-evidence\.mjs`/);
-  // PLANTED: a skipped cell's entry flipped to passed by hand
+  // PLANTED: a skipped cell's entry flipped to passed by hand, and the counts made to agree
   const ev = lfxEvidence({ tests: lfxTests({ 32: { skip: 'refused' } }) });
   const forged = { ...ev, cells: ev.cells.map((c) => (c.tool === 'Grep' ? { ...c, passed: true } : c)) };
   const r = checkLocalRuns(lfxLocal(forged));
-  assert.match(r.findings[0], /cells are not what its tests say under this tree's drivers .* count nowhere until you re-run/);
-  assert.deepStrictEqual(r.cells, []);
-  for (const x of [none, host, cmd, r]) assert.deepStrictEqual(x.cells, []);
+  assert.match(r.findings[0], /cells or counts are not what its tests say \(edited by hand\); its cells count nowhere until you re-run/);
+  const counted = checkLocalRuns(lfxLocal({ ...ev, counts: { ...ev.counts, passed: 6, skipped: 0 } }));
+  assert.match(counted.findings[0], /cells or counts are not what its tests say/);
+  // and when the record is stale too: hand edits are red everywhere, not a warning
+  const staleForged = checkLocalRuns(lfxLocal({ ...forged, date: '2026-08-01' }));
+  assert.match(staleForged.findings[0], /cells or counts are not what its tests say \(edited by hand\)/);
+  // a row naming a test its records do not hold, on a stale record (whose drivers cannot be re-read)
+  const ghost = { ...ev, date: '2026-08-01', cells: ev.cells.map((c) => (c.tool === 'Read' ? { ...c, tests: [{ ...c.tests[0], name: 'nowhere' }] } : c)) };
+  assert.match(checkLocalRuns(lfxLocal(ghost)).findings[0], /edited by hand/);
+  for (const x of [none, host, cmd, r, counted, staleForged]) assert.deepStrictEqual([x.cells, x.staleCells || []], [[], []]);
 });
 
 // The fixture's exemptions with the local run's cells left out on netbsd-arm64 too.
@@ -2891,7 +3039,7 @@ const lfxExemptions = () => {
 };
 test('driven-local in the verdict: its cells are their own state and count, never folded into the CI-claimed ones', () => {
   const lfx = lfxLocal();
-  const inputs = fixtureInputs({ exemptions: lfxExemptions(), localRuns: lfx.runs, evidence: lfx.evidence, inputs: LFX_INPUTS });
+  const inputs = fixtureInputs({ exemptions: lfxExemptions(), localRuns: lfx.runs, evidence: lfx.evidence, inputs: lfx.inputs, ancestry: lfx.ancestry });
   const r = scanCoverage(inputs);
   assert.deepStrictEqual(r.findings, []);
   assert.strictEqual(r.counts.driven, 6);
@@ -2899,11 +3047,26 @@ test('driven-local in the verdict: its cells are their own state and count, neve
   assert.match(r.note, / 6 claimed by a CI job, 6 driven-local \(committed VM evidence, NOT CI: fx-vm 2026-09-20 @ aaaaaaa\), /);
   assert.ok(r.matrix.includes(`Read x print: darwin-arm64 exempt until 2026-12-31; linux-x64-musl CLAIMED (${FX_JOB}); netbsd-arm64 `
     + 'DRIVEN-LOCAL (fx-vm, local VM evidence 2026-09-20 @ aaaaaaa)'), r.matrix.join('\n'));
-  // stale: the cells fall back to NONE (each a finding), after the finding that says why and how to re-run
-  const stale = scanCoverage({ ...inputs, today: '2026-10-21' });
-  assert.match(stale.findings[0], /^driven-local fx-vm \(netbsd-arm64\): STALE: it is 31 days old/);
-  assert.ok(stale.findings.includes('Read x print: on netbsd-arm64 no CI job drives it (CELL_JOBS) and no exemption covers it'), stale.findings.join('\n'));
-  assert.strictEqual(stale.counts.drivenLocal, 0);
+  // M1: a pinned divergence held driven-local is counted apart too, never read as equal to native
+  const named = DRIVER_SOURCES.map((x) => (x.file === 'test/synthetic/drivers.test.cjs' ? { ...x, text: `${x.text}\n// NAMED DIVERGENCE: Read` } : x));
+  const pin = scanCoverage({ ...inputs, sources: named, divergences: [{ tool: 'Read', file: 'test/synthetic/drivers.test.cjs', why: 'x' }] });
+  assert.deepStrictEqual(pin.findings, []);
+  assert.strictEqual(pin.counts.pinned, 1);
+  assert.strictEqual(pin.counts.pinnedLocal, 1);
+  assert.match(pin.note, / 6 driven-local \(committed VM evidence, NOT CI: fx-vm 2026-09-20 @ aaaaaaa; 1 hold a pinned divergence: Read\), /);
+  // stale: a warning and a separate STALE count, no finding; at a release, red, and the cells fall back to NONE
+  const staleInputs = { ...inputs, inputs: { [LFX_RUN.run]: { ...LFX_INPUTS, drivers: '2'.repeat(64) } } };
+  const stale = scanCoverage(staleInputs);
+  assert.deepStrictEqual(stale.findings, []);
+  assert.deepStrictEqual(stale.warnings, ['NetBSD/arm64 VM record stale since aaaaaaaaaaaa (drivers changed); run node scripts/fx-evidence.mjs']);
+  assert.deepStrictEqual([stale.counts.drivenLocal, stale.counts.drivenLocalStale], [0, 6]);
+  assert.match(stale.note, / 0 driven-local \(committed VM evidence, NOT CI: none fresh; plus 6 STALE driven-local, not counted as driven-local: NetBSD\/arm64 VM record stale/);
+  assert.ok(stale.matrix.some((l) => /^Read x print: .*netbsd-arm64 STALE DRIVEN-LOCAL \(fx-vm, STALE local VM evidence 2026-09-20 @ aaaaaaa: drivers changed\)$/.test(l)), stale.matrix.join('\n'));
+  const rel = scanCoverage({ ...staleInputs, release: true });
+  assert.match(rel.findings[0], /^driven-local fx-vm \(netbsd-arm64\): STALE, and a release refuses a stale record: the driver inputs/);
+  assert.ok(rel.findings.includes('Read x print: on netbsd-arm64 no CI job drives it (CELL_JOBS) and no exemption covers it'), rel.findings.join('\n'));
+  assert.deepStrictEqual([rel.counts.drivenLocal, rel.counts.drivenLocalStale], [0, 0]);
+  assert.deepStrictEqual(scanCoverage({ ...inputs, release: true }).findings, [], 'fresh evidence passes a release');
   // exempted and driven-local at once: narrow the exemption
   const both = scanCoverage({ ...inputs, exemptions: FIXTURE_EXEMPTIONS });
   assert.match(both.findings.join('\n'), /^Read x print @ netbsd-arm64: exempted \(2026-09-28, until 2026-12-31\) but driven-local by fx-vm; narrow the exemption$/m);
@@ -2921,16 +3084,48 @@ test('driven-local: LOCAL_CELL_RUNS netbsd-arm64-vm is scripts/netbsd-arm64-evid
   assert.deepStrictEqual([run.engine, run.evidence, run.command, [...run.files].sort()], [ev.ENGINE, ev.EVIDENCE, ev.COMMAND, [...ev.FILES].sort()]);
 });
 
-// THE COMMITTED EVIDENCE, judged with or without a carve: fresh, of this tree, every cell it claims passed.
+const readLocalRuns = () => { const evidence = readEvidence(); return { runs: LOCAL_CELL_RUNS, sources: readSources(), evidence,
+  today: new Date().toISOString().slice(0, 10), inputs: readEvidenceInputs(), ancestry: readAncestry(LOCAL_CELL_RUNS, evidence), release: RELEASE() }; };
+// THE COMMITTED EVIDENCE, judged with or without a carve: well-formed, true to its tests, on HEAD's history, and (at a
+// release, CLODE_EVIDENCE_RELEASE=1) fresh.
 guardTests(defineGuard({
   name: 'driven-local-evidence',
   floor: 1,
-  read: () => ({ runs: LOCAL_CELL_RUNS, sources: readSources(), evidence: readEvidence(), today: new Date().toISOString().slice(0, 10),
-    inputs: readEvidenceInputs() }),
+  read: readLocalRuns,
   scan: checkLocalRuns,
-  // The failure this exists for: evidence that has aged past the limit still reading as proof.
-  control: () => lfxLocal(lfxEvidence({ date: '2026-08-01' })),
+  // The failure this exists for: a release cut on evidence that has aged past the limit.
+  control: () => lfxLocal(lfxEvidence({ date: '2026-08-01' }), { release: true }),
 }));
+
+// THE RELEASE REFUSES A STALE RECORD: release.yml's gates-ran-in-release (which the release job needs) runs this guard
+// with CLODE_EVIDENCE_RELEASE=1, on a full clone so the ancestor check runs; and that env is what turns stale red.
+test('driven-local: release.yml\'s gates-ran-in-release refuses a stale VM record, and the release job needs it', () => {
+  const wf = fs.readFileSync(path.join(REPO, '.github', 'workflows', 'release.yml'), 'utf8');
+  const job = (name) => { const m = new RegExp(`^  ${name}:\\n([\\s\\S]*?)(?=^  [\\w-]+:\\n|(?![\\s\\S]))`, 'm').exec(wf); return m ? m[1] : ''; };
+  const gr = job('gates-ran-in-release');
+  assert.match(gr, /^\s+fetch-depth: 0\b/m, 'gates-ran-in-release checks out shallow: the ancestor check would be skipped');
+  const step = gr.split(/^      - /m).find((st) => /--test-name-pattern=driven-local-evidence test\/build-gates\/tool-coverage-gates\.test\.cjs/.test(st)) || '';
+  assert.match(step, /CLODE_EVIDENCE_RELEASE: '1'/, 'no gates-ran-in-release step runs driven-local-evidence with CLODE_EVIDENCE_RELEASE=1');
+  assert.match(job('release'), /needs: \[[^\]]*\bgates-ran-in-release\b/);
+  // the env is what the guard reads: red on stale, green on fresh, under it
+  const was = process.env.CLODE_EVIDENCE_RELEASE;
+  try {
+    process.env.CLODE_EVIDENCE_RELEASE = '1';
+    assert.strictEqual(RELEASE(), true);
+    const g = (ev) => checkLocalRuns(lfxLocal(ev, { release: RELEASE() }));
+    assert.match(g(lfxEvidence({ date: '2026-08-01' })).findings[0], /a release refuses a stale record/);
+    assert.deepStrictEqual(g(lfxEvidence()).findings, []);
+    delete process.env.CLODE_EVIDENCE_RELEASE;
+    assert.deepStrictEqual(g(lfxEvidence({ date: '2026-08-01' })).findings, [], 'outside a release, stale only warns');
+  } finally { if (was === undefined) delete process.env.CLODE_EVIDENCE_RELEASE; else process.env.CLODE_EVIDENCE_RELEASE = was; }
+});
+
+// A STALE record is never silent: outside a release it is this warning, printed every run (a release refuses it, above).
+test('driven-local: the VM record\'s freshness, said every run', (t) => {
+  const r = checkLocalRuns(readLocalRuns());
+  for (const w of r.warnings) { t.diagnostic(`WARNING: ${w}`); process.stderr.write(`WARNING: ${w}\n`); }
+  if (!r.warnings.length) t.diagnostic(r.note);
+});
 
 // The writer's half (scripts/netbsd-arm64-evidence.mjs sets CLODE_LOCAL_EVIDENCE_WRITE to its draft): the cells and
 // counts go into the evidence by the same code that judges them.

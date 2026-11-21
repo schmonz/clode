@@ -15,7 +15,10 @@ const { execFileSync } = require('node:child_process');
 // with (else a new RSA 2048 one); `name` prefixes the files, so one directory can hold several.
 function selfSignedCert(dir, { cn = '127.0.0.1', san = 'IP:127.0.0.1', days = 1, key = null, name = 'self-signed', stdio = 'pipe' } = {}) {
   const config = path.join(dir, `${name}-openssl.cnf`);
-  fs.writeFileSync(config, ['[ req ]', 'distinguished_name = dn', 'prompt = no', '[ dn ]', `CN = ${cn}`, ''].join('\n'));
+  fs.writeFileSync(config, ['[ req ]', 'distinguished_name = dn', 'prompt = no', 'x509_extensions = v3_ca', '[ dn ]', `CN = ${cn}`,
+    // what a stock openssl.cnf's v3_ca gave every cert before: a self-signed cert that is its own CA (a client given it
+    // as `ca` trusts it as an anchor), with key identifiers
+    '[ v3_ca ]', 'subjectKeyIdentifier = hash', 'authorityKeyIdentifier = keyid:always,issuer', 'basicConstraints = critical,CA:TRUE', ''].join('\n'));
   const env = { ...process.env, OPENSSL_CONF: config };
   const out = { key: key || path.join(dir, `${name}-key.pem`), cert: path.join(dir, `${name}.pem`), config };
   execFileSync('openssl', ['req', '-config', config, '-x509', ...(key ? ['-key', key] : ['-newkey', 'rsa:2048', '-nodes', '-keyout', out.key]),

@@ -199,7 +199,7 @@ async function main(argv) {
   const commit = git(['rev-parse', 'HEAD']).trim();
   const date = new Date().toISOString().slice(0, 10);
   const require = createRequire(import.meta.url);
-  const inputs = require(path.join(REPO, 'scripts', 'lib', 'evidence-inputs.cjs')).evidenceInputs();
+  const inputs = require(path.join(REPO, 'scripts', 'lib', 'evidence-inputs.cjs')).evidenceInputs(REPO, FILES);
   const ssh = (cmd, { timeout, input, inherit } = {}) => {
     const r = spawnSync('ssh', ['-p', port, '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15', '-o', 'ServerAliveInterval=30',
       '-o', 'ServerAliveCountMax=10', host, cmd], { input, timeout, killSignal: 'SIGKILL', maxBuffer: 1 << 30,
@@ -263,14 +263,17 @@ async function main(argv) {
     for (const c of ev.cells.filter((x) => !x.passed)) {
       say(`  NOT PASSED ${c.tool} x ${c.mode}: ${c.tests.filter((t) => t.outcome !== 'passed').map((t) => `"${t.name}" ${t.outcome}`).join('; ')}`);
     }
-    // the verdict on it
+    // the verdict on it, as a release judges it: fresh, true to its tests, every lane exited 0
     const judge = spawnSync(process.execPath, ['--test', '--test-name-pattern=driven-local-evidence', 'test/build-gates/tool-coverage-gates.test.cjs'],
-      { cwd: REPO, encoding: 'utf8', timeout: 10 * MIN });
+      { cwd: REPO, env: { ...process.env, CLODE_EVIDENCE_RELEASE: '1' }, encoding: 'utf8', timeout: 10 * MIN });
     process.stdout.write(judge.stdout.split('\n').filter((l) => /^(✔|✖)|VIOLATION|examined/.test(l)).join('\n') + '\n');
     ok = judge.status === 0;
   } finally {
     if (keep) say(`kept ${dir} on the guest (--keep)`);
     else ssh(`rm -rf ${dir}`, { timeout: 15 * MIN });
+    // the local directory too, unless a red run's logs are in it (or --keep)
+    if (ok && !keep) fs.rmSync(local, { recursive: true, force: true });
+    else say(`kept ${local} (${keep ? '--keep' : 'the run was not green: its guest logs are there'})`);
   }
   process.exit(ok ? 0 : 1);
 }
