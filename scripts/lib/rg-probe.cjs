@@ -115,7 +115,8 @@ function makeRgTree(dir, kind) {
 }
 
 // ---- the argv matrix ----------------------------------------------------------------------------
-// The Grep tool's argv, as 2.1.283's builder (`_In`) writes it, in its order: --hidden, a
+// The Grep tool's argv, as 2.1.330's builder (`K8r`) writes it, in its order: --hidden --no-follow
+// (2.1.330 added --no-follow; rg does not follow links by default, so no answer changes), a
 // `--glob !<dir>` per VCS directory (`fIn`), --max-columns 500 ALWAYS, -U --multiline-dotall for
 // multiline, -i, the mode flag (-l, or -c -H), --json for content else --null, then for content
 // -n, -o and the context flags (`context`, else -C, else -B and -A), the pattern (after -e when
@@ -134,7 +135,7 @@ function makeRgTree(dir, kind) {
 const VCS_DIRS = ['.git', '.svn', '.hg', '.bzr', '.jj', '.sl'];
 function grepArgv(p, target) {
   const mode = p.mode || 'files_with_matches';
-  const a = ['--hidden'];
+  const a = ['--hidden', '--no-follow'];
   const glob = (g) => a.push('--glob', g);
   for (const d of VCS_DIRS) glob(`!${d}`);
   a.push('--max-columns', '500');
@@ -163,10 +164,13 @@ function grepArgv(p, target) {
   a.push(target);
   return a;
 }
-// The Glob tool's argv, as 2.1.283's builder (`eIn`) writes it with its defaults
+// The Glob tool's argv, as 2.1.330's builder (`C8r`) writes it with its defaults
 // (CLAUDE_CODE_GLOB_NO_IGNORE and CLAUDE_CODE_GLOB_HIDDEN both default to true). Compared with
-// the carve's the same way.
-const globArgv = (pattern, target) => ['--files', '--null', '--glob', pattern, '--sort=modified', '--no-ignore', '--hidden', target];
+// the carve's the same way. 2.1.330 appends `...HEr(y)?["--no-follow"]:[]`, and that test is
+// `function HEr(e){return!1}` in both the darwin-arm64 and linux-x64 carves (built-out, so
+// constant false): `noFollow` models it, false as the carve has it.
+const globArgv = (pattern, target, noFollow = false) => ['--files', '--null', '--glob', pattern, '--sort=modified', '--no-ignore', '--hidden',
+  ...noFollow ? ['--no-follow'] : [], target];
 
 // The flag literals of a builder's source text, in order: every quoted string that is a flag
 // (starts with -) or a number. The ONE reading both sides of the comparison below go through.
@@ -176,8 +180,9 @@ function flagLiterals(src) {
 
 // The two builders in a carve's (decoded) text, each found BY STRUCTURE and required exactly
 // once, and cut to the span that writes the argv this matrix models:
-//   Grep (`_In` in 2.1.283): from the `["--hidden"]` that starts the argv to its first
-//        `"--iglob"` push, anchored on the one `"-U","--multiline-dotall"` push;
+//   Grep (`_In` in 2.1.283): from the `["--hidden"` that starts the argv (`["--hidden"]` to
+//        2.1.283, `["--hidden","--no-follow"]` at 2.1.330) to its first `"--iglob"` push,
+//        anchored on the one `"-U","--multiline-dotall"` push;
 //   Glob (`eIn`): from the array that starts `"--files","--null","--glob"` to its first
 //        `"--iglob"` push (exclusive: globArgv models no deny rules).
 // Returns { grep, glob }, each { literals } or { missing: why }.
@@ -188,7 +193,7 @@ function builderFlagLiterals(text) {
   const once = (needle) => { const i = t.indexOf(needle); return i !== -1 && t.indexOf(needle, i + 1) === -1 ? i : -1; };
   const out = {};
   const g = once(GREP_ANCHOR);
-  const gStart = g === -1 ? -1 : t.lastIndexOf('["--hidden"]', g);
+  const gStart = g === -1 ? -1 : t.lastIndexOf('["--hidden"', g);
   const gEnd = g === -1 ? -1 : t.indexOf('"--iglob"', g);
   out.grep = g === -1 ? { missing: `${GREP_ANCHOR} is not in the carve exactly once` }
     : gStart === -1 || gEnd === -1 ? { missing: 'the Grep builder has no ["--hidden"] before its -U push or no --iglob after it' }
@@ -224,9 +229,12 @@ function matrixDrift(text) {
 // reads as "no results". quaude's refusal (rg-native.cjs rgRefusal) must pass THAT regex, read
 // from the carve, never a copy of it. Found by structure, never by those names:
 //   1. the class whose constructor's super() message is that "Search failed ..." text;
-//   2. the `<re>.test(<stderr>)){<reject>(new <that class>(` call that throws it;
+//   2. the `<re>.test(<stderr>)){<reject>(new <that class>(` call that throws it, or, from
+//      2.1.330, the `<re>.test(<stderr>)){` guard whose block throws it after retrying with
+//      `--no-messages` first and requiring `<stderr>.search(<re>)===0` (the match at offset 0);
 //   3. `<re>=/.../<flags>`, the regex literal bound to that name.
-// Returns { regex } or { missing: why }.
+// Returns { regex, atStart } (atStart: the consumer also requires the match at offset 0) or
+// { missing: why }.
 const ID = '[\\w$]+';
 function consumerUsageErrorRegex(text) {
   const t = String(text);
@@ -234,7 +242,14 @@ function consumerUsageErrorRegex(text) {
   const cls = all(new RegExp(`class (${ID}) extends ${ID}\\{constructor\\(${ID}\\)\\{super\\(\`Search failed[^\`]*?ripgrep rejected the pattern`, 'g'));
   if (cls.length !== 1) return { missing: `the "Search failed ... ripgrep rejected the pattern" class is in the carve ${cls.length} times, not once` };
   const esc = (n) => n.replace(/\$/g, '\\$');
-  const use = all(new RegExp(`(${ID})\\.test\\(${ID}\\)\\)\\{${ID}\\(new ${esc(cls[0][1])}\\(`, 'g'));
+  let use = all(new RegExp(`(${ID})\\.test\\(${ID}\\)\\)\\{${ID}\\(new ${esc(cls[0][1])}\\(`, 'g'));
+  let atStart = false;
+  if (use.length === 0) {
+    // 2.1.330: `<re>.test(<e>)){if(<argv>[0]!==<NM>){<retry>;return}if(<e>.search(<re>)===0){<reject>(new <cls>(`
+    use = all(new RegExp(`(${ID})\\.test\\((${ID})\\)\\)\\{if\\(${ID}\\[0\\]!==${ID}\\)\\{[^{}]*\\}`
+      + `if\\(\\2\\.search\\(\\1\\)===0\\)\\{${ID}\\(new ${esc(cls[0][1])}\\(`, 'g'));
+    atStart = use.length > 0;
+  }
   if (use.length !== 1) return { missing: `the test that throws ${cls[0][1]} is in the carve ${use.length} times, not once` };
   let def = all(new RegExp(`(?:^|[^\\w$])${esc(use[0][1])}=\\/((?:[^/\\\\\\n]|\\\\.)+)\\/([a-z]*)`, 'g'));
   // A minified name is its MODULE's own: the linux-x64 2.1.283 carve binds this one twice, in two modules (grep-native
@@ -248,7 +263,7 @@ function consumerUsageErrorRegex(text) {
     if (def.length !== 1) return { missing: `the regex ${use[0][1]} is bound in the consumer's module ${def.length} times, not once` };
   }
   if (def.length !== 1) return { missing: `the regex ${use[0][1]} is bound in the carve ${def.length} times, not once` };
-  return { regex: new RegExp(def[0][1], def[0][2]) };
+  return { regex: new RegExp(def[0][1], def[0][2]), atStart };
 }
 
 // What differs between quaude's refusal and the consumer's test: [] when every refusal shape
@@ -260,7 +275,7 @@ function refusalDrift(text) {
   const findings = [];
   for (const r of [rgRefusal('a reason', { flag: '--json' }), rgRefusal('a reason')]) {
     const line = r.stderr.toString('utf8');
-    if (!c.regex.test(line)) {
+    if (!c.regex.test(line) || (c.atStart && line.search(c.regex) !== 0)) {
       findings.push(`usage-error regex: the carve's ${c.regex} does not pass quaude's refusal ${JSON.stringify(line)}, `
         + 'so the model would read it as "no results"');
     }

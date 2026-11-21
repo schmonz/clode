@@ -1845,3 +1845,22 @@ test('RG-PID-FD: a file named /proc/<our pid>/fd/N is searched as the file it is
     assert.strictEqual(rgn.runRg(['needle', `/proc/self/fd/${fd}`], { ...ctx, cwd: dir }).status, 2, '/proc/self/fd/N still refuses');
   } finally { fs.closeSync(fd); fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+// 2.1.330's Grep/Glob consumer, on an rc-2 run with no output whose stderr passes its usage-error regex, runs the
+// SAME argv again with --no-messages first, and throws its usage error only if that retry's stderr matches at
+// offset 0 (rg-probe-gates reads both rules from the carve). So quaude's refusal must survive --no-messages
+// unchanged: a refusal it silenced would turn the retry into "no results".
+test('a refusal survives the consumer\'s --no-messages retry, byte for byte, still at offset 0', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-nomsg-'));
+  try {
+    fs.writeFileSync(path.join(dir, 'a.txt'), 'hello\n');
+    for (const argv of [['--hidden', '--no-follow', '--null', '-l', '--pcre2', 'x', '.'], ['--files', '--null', '--glob', '[', '.']]) {
+      const first = rgn.runRg(argv, { cwd: dir });
+      const retry = rgn.runRg(['--no-messages', ...argv], { cwd: dir });
+      assert.strictEqual(first.status, 2, argv.join(' '));
+      assert.strictEqual(retry.status, 2, argv.join(' '));
+      assert.strictEqual(String(retry.stderr), String(first.stderr), argv.join(' '));
+      assert.match(String(retry.stderr), /^rg: error parsing (?:flag|glob)/, argv.join(' '));
+    }
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});

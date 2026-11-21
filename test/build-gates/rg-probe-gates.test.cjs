@@ -19,7 +19,13 @@
 // copied into a test.
 //
 // FLOOR: 3 (the Grep builder, the Glob builder and the usage-error regex, each found once).
-// CONTROL: the 2.1.283 builders verbatim, with ONE more flag pushed beside -U.
+// CONTROL: the 2.1.330 builders verbatim, with ONE more flag pushed beside -U.
+//
+// 2.1.330 (re-pinned 2026-11-21): the Grep builder starts `["--hidden","--no-follow"]`; the Glob
+// builder appends `...HEr(y)?["--no-follow"]:[]` behind a test that is `return!1` in both carves;
+// the consumer's usage-error regex gained `|the literal|pattern contains`, and before throwing it
+// now retries once with `--no-messages` first and requires `<stderr>.search(<re>)===0`, so a
+// refusal must match at offset 0 (refusalDrift checks that when the carve requires it).
 const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -68,7 +74,17 @@ function readCarve() {
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 }
 
-const controlText = () => CARVE_2_1_283.replace('Me.push("-U","--multiline-dotall")', 'Me.push("-U","--multiline-dotall","--crlf")');
+// VERBATIM from the 2.1.330 darwin-arm64 binary (test/fixtures/rg-builders-2.1.330.js, sliced 2026-11-21 and joined
+// with ';' as above): the Grep builder, the Glob builder, the regex and the class it throws, and the guarded throw.
+const CARVE_2_1_330 = fs.readFileSync(path.join(REPO, 'test', 'fixtures', 'rg-builders-2.1.330.js'), 'latin1');
+
+// The 2.1.283 fixture with 2.1.330's two builder changes (its consumer shape kept), for the tests of that shape.
+const as330Builders = (t) => {
+  const out = t.replace('Me=["--hidden"]', 'Me=["--hidden","--no-follow"]').replace('...W?["--hidden"]:[]]', '...W?["--hidden"]:[],...H(y)?["--no-follow"]:[]]');
+  assert.strictEqual((out.match(/--no-follow/g) || []).length, 2);
+  return out;
+};
+const controlText = () => CARVE_2_1_330.replace('Xe.push("-U","--multiline-dotall")', 'Xe.push("-U","--multiline-dotall","--crlf")');
 
 guardTests(defineGuard({
   name: 'rg-matrix-from-carve',
@@ -78,42 +94,75 @@ guardTests(defineGuard({
   control: () => ({ text: controlText(), what: 'synthetic control' }),
 }));
 
-test('the verbatim 2.1.283 builders agree with the matrix (the fixture the control edits is clean)', () => {
-  const r = scanBuilders({ text: CARVE_2_1_283, what: 'the 2.1.283 fixture' });
+test('the verbatim 2.1.330 builders agree with the matrix (the fixture the control edits is clean)', () => {
+  const r = scanBuilders({ text: CARVE_2_1_330, what: 'the 2.1.330 fixture' });
   assert.deepStrictEqual(r.findings, []);
   assert.strictEqual(r.examined, 3);
 });
 
+// The drift this gate exists for, as it really happened: the 2.1.283 builders are read whole (start anchor
+// `["--hidden"` takes both spellings) and differ from the 2.1.330 matrix by exactly the two --no-follow literals.
+test('the 2.1.283 builders are now drift: each finding names the missing --no-follow, the old consumer shape still reads', () => {
+  const r = scanBuilders({ text: CARVE_2_1_283, what: 'the 2.1.283 fixture' });
+  assert.strictEqual(r.examined, 3);
+  assert.strictEqual(r.findings.length, 2, r.findings.join('\n'));
+  assert.match(r.findings[0], /^grep: the carve's builder writes \["--hidden","--glob",/);
+  assert.match(r.findings[1], /^glob: the carve's builder writes \[.*"--hidden"\], /);
+  assert.deepStrictEqual(scanBuilders({ text: as330Builders(CARVE_2_1_283), what: 'x' }).findings, []);
+});
+
 test('the control differs from the fixture by exactly the one planted flag, and the finding names the Grep builder', () => {
-  assert.notStrictEqual(controlText(), CARVE_2_1_283);
+  assert.notStrictEqual(controlText(), CARVE_2_1_330);
   const r = scanBuilders({ text: controlText(), what: 'control' });
   assert.strictEqual(r.findings.length, 1);
   assert.match(r.findings[0], /^grep: the carve's builder writes .*"--multiline-dotall","--crlf"/);
 });
 
 test('a builder that is not in the carve is a finding and is not counted as examined', () => {
-  const r = scanBuilders({ text: CARVE_2_1_283.replace('"--files","--null","--glob"', '"--files","--glob"'), what: 'no Glob' });
+  const r = scanBuilders({ text: CARVE_2_1_330.replace('"--files","--null","--glob"', '"--files","--glob"'), what: 'no Glob' });
   assert.strictEqual(r.examined, 2);
   assert.match(r.findings.join('\n'), /^glob: .* is not in the carve exactly once/m);
 });
 
 test('a builder found twice is not trusted: it is a finding, not a pick', () => {
-  const r = scanBuilders({ text: CARVE_2_1_283 + ';' + CARVE_2_1_283, what: 'twice' });
+  const r = scanBuilders({ text: CARVE_2_1_330 + ';' + CARVE_2_1_330, what: 'twice' });
   assert.strictEqual(r.examined, 0);
   assert.strictEqual(r.findings.length, 3);
 });
 
 test('the consumer\'s usage-error regex is found in the fixture by structure, and quaude\'s refusal passes it', () => {
-  const r = scanBuilders({ text: CARVE_2_1_283, what: 'the 2.1.283 fixture' });
+  const r = scanBuilders({ text: CARVE_2_1_330, what: 'the 2.1.330 fixture' });
   assert.strictEqual(r.examined, 3);
   assert.deepStrictEqual(r.findings, []);
+  const u = P.consumerUsageErrorRegex(CARVE_2_1_330);
+  assert.strictEqual(u.atStart, true, '2.1.330 requires the match at offset 0');
+  assert.strictEqual(P.consumerUsageErrorRegex(CARVE_2_1_283).atStart, false);
 });
 
 test('a usage-error regex that no longer passes quaude\'s refusal is a finding (the model would read "no results")', () => {
-  const r = scanBuilders({ text: CARVE_2_1_283.replace('|error parsing flag|', '|'), what: 'narrowed' });
+  const r = scanBuilders({ text: CARVE_2_1_330.replace('|error parsing flag|', '|'), what: 'narrowed' });
   assert.strictEqual(r.examined, 3);
   assert.strictEqual(r.findings.length, 2, r.findings.join('\n'));
   for (const f of r.findings) assert.match(f, /^usage-error regex: the carve's .* does not pass quaude's refusal/);
+});
+
+// 2.1.330 throws only when the match is at offset 0 (`v.search(ke)===0`): a regex that would match the refusal
+// somewhere later, but not at its start, reads as "no results" there. (Dropping the m flag and the ^ anchor
+// moves nothing for a one-line refusal; requiring a leading prefix does.)
+test('a refusal the regex matches only past offset 0 is a finding where the consumer requires offset 0', () => {
+  // `/(?:...|parsing flag|...)/m` matches "rg: error parsing flag ..." at offset 10, never at 0.
+  const shift = (t, re) => {
+    const out = t.replace(`var ${re}=/^rg: (?:regex parse error`, `var ${re}=/(?:regex parse error`).replace('|error parsing flag|', '|parsing flag|');
+    assert.notStrictEqual(out, t);
+    return out;
+  };
+  const r = scanBuilders({ text: shift(CARVE_2_1_330, 'ke'), what: 'shifted' });
+  assert.strictEqual(r.examined, 3);
+  assert.strictEqual(r.findings.length, 2, r.findings.join('\n'));
+  for (const f of r.findings) assert.match(f, /^usage-error regex: the carve's .* does not pass quaude's refusal/);
+  // the same regex under the 2.1.283 consumer (no offset-0 rule) passes
+  const old = scanBuilders({ text: as330Builders(shift(CARVE_2_1_283, 'TQ')), what: 'old consumer' });
+  assert.deepStrictEqual(old.findings, []);
 });
 
 test('a consumer whose usage-error test cannot be found is a finding and is not counted as examined', () => {
@@ -129,7 +178,7 @@ test('a consumer whose usage-error test cannot be found is a finding and is not 
 const HDR = (name) => `\nimport.meta.require = globalThis.__quaudeRequire; import.meta.url = "file://${name}";\n`;
 test('the usage-error regex is the binding in the consumer\'s own module when the name is bound in another too (linux-x64 2.1.283)', () => {
   const other = `${HDR('/$bunfs/root/chunk-blob.js')}var a=new Set(["x"]),TQ=/^\\/?_blob\\/[0-9a-f]{32}$/;function f(){}`;
-  const consumer = `${HDR('/$bunfs/root/chunk-grep.js')}${CARVE_2_1_283}`;
+  const consumer = `${HDR('/$bunfs/root/chunk-grep.js')}${as330Builders(CARVE_2_1_283)}`;
   for (const text of [other + consumer, consumer + other]) {
     const r = scanBuilders({ text, what: 'two modules' });
     assert.strictEqual(r.examined, 3, r.findings.join('\n'));
