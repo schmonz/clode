@@ -49,7 +49,8 @@ function writeProg(body) {
 // libexec/inspect-claude-bundle.cjs KNOWN_BUN_ANT with its call site.
 const MUST_STAY_ABSENT = ['getPeerUid', 'getPeerPid', 'setDumpable', 'memoryPressureLevel', 'waitForUrlEvent',
   'loginTty', 'posixFsAt', 'stringifyToBytes', 'stringifyToBytesFallbacks', 'ttyName', 'withThreadWorkingDirectory',
-  'windowsFolderSecurity', 'windowsProcessCreationTime', 'windowsProcessList', 'windowsSandboxDeniesArg'];
+  'windowsFolderSecurity', 'windowsProcessCreationTime', 'windowsProcessList', 'windowsSandboxDeniesArg',
+  'windowsFsAt', 'windowsProcessPin', 'windowsProcessUnpin'];
 
 test('Bun.ant carries CellSegmenter and isVmContextGlobal and NOTHING else, so every capability probe reads false', (t) => {
   if (skipUnlessTjs(t)) return;

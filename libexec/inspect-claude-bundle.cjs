@@ -221,6 +221,24 @@ const KNOWN_BUN_ANT = new Map([
   ['windowsSandboxDeniesArg', 'MEASURED on the darwin-arm64 2.1.330 carve (2026-11-21), not inferred: `x()==="windows"&&typeof '
     + 'Bun<"u"?Bun.ant?.windowsSandboxDeniesArg?.():void 0`, then `if(typeof e!=="string")return;`: no denies '
     + 'helper is built. Windows-only, and gated.'],
+  // The three below exist ONLY in the win32 carves of 2.1.330 (absent from darwin-arm64 and
+  // linux-x64), so the darwin-carve review above could not see them. Reviewed from the
+  // win32-x64 2.1.330 carve: @anthropic-ai/claude-code-win32-x64@2.1.330's claude.exe.
+  ['windowsFsAt', 'MEASURED on the win32-x64 2.1.330 carve (2026-11-21), not inferred: the Windows twin of posixFsAt. One '
+    + 'call site, `function tQl(){...try{T=y(Bun.ant.windowsFsAt),...}catch(e){t(`anchor: no Windows backend, '
+    + 'Bun.ant.windowsFsAt unavailable (...)`,{level:"warn"}),T=null}return T}` (y() throws "not in this runtime" '
+    + 'unless `typeof e?.open==="function"`). tQl is exported as loadNt, and the held-directory backend reads it '
+    + 'as `case"windows":{...D=k();if(D===null)return{unavailable:"no_ffi"};...`; on Windows "no_ffi" is mapped to '
+    + '{outcome:"unanchored",reason:"no_ffi"}, the same reported fallback macOS takes without posixFsAt. An NT '
+    + 'handle-relative file API (NtCreateFile/rename/delete-by-handle) is a new C primitive; not now.'],
+  ['windowsProcessPin', 'MEASURED on the win32-x64 2.1.330 carve (2026-11-21), not inferred: one call site, the Windows '
+    + 'killProcessTree: `r.id=typeof Bun<"u"&&typeof Bun.ant?.windowsProcessPin==="function"?Bun.ant.windowsProcessPin(e)'
+    + ':null;` and then `taskkill.exe /PID e /T /F` runs either way. Absent, the pin is null and taskkill kills the '
+    + 'tree by bare PID, as it did before 2.1.330; what is lost is holding the process open across the taskkill so '
+    + 'its PID cannot be recycled in that window. Holding a process handle is a new C primitive; not now.'],
+  ['windowsProcessUnpin', 'MEASURED on the win32-x64 2.1.330 carve (2026-11-21), not inferred: one call site, '
+    + '`function xb(e){let r=e.id;if(e.id=null,r===null)return;try{Bun.ant.windowsProcessUnpin(r)}catch{}}`. It only '
+    + 'releases a pin windowsProcessPin made, so with Pin absent (id null) it is never reached; see windowsProcessPin.'],
 ]);
 
 // Every Bun.ant.<member> the bundle references, deduplicated, in source order of
