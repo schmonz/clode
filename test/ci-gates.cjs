@@ -58,7 +58,6 @@ const JOBS = [
   { id: 'node-shim-oracle-darwin', workflow: CI, job: 'node-shim-oracle-darwin' },
   { id: 'native-builder-oracle', workflow: CI, job: 'native-builder-oracle' },
   { id: 'linux-x64-pty', workflow: CI, job: 'linux-x64-pty' },
-  { id: 'netbsd-arm64-cells', workflow: CI, job: 'netbsd-arm64-cells' },
   { id: 'windows-amd64-tests', workflow: CI, job: 'windows-amd64-tests' },
   { id: 'windows-arm64-tests', workflow: CI, job: 'windows-arm64-tests' },
   { id: 'windows-amd64-tui', workflow: CI, job: 'windows-amd64-tui' },
@@ -110,7 +109,7 @@ const PLACED = {
   'credential-store-attempted': { jobs: ['node-shim-oracle-darwin'],
     why: 'security(1) is darwin-only: "this guard has no other platform\'s credential-store call modeled yet"' },
   // Every CI cell job checks its cells with this guard (test/build-gates/tool-coverage-gates.test.cjs).
-  'cells-ran-in-ci-job': { jobs: ['node-shim-oracle', 'node-shim-oracle-darwin', 'native-builder-oracle', 'linux-x64-pty', 'netbsd-arm64-cells'],
+  'cells-ran-in-ci-job': { jobs: ['node-shim-oracle', 'node-shim-oracle-darwin', 'native-builder-oracle', 'linux-x64-pty'],
     why: 'it judges a cell job\'s own reporter output: "not a CI cell job (CLODE_CELL_JOB unset)"' },
   // linux-x64-pty: the PTY harness, the pinned native that runs as rg, the text oracle.
   'tui-initial-frame-cells': { jobs: ['linux-x64-pty'], why: NO_ENGINE },
@@ -168,15 +167,9 @@ const EXEMPT = {
 // FILES: named gate files a job accounts for test by test. Every test of the file must be reported
 // in that job and pass; a skip is accepted only by its exact test name, with why: in every job that runs the file
 // (`skips`), or in one job alone (`jobSkips: { <job id>: { <test name>: why } }`), for a skip that is a fact of that
-// job's host and must stay red everywhere else (a native test on NetBSD, which has no native Claude Code).
+// job's host and must stay red everywhere else. (NetBSD's native tests, which skipped in the emulated netbsd-arm64-cells
+// job, now skip only in the local VM run, judged by test/build-gates/tool-coverage-gates.test.cjs: USER RULING 2026-11-21.)
 // ==========================================================================
-// The modes tools-local's mode turns run (its MODE_ARGS) and agentic-grep-glob's permission turns (PERMISSION_TURNS),
-// by which their native tests are named.
-const SEARCH_PERMISSION_MODES = ['permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk',
-  'permission:plan'];
-const LOCAL_MODE_TURNS = ['print', ...SEARCH_PERMISSION_MODES, 'unlisted', 'interactive'];
-const NO_NATIVE = (names) => Object.fromEntries(names.map((n) => [n, 'no native Claude Code on NetBSD: the test runs native '
-  + 'alone, and no provider resolves there ("no Claude provider found")']));
 const FILES = {
   // node-shim-oracle: added there (task-8, observability Task 5) because the suite cannot run them.
   'test/shim-surface.test.cjs': { jobs: ['node-shim-oracle'] },
@@ -237,23 +230,13 @@ const FILES = {
     'RG-MMAP-EVERYWHERE: macOS native in a tree with a quote and a non-ASCII letter prints its record as inTree spells it (native, macOS)':
       'macOS only: it judges the macOS native\'s own record of the RG-MMAP-EVERYWHERE divergence',
   } },
-  // netbsd-arm64-cells: NetBSD has no native Claude Code, so each file's native tests skip there, and there alone
-  // (no provider resolvable: "no Claude provider found"); quaude is judged by the answers recorded from native.
-  'test/fidelity/agentic-grep-glob.test.cjs': { jobs: ['linux-x64-pty', 'node-shim-oracle-darwin', 'netbsd-arm64-cells'],
-    jobSkips: { 'netbsd-arm64-cells': NO_NATIVE([
-      'native answers this script as NATIVE records (CLODE_E2E_NATIVE=1)',
-      ...SEARCH_PERMISSION_MODES.map((m) => `native answers this script in ${m} as NATIVE records (CLODE_E2E_NATIVE=1)`)]) } },
-  'test/fidelity/tools-local.test.cjs': { jobs: ['linux-x64-pty', 'node-shim-oracle-darwin', 'netbsd-arm64-cells'],
-    jobSkips: { 'netbsd-arm64-cells': NO_NATIVE([
-      'native answers this script as NATIVE records', 'native answers the task script as TASK_NATIVE records',
-      'native answers the session script as SESSION_NATIVE records', 'native answers the Task 5 script as T5_NATIVE records',
-      'native answers the zsh Bash turn as ZSH_DONE records',
-      ...LOCAL_MODE_TURNS.map((m) => `native answers every Phase A call in ${m} as recorded`)]) } },
+  // (their netbsd-arm64 cells: the local VM run, LOCAL_CELL_RUNS in test/build-gates/tool-coverage-gates.test.cjs)
+  'test/fidelity/agentic-grep-glob.test.cjs': { jobs: ['linux-x64-pty', 'node-shim-oracle-darwin'] },
+  'test/fidelity/tools-local.test.cjs': { jobs: ['linux-x64-pty', 'node-shim-oracle-darwin'] },
   // tjs-tls-trust: its built-quaude test (CA globals gone, an Ed25519 extra cert dropped end to end) skips without a
   // built quaude, which the suite rows lack; these jobs build one, so a skip there is a finding.
   'test/tjs-tls-trust.test.cjs': { jobs: ['linux-x64-pty', 'node-shim-oracle-darwin'] },
-  'test/fidelity/webfetch.test.cjs': { jobs: ['linux-x64-pty', 'node-shim-oracle-darwin', 'netbsd-arm64-cells'],
-    jobSkips: { 'netbsd-arm64-cells': NO_NATIVE(['native fetches the same page and answers as recorded']) } },
+  'test/fidelity/webfetch.test.cjs': { jobs: ['linux-x64-pty', 'node-shim-oracle-darwin'] },
   'test/build-gates/rg-regex-gates.test.cjs': { jobs: ['linux-x64-pty'] },
   'test/build-gates/rg-types-gates.test.cjs': { jobs: ['linux-x64-pty'] },
   'test/fidelity/lead-scrub-equivalence.test.cjs': { jobs: ['linux-x64-pty'] },
@@ -283,7 +266,7 @@ FILES['test/node-shim-os-priority.test.cjs'].skips['os.getPriority/setPriority u
 // node-shim-oracle's online step (it runs under the reporter for exactly this).
 FILES['test/bootstrap-engine-online.test.cjs'] = { jobs: ['node-shim-oracle'] };
 // Every cell job runs this file under --test-name-pattern=cells-ran-in-ci-job: only that guard's rows are reported.
-FILES['test/build-gates/tool-coverage-gates.test.cjs'] = { jobs: ['node-shim-oracle', 'node-shim-oracle-darwin', 'native-builder-oracle', 'linux-x64-pty', 'netbsd-arm64-cells'] };
+FILES['test/build-gates/tool-coverage-gates.test.cjs'] = { jobs: ['node-shim-oracle', 'node-shim-oracle-darwin', 'native-builder-oracle', 'linux-x64-pty'] };
 
 // The engine legs' hermeticity step runs the whole file (CI run 44597568635: 17 pass, 0 skipped, in all 29 legs).
 FILES['test/depscan-guard.test.cjs'] = { jobs: JOBS.filter((j) => j.leg).map((j) => j.id) };

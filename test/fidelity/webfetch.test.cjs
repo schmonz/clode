@@ -30,7 +30,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const https = require('node:https');
-const { execFileSync } = require('node:child_process');
+const { selfSignedCert } = require('../self-signed-cert.cjs');
 const { driveTool } = require('../tool-driver.cjs');
 const { builtQuaude } = require('../built-binary.cjs');
 const { rgOracle, rgOracleSkip } = require('../provider-resolve.cjs');
@@ -48,13 +48,10 @@ const USE = { name: 'WebFetch', input: { url: '', prompt: `${ASK}: what does the
 const summarize = (seen) => { const m = /WF-PAGE-[0-9a-f]{12}/.exec(seen); return m ? `the page says ${m[0]}` : 'the page carried no WF-PAGE token'; };
 const fetched = (m) => toolResultText(m, USE.id) === REPLY;
 
-// A self-signed certificate for 127.0.0.1, made here (openssl, as test/mock-anthropic-helper.cjs's tls mock does), so
-// no key is committed.
+// A self-signed certificate for 127.0.0.1, made here (test/self-signed-cert.cjs, which every such test shares: it
+// carries its own openssl config, which NetBSD's base openssl has none of), so no key is committed.
 function selfSigned(dir) {
-  const key = path.join(dir, 'key.pem');
-  const cert = path.join(dir, 'cert.pem');
-  execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', key, '-out', cert, '-days', '1',
-    '-subj', '/CN=127.0.0.1', '-addext', 'subjectAltName=IP:127.0.0.1'], { stdio: 'pipe' });
+  const { key, cert } = selfSignedCert(dir, { name: 'target' });
   return { key, cert };
 }
 

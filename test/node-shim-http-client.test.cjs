@@ -26,7 +26,8 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { spawn, spawnSync, execFileSync } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
+const { selfSignedCert } = require('./self-signed-cert.cjs');
 const { runLoader, skipUnlessTjs } = require('./node-shim-helper.cjs');
 
 const FIXTURES = path.join(__dirname, 'fixtures');
@@ -80,11 +81,7 @@ test('https client differential: TLS handshake, CA, SNI, rejectUnauthorized', as
   const openssl = spawnSync('openssl', ['version'], { encoding: 'utf8' });
   if (openssl.status !== 0) { t.skip('no openssl on PATH; cannot mint a test certificate'); return; }
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-httpsc-'));
-  const cert = path.join(dir, 'cert.pem');
-  const key = path.join(dir, 'key.pem');
-  execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes',
-    '-keyout', key, '-out', cert, '-days', '2', '-subj', '/CN=localhost',
-    '-addext', 'subjectAltName=DNS:localhost,IP:127.0.0.1'], { stdio: 'ignore' });
+  const { cert, key } = selfSignedCert(dir, { cn: 'localhost', san: 'DNS:localhost,IP:127.0.0.1', days: 2, stdio: 'ignore' });
   const { proc, port } = await startOrigin('https-client-origin.cjs', [cert, key]);
   try {
     const [node, shim] = bothEngines('https-client-probe.cjs', { PROBE_PORT: String(port), PROBE_CA: cert }, t);

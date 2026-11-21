@@ -22,6 +22,7 @@ const net = require('node:net');
 const tls = require('node:tls');
 const https = require('node:https');
 const { execFile, execFileSync, spawnSync } = require('node:child_process');
+const { selfSignedCert, opensslEnv } = require('./self-signed-cert.cjs');
 const { tjsPath } = require('./node-shim-helper.cjs');
 const { builtQuaude } = require('./built-binary.cjs');
 
@@ -37,18 +38,13 @@ function tmpdir(t) {
   return d;
 }
 function rsaCert(dir, name = 'rsa') {
-  const key = path.join(dir, `${name}-key.pem`);
-  const cert = path.join(dir, `${name}.pem`);
-  execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', key, '-out', cert, '-days', '1',
-    '-subj', '/CN=127.0.0.1', '-addext', 'subjectAltName=IP:127.0.0.1'], { stdio: 'pipe' });
+  const { key, cert } = selfSignedCert(dir, { name });
   return { key, cert };
 }
 function ed25519Cert(dir) {
   const key = path.join(dir, 'ed-key.pem');
-  const cert = path.join(dir, 'ed.pem');
-  execFileSync('openssl', ['genpkey', '-algorithm', 'ed25519', '-out', key], { stdio: 'pipe' });
-  execFileSync('openssl', ['req', '-x509', '-key', key, '-out', cert, '-days', '1', '-subj', '/CN=ed25519 test CA'],
-    { stdio: 'pipe' });
+  execFileSync('openssl', ['genpkey', '-algorithm', 'ed25519', '-out', key], { stdio: 'pipe', env: opensslEnv(dir) });
+  const { cert } = selfSignedCert(dir, { name: 'ed', key, cn: 'ed25519 test CA', san: null });
   return { key, cert };
 }
 // Run a script under the engine (`tjs run`), with an environment that names no CA bundle unless `env` does.

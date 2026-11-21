@@ -331,8 +331,8 @@ test('native answers the task script as TASK_NATIVE records', { skip: SKIP }, as
 // The Bash tool runs a user's zsh as readily as bash: SHELL names it (by name: Claude Code takes SHELL only when it is
 // bash or zsh). One call whose answer only zsh can give: ${ZSH_NAME} is set by zsh alone, and $((6*7)) is computed,
 // so neither the command text nor bash's answer ("shell=none-42") passes. zsh is in every job that runs this file
-// (macOS ships /bin/zsh, linux-x64-pty apt-installs it, netbsd-arm64-cells' package list has it); a box without it
-// skips by name, which a CI job reports as a failure of its cell.
+// (macOS ships /bin/zsh, linux-x64-pty apt-installs it, the local NetBSD/arm64 VM has pkgsrc's); a box without it
+// skips by name, which a CI job, or the driven-local evidence, reports as a failure of its cell.
 const Z_ECHO = { name: 'Bash', input: { command: 'echo shell=${ZSH_NAME:-none}-$((6*7))', description: 'Print which shell ran' }, id: 'toolu_z7_echo' };
 // MEASURED on native 2.1.283 darwin-arm64 (2026-11-20)
 const ZSH_DONE = { text: 'shell=zsh-42', isError: false };

@@ -66,14 +66,10 @@ function cannedMessage(text, stopSequence = null) {
 // no cert material is committed. Requires `openssl` on PATH; only used when
 // opts.tls is set (the wall-walk decides whether it is needed).
 function selfSigned() {
-  const { execFileSync } = require('node:child_process');
   const os = require('node:os'); const fs = require('node:fs'); const path = require('node:path');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mock-tls-'));
-  const key = path.join(dir, 'k.pem'); const crt = path.join(dir, 'c.pem');
-  execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes',
-    '-keyout', key, '-out', crt, '-days', '1', '-subj', '/CN=127.0.0.1',
-    '-addext', 'subjectAltName=IP:127.0.0.1'], { stdio: 'pipe' });
-  return { key: fs.readFileSync(key), cert: fs.readFileSync(crt), certPath: crt };
+  const { key, cert } = require('./self-signed-cert.cjs').selfSignedCert(dir, { name: 'mock' });
+  return { key: fs.readFileSync(key), cert: fs.readFileSync(cert), certPath: cert };
 }
 
 function startMockAnthropic(opts = {}) {

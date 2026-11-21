@@ -23,7 +23,8 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const net = require('node:net');
-const { spawn, spawnSync, execFileSync } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
+const { selfSignedCert } = require('./self-signed-cert.cjs');
 const { runLoader, skipUnlessTjs, engineSpawn } = require('./node-shim-helper.cjs');
 
 const FIXTURES = path.join(__dirname, 'fixtures');
@@ -257,11 +258,7 @@ test('an https:// PROXY (TLS to the proxy itself) works, with the caller\'s CA',
   const openssl = spawnSync('openssl', ['version'], { encoding: 'utf8' });
   if (openssl.status !== 0) { t.skip('no openssl on PATH; cannot mint a test certificate'); return; }
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-proxy-tls-'));
-  const cert = path.join(dir, 'cert.pem');
-  const key = path.join(dir, 'key.pem');
-  execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes',
-    '-keyout', key, '-out', cert, '-days', '2', '-subj', '/CN=localhost',
-    '-addext', 'subjectAltName=DNS:localhost,IP:127.0.0.1'], { stdio: 'ignore' });
+  const { cert, key } = selfSignedCert(dir, { cn: 'localhost', san: 'DNS:localhost,IP:127.0.0.1', days: 2, stdio: 'ignore' });
   const fx = fixtures();
   const origin = await fx.start('http-client-origin.cjs');
   const log = freshLog(dir, 'tls-proxy');
