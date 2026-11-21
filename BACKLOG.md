@@ -154,7 +154,8 @@ Its native test keeps that expectation native-derived, measured on 2.1.330 darwi
   quaude's exact text.
 - The control that pins the reason: the same input with the sandbox NOT named (`{"env": `, or the user's merge-row
   file as written) starts, with and without the layer.
-Measured: native 2.1.330 darwin-arm64 and a fresh quaude, both run by agentic-sandbox-fail-closed.test.cjs (2026-11-21).
+
+Measured: test/fidelity/agentic-sandbox-fail-closed.test.cjs on darwin-arm64, native 2.1.330 and a fresh quaude (2026-11-21)
 
 ## 2.1.330 is the pin and the suite is RED on it: 39 failures, each named here (2026-11-21)
 
@@ -234,7 +235,9 @@ Bun.SHA256/gzipSync. STILL RED, beyond 1 and 2 above, by gate:
     node reads 1000000. Alone the differential is green (8/8). The same run found two DIFF-WRITESTREAM-THROWS pairs
     (`createWriteStream(<dir>|<missing/x>, {fd, autoClose})` r.end) agreeing with node, which they do not alone. The
     fix is an engine primitive (a sync utime/lutime in txiki-sync-fs.patch, with an engine-floor fallback), which
-    touches every engine leg: not done inside the pin bump without a ruling. The gate is left as is.
+    touches every engine leg: not done inside the pin bump without a ruling. The gate is left as is. The next full
+    run (after the four gate fixes: 4051 pass, 2 fail) hit it again on lutimesSync, `fs.lutimesSync(<empty>|<emptydir>,
+    1700000000.5, ...)` reading "recent" where node reads 1700000000500.
 17. **INTERMITTENT: the host node died of SIGSEGV running test/procfs-linux-only.test.cjs** (378 ms in, no test
     reported; run.mjs kept the TAP). Not reproduced in 63 more runs (8 via the suite's own runner, 25 under
     `node --test` with the watchdog preload on this branch and 25 on main's tree, 30 directly). The file loads
