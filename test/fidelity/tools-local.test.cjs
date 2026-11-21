@@ -235,14 +235,16 @@ const tList2 = (m) => taskSame(toolResult(m, T_LIST_2.id), T_LIST_2, m);
 // The background call, by shape: native's sentence around this side's own sandboxed output path (raw.tmp, which
 // driveTool puts beside every log it returns; a synthetic control log has none, so there the path may be any, and the
 // check fails there for the reason the control means: the call's answer is missing).
-const tBg = (m) => {
+const bgShaped = (tail) => (m) => {
   const r = toolResult(m, T_BG.id);
   const id = bgIdOf(m);
   if (!r || r.isError || !id) return false;
   const tmp = typeof m.tmp === 'string' ? escRe(m.tmp) : '/.+';
-  const shape = new RegExp(`^Command running in background with ID: ${id}\\. Output is being written to: ${tmp}/claude-\\d+/[^/]+/[0-9a-f-]{36}/tasks/${id}\\.output\\. You will be notified when it completes\\. To check interim output, use Read on that file path\\.$`);
+  const shape = new RegExp(`^Command running in background with ID: ${id}\\. Output is being written to: ${tmp}/claude-\\d+/[^/]+/[0-9a-f-]{36}/tasks/${id}\\.output\\. ${escRe(tail)}$`);
   return shape.test(r.text);
 };
+const BG_TAIL = 'You will be notified when it completes. To check interim output, use Read on that file path.';
+const tBg = bgShaped(BG_TAIL);
 const tStop = (m) => taskSame(toolResult(m, T_STOP.id), T_STOP, m);
 const tStopAgain = (m) => taskSame(toolResult(m, T_STOP_AGAIN.id), T_STOP_AGAIN, m);
 const tKillNone = (m) => taskSame(toolResult(m, T_KILL_NONE.id), T_KILL_NONE, m);
@@ -382,8 +384,11 @@ test('native answers the zsh Bash turn as ZSH_DONE records', { skip: SKIP }, asy
 // the clock time of the wakeup, so it is judged by shape); ExitWorktree outside a worktree refuses, EnterWorktree
 // makes one, and ExitWorktree removes it and its branch, which the tree left after the turn shows.
 //
-// MEASURED on native 2.1.283 darwin-arm64 (2026-11-20) and a quaude built from this tree. Driving it found two
-// defects, both fixed: the shim's readdir/readlink ignored `encoding: 'buffer'`, so quaude's ExitWorktree "could not
+// MEASURED on native 2.1.283 darwin-arm64 (2026-11-20) and a quaude built from this tree; RE-MEASURED on native 2.1.330
+// (2026-11-21), which moved five answers: CronCreate and CronList name the job's next run ("Next run: Jan 1 3:00am",
+// NEXT_RUN below), ScheduleWakeup's two sentences are reworded, and EnterWorktree/ExitWorktree quote their paths and
+// branch in curly quotes. Quaude's next-run text was "01/01/2027 02:59:00am" until the shim's Date.toLocaleString
+// honoured its options (test/node-shim-intl.test.cjs). Driving it at 2.1.283 found two defects, both fixed: the shim's readdir/readlink ignored `encoding: 'buffer'`, so quaude's ExitWorktree "could not
 // remove" the worktree native removed (test/node-shim-fs-walk.test.cjs has the differential row); and a mock-id
 // hazard in driveTool (an id inside another read as answered), now refused there.
 // The same base as the Read/Write turn's, so the permission-mode turn below can lay both fixtures in one working
@@ -430,31 +435,43 @@ const SESSION_SCRIPT = [{ tool: S_SKILL }, { tool: S_NOSKILL }, { tool: C_LIST_0
   { tool: C_DELETE, inputFrom: (log) => ({ id: cronIdOf(log) || 'no-cron-id' }) }, { tool: C_NODELETE }, { tool: W_SCHED },
   { tool: W_STOP }, { tool: WT_NOEXIT }, { tool: WT_ENTER }, { tool: WT_REMOVE }];
 
-// MEASURED: native's answers; <CRON> is the job id, <WORK> the turn's working directory, <WT> the worktree.
+// The curly quotes 2.1.330's worktree answers put around a path or branch (built from code points: tool hazard).
+const LQ = String.fromCodePoint(0x201C);
+const RQ = String.fromCodePoint(0x201D);
+// When the one-shot job next runs, as CronCreate and CronList name it (2.1.330). The bundle fires a one-shot job whose
+// minute is a multiple of 30 up to 90 s EARLY, by the fraction its id's first 8 hex digits are of 2^32 (eTi,
+// oneShotMaxMs 90000, oneShotMinuteMod 30), and names that instant rounded to the minute (Vrn): 03:00 less under 30 s
+// is "3:00am", more is "2:59am". Computed from the id, so the text is judged exactly, not by shape. MEASURED on
+// native: ids ee394d1c and eeb85356 answered 2:59am, 32fbbb2e 3:00am.
+const NEXT_RUN = (cron) => (parseInt(cron.slice(0, 8), 16) / 2 ** 32 * 90000 <= 30000 ? 'Jan 1 3:00am' : 'Jan 1 2:59am');
+// MEASURED: native's answers; <CRON> is the job id, <NEXT> its next run (NEXT_RUN), <WORK> the turn's working
+// directory, <WT> the worktree.
 const SESSION_NATIVE = {
   toolu_ss_skill: { text: 'Launching skill: greet', isError: false },
   toolu_ss_unknown: { text: '<tool_use_error>Unknown skill: no-such-skill</tool_use_error>', isError: true },
   toolu_sc_list0: { text: 'No scheduled jobs.', isError: false },
-  toolu_sc_create: { text: `Scheduled one-shot task <CRON> (0 3 1 1 *). Session-only (not written to disk, dies when Claude exits). It will fire once then auto-delete.`, isError: false },
-  toolu_sc_list1: { text: `<CRON> ${String.fromCodePoint(0x2014)} 0 3 1 1 * (one-shot) [session-only]: say the new year`, isError: false },
+  toolu_sc_create: { text: `Scheduled one-shot task <CRON> (0 3 1 1 *). Next run: <NEXT>. Session-only (not written to disk, dies when Claude exits). It will fire once then auto-delete.`, isError: false },
+  toolu_sc_list1: { text: `<CRON> ${String.fromCodePoint(0x2014)} 0 3 1 1 * (one-shot) [session-only], next run <NEXT>: say the new year`, isError: false },
   toolu_sc_delete: { text: 'Cancelled job <CRON>.', isError: false },
   toolu_sc_nodel: { text: "<tool_use_error>No scheduled job with id 'deadbeef'</tool_use_error>", isError: true },
-  toolu_sw_halt: { text: `Loop stopped ${String.fromCodePoint(0x2014)} cancelled 1 pending wakeup(s); no further dynamic-loop wakeups scheduled. If you armed a Monitor for this loop, TaskStop it now; otherwise nothing more to do this turn.`, isError: false },
+  toolu_sw_halt: { text: `Loop stopped ${String.fromCodePoint(0x2014)} cancelled 1 pending wakeup(s); no further dynamic-loop wakeups scheduled. If you armed a Monitor for this loop, TaskStop it now. Then write the loop's outcome for the user as ordinary visible response text ${String.fromCodePoint(0x2014)} and end the turn.`, isError: false },
   toolu_sx_outside: { text: `<tool_use_error>No-op: there is no active EnterWorktree session to exit. This tool only operates on worktrees created by EnterWorktree in the current session ${String.fromCodePoint(0x2014)} it will not touch worktrees created manually or in a previous session. No filesystem changes were made.</tool_use_error>`, isError: true },
-  toolu_se_enter: { text: 'Created worktree at <WT> on branch worktree-wt-drive. The session is now working in the worktree. Use ExitWorktree to leave mid-session, or exit the session to be prompted.', isError: false },
-  toolu_sx_remove: { text: 'Exited and removed worktree at <WT>. Session is now back in <WORK>.', isError: false },
+  toolu_se_enter: { text: `Created worktree at ${LQ}<WT>${RQ} on branch ${LQ}worktree-wt-drive${RQ}. The session is now working in the worktree. Use ExitWorktree to leave mid-session, or exit the session to be prompted.`, isError: false },
+  toolu_sx_remove: { text: `Exited and removed worktree at ${LQ}<WT>${RQ}. Session is now back in ${LQ}<WORK>${RQ}.`, isError: false },
 };
 // The tree native left: the main worktree alone, no worktree branch, no worktree directory.
 const REPO_NATIVE = { worktrees: 1, branches: '', wtDir: false };
 // ScheduleWakeup by shape: native's sentence around the wakeup's clock time and its delay from now.
-const W_SCHED_SHAPE = new RegExp(`^Next wakeup scheduled for \\d\\d:\\d\\d:\\d\\d \\(in \\d+s\\)\\. Nothing more to do this turn ${String.fromCodePoint(0x2014)} the harness re-invokes you when the wakeup fires or a task-notification arrives\\.$`);
+const W_SCHED_SHAPE = new RegExp(`^Next wakeup scheduled for \\d\\d:\\d\\d:\\d\\d \\(in \\d+s\\)\\. If you owe the user a status update this tick, write it now as ordinary response text; then end the turn ${String.fromCodePoint(0x2014)} the harness re-invokes you when the wakeup fires or a task-notification arrives\\.$`);
 const sessionWant = (USE, m) => {
   const w = SESSION_NATIVE[USE.id];
   if (!w) return null;
   const cron = cronIdOf(m);
   if (w.text.includes('<CRON>') && !cron) return null;
-  return { text: w.text.split('<CRON>').join(cron).split('<WT>').join(S_WT).split('<WORK>').join(S_WORK), isError: w.isError };
+  return { text: w.text.split('<CRON>').join(cron).split('<NEXT>').join(cron && NEXT_RUN(cron)).split('<WT>').join(S_WT).split('<WORK>').join(S_WORK), isError: w.isError };
 };
+// A recorded answer filled in for a sample job id, for the controls.
+const sessionSample = (id, cron) => SESSION_NATIVE[id].text.split('<CRON>').join(cron).split('<NEXT>').join(NEXT_RUN(cron));
 const sessionSame = (r, USE, m) => {
   const w = sessionWant(USE, m);
   return !!r && !!w && r.text === w.text && r.isError === w.isError;
@@ -478,7 +495,7 @@ const sessionVerdicts = (m) => [[S_SKILL, sSkill(m)], [S_NOSKILL, sNoSkill(m)], 
   [C_LIST_1, cList1(m)], [C_DELETE, cDelete(m)], [C_NODELETE, cNoDelete(m)], [W_SCHED, wSched(m)], [W_STOP, wStop(m)],
   [WT_NOEXIT, wtNoExit(m)], [WT_ENTER, wtEnter(m)], [WT_REMOVE, wtRemove(m)]];
 // What CronCreate answers, for the controls of the calls whose check reads its id.
-const CRON_CONTEXT = [{ use: C_CREATE, content: SESSION_NATIVE[C_CREATE.id].text.split('<CRON>').join('0abc1234') }];
+const CRON_CONTEXT = [{ use: C_CREATE, content: sessionSample(C_CREATE.id, '0abc1234') }];
 
 function sessionControls() {
   assertFailsOnMissingOutput(sSkill, S_SKILL);
@@ -497,10 +514,15 @@ function sessionControls() {
   // each check is shown to pass on its own answer with it, so a control's failure is about that call's output alone
   assertFailsOnMissingOutput(cList1, C_LIST_1, 'print', CRON_CONTEXT);
   assertFailsOnMissingOutput(cDelete, C_DELETE, 'print', CRON_CONTEXT);
-  assert.ok(cList1(answeredLog(C_LIST_1, SESSION_NATIVE[C_LIST_1.id].text.split('<CRON>').join('0abc1234'), CRON_CONTEXT)),
+  assert.ok(cList1(answeredLog(C_LIST_1, sessionSample(C_LIST_1.id, '0abc1234'), CRON_CONTEXT)),
     'the second CronList check passes on its own answer with CronCreate\'s');
-  assert.ok(cDelete(answeredLog(C_DELETE, SESSION_NATIVE[C_DELETE.id].text.split('<CRON>').join('0abc1234'), CRON_CONTEXT)),
+  assert.ok(cDelete(answeredLog(C_DELETE, sessionSample(C_DELETE.id, '0abc1234'), CRON_CONTEXT)),
     'the CronDelete check passes on its own answer with CronCreate\'s');
+  // the next run is the id's own: the other minute's text is not this job's answer
+  assert.strictEqual(NEXT_RUN('32fbbb2e'), 'Jan 1 3:00am');
+  assert.strictEqual(NEXT_RUN('ee394d1c'), 'Jan 1 2:59am');
+  assert.ok(!cCreate(answeredLog(C_CREATE, sessionSample(C_CREATE.id, '0abc1234').replace('3:00am', '2:59am'))),
+    'CronCreate with another next run is not its answer');
 }
 
 function sessionFindings(label, side) {
@@ -543,7 +565,9 @@ test('native answers the session script as SESSION_NATIVE records', { skip: SKIP
 // API; Workflow returns at once with the run's task id, and the run is in the background); ListAgents, with no other
 // session on the box's sandboxed home.
 //
-// MEASURED on native 2.1.283 darwin-arm64 and a quaude built from this tree (2026-11-20). Every answer is native's,
+// MEASURED on native 2.1.283 darwin-arm64 and a quaude built from this tree (2026-11-20); RE-MEASURED on native 2.1.330
+// (2026-11-21), which moved three: ReportFindings without `findings` names it missing, Workflow with nothing to run no
+// longer offers runId, and the launch answer's resume line is reworded. Every answer is native's,
 // with ONE NAMED DIVERGENCE: ListAgents. Native starts its UDS peer-messaging server at startup (the debug log:
 // "[uds-messaging] Listening: /tmp/cc-socks-<uid>/<pid>.sock") and so names this session ("This session is
 // work-NN [ref] ...") above "No reachable agents ...". Under quaude net.createServer is the named throwing stub
@@ -571,8 +595,8 @@ const EM = String.fromCodePoint(0x2014);
 const T5_NATIVE = {
   toolu_r5_none: { text: 'No findings reported.', isError: false },
   toolu_r5_one: { text: '1 finding reported.', isError: false },
-  toolu_r5_bad: { text: '<tool_use_error>InputValidationError: ReportFindings failed due to the following issue:\nThe parameter `findings` type is expected as `array` but provided as `unknown`</tool_use_error>', isError: true },
-  toolu_w5_noinput: { text: '<tool_use_error>InputValidationError: [\n  {\n    "code": "custom",\n    "path": [],\n    "message": "Must provide script, name, scriptPath, or runId"\n  }\n]</tool_use_error>', isError: true },
+  toolu_r5_bad: { text: '<tool_use_error>InputValidationError: ReportFindings failed due to the following issue:\nThe required parameter `findings` is missing</tool_use_error>', isError: true },
+  toolu_w5_noinput: { text: '<tool_use_error>InputValidationError: [\n  {\n    "code": "custom",\n    "path": [],\n    "message": "Must provide script, name, or scriptPath"\n  }\n]</tool_use_error>', isError: true },
   toolu_w5_unknown: { text: '<tool_use_error>Workflow "no-such-workflow" not found. Available: deep-research</tool_use_error>', isError: true },
 };
 // Workflow's launch answer, by shape: native's text around the run's task id, run id and the session's project dir
@@ -585,8 +609,10 @@ const F_RUN_SHAPE = new RegExp('^' + [
   'Script file: \\2/workflows/scripts/noop-\\3\\.js',
   esc('(Edit this file with Write/Edit and re-invoke Workflow with {scriptPath: "') + '\\2/workflows/scripts/noop-\\3\\.js' + esc('"} to iterate without resending the script.)'),
   'Run ID: \\3',
-  esc('To resume after editing the script: Workflow({scriptPath: "') + '\\2/workflows/scripts/noop-\\3\\.js' + esc('", resumeFromRunId: "')
-    + '\\3' + esc(`"}) ${EM} completed agents return cached results (cached results may themselves be empty ${EM} inspect journal.jsonl before assuming there is something to recover).`),
+  esc('To resume after editing the script, with the same args if this run had any: Workflow({scriptPath: "') + '\\2/workflows/scripts/noop-\\3\\.js'
+    + esc('", resumeFromRunId: "') + '\\3' + esc(`"}) ${EM} agent() calls return cached results up to the first one that failed, no longer `
+    + 'matches (edited, added, removed, or in a different call order) or never started. Cached results may themselves be empty: inspect '
+    + 'journal.jsonl before assuming there is something to recover.'),
   '',
   'You will be notified when it completes\\. Use /workflows to watch live progress\\.',
 ].join('\\n') + '$');
@@ -797,6 +823,11 @@ const AGENT_BG = new RegExp('^' + esc(`Async agent launched successfully. (This 
   + 'output_file: /\\S+/claude-tmp/claude-\\d+/\\S+/[0-9a-f-]{36}/tasks/\\1\\.output\\n'
   + esc(`Do NOT Read or tail this file via the shell tool ${EM} it is the full subagent JSONL transcript and reading it will overflow your context. If the user asks for progress, say the agent is still running; you'll get a completion notification.`) + '$');
 const iAgentBg = (m) => { const r = toolResult(m, A_AGENT.id); return !!r && !r.isError && AGENT_BG.test(r.text); };
+// The background Bash, interactive (MEASURED on native 2.1.330, 2026-11-21): the session can be told when the command
+// ends after its reply, so the answer says not to poll; in -p (kb(): non-interactive) it says to Read the file, as above.
+const BG_TAIL_INTERACTIVE = `You will be notified when it completes ${EM} do not poll that file or sleep while waiting. Read the file only if `
+  + "the user asks for progress, or if you need a line it prints before you can go on, such as a server's ready line or port.";
+const iBg = bgShaped(BG_TAIL_INTERACTIVE);
 // MEASURED on native 2.1.283 darwin-arm64 (2026-11-20): both answer relative to the working directory
 const GREP_DONE = { text: 'Found 1 file\na.txt', isError: false };
 const GLOB_DONE = { text: 'n.ipynb', isError: false };
@@ -815,7 +846,8 @@ const MODE_CHECKS = {
     [T_LIST_1, uListOff, TASK_OFF('TaskList')],
     ...[T_CREATE_2, T_GET_2, T_GET_NONE, T_BLOCK_2, T_DONE_1, T_LIST_2].map((U) => [U, taskOff(U), TASK_OFF(U.name)])],
   'permission:auto': [[A_AGENT, aAgentAuto, { text: agentSample(AGENT_UNREPORTED), isError: false }]],
-  interactive: [[A_AGENT, iAgentBg, { text: AGENT_BG_SAMPLE, isError: false }]],
+  interactive: [[A_AGENT, iAgentBg, { text: AGENT_BG_SAMPLE, isError: false }],
+    [T_BG, iBg, { text: BG_ANSWER.replace(BG_TAIL, BG_TAIL_INTERACTIVE), isError: false }]],
 };
 // The calls' verdicts in `mode`: a call the mode changes is judged by ITS check, any other by its print check.
 const modeVerdicts = (m, mode, side) => {
@@ -833,6 +865,7 @@ const modeLeft = (mode) => {
 };
 // What each changed call answers in print (the controls' negative side: a mode's check must fail on it).
 const printAnswer = (USE) => (USE === E_EDIT ? EDIT_DONE : USE === A_AGENT ? { text: agentSample(AGENT_FRAME), isError: false }
+  : USE === T_BG ? { text: BG_ANSWER, isError: false }
   : USE === F_RUN ? { text: 'Workflow launched in background. Task ID: b1', isError: false }
     : TASK_NATIVE[USE.id] ? { text: TASK_NATIVE[USE.id].text.split('<ID>').join('b1'), isError: TASK_NATIVE[USE.id].isError } : want(USE));
 
@@ -863,7 +896,7 @@ function modeControls() {
   assertFailsOnMissingOutput(fName, F_NAME, ['interactive', 'permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted']);
   assertFailsOnMissingOutput(aListNative, A_LIST, ['interactive', 'permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted']);
   assertFailsOnMissingOutput(aListQuaude, A_LIST, ['interactive', 'permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted']);
-  assertFailsOnMissingOutput(tBg, T_BG, ['interactive', 'permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted']);
+  assertFailsOnMissingOutput(tBg, T_BG, ['permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted']);
   assertFailsOnMissingOutput(tStop, T_STOP, ['interactive', 'permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted'], BG_CONTEXT);
   assertFailsOnMissingOutput(tGet1, T_GET_1, ['interactive', 'permission:acceptEdits', 'permission:auto', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan']);
   assertFailsOnMissingOutput(aAgent, A_AGENT, ['permission:acceptEdits', 'permission:bypassPermissions', 'permission:dontAsk', 'permission:plan', 'unlisted']);
@@ -883,6 +916,7 @@ function modeControls() {
   assertFailsOnMissingOutput(uRun, F_RUN, 'unlisted');
   assertFailsOnMissingOutput(aAgentAuto, A_AGENT, 'permission:auto');
   assertFailsOnMissingOutput(iAgentBg, A_AGENT, 'interactive');
+  assertFailsOnMissingOutput(iBg, T_BG, 'interactive');
   assertFailsOnMissingOutput(iGrep, G_TWO, 'interactive');
   assertFailsOnMissingOutput(iGlob, G_NB, 'interactive');
   // not registered, unlisted: not applicable, never driven (each fails on the tool's own print answer)
