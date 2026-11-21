@@ -455,7 +455,24 @@ const WALLS = [
     // feature, one more module that can reach the wall. The win32 carves count 12 (a
     // win32-only `require('net').connect(` module); no CI leg stages a win32 carve with an
     // engine, so none judges it.
-    baseline: 11,
+    //
+    // RE-MEASURED AT THE PIN BUMP TO 2.1.330 (2026-11-21): 16, on the darwin-arm64 and
+    // linux-amd64 carves alike. Matched by call site against the staged 2.1.283 graph: all
+    // eleven 2.1.283 reaches are still there (the chunks were re-split, so the names all
+    // changed). The five new ones each rejects a promise or reaches a catch when the wall
+    // throws, and none is on the -p or TUI path:
+    //   - the CA-certs "served-chain read" (`ht(host,port,network)` inside An's `new
+    //     Promise` executor): a diagnostic that reads a server's chain after a TLS
+    //     issuer error, so the wall's throw becomes that read's rejection;
+    //   - the runner's dead-socket sweep (`[runner] nested model access: removed a dead
+    //     socket directory`), runner mode only;
+    //   - the CCR heartbeat-gap network probe (dns, connect, /api/hello), inside
+    //     try/catch, gated, and switched off after 2026-12-20 by its own date check;
+    //   - `mcp serve --transport http`'s session tunnel: its control/status port probe
+    //     (`[control/status port=... listening=...]`, allowed ports only) and its early
+    //     dial, whose `.catch` warns "[session tunnel] the dial during the start
+    //     failed, so the server will dial once it has bound".
+    baseline: 16,
     why: '"the actual socket surface (net.connect / createConnection / real '
       + 'Socket I/O / net.Server) is NOT implemented — the -p transport is '
       + 'txiki\'s native fetch, which never routes through node:net ... '
