@@ -225,7 +225,8 @@ Bun.SHA256/gzipSync. STILL RED, beyond 1 and 2 above, by gate:
     `-p /status` takes 23-48 s wall, ~12 s user CPU, where naude takes ~10 s; 1P telemetry export fails every session
     on zlib.gzipSync (node-shim has no gzip; Bun.gzipSync refuses with it); the event-loop-stall detector logs
     "process.resourceUsage() failed: not a function". crypto.X509Certificate is absent too (2.1.330 reads it in 11
-    modules, its CA-trust builder inside try/catch).
+    modules, its CA-trust builder inside try/catch). Bun.Archive (new in 2.1.330: the hosted project folder's .tgz)
+    waits on the same gzip compressor; accepted-missing for now with its review (inspect-claude-bundle.cjs).
 
 Measured: CLODE_PROVIDER_BIN=<2.1.330 darwin-arm64 and linux-x64 from npm pack> CLODE_TJS=<engine with
 quickjs-ng-regexp-capture-u16.patch> node --test test/node-shim-differential.test.cjs (VIOLATION, 2092 calls

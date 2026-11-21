@@ -804,6 +804,15 @@ const ACCEPTED_UNRECOGNIZED_BUN = new Set([
   // back to the plain fetch path on nothing: `let r=Xd()?Cjr():void 0;if(!r)return wFt(e,n)`.
   // So absence is a host without it. Do NOT stub: a stub flips the detection.
   'FetchSession',
+  // Archive: new in 2.1.330 (reviewed 2026-11-21, darwin-arm64 carve). One call site, the hosted project folder
+  // (copying a claude.ai project's text documents into a folder in a hosted container): `await new
+  // Bun.Archive(G,{compress:"gzip"}).bytes()` builds a .tgz that a shell then untars into a tmpfs mount
+  // (findmnt, mount -o remount,ro). Reached only when placeBefore's gates pass: allowed() is
+  // CLAUDE_CODE_RESTRICT_PERSONAL_CONFIG, and CLAUDE_PROJECT_UUID must name a project. If reached without it,
+  // fill() rejects, place() catches that as "container_failed" (`.catch((I)=>(i(I),"container_failed"))`),
+  // and the model is told the copy did not finish. So absence is a reported outcome, not a crash. Implementing it
+  // needs a gzip compressor, which tjs lacks (node-shim zlib has none; BACKLOG, the 2.1.330 entry, item 14).
+  'Archive',
   // SHA256: new in 2.1.330, `Bun.SHA256.hash(bytes,"base64")` in its prompt-block digester (chunk-30a5awzz.js), live
   // code. IMPLEMENTED in bun-shim (static hash and update/digest, over crypto's sha256); accepted here only because it
   // is not in KNOWN_BUN (adding it there would rewrite the golden --json shas, as for Image).
