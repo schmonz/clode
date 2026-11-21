@@ -140,14 +140,11 @@ function findPhantomCommentSites(src, mask) {
 // by platform: in 2.1.283 this one is chunk-d73nsb9c.js on darwin-arm64, chunk-ep8pa8n7.js on
 // linux-x64, chunk-4417evft.js on linux-x64-musl and chunk-j92898s3.js on win32-x64, at offset
 // 6035 in all four. An entry that no longer fires is a finding, so a pin bump re-reviews it.
-const PHANTOM_ALLOWED = new Map([
-  ['/1000)),f=o==="running"?`This call is still running on ${e.n',
-    'measured 2026-09-26 on the 2.1.283 carves: the "/" is `Math.round(r/1000)`, a division '
-    + 'after the identifier `r`, its only reading. The candidate scan walks on through a `[` it '
-    + 'takes for a character class and finds "/*" inside the STRING "/**" (`tail:"/**"`) 4,939 '
-    + 'bytes later, which lexicalCodeMask reads as a string (0 there, code again right after '
-    + 'it). No comment can open.'],
-]);
+// 2.1.283 had one (2026-09-26): '/1000)),f=o==="running"?`This call is still running on ${e.n', a division
+// (`Math.round(r/1000)`) the candidate scan walked on from, through a `[` it took for a class, to "/*" inside the
+// string "/**" 4,939 bytes later. At 2.1.330 it no longer fires on the darwin-arm64 or the linux-x64-musl carve, and
+// nothing else does (measured 2026-11-21, both carves): the list is empty, and a new site is a finding again.
+const PHANTOM_ALLOWED = new Map([]);
 
 // PURE. The shape defineGuard's `scan` requires: {findings, examined}. `allowed` defaults to the
 // reviewed sites; the control passes none.
