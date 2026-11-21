@@ -515,7 +515,7 @@ tool x mode pairs (permission modes, sandbox, Bash shells, interactive, unlisted
 it says) over darwin-arm64, linux-x64-musl and netbsd-arm64, 2166 cells. Measured: the every-tool-driven
 gate's verdict over the 2.1.283 darwin-arm64 carve (test/build-gates/tool-coverage-gates.test.cjs, 2026-11-21):
 363 claimed by a CI job (16 hold the ListAgents pinned divergence), 181 driven-local (committed VM evidence, NOT CI:
-netbsd-arm64-vm 2026-11-21 @ 8f66672), 1610 exempted, 12 not applicable, 0 neither, over four CI jobs (CELL_JOBS). CLAIMED IS NOT SEEN (final-review C1): the verdict is a static scan of what each job's
+netbsd-arm64-vm 2026-11-21 @ 9e20ba4; 8 of them hold the ListAgents pinned divergence), 1610 exempted, 12 not applicable, 0 neither, over four CI jobs (CELL_JOBS). CLAIMED IS NOT SEEN (final-review C1): the verdict is a static scan of what each job's
 files declare. Only cells-ran-in-ci-job, gathered by gates-ran-in-ci on a green CI run, shows a cell ran, and no CI
 run has yet completed gates-ran-in-ci on the code that claims the interactive, Agent, not-applicable and E12 cells.
 The numbers here are updated from the first green run.
@@ -554,15 +554,33 @@ ripgrep timeout tripped). netbsd-arm64's cells are proven by the local NetBSD/ar
 arm64`, ssh -p 2230) through ONE re-run command, `node scripts/netbsd-arm64-evidence.mjs`: a `git ls-files` tarball
 to a mktemp dir on the guest, the engine and a quaude built there, tools-local, agentic-grep-glob and webfetch in the
 CI job's four lanes, and the committed evidence test/fidelity/evidence/netbsd-arm64.json (commit, date, guest OS,
-quaude/engine sha256, this tree's engine and quaude input hashes, every test record, the cells they prove). The gate
-counts those cells apart (DRIVEN-LOCAL), and only while the evidence is fresh: at most 30 days old AND recorded at a
-tree with the same engine recipe and quaude inputs (libexec/, scripts/stage0.mjs, UPSTREAM_PIN). An edit to any of
-those turns guard driven-local-evidence red until the command is re-run (libexec changed 21 times in the 30 days
-before this ruling, so expect to re-run it often; it takes about 6 minutes). MEASURED 2026-11-21 at 8f66672 (NetBSD
-11.0_RC2 evbarm, quaude 2.1.283): 193 evidence cells, 193 passed, 0 failed, 0 skipped; 21 tests passed, 20 native
-tests skipped by name (no native Claude Code on NetBSD), 0 failed; the whole run 336 s (each tools-local mode turn
-~33 s, interactive 82 s). The webfetch test first needed test/self-signed-cert.cjs: NetBSD's base openssl has no
-/etc/openssl/openssl.cnf, so `openssl req` died until the config was written beside the key.
+quaude/engine sha256, this tree's engine, quaude and driver input hashes, every lane's exit status, every test record,
+the cells they prove). The gate counts those cells apart (DRIVEN-LOCAL) while the evidence is FRESH: at most 30 days
+old AND recorded at a tree with the same engine recipe, quaude inputs (libexec/, scripts/stage0.mjs, UPSTREAM_PIN) and
+driver inputs (the three claimed driver files plus their require closure, derived from their relative require literals:
+55 files, test/tool-driver.cjs, the mock helper, scripts/lib/tool-result.cjs among them). Cell rows carry no line
+numbers. STALE IS RED ONLY AT RELEASE (USER RULING 2026-11-21): in CI and the local suite a stale record is a WARNING
+printed every run ("NetBSD/arm64 VM record stale since <commit> (<what changed>); run node
+scripts/netbsd-arm64-evidence.mjs"), and its cells a separate drivenLocalStale count; release.yml's
+gates-ran-in-release runs driven-local-evidence with CLODE_EVIDENCE_RELEASE=1 on a full clone, and refuses it. A
+record that is malformed, hand-edited (it must be true to its own tests even when stale), whose commit is not an
+ancestor of HEAD (skipped, by name, in a shallow clone), or one of whose lanes did not exit 0 is red everywhere.
+COST, MEASURED: in the 30 days before the ruling, 44 commits touched the quaude or driver inputs (all of them libexec/,
+on 3 distinct days, 2026-11-18..20), so on a day of shim work the record goes stale with nearly every commit; expect a
+re-run before each release, not after each commit. One re-run is 337 s wall end to end (2026-11-21, at 9e20ba4: tarball,
+upload, the in-guest engine and quaude build, all four lanes, the judge), plus a commit of the evidence. MEASURED
+2026-11-21 at 9e20ba4 (NetBSD 11.0_RC2 evbarm, quaude 2.1.283): 193 evidence cells, 193 passed; 21 tests passed, 20
+native tests skipped by name (no native Claude Code on NetBSD), 0 failed; 310 s in the guest. The webfetch test first
+needed test/self-signed-cert.cjs: NetBSD's base openssl has no /etc/openssl/openssl.cnf, so `openssl req` died until
+the config was written beside the key (test/self-signed-cert.test.cjs now reproduces that shape on any host).
+
+OPEN, NETBSD-ARM64 INTERMITTENT SIGSEGV: the first evidence run at 9e20ba4 (2026-11-21) failed one test: quaude died of
+SIGSEGV mid-turn in tools-local's "ReportFindings, Workflow and ListAgents in a built quaude" (the Workflow tool_use,
+then ListAgents and Agent never answered), so lane rest-tools exited 1 and the gate refused the record (193 cells, 189
+passed). The engine and quaude inputs were byte-identical to the 8f66672 run that passed, and the immediate re-run at
+the same commit passed all 193: an intermittent crash in the engine or shim on NetBSD/arm64, not yet reproduced or
+diagnosed. The red run's guest logs were kept off-repo; next step is a loop of that one test on the VM with core
+dumps on.
 
 Nothing falls due 2026-12-15 any more: UNTIL_PHASE_A is retired (2026-11-20, plan Task 5 step 3), because it covered
 0 cells. USER RULING 2026-11-20 settled the last 8 Bash cells. The 3 shell:zsh cells are driven now (tools-local's
