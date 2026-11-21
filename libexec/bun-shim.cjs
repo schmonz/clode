@@ -440,7 +440,18 @@ function matchBrace(text, openIdx){
 // routed to the host applet, a comment in its body says the flags could not be read,
 // and the rewrite warns on stderr and records it for /doctor (_warnUnparsedShadows).
 const SHADOW_ARG_SPELLINGS = ['${1+"$@"}', '"$@"'];
-const _SHADOW_CALL = new RegExp(_SHADOW_INVOKE + '[A-Za-z0-9_+-]+\\s+"\\$_cc_bin"(.*)$');
+// THE BINARY THE APPLET RUNS AS. Through 2.1.283 every applet call ran `"$_cc_bin"` (a local
+// resolved from CLAUDE_CODE_EXECPATH, else the install path). From 2.1.330 a feature-flagged
+// writer variant (`tengu_playful_dusk`, measured in the 2.1.330 carve) tries the RUNNING binary
+// first and then the install path, each spelled as a literal word upstream shell-quotes itself:
+//   if [[ -x /path/to/claude ]]; then ARGV0=ugrep /path/to/claude <flags> ${1+"$@"} ...
+//   elif [[ -x '/path with space/claude' ]]; then ... else command grep ${1+"$@"}; fi
+// So the binary is `"$_cc_bin"`, a single-quoted word (upstream's quoter writes ' as '"'"'), or
+// a bare word of the characters that quoter leaves unquoted ([A-Za-z0-9_./:=@+,-]). Anything
+// else is not an applet call. Both branches must agree on the flags (seen.size below), as the
+// zsh/msys/bash branches always had to.
+const _SHADOW_BIN = '(?:"\\$_cc_bin"|\'(?:[^\']|\'"\'"\')*\'|[A-Za-z0-9_./:=@+,-]+)';
+const _SHADOW_CALL = new RegExp(_SHADOW_INVOKE + '[A-Za-z0-9_+-]+\\s+' + _SHADOW_BIN + '(.*)$');
 function _shadowCallFlags(body){
   const seen = new Set();
   for (const line of body.split('\n')) {
@@ -456,7 +467,7 @@ function _shadowCallFlags(body){
     if (/[$`]/.test(flags)) return { unparsed: `flags expand shell text: ${flags}` };
     seen.add(flags);
   }
-  if (seen.size === 0) return { unparsed: 'no applet call on "$_cc_bin"' };
+  if (seen.size === 0) return { unparsed: 'no applet call on "$_cc_bin" or a binary path' };
   if (seen.size > 1) return { unparsed: `branches disagree: ${[...seen].join(' | ')}` };
   return { flags: [...seen][0] };
 }

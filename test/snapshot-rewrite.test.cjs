@@ -96,6 +96,43 @@ test('rgShadowFunction is native 2.1.283\'s rg function, byte for byte, with thi
   assert.match(rgShadowFunction('C:\\x\\quaude.exe', 'win32'), /_cc_bin=\/c\/x\/quaude\.exe\n/);
 });
 
+// 2.1.330's writer, run for real (test/fixtures/snapshot-2.1.330*.sh say how): with its feature
+// flag off it writes the 2.1.283 shape (grep gains --encoding=UTF-8); with tengu_playful_dusk on,
+// each shadow runs its applet on the RUNNING binary and then the install path, each a shell-quoted
+// WORD, not "$_cc_bin". Before this the flagged variant read as "no applet call on $_cc_bin":
+// every shadow lost all of upstream's flags (the F4 failure mode). Both variants must read the same
+// flags, and the rg function stays native's own.
+test('rewriteSnapshot: 2.1.330\'s flagged writer (binary as a quoted word) keeps every upstream flag', () => {
+  const plain = collectShadows(fx('snapshot-2.1.330.sh'));
+  const flagged = collectShadows(fx('snapshot-2.1.330-execpath-first.sh'));
+  const grepFlags = '-G --ignore-files --hidden -I --encoding=UTF-8 --exclude-dir=.git --exclude-dir=.svn '
+    + '--exclude-dir=.hg --exclude-dir=.bzr --exclude-dir=.jj --exclude-dir=.sl';
+  const want = [
+    { name: 'find', applet: 'bfs', env: 'CLODE_BFS', flags: '-S dfs -regextype findutils-default' },
+    { name: 'grep', applet: 'ugrep', env: 'CLODE_UGREP', flags: grepFlags },
+  ];
+  assert.deepStrictEqual(plain.filter((s) => s.name !== 'rg'), want);
+  assert.deepStrictEqual(flagged.filter((s) => s.name !== 'rg'), want);
+  const out = rewriteSnapshot(fx('snapshot-2.1.330-execpath-first.sh'));
+  assert.doesNotMatch(out, /(?:ARGV0=|exec -a )(?:bfs|ugrep)\b/, 'every upstream find/grep multiplexer call is replaced');
+  assert.doesNotMatch(out, /O'"'"'Brien/, 'nothing of upstream\'s flagged bodies survives (quaude\'s rg names its own binary)');
+  assert.doesNotMatch(out, /could not read upstream's flags/);
+  assert.ok(out.includes(`  "$_bin" ${grepFlags} "$@"\n`), out);
+  assert.ok(out.includes(rgShadowFunction(process.execPath)), 'rg becomes quaude\'s own rg function');
+});
+
+test('the applet-call reader takes the binary only as "$_cc_bin", a single-quoted word or a bare quoter-safe word', () => {
+  const body = (bin) => `function grep {\n  local _cc_bin=x\n  ARGV0=ugrep ${bin} -G \${1+"$@"}\n}\n`;
+  for (const bin of ['"$_cc_bin"', '/opt/claude', "'/a b/claude'", "'/O'\"'\"'Brien/claude'"]) {
+    assert.deepStrictEqual(collectShadows(body(bin)).map((s) => s.flags), ['-G'], bin);
+  }
+  // A binary that expands shell text is not upstream's quoter's output: never read as an applet call.
+  for (const bin of ['$CC', '"$CC"', '`cc`']) {
+    const out = rewriteSnapshot(body(bin));
+    assert.match(out, /could not read upstream's flags/, bin);
+  }
+});
+
 test('rewriteSnapshot: never adds an rg shadow beside find/grep (rg lives inside upstream\'s guard)', () => {
   const out = rewriteSnapshot(skewSnap); // skewSnap has find+grep, no rg
   assert.doesNotMatch(out, /function rg \{/);

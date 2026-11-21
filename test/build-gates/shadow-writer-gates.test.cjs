@@ -44,6 +44,14 @@
 // own embedded-rg argv0 — never a literal; rg never carries upstream flags either way,
 // by clode's own design: CLODE_SHADOWS.rg.entry, bun-shim.cjs).
 //
+// 2.1.330 (re-pinned 2026-11-21, upstream-drift.yml red since 2026-10-23 with "0 writer
+// candidates"): the writer (`UUt`) no longer holds the ARGV0=/exec -a lines; it spreads a helper,
+// `BUt(bin,applet,tail,windowsFlag)`, once per binary it tries. With the feature flag
+// tengu_playful_dusk off the binary is `"$_cc_bin"` and the output is the 2.1.283 shape; with it on,
+// the applet runs on the RUNNING binary and then the install path, each a shell-quoted word. The
+// scan finds the helper by structure, runs its body for each binary, and requires the flagged
+// variant to read as the same flags (bun-shim.cjs _SHADOW_BIN learned the word shapes for it).
+//
 // THE EXTRACTION RULE, by structure, never by minified names (dbe/tbe/whatever the next
 // carve's minifier picks; same discipline as reset-patch-gates.test.cjs and
 // text-probe-gates.test.cjs's wrap-options scan in this same directory):
@@ -182,9 +190,10 @@ function parseSpreadMap(tok) {
 }
 // The NEAREST `var|let|const IDENT=[...]` pure-string-literal array before `beforeIdx`
 // (minified names repeat per module — the same "nearest definition" convention as
-// text-probe-gates.test.cjs's scanCallerStyle), resolved recursively.
+// text-probe-gates.test.cjs's scanCallerStyle), resolved recursively. The declaration may be a
+// later declarator of a list: 2.1.330 writes `var xFo="...",CAi=[".git",...]`.
 function findArrayDef(wholeText, ident, beforeIdx) {
-  const re = new RegExp('(?:var|let|const)\\s+' + ident.replace(/\$/g, '\\$') + '\\s*=\\s*(\\[[^\\]]*\\])', 'g');
+  const re = new RegExp('(?:(?:var|let|const)\\s+|,)' + ident.replace(/\$/g, '\\$') + '\\s*=\\s*(\\[[^\\]]*\\])', 'g');
   let best = null, bestDist = Infinity, mm;
   while ((mm = re.exec(wholeText)) !== null) {
     const d = Math.abs(mm.index - beforeIdx);
@@ -229,6 +238,30 @@ const SHADOW_NAMES = Object.keys(CLODE_SHADOWS);
 // DEFAULTS + SHELL SYNTAX, never by name. Every match in the whole carve is returned; the
 // caller decides what "not exactly one" means.
 const WRITER_SIG = /function\s+(\w+)\(\s*(\w+)\s*,\s*(\w+)\s*,\s*(\w+)\s*=\s*\[\]\s*,\s*(\w+)\s*=\s*\[\]\s*\)\s*\{/g;
+// 2.1.330 MOVED THE INVOCATION LINES INTO A HELPER the writer calls once per binary it tries
+// (`function BUt(e,o,r,g){if(g)return[\`  ARGV0=\${o} \${e} \${r}\`];return[...,\`    (exec -a \${o}
+// \${e} \${r})\`,...]}`, called as `...BUt('"$_cc_bin"',o,h,k)` and, behind a feature flag, as
+// `...BUt(Q,o,h,k)` / `...BUt(X,o,h,k)` with Q/X shell-quoted binary paths). So a writer is either
+// the pre-2.1.330 one, whose OWN body holds both idioms on "$_cc_bin", or one that names `_cc_bin`
+// and spreads a 4-parameter helper whose body holds both idioms. Found by structure, as before.
+const HELPER_SIG = (name) => new RegExp('function\\s+' + name.replace(/\$/g, '\\$')
+  + '\\(\\s*(\\w+)\\s*,\\s*(\\w+)\\s*,\\s*(\\w+)\\s*,\\s*(\\w+)\\s*\\)\\s*\\{', 'g');
+function findInvocationHelper(bundle, body) {
+  const called = [...new Set([...body.matchAll(/\.\.\.([\w$]+)\(/g)].map((c) => c[1]))];
+  const found = [];
+  for (const name of called) {
+    const defs = [...bundle.matchAll(HELPER_SIG(name))];
+    if (defs.length !== 1) continue;
+    const openIdx = defs[0].index + defs[0][0].length - 1;
+    const endIdx = matchBrace(bundle, openIdx);
+    if (endIdx === -1) continue;
+    const hbody = bundle.slice(openIdx + 1, endIdx - 1);
+    if (hbody.includes('ARGV0=') && hbody.includes('exec -a ')) {
+      found.push({ name, params: [defs[0][1], defs[0][2], defs[0][3], defs[0][4]], body: hbody });
+    }
+  }
+  return found.length === 1 ? found[0] : null;
+}
 function findWriterCandidates(bundle) {
   const out = [];
   const re = new RegExp(WRITER_SIG.source, 'g');
@@ -238,8 +271,12 @@ function findWriterCandidates(bundle) {
     const endIdx = matchBrace(bundle, openIdx);
     if (endIdx === -1) continue;
     const body = bundle.slice(openIdx + 1, endIdx - 1);
+    const params = [m[2], m[3], m[4], m[5]];
     if (body.includes('"$_cc_bin"') && body.includes('ARGV0=') && body.includes('exec -a ')) {
-      out.push({ name: m[1], params: [m[2], m[3], m[4], m[5]], body });
+      out.push({ name: m[1], params, body, helper: null });
+    } else if (body.includes('_cc_bin')) {
+      const helper = findInvocationHelper(bundle, body);
+      if (helper) out.push({ name: m[1], params, body, helper });
     }
   }
   return out;
@@ -273,6 +310,61 @@ function findInvocationTemplates(body) {
     else if (mm[1].includes('exec -a ')) out.push({ kind: 'exec', src: mm[0] });
   }
   return out;
+}
+
+// The helper's invocation lines (2.1.330+): it returns the zsh/msys `ARGV0=${APPLET} ${BIN} ${TAIL}`
+// lines and the bash `(exec -a ${APPLET} ${BIN} ${TAIL})` line (or, when its fourth parameter, a
+// Windows-only feature flag, is set, the ARGV0 line alone). Which parameter is the applet, the
+// binary and the tail is READ from the ARGV0 template's own order, never assumed, and the helper's
+// WHOLE BODY is then run (fourth parameter false, as everywhere but that Windows branch) so each
+// line is exactly what it returns. Null if the shape is not there.
+function helperInvocations(helper) {
+  const order = /ARGV0=\$\{(\w+)\} \$\{(\w+)\} \$\{(\w+)\}/.exec(helper.body);
+  if (!order) return null;
+  const [, a, b, t] = order;
+  if (![a, b, t].every((p) => helper.params.includes(p))) return null;
+  let run;
+  try { run = new Function(...helper.params, helper.body); } catch (e) { return null; }
+  const lines = (applet, bin, tail) => {
+    const out = run(...helper.params.map((p) => (p === a ? applet : p === b ? bin : p === t ? tail : false)));
+    return Array.isArray(out) ? out : [];
+  };
+  const pick = (re) => (applet, bin, tail) => lines(applet, bin, tail).find((l) => re.test(l));
+  const probe = lines('APPLET', 'BIN', 'TAIL');
+  if (!probe.some((l) => /ARGV0=/.test(l)) || !probe.some((l) => /exec -a /.test(l))) return null;
+  return { zsh: pick(/ARGV0=/), exec: pick(/exec -a /) };
+}
+
+// The binaries a 2.1.330+ writer hands its helper, read from its own calls: a string literal (the
+// `"$_cc_bin"` local) is taken as written; a binding (a shell-quoted path, built at run time from
+// the running binary and the install dir) is stood in for by the two word shapes upstream's
+// quoter writes: a bare path, and a single-quoted one with a space and an apostrophe.
+const QUOTED_BIN_STAND_INS = ['/home/user/.local/bin/claude', "'/home/user/O'\"'\"'Brien Apps/claude'"];
+function helperBins(w) {
+  const re = new RegExp('\\.\\.\\.' + w.helper.name.replace(/\$/g, '\\$') + '\\(', 'g');
+  const literal = new Set(), bound = new Set();
+  let c;
+  while ((c = re.exec(w.body)) !== null) {
+    const openIdx = c.index + c[0].length - 1;
+    const closeIdx = matchParen(w.body, openIdx);
+    if (closeIdx === -1) continue;
+    const first = splitTopArgs(w.body.slice(openIdx + 1, closeIdx - 1))[0];
+    const lit = parseStringLiteral(first);
+    if (lit !== undefined) literal.add(lit); else bound.add(first.trim());
+  }
+  return { literal: [...literal], bound: [...bound] };
+}
+
+// A flagged (2.1.330+) shadow body, in the writer's own branch shape: try each binary word in
+// turn, else fall back to the real command.
+function buildFlaggedShadowBody(name, branches) {
+  const lines = [`function ${name} {`];
+  branches.forEach(({ bin, zshLine, execLine }, i) => {
+    lines.push(`  ${i === 0 ? 'if' : 'elif'} [[ -x ${bin} ]]; then`, `  if [[ -n \${ZSH_VERSION:-} ]]; then`,
+      `    ${zshLine.trim()}`, '  else', `    ${execLine.trim()}`, '  fi');
+  });
+  lines.push(`  else command ${name} \${1+"$@"}; fi`, '}');
+  return lines.join('\n');
 }
 
 // Every `WRITERNAME("shadowName", applet, flags?, guard?)` call site: `applet`/`flags` as
@@ -328,17 +420,33 @@ function scanShadowWriter({ bundle, what }) {
       + `\`?TEMPLATE:SPELLING\` ternary — re-derive this scan's shape from the current carve`);
     return { findings, examined: 0, note: `${what}: writer found, spelling ternary not found` };
   }
-  const templates = findInvocationTemplates(w.body);
-  const zsh = templates.find((t) => t.kind === 'zsh');
-  const exec = templates.find((t) => t.kind === 'exec');
-  if (!zsh || !exec) {
-    findings.push(`the writer in ${what} no longer builds both an ARGV0= (zsh) and an (exec -a ...) `
-      + `(bash) invocation line on "$_cc_bin" — re-derive this scan's shape from the current carve`);
-    return { findings, examined: 0, note: `${what}: writer found, invocation lines not found` };
-  }
-  const nVar = w.params[1];
-  function fillInvocation(t, appletVal, tailVal) {
-    return new Function(nVar, tern.gVar, 'return (' + t.src + ')')(appletVal, tailVal);
+  // fillInvocation(kind, applet, tail, bin): one invocation line, evaluated from the carve's own
+  // template source. bins: every binary the writer runs its applet as ("$_cc_bin" first).
+  let fillInvocation, bins, words = [];
+  if (!w.helper) {
+    const templates = findInvocationTemplates(w.body);
+    const zsh = templates.find((t) => t.kind === 'zsh');
+    const exec = templates.find((t) => t.kind === 'exec');
+    if (!zsh || !exec) {
+      findings.push(`the writer in ${what} no longer builds both an ARGV0= (zsh) and an (exec -a ...) `
+        + `(bash) invocation line on "$_cc_bin" — re-derive this scan's shape from the current carve`);
+      return { findings, examined: 0, note: `${what}: writer found, invocation lines not found` };
+    }
+    const nVar = w.params[1];
+    const src = { zsh: zsh.src, exec: exec.src };
+    fillInvocation = (kind, appletVal, tailVal) => new Function(nVar, tern.gVar, 'return (' + src[kind] + ')')(appletVal, tailVal);
+    bins = ['"$_cc_bin"'];
+  } else {
+    const inv = helperInvocations(w.helper);
+    const hb = helperBins(w);
+    if (!inv || !hb.literal.includes('"$_cc_bin"')) {
+      findings.push(`the writer in ${what} spreads ${w.helper.name}(), but ${inv ? 'never hands it "$_cc_bin"' : 'its ARGV0=/exec -a '
+        + 'templates are not `${applet} ${bin} ${tail}`'} — re-derive this scan's shape from the current carve`);
+      return { findings, examined: 0, note: `${what}: writer and helper found, invocation shape not read` };
+    }
+    fillInvocation = (kind, appletVal, tailVal, bin = '"$_cc_bin"') => inv[kind](appletVal, bin, tailVal);
+    bins = hb.literal;
+    words = hb.bound.length > 0 ? QUOTED_BIN_STAND_INS : [];
   }
 
   let examined = 0;
@@ -367,8 +475,21 @@ function scanShadowWriter({ bundle, what }) {
     }
     examined++;
     const tail = tern.computeTail(flags);
-    const body = buildShadowBody(name, fillInvocation(zsh, appletVal, tail), fillInvocation(exec, appletVal, tail));
+    const body = buildShadowBody(name, fillInvocation('zsh', appletVal, tail), fillInvocation('exec', appletVal, tail));
     shadowTexts.push(body);
+    // The flagged variant (2.1.330+): the applet run on shell-quoted binary WORDS. It must read as
+    // the same flags as the "$_cc_bin" body; otherwise every upstream flag is dropped whenever the
+    // flag is on (the F4 failure mode, one feature flag away).
+    if (words.length > 0) {
+      const flagged = buildFlaggedShadowBody(name, words.map((bin) => ({
+        bin, zshLine: fillInvocation('zsh', appletVal, tail, bin), execLine: fillInvocation('exec', appletVal, tail, bin) })));
+      const fp = parseShadow(flagged.slice(flagged.indexOf('{') + 1, flagged.lastIndexOf('}')));
+      const pp = parseShadow(body.slice(body.indexOf('{') + 1, body.lastIndexOf('}')));
+      if (!fp || fp.unparsed || !pp || fp.flags !== pp.flags || fp.applet !== pp.applet) {
+        findings.push(`the ${name} shadow's flagged variant in ${what} (the applet run on a quoted binary word) does `
+          + `not read as its "$_cc_bin" body does: ${JSON.stringify(fp)} against ${JSON.stringify(pp)}`);
+      }
+    }
     const parsed = parseShadow(body.slice(body.indexOf('{') + 1, body.lastIndexOf('}')));
     if (!parsed) {
       findings.push(`the ${name} shadow this scan built from ${what} is not recognised as an upstream `
@@ -389,7 +510,7 @@ function scanShadowWriter({ bundle, what }) {
     // (libexec/rg-entry.cjs rgShadowFunction), so it must run each of the writer's own invocation lines, verbatim.
     if (known.entry) {
       const ours = rgShadowFunction('/x').split('\n');
-      for (const line of [fillInvocation(zsh, appletVal, tail), fillInvocation(exec, appletVal, tail)]) {
+      for (const line of [fillInvocation('zsh', appletVal, tail), fillInvocation('exec', appletVal, tail)]) {
         if (!ours.includes(line)) {
           findings.push(`the ${name} shadow in ${what} runs \`${line.trim()}\`, and quaude's rg function (rg-entry.cjs `
             + 'rgShadowFunction) does not: it no longer mirrors the writer');
@@ -414,7 +535,8 @@ function scanShadowWriter({ bundle, what }) {
         + `expected ${shadowTexts.length}`);
     }
   }
-  return { findings, examined, note: `${what}: ${examined} of ${SHADOW_NAMES.length} shadow(s) examined` };
+  return { findings, examined, note: `${what}: ${examined} of ${SHADOW_NAMES.length} shadow(s) examined`
+    + (w.helper ? `; invocation helper ${w.helper.name}(), binaries ${[...bins, ...(words.length ? ['(quoted words)'] : [])].join(', ')}` : '') };
 }
 
 // The carve of CLODE_PROVIDER_BIN, decoded the way inspect-claude-bundle reads it -- the
@@ -488,6 +610,27 @@ test('shadow-writer-gates step 2: red-then-green scenarios named in the brief', 
   const c = scanShadowWriter({ bundle: CARVE_2_1_283, what: 'x' });
   assert.deepStrictEqual(c.findings, []);
   assert.strictEqual(c.examined, 3);
+});
+
+// The 2.1.330 writer, verbatim from the darwin-arm64 binary (test/fixtures/shadow-writer-2.1.330.js:
+// BUt, UUt, RAi and AAi with its CAi list): the invocation lines moved into the BUt() helper, and a
+// feature-flagged branch runs the applet on shell-quoted binary WORDS instead of "$_cc_bin".
+const CARVE_2_1_330 = fs.readFileSync(path.join(REPO, 'test', 'fixtures', 'shadow-writer-2.1.330.js'), 'latin1');
+
+test('scanShadowWriter: the real 2.1.330 writer (invocation helper, flagged binary words) reads all three shadows', () => {
+  const r = scanShadowWriter({ bundle: CARVE_2_1_330, what: 'x' });
+  assert.deepStrictEqual(r.findings, []);
+  assert.strictEqual(r.examined, 3);
+  assert.match(r.note, /invocation helper BUt\(\), binaries "\$_cc_bin", \(quoted words\)/);
+  // A helper that stops putting the binary between applet and tail is a shape this scan cannot read: refused, not passed.
+  const reordered = CARVE_2_1_330.split('ARGV0=${o} ${e} ${r}').join('ARGV0=${o} ${r} ${e}');
+  assert.notStrictEqual(reordered, CARVE_2_1_330);
+  const bad = scanShadowWriter({ bundle: reordered, what: 'x' });
+  assert.ok(bad.findings.length > 0, 'a reordered invocation must be a finding');
+  // A writer that stops handing the helper "$_cc_bin" is refused too.
+  const noLocal = CARVE_2_1_330.split('BUt(\'"$_cc_bin"\',o,h,k)').join('BUt(X,o,h,k)');
+  assert.notStrictEqual(noLocal, CARVE_2_1_330);
+  assert.strictEqual(scanShadowWriter({ bundle: noLocal, what: 'x' }).examined, 0);
 });
 
 test('scanShadowWriter: structural absence is BROKEN territory (examined 0), never a silent pass', () => {
