@@ -139,6 +139,27 @@ phase timestamps in a scratch copy of rg-native.cjs, alone and beside 16 CPU hog
 30.6 MB reached the tjs reader within 0.9 s every run, and 4 of 4 loaded runs hit a 20 s timeout before printing
 (2026-11-19)
 
+## RULING NEEDED: at 2.1.330 a bad --settings file that names the sandbox makes quaude refuse to START (2026-11-21)
+
+test/fidelity/agentic-sandbox-fail-closed.test.cjs, two rows ("user settings + an unparseable --settings file" and
+"policy may exist (merge mode) + user settings + a schema-invalid --settings file"), finding "refused to START (native
+starts)". 2.1.330 added a STARTUP check (chunk-a0tz781a.js, and the TUI's I3.start): when the sandbox is required
+(`isSandboxRequired()`) and `getSandboxUnavailableReason()` names a reason, it prints "Error: sandbox required but
+unavailable: <reason> / Refusing to start without a working sandbox (see sandbox.failIfUnavailable)" and exits 1. A
+--settings file that mentions `sandbox` and fails validation is now such a reason: "the settings passed with --settings
+or the SDK's settings option configure the sandbox but failed validation, so none of them apply (Invalid or malformed
+JSON)". quaude always requires the sandbox (sandbox.failIfUnavailable via --managed-settings, the fail-closed ruling
+and D1), so it refuses to start; in merge mode quaude's own failIfUnavailable merged into the user's schema-invalid file
+makes that file "configure the sandbox" too.
+
+Measured 2026-11-21 on darwin-arm64 against native 2.1.330 (user settings `{"sandbox":{"enabled":true}}`,
+`-p hi --settings s.json`, s.json = `{"sandbox": `): native prints the "These settings did not load" warning and
+STARTS; native given quaude's layer (`--managed-settings {"sandbox":{"failIfUnavailable":true}}`) refuses to start
+with exactly quaude's message and rc 1. So quaude is native under the configuration quaude imposes, and refusing is
+the more closed outcome, but the row says native starts. The choice: accept the startup refusal for these rows
+(re-cut the row's expectation, with this measurement), or stop imposing failIfUnavailable when the user's --settings
+fails (calls would then run unsandboxed: contrary to the fail-closed ruling). Not changed pending a ruling.
+
 ## 2.1.330 is the pin and the suite is RED on it: 39 failures, each named here (2026-11-21)
 
 The pin moved 2.1.283 -> 2.1.330 (UPSTREAM_PIN). upstream-drift.yml's five red anchor steps (red since 2026-10-23)
