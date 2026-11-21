@@ -1392,6 +1392,26 @@ function _csPack(endCol, x1, x2) {
   return e + (x1 * 1048576) + (x2 * 68719476736);
 }
 
+// Bun.gzipSync and Bun.SHA256, both live in 2.1.330 (inspect --strict flagged them): its telemetry batch sender
+// compresses with `Bun.gzipSync(bytes,{level:1,library:"libdeflate"})` and sends the result as Content-Encoding gzip,
+// and its prompt-block digester calls `Bun.SHA256.hash(bytes,"base64")`. `library` picks Bun's compressor and changes
+// only which (equally valid) gzip bytes come out, so zlib's stand in; the digest is the digest.
+const gzipSync = (data, opts) => {
+  const level = opts && typeof opts.level === 'number' ? opts.level : undefined;
+  const out = require('zlib').gzipSync(data, level === undefined ? {} : { level });
+  return new Uint8Array(out.buffer, out.byteOffset, out.byteLength);
+};
+class SHA256 {
+  constructor() { this._h = require('crypto').createHash('sha256'); }
+  update(data) { this._h.update(data); return this; }
+  digest(encoding) {
+    const out = this._h.digest();
+    return typeof encoding === 'string' ? out.toString(encoding) : new Uint8Array(out.buffer, out.byteOffset, out.byteLength);
+  }
+  static hash(data, encoding) { return new SHA256().update(data).digest(encoding); }
+}
+SHA256.byteLength = 32;
+
 const Bun = {
   version: process.versions.bun || '1.4.0',
   revision: '0000000000000000000000000000000000000000',
@@ -1401,7 +1421,7 @@ const Bun = {
   stdin: process.stdin, stdout: process.stdout, stderr: process.stderr,
 
   stripANSI, stringWidth, wrapAnsi, sliceAnsi,
-  hash, which, spawn, semver, JSONL, YAML,
+  hash, which, spawn, semver, JSONL, YAML, gzipSync, SHA256,
   deepEquals: (a,b)=> require('util').isDeepStrictEqual(a,b),
   gc: ()=> { if (global.gc) global.gc(); },
   // The bundle calls this as generateHeapSnapshot("v8","arraybuffer") and hands the

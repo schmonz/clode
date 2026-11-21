@@ -697,6 +697,10 @@ const ACCEPTED_MISSING_EXTERNALS = new Set([
   // rather than code. The bundle can never require it. Same shape as esbuild,
   // playwright and react above.
   'ts-morph',
+  // Cocoa, CoreGraphics (new in 2.1.330): `ObjC.import('Cocoa');ObjC.import('CoreGraphics')` inside a JXA script
+  // TEMPLATE LITERAL that computer-use hands to osascript (chunk-6vxdmxtw.js). Frameworks named to the JXA bridge
+  // in another process, never required by the bundle (libexec/clode-build.cjs KNOWN_UNREACHABLE says the same).
+  'Cocoa', 'CoreGraphics',
 ]);
 
 const ACCEPTED_STUBBED_BUN = new Set(['serve', 'listen', 'file', 'write', 'Terminal', 'Transpiler',
@@ -715,6 +719,9 @@ const ACCEPTED_STUBBED_BUN = new Set(['serve', 'listen', 'file', 'write', 'Termi
 // Bun` — must stay ABSENT so the guard skips it (adding it would flip the detect
 // and try to call the stub). All safe to leave unimplemented.
 const ACCEPTED_MISSING_BUN = new Set(['SQL', 'ant', 'WebView',
+  // $ (2.1.330): its one occurrence is STRING TEXT, the REPL's error hint "($ throws on a non-zero exit, as Bun.$
+  // does; ...)" in chunk-v7j43e2p.js. Nothing reads Bun.$.
+  '$',
   // zstdDecompress/zstdDecompressSync: the ONE call site reads an embedded text
   // asset and only decompresses when the bytes start with the zstd magic
   // (28 B5 2F FD) -- `(s(r) ? await Bun.zstdDecompress(r) : r).toString("utf8")`.
@@ -758,6 +765,10 @@ const ACCEPTED_UNRECOGNIZED_BUN = new Set([
   // back to the plain fetch path on nothing: `let r=Xd()?Cjr():void 0;if(!r)return wFt(e,n)`.
   // So absence is a host without it. Do NOT stub: a stub flips the detection.
   'FetchSession',
+  // SHA256: new in 2.1.330, `Bun.SHA256.hash(bytes,"base64")` in its prompt-block digester (chunk-30a5awzz.js), live
+  // code. IMPLEMENTED in bun-shim (static hash and update/digest, over crypto's sha256); accepted here only because it
+  // is not in KNOWN_BUN (adding it there would rewrite the golden --json shas, as for Image).
+  'SHA256',
 ]);
 const ACCEPTED_BUN_MODULES = new Set(['bun:jsc']);
 
