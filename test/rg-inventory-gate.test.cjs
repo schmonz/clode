@@ -31,13 +31,14 @@ const GOLDEN = JSON.parse(
 // covered on every other leg.
 const NO_FAKE = process.platform === 'win32' ? 'needs a POSIX shebang to fake a binary' : false;
 
-// The golden's three calls, with a concrete path where it records <PATH>.
+// The golden's calls, with a concrete path where it records <PATH>. Derived from the golden, not a
+// copy of it: 2.1.330's re-record dropped two calls (the orphan scan and `rg --version` are no longer
+// reached at startup), and a hand-kept copy here then made the PASS row fail for a fixture reason.
 const P = '/tmp/rg-gate-fixture';
-const RG = [
-  'rg --version',
-  `rg --files --hidden ${P}`,
-  `rg --files --hidden --no-ignore --max-depth 4 --glob .orphaned_at ${P}`,
-];
+const RG = GOLDEN.map((g) => g.split('<PATH>').join(P));
+// A call refused for want of bfs, so the host verdict names both applets. Off the golden on purpose:
+// the host verdict comes before the inventory diff, so it must not read as "usage changed" either.
+const RG_ORPHAN = `rg --files --hidden --no-ignore --max-depth 4 --glob .orphaned_at ${P}`;
 const SENTINEL = 'fixture-stderr-sentinel-9f2a';
 
 // Emits `lines` on stderr, exits 0. Named so a failure message points here.
@@ -62,13 +63,13 @@ const needs = (rg, applet) => `clode rg-debug: ${rg} !! needs ${applet}`;
 test('gate: the golden calls, all translated -> PASS', { skip: NO_FAKE }, () => {
   const r = runGate(RG.map(translated));
   assert.strictEqual(r.status, 0, r.err);
-  assert.match(r.out, /PASS: 3 rg call\(s\), 3 translated/);
+  assert.match(r.out, new RegExp(`PASS: ${RG.length} rg call\\(s\\), ${RG.length} translated`));
 });
 
 // The CI failure, reduced. A refused call is still an OBSERVED call: the
 // inventory is intact and upstream changed nothing. Saying so is the whole point.
 test('gate: applet-missing refusals are NOT "usage changed"', { skip: NO_FAKE }, () => {
-  const r = runGate([needs(RG[0], 'ugrep'), needs(RG[1], 'ugrep'), needs(RG[2], 'bfs')]);
+  const r = runGate([...RG.map((c) => needs(c, 'ugrep')), needs(RG_ORPHAN, 'bfs')]);
   assert.strictEqual(r.status, 1);
   assert.match(r.err, /this host cannot translate rg — missing bfs, ugrep/);
   assert.doesNotMatch(r.err, /usage changed/);
@@ -78,10 +79,9 @@ test('gate: applet-missing refusals are NOT "usage changed"', { skip: NO_FAKE },
 });
 
 test('gate: --allow-untranslated passes but says how many were refused', { skip: NO_FAKE }, () => {
-  const r = runGate([needs(RG[0], 'ugrep'), needs(RG[1], 'ugrep'), needs(RG[2], 'bfs')],
-    ['--allow-untranslated']);
+  const r = runGate(RG.map((c) => needs(c, 'ugrep')), ['--allow-untranslated']);
   assert.strictEqual(r.status, 0, r.err);
-  assert.match(r.out, /0 translated, 3 refused \(no applet on this host\)/);
+  assert.match(r.out, new RegExp(`0 translated, ${RG.length} refused \\(no applet on this host\\)`));
 });
 
 // The lie that cost the most: nothing parsed, so nothing was observed, so the
