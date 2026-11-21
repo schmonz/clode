@@ -96,7 +96,10 @@ function externalsOf(mods) {
   var want = function (s) { if (!ext[s]) ext[s] = {}; return ext[s]; };
   for (name of mods.keys()) {
     src = mods.get(name);
-    re = /\bimport\s*\{([^}]*)\}\s*from\s*"((?:[^"\\]|\\.)*)"/g;
+    // A default binding may come first: 2.1.330 writes `import Ce,{ChildProcess as $t}from"child_process"`,
+    // and reading only `import{...}` left ChildProcess out of the facade (naude: "does not provide an export
+    // named 'ChildProcess'", every turn).
+    re = /\bimport\s*(?:[A-Za-z0-9_$]+\s*,\s*)?\{([^}]*)\}\s*from\s*"((?:[^"\\]|\\.)*)"/g;
     while ((m = re.exec(src))) {
       if (mods.has(m[2]) || !isPlausibleSpecifier(m[2])) continue;
       var set = want(m[2]);
@@ -112,7 +115,7 @@ function externalsOf(mods) {
     // declares runInContext. We cannot enumerate a runtime object's properties at
     // compile time, so collect the property names the module actually reads off the
     // namespace binding — precise, and derived from the same source.
-    re = /\bimport\s*\*\s*as\s+([A-Za-z0-9_$]+)\s*from\s*"((?:[^"\\]|\\.)*)"/g;
+    re = /\bimport\s*(?:[A-Za-z0-9_$]+\s*,\s*)?\*\s*as\s+([A-Za-z0-9_$]+)\s*from\s*"((?:[^"\\]|\\.)*)"/g;
     while ((m = re.exec(src))) {
       if (mods.has(m[2]) || !isPlausibleSpecifier(m[2])) continue;
       var nsSet = want(m[2]);

@@ -58,6 +58,17 @@ test('every import form contributes an external, and named imports are collected
   assert.deepStrictEqual(Object.keys(ext.fs).sort(), ['readFileSync', 'writeFileSync']);
 });
 
+// 2.1.330 imports a default AND names in one statement (`import Ce,{ChildProcess as $t}from"child_process"`); the
+// names were dropped, so the facade lacked ChildProcess and every naude turn died at link time. The census caught it.
+test('a default binding before named or namespace imports still contributes the names', () => {
+  const g = G({
+    '/a.js': 'import Ce,{ChildProcess as $t,spawn}from"child_process";import Ev,*as Ns from"events";Ns.once(Ev);',
+  });
+  const ext = externalsOf(g);
+  assert.deepStrictEqual(Object.keys(ext.child_process).sort(), ['ChildProcess', 'spawn']);
+  assert.deepStrictEqual(Object.keys(ext.events), ['once']);
+});
+
 test('a shim re-exports the requested names and routes through one runtime seam', () => {
   const src = shimSource('fs', ['readFileSync', 'promises']);
   assert.match(src, /globalThis\.__quaudeRequire\("fs"\)/);

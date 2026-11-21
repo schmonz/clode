@@ -89,7 +89,9 @@ async function runTurns(stageDir, workDir) {
     let census = null;
     try { census = JSON.parse(fs.readFileSync(censusFile, 'utf8')); } catch { /* absent: reported below */ }
     out.push({ name: turn.name, status: r.status, signal: r.signal, answered: r.stdout.includes(turn.done),
-      stderr: r.stderr.slice(0, 600), census });
+      // head AND tail: a SyntaxError prints the offending source line first and its message last, and a
+      // head-only cut (600 bytes until 2026-11-21) kept a 549-byte import line and dropped the reason
+      stderr: r.stderr.length > 1200 ? `${r.stderr.slice(0, 300)} [...] ${r.stderr.slice(-900)}` : r.stderr, census });
   }
   return { turns: out };
 }
