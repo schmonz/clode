@@ -42,6 +42,7 @@ const CAUSES = [
   { cause: 'DIFF-ISATTY-DEVNULL', api: '^tty\\.isatty$', id: '\\(0\\)$', leaf: '^r$' },
   { cause: 'DIFF-UTIL-FORMAT', api: '^util\\.(format|inspect)$', leaf: '^r$' },
   { cause: 'DIFF-STATFS-SYNC', api: '^fs\\.statfsSync$', leaf: `(${ERR}|^r\\.(typeof|ctor)$)` },
+  { cause: 'DIFF-BUFFER-ENGINE-LIMITS', api: '^buffer\\.constants$', leaf: '^r\\.(MAX_LENGTH|MAX_STRING_LENGTH)$' },
 ];
 
 function classify(api, id, leaf) {

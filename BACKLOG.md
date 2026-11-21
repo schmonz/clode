@@ -178,17 +178,18 @@ the text tripwires and the text oracle (d7a5a6b), shadow-writer-from-carve plus 
 (0f1f334), rg-matrix-from-carve (813c3f4), and the regexp census (588 groups is no finding: the engine allows
 native's 32,768, 7a707d6; lead-scrub retired, ded6a49). What 2.1.330 still asks that quaude does not answer:
 
-1. **node-shim-differential: darwin GREEN at 2.1.330; LINUX STILL TO FREEZE.** Fixed in node-shim fs
+1. FIXED: **node-shim-differential, darwin and linux GREEN at 2.1.330.** Fixed in node-shim fs
    (test/node-shim-fs-2-1-330.test.cjs, node against quaude with no provider needed): fs.open's callback form
    dropped its mode (`fs.open(p, O_WRONLY|O_APPEND|O_CREAT, 0o600, cb)` made the file 0644); utimesSync of a
-   missing path returned as if it had worked, and lutimesSync was absent (both now throw node's errors
-   synchronously, times still set by the async call); readdir errors say scandir, opendir's say opendir (no path
+   missing path returned as if it had worked, and lutimesSync was absent (both now throw node's errors, and since
+   item 16 set the times synchronously); readdir errors say scandir, opendir's say opendir (no path
    from opendirSync, the path from the promise), and opendir honours `{recursive}`, breadth-first like node's Dir;
    recursive readdir is breadth-first too; the JS realpath walk's errors; promises.lstat()/mkdtemp() argument
-   checks. zlib.deflateRawSync joins DIFF-ZLIB. known-divergences.json is frozen for darwin from a measured run
-   (freeze.cjs). Its LINUX pairs are still 2.1.283's case ids, so CI's musl node-shim-oracle will name them stale
-   and the 2.1.330 ids unlisted until a linux run is frozen: `CLODE_SHIM_DIFF_DUMP=<f> node --test
-   test/node-shim-differential.test.cjs` on that job, then `node test/shim-differential/freeze.cjs <f>`.
+   checks. zlib.deflateRawSync joins DIFF-ZLIB. known-divergences.json is frozen for both platforms from measured
+   runs (freeze.cjs): darwin on this box, linux in node:24.22.0-alpine with this tree's static musl engine and the
+   linux-x64-musl provider, as ci.yml's node-shim-oracle runs it. The linux run found os.machine() answering
+   process.arch ("x64" for node's "x86_64"), fixed by txiki-uname-global.patch rather than listed. buffer.constants
+   (engine limits, 7004b47) is DIFF-BUFFER-ENGINE-LIMITS on both.
 2. **rg-carve-argv-answered: quaude's rg refuses two NEW production searches.** `--text --fixed-strings --glob
    *.jsonl* --regexp "type":"hybrid-organization"` (runner apo) and the environment scan's `--max-count N`
    (runner rre, beside the already-answered --line-buffered). Until answered, those searches reach the model as
@@ -462,6 +463,10 @@ child_process), 1836 judged, 302 diverging, 1237 pairs listed (2026-11-19).
 Measured: the same test in a node:24.22.0-alpine container (linux-x64, musl) with the tjs-linux-x64-musl engine of CI
 run 44460009323 (HEAD 2cca33a) and the 2.1.283 linux-x64-musl provider: 308 of 1808 calls diverging, 1271 pairs
 listed for linux (1202 shared with darwin), every other field node's (2026-11-19).
+
+Measured: test/node-shim-differential.test.cjs at 2.1.330 (2026-11-21): darwin-arm64 with a fresh engine, 2092 calls
+judged, OK; node:24.22.0-alpine on ultimate-hat's docker (linux-x64, musl) with the static musl engine built from this
+tree and the 2.1.330 linux-x64-musl provider, 2089 judged, OK; 1323 darwin pairs and 1297 linux pairs listed.
 
 Unmeasured. NetBSD and Windows: the gate does not run there (no job has an engine, a provider and a node at once on
 NetBSD; the Windows jobs run named files only); running it on the NetBSD VM would measure it.
