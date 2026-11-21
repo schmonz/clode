@@ -90,29 +90,103 @@ function unimplemented(name) {
 }
 const SOCKET_API = ['connect', 'createServer', 'TLSSocket', 'Server', 'checkServerIdentity'];
 
-// createSecureContext({ ca }), as node answers it (measured, node 24): a string, Buffer or TypedArray `ca`, or an array
-// of them, is ACCEPTED whatever it holds (garbage, a key, a truncated certificate: no throw), and any other type is
-// ERR_INVALID_ARG_TYPE. 2.1.330 asks it whether the NODE_EXTRA_CA_CERTS file loads (`createSecureContext({ca:[file]})`
-// in its CA-trust builder) and drops the file when it throws; as a wall it always threw, so a private CA never
-// reached WebFetch's trust list (test/fidelity/webfetch.test.cjs: "X509 - Certificate verification failed"). Options
-// this context could not honour (a certificate, a key, ciphers...) still meet the wall: accepting them would lie.
+// createSecureContext({ ca }), as NATIVE answers it (measured in 2.1.330's Bun with the BUN_OPTIONS preload
+// oracle; recorded rows: test/fixtures/tls-secure-context-native.json). Node accepts any string or bytes here
+// unparsed; native does not, and native is the reference. 2.1.330's CA-trust builder asks this whether the
+// NODE_EXTRA_CA_CERTS file loads as one entry (`createSecureContext({ca:[file]})`); when it throws "Invalid CA",
+// the bundle warns that it "cannot load ... as one CA list entry" and keeps only the blocks that load one by one.
+// Accepting what native refuses would trust MORE than native does, and would skip that per-block filter.
+//
+// What native does, row by row:
+// - options that are not an object (a string, a number), null or undefined: no options. A falsy `ca` (undefined,
+//   null, false, 0, ''): no ca. Unknown keys are ignored, as node and native ignore them.
+// - `ca` (or each element of an array `ca`) must be a string, Buffer, TypedArray or DataView, every element checked
+//   before any is read: ERR_INVALID_ARG_TYPE otherwise.
+// - each element is read as PEM, block by block (BEGIN/END lines, leading and trailing whitespace ignored, text
+//   between blocks skipped). A block is bad when it has no matching END, its body is not whole base64 (a header
+//   line, a stray BEGIN, missing padding, nothing at all), or, for a CERTIFICATE / X509 CERTIFICATE / TRUSTED
+//   CERTIFICATE block, its DER is not one Certificate SEQUENCE {SEQUENCE, SEQUENCE, BIT STRING} filling the block
+//   exactly (truncated, or a byte left over). Any other label (a key) is decoded but not parsed, and not counted.
+//   Reading stops at the first bad block: the element is refused unless a certificate was read before it. An
+//   element with no block at all (empty, whitespace, garbage) is refused. Refused = Error code ERR_BORINGSSL,
+//   message "Invalid CA".
+// This decides only whether the context is made; the engine's own TLS still verifies with mbedtls, whose parser
+// the bootstrap's NODE_EXTRA_CA_CERTS path consults (libexec/quaude-bootstrap.mjs extraCaBundle). Options this
+// context could not honour (a certificate, a key, ciphers...) still meet the wall: accepting them would lie.
 class SecureContext { constructor() { this.context = {}; } }
-const SECURE_CONTEXT_HONOURED = new Set(['ca']);
+const SECURE_CONTEXT_WALLED = ['cert', 'key', 'pfx', 'passphrase', 'ciphers', 'ecdhCurve', 'dhparam', 'crl',
+  'honorCipherOrder', 'secureOptions', 'secureProtocol', 'minVersion', 'maxVersion', 'sigalgs', 'privateKeyEngine',
+  'privateKeyIdentifier', 'clientCertEngine', 'sessionIdContext', 'ticketKeys', 'sessionTimeout',
+  'allowPartialTrustChain'];
+const CERT_LABELS = new Set(['CERTIFICATE', 'X509 CERTIFICATE', 'TRUSTED CERTIFICATE']);
+const B64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+
+// One DER TLV at b[i]: { tag, start (of contents), end }, or null when it runs past `lim`.
+function tlv(b, i, lim) {
+  if (i + 2 > lim) return null;
+  const tag = b[i];
+  let len = b[i + 1]; let p = i + 2;
+  if (len & 0x80) {
+    const n = len & 0x7f;
+    if (n === 0 || n > 4 || p + n > lim) return null;
+    len = 0;
+    for (let k = 0; k < n; k++) len = len * 256 + b[p++];
+  }
+  return p + len > lim ? null : { tag, start: p, end: p + len };
+}
+// Certificate ::= SEQUENCE { tbsCertificate SEQUENCE, signatureAlgorithm SEQUENCE, signature BIT STRING },
+// filling the block exactly (a TRUSTED CERTIFICATE may carry one trailing aux SEQUENCE).
+function isCertificateDer(b, trusted) {
+  const outer = tlv(b, 0, b.length);
+  if (!outer || outer.tag !== 0x30) return false;
+  let i = outer.start;
+  for (const want of [0x30, 0x30, 0x03]) {
+    const t = tlv(b, i, outer.end);
+    if (!t || t.tag !== want) return false;
+    i = t.end;
+  }
+  if (i !== outer.end) return false;
+  if (outer.end === b.length) return true;
+  const aux = trusted && tlv(b, outer.end, b.length);
+  return !!aux && aux.tag === 0x30 && aux.end === b.length;
+}
+// Whether native loads one `ca` element (above).
+function caEntryLoads(text) {
+  const lines = text.split('\n').map((l) => l.trim());
+  let certs = 0; let blocks = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const m = /^-----BEGIN (.+)-----$/.exec(lines[i]);
+    if (!m) continue;
+    blocks++;
+    const end = lines.indexOf(`-----END ${m[1]}-----`, i + 1);
+    const body = end < 0 ? null : lines.slice(i + 1, end).join('');
+    let ok = body !== null && body !== '' && B64.test(body);
+    if (ok && CERT_LABELS.has(m[1])) {
+      ok = isCertificateDer(Buffer.from(body, 'base64'), m[1] === 'TRUSTED CERTIFICATE');
+      if (ok) certs++;
+    }
+    if (!ok) return certs > 0;
+    i = end;
+  }
+  return blocks > 0;
+}
 function createSecureContext(options) {
   const NE = require('../internal/node-errors.cjs');
-  if (options === undefined || options === null) return new SecureContext(); // node takes null as no options
-  if (options === null || typeof options !== 'object') throw NE.invalidArgType('The "options" argument must be of type object', options);
-  for (const k of Object.keys(options)) {
-    if (options[k] !== undefined && !SECURE_CONTEXT_HONOURED.has(k)) {
-      throw new Error(`node-shim: tls.createSecureContext({${k}}) not implemented (only the ca option is taken)`);
-    }
+  if (options === null || typeof options !== 'object') return new SecureContext();
+  for (const k of SECURE_CONTEXT_WALLED) {
+    if (options[k] !== undefined) throw new Error(`node-shim: tls.createSecureContext({${k}}) not implemented (only the ca option is taken)`);
   }
   const ca = options.ca;
-  if (ca !== undefined) {
-    const ok = (v) => typeof v === 'string' || ArrayBuffer.isView(v);
-    for (const v of Array.isArray(ca) ? ca : [ca]) {
-      if (!ok(v)) throw NE.invalidArgType('The "options.ca" property must be of type string or an instance of Buffer, TypedArray, or DataView', v);
+  if (!ca) return new SecureContext();
+  const entries = Array.isArray(ca) ? ca : [ca];
+  for (const v of entries) {
+    if (typeof v !== 'string' && !ArrayBuffer.isView(v)) {
+      throw NE.invalidArgType('The "options.ca" property must be of type string or an instance of Buffer, TypedArray, or DataView', v);
     }
+  }
+  for (const v of entries) {
+    const text = typeof v === 'string' ? v : Buffer.from(v.buffer, v.byteOffset, v.byteLength).toString('latin1');
+    if (!caEntryLoads(text)) throw Object.assign(new Error('Invalid CA'), { code: 'ERR_BORINGSSL' });
   }
   return new SecureContext();
 }

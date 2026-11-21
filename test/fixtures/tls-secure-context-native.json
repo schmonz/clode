@@ -1,0 +1,418 @@
+[
+ [
+  "one good",
+  "ok",
+  "object",
+  "object"
+ ],
+ [
+  "good string",
+  "ok",
+  "object",
+  "object"
+ ],
+ [
+  "good buffer",
+  "ok",
+  "object",
+  "object"
+ ],
+ [
+  "good u8",
+  "ok",
+  "object",
+  "object"
+ ],
+ [
+  "two good in one",
+  "ok",
+  "object",
+  "object"
+ ],
+ [
+  "two good entries",
+  "ok",
+  "object",
+  "object"
+ ],
+ [
+  "good with comments",
+  "ok",
+  "object",
+  "object"
+ ],
+ [
+  "crlf good",
+  "ok",
+  "object",
+  "object"
+ ],
+ [
+  "no newline at end",
+  "ok",
+  "object",
+  "object"
+ ],
+ [
+  "indented",
+  "ok",
+  "object",
+  "object"
+ ],
+ [
+  "trusted cert label",
+  "ok",
+  "object",
+  "object"
+ ],
+ [
+  "x509 cert label",
+  "ok",
+  "object",
+  "object"
+ ],
+ [
+  "empty",
+  "threw",
+  "Error",
+  "ERR_BORINGSSL",
+  "Invalid CA"
+ ],
+ [
+  "empty string",
+  "ok",
+  "object",
+  "object"
+ ],
+ [
+  "whitespace",
+  "threw",
+  "Error",
+  "ERR_BORINGSSL",
+  "Invalid CA"
+ ],
+ [
+  "garbage",
+  "threw",
+  "Error",
+  "ERR_BORINGSSL",
+  "Invalid CA"
+ ],
+ [
+  "garbage string",
+  "threw",
+  "Error",
+  "ERR_BORINGSSL",
+  "Invalid CA"
+ ],
+ [
+  "empty buffer",
+  "threw",
+  "Error",
+  "ERR_BORINGSSL",
+  "Invalid CA"
+ ],
+ [
+  "empty buffer in array",
+  "threw",
+  "Error",
+  "ERR_BORINGSSL",
+  "Invalid CA"
+ ],
+ [
+  "a key, not a cert",
+  "ok",
+  "object",
+  "object"
+ ],
+ [
+  "good plus key in one",
+  "ok",
+  "object",
+  "object"
+ ],
+ [
+  "key then corrupt in one",
+  "threw",
+  "Error",
+  "ERR_BORINGSSL",
+  "Invalid CA"
+ ],
+ [
+  "key with bad base64",
+  "threw",
+  "Error",
+  "ERR_BORINGSSL",
+  "Invalid CA"
+ ],
+ [
+  "other pem type",
+  "ok",
+  "object",
+  "object"
+ ],
+ [
+  "other type, bad base64",
+  "threw",
+  "Error",
+  "ERR_BORINGSSL",
+  "Invalid CA"
+ ],
+ [
+  "other type bad, then good",
+  "threw",
+  "Error",
+  "ERR_BORINGSSL",
+  "Invalid CA"
+ ],
+ [
+  "empty block",
+  "threw",
+  "Error",
+  "ERR_BORINGSSL",
+  "Invalid CA"
+ ],
+ [
+  "empty cert block",
+  "threw",
+  "Error",
+  "ERR_BORINGSSL",
+  "Invalid CA"
+ ],
+ [
+  "unpadded base64",
+  "threw",
+  "Error",
+  "ERR_BORINGSSL",
+  "Invalid CA"
+ ],
+ [
+  "truncated",
+  "threw",
+  "Error",
+  "ERR_BORINGSSL",
+  "Invalid CA"
+ ],
+ [
+  "corrupt block",
+  "threw",
+  "Error",
+  "ERR_BORINGSSL",
+  "Invalid CA"
+ ],
+ [
+  "corrupt string",
+  "threw",
+  "Error",
+  "ERR_BORINGSSL",
+  "Invalid CA"
+ ],
+ [
+  "empty SEQUENCE as a cert",
+  "threw",
+  "Error",
+  "ERR_BORINGSSL",
+  "Invalid CA"
+ ],
+ [
+  "good, one trailing byte",
+  "threw",
+  "Error",
+  "ERR_BORINGSSL",
+  "Invalid CA"
+ ],
+ [
+  "mismatched END",
+  "threw",
+  "Error",
+  "ERR_BORINGSSL",
+  "Invalid CA"
+ ],
+ [
+  "two BEGINs",
+  "threw",
+  "Error",
+  "ERR_BORINGSSL",
+  "Invalid CA"
+ ],
+ [
+  "header lines",
+  "threw",
+  "Error",
+  "ERR_BORINGSSL",
+  "Invalid CA"
+ ],
+ [
+  "unterminated",
+  "threw",
+  "Error",
+  "ERR_BORINGSSL",
+  "Invalid CA"
+ ],
+ [
+  "good then unterminated",
+  "ok",
+  "object",
+  "object"
+ ],
+ [
+  "good plus corrupt in one",
+  "ok",
+  "object",
+  "object"
+ ],
+ [
+  "corrupt then good in one",
+  "threw",
+  "Error",
+  "ERR_BORINGSSL",
+  "Invalid CA"
+ ],
+ [
+  "truncated then good in one",
+  "threw",
+  "Error",
+  "ERR_BORINGSSL",
+  "Invalid CA"
+ ],
+ [
+  "good then truncated in one",
+  "ok",
+  "object",
+  "object"
+ ],
+ [
+  "good then garbage text",
+  "ok",
+  "object",
+  "object"
+ ],
+ [
+  "garbage then good",
+  "ok",
+  "object",
+  "object"
+ ],
+ [
+  "good, corrupt entries",
+  "threw",
+  "Error",
+  "ERR_BORINGSSL",
+  "Invalid CA"
+ ],
+ [
+  "empty then good entries",
+  "threw",
+  "Error",
+  "ERR_BORINGSSL",
+  "Invalid CA"
+ ],
+ [
+  "empty array",
+  "ok",
+  "object",
+  "object"
+ ],
+ [
+  "undefined ca",
+  "ok",
+  "object",
+  "object"
+ ],
+ [
+  "null ca",
+  "ok",
+  "object",
+  "object"
+ ],
+ [
+  "false",
+  "ok",
+  "object",
+  "object"
+ ],
+ [
+  "zero",
+  "ok",
+  "object",
+  "object"
+ ],
+ [
+  "no options",
+  "ok",
+  "object",
+  "object"
+ ],
+ [
+  "empty options",
+  "ok",
+  "object",
+  "object"
+ ],
+ [
+  "options null",
+  "ok",
+  "object",
+  "object"
+ ],
+ [
+  "options a string",
+  "ok",
+  "object",
+  "object"
+ ],
+ [
+  "options a number",
+  "ok",
+  "object",
+  "object"
+ ],
+ [
+  "options an array",
+  "ok",
+  "object",
+  "object"
+ ],
+ [
+  "number",
+  "threw",
+  "TypeError",
+  "ERR_INVALID_ARG_TYPE",
+  "The \"options.ca\" property must be of type string or an instance of Buffer, TypedArray, or DataView. Received type number (42)"
+ ],
+ [
+  "ca true",
+  "threw",
+  "TypeError",
+  "ERR_INVALID_ARG_TYPE",
+  "The \"options.ca\" property must be of type string or an instance of Buffer, TypedArray, or DataView. Received type boolean (true)"
+ ],
+ [
+  "number in array",
+  "threw",
+  "TypeError",
+  "ERR_INVALID_ARG_TYPE",
+  "The \"options.ca\" property must be of type string or an instance of Buffer, TypedArray, or DataView. Received type number (42)"
+ ],
+ [
+  "garbage then number",
+  "threw",
+  "TypeError",
+  "ERR_INVALID_ARG_TYPE",
+  "The \"options.ca\" property must be of type string or an instance of Buffer, TypedArray, or DataView. Received type number (42)"
+ ],
+ [
+  "object in array",
+  "threw",
+  "TypeError",
+  "ERR_INVALID_ARG_TYPE",
+  "The \"options.ca\" property must be of type string or an instance of Buffer, TypedArray, or DataView. Received an instance of Object"
+ ],
+ [
+  "null in array",
+  "threw",
+  "TypeError",
+  "ERR_INVALID_ARG_TYPE",
+  "The \"options.ca\" property must be of type string or an instance of Buffer, TypedArray, or DataView. Received null"
+ ]
+]

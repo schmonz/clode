@@ -247,6 +247,16 @@ Bun.SHA256/gzipSync. STILL RED, beyond 1 and 2 above, by gate:
     fd pairs (`createWriteStream(<dir>|<missing/x>, {fd, autoClose})` r.end) agreed with node under load and not
     alone: Unmeasured whether that is the same kind of race; it did not recur in the next run.
 17. The host node SIGSEGV in test/procfs-linux-only.test.cjs came back once: added to its own entry, above.
+18. **tls.createSecureContext({ca}) answers as native does, so 2.1.330's per-block NODE_EXTRA_CA_CERTS filter now
+    runs under quaude, and keeps NOTHING** (review of 4ae7fc5, 2026-11-21). 4ae7fc5 copied node, which takes any
+    string or bytes; native refuses invalid CA input with "Invalid CA" (64 rows, test/fixtures/tls-secure-context-native.json).
+    So a file with a corrupt block before a good root was refused whole by native and trusted whole by quaude. Now
+    quaude refuses it too, and the bundle's CA-trust builder takes its fallback ("cannot load ... as one CA list
+    entry; kept only the N certificate(s) in it that the runtime loads one by one"). That fallback keeps a block only
+    when `new crypto.X509Certificate(block)` succeeds, and node-shim has no X509Certificate, so it keeps zero blocks
+    and drops the file, where native keeps the good root. This fails closed (LESS trust than native, not more). The
+    rest is open: a minimal X509Certificate (constructor validating, `raw`, `toString`, a wall for the rest). 2.1.330
+    reads it in 11 modules, so each read site needs reviewing first.
 
 The full suite after 15 (2026-11-21, same setup): 4011 pass, 6 fail, 113 skip, RC=1. The six were: 16 and 17 above;
 backlog-claims-measured (the RULED entry had no Measured line), live-checks-judge-output (the sandbox test's native
