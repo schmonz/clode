@@ -1,0 +1,286 @@
+# REGEXP-CAPTURE-U16: a RegExp may have up to 32,768 capture groups, as in native, not 254.
+#
+# WHY. QuickJS-ng refused any pattern with more than 254 capture groups ("too many
+# captures"): CAPTURE_COUNT_MAX was 255 (it counts the whole match), because a capture
+# index was ONE BYTE in libregexp's bytecode (save_start, save_end, back_reference,
+# backward_back_reference, save_reset's two operands) and the header held the count in
+# one byte. JavaScriptCore (Bun, i.e. native Claude Code) and V8 accept tens of
+# thousands, so upstream never sees the limit. Claude Code builds patterns with one
+# group per letter of a word list: the artifact-lead scrub pattern
+# (bracketedLeadScrubPattern) had 559 groups at 2.1.278-2.1.283 and 588 at 2.1.327
+# (a 980,559-character /giu pattern), and the harness-tag scrub patterns sat at 251 and
+# 229 at 2.1.283. Under quaude `new RegExp` threw every time, and no subagent could
+# finish. Until this patch an extractor hook (LEAD-SCRUB-POSSESSIVE) rewrote that ONE
+# builder's separators to a group-free form; its anchor broke at 2.1.327 when upstream
+# changed the builder, and it never covered the siblings. Fixing the engine covers every
+# pattern the bundle builds, today's and the next, with upstream's own pattern text.
+#
+# THE FORMAT CHANGE. Capture indexes are u16 operands (those four opcodes grow from 2 to
+# 3 bytes, save_reset from 3 to 5), and the header is 10 bytes, not 8:
+#     flags u16 @0 | capture count u16 @2 | bytecode length u32 @4 | stack size u8 @8 | pad @9
+# The flags and the bytecode length stay where they were ON PURPOSE:
+# quickjs-ng-canonical-le-bytecode.patch's big-endian recompile reads exactly those two
+# fields (flags at 0, length at 4) to tell little-endian bytecode from native and to
+# recompile it, so that patch needs no change and still discriminates correctly.
+# Every opcode walker (compute_stack_size, the simple-quantifier and check-advance scans)
+# steps by reopcode_info[].size, which libregexp-opcode.h now states.
+#
+# THE LIMIT IS NATIVE'S. Measured 2026-11-21 by bisection inside native Claude Code 2.1.330
+# (its own Bun/JavaScriptCore, through a BUN_OPTIONS=--preload probe): `new RegExp` accepts
+# 32,768 groups and refuses 32,769 ("too many captures"). node 24.21.0 (V8) accepts 32,767.
+# So CAPTURE_COUNT_MAX is 32,769 (the whole match plus 32,768 groups), which a u16 holds.
+#
+# BC_VERSION IS NOT BUMPED, deliberately: compiled regexp bytecode is embedded opaquely in
+# JS bytecode, and clode's bytecode writer IS the runtime (clode-build.cjs, BC_VERSION and
+# engine fingerprint lockstep, recorded by attest), so no other build's bytecode reaches
+# this reader. Order-independent of every other quickjs-ng-*.patch: none touches
+# libregexp.c, libregexp-opcode.h or lre-test.c. lre-test.c's hand-built bytecode moves
+# to the new header and operand widths.
+#
+# Tests: test/engine-regexp-captures.test.cjs (under the engine, 32,768 groups compile and
+# match and 32,769 are refused, native's boundary; 588 groups, with backreferences past 255,
+# match as node matches them), and
+# test/fidelity/regexp-capture-census.test.cjs (every pattern a real turn builds, against
+# this limit).
+diff --git a/libregexp-opcode.h b/libregexp-opcode.h
+--- a/libregexp-opcode.h
++++ b/libregexp-opcode.h
+@@ -36,16 +36,16 @@
+ DEF(split_goto_first, 5)
+ DEF(split_next_first, 5)
+ DEF(match, 1)
+-DEF(save_start, 2) /* save start position */
+-DEF(save_end, 2) /* save end position, must come after saved_start */
+-DEF(save_reset, 3) /* reset save positions */
++DEF(save_start, 3) /* save start position (u16 capture index) */
++DEF(save_end, 3) /* save end position, must come after saved_start */
++DEF(save_reset, 5) /* reset save positions (two u16 capture indexes) */
+ DEF(loop, 5) /* decrement the top the stack and goto if != 0 */
+ DEF(push_i32, 5) /* push integer on the stack */
+ DEF(drop, 1)
+ DEF(word_boundary, 1)
+ DEF(not_word_boundary, 1)
+-DEF(back_reference, 2)
+-DEF(backward_back_reference, 2) /* must come after back_reference */
++DEF(back_reference, 3)
++DEF(backward_back_reference, 3) /* must come after back_reference */
+ DEF(range, 3) /* variable length */
+ DEF(range32, 3) /* variable length */
+ DEF(lookahead, 5)
+diff --git a/libregexp.c b/libregexp.c
+--- a/libregexp.c
++++ b/libregexp.c
+@@ -55,7 +55,10 @@
+     REOP_COUNT,
+ } REOPCodeEnum;
+ 
+-#define CAPTURE_COUNT_MAX 255
++/* REGEXP-CAPTURE-U16 (clode: spike/quickjs/patches/quickjs-ng-regexp-capture-u16.patch):
++   capture indexes are u16 in the bytecode, and the header holds a u16 count. The limit is
++   native Claude Code's (JavaScriptCore under Bun): 32,768 groups, plus the whole match. */
++#define CAPTURE_COUNT_MAX 32769
+ #define STACK_SIZE_MAX 255
+ /* must be large enough to have a negligible runtime cost and small
+    enough to call the interrupt callback often. */
+@@ -107,11 +110,11 @@
+ };
+ 
+ #define RE_HEADER_FLAGS         0
+-#define RE_HEADER_CAPTURE_COUNT 2
+-#define RE_HEADER_STACK_SIZE    3
+-#define RE_HEADER_BYTECODE_LEN  4
+-
+-#define RE_HEADER_LEN 8
++#define RE_HEADER_CAPTURE_COUNT 2 /* u16 */
++#define RE_HEADER_BYTECODE_LEN  4 /* u32 */
++#define RE_HEADER_STACK_SIZE    8 /* u8 */
++
++#define RE_HEADER_LEN 10
+ 
+ static inline int lre_is_digit(int c) {
+     return c >= '0' && c <= '9';
+@@ -238,12 +241,12 @@
+     bc_len = get_u32(buf + RE_HEADER_BYTECODE_LEN);
+     assert(bc_len + RE_HEADER_LEN <= buf_len);
+     printf("flags: 0x%x capture_count=%d stack_size=%d\n",
+-           re_flags, buf[RE_HEADER_CAPTURE_COUNT], buf[RE_HEADER_STACK_SIZE]);
++           re_flags, get_u16(buf + RE_HEADER_CAPTURE_COUNT), buf[RE_HEADER_STACK_SIZE]);
+     if (re_flags & LRE_FLAG_NAMED_GROUPS) {
+         const char *p;
+         p = (char *)buf + RE_HEADER_LEN + bc_len;
+         printf("named groups: ");
+-        for(i = 1; i < buf[RE_HEADER_CAPTURE_COUNT]; i++) {
++        for(i = 1; i < get_u16(buf + RE_HEADER_CAPTURE_COUNT); i++) {
+             if (i != 1)
+                 printf(",");
+             printf("<%s>", p);
+@@ -305,10 +308,10 @@
+         case REOP_save_end:
+         case REOP_back_reference:
+         case REOP_backward_back_reference:
+-            printf(" %u", buf[pos + 1]);
++            printf(" %u", get_u16(buf + pos + 1));
+             break;
+         case REOP_save_reset:
+-            printf(" %u %u", buf[pos + 1], buf[pos + 2]);
++            printf(" %u %u", get_u16(buf + pos + 1), get_u16(buf + pos + 3));
+             break;
+         case REOP_push_i32:
+             val = get_u32(buf + pos + 1);
+@@ -1311,16 +1314,16 @@
+             last_atom_start = s->byte_code.size;
+             last_capture_count = s->capture_count;
+             capture_index = s->capture_count++;
+-            re_emit_op_u8(s, REOP_save_start + is_backward_dir,
+-                          capture_index);
++            re_emit_op_u16(s, REOP_save_start + is_backward_dir,
++                           capture_index);
+ 
+             s->buf_ptr = p;
+             if (re_parse_disjunction(s, is_backward_dir))
+                 return -1;
+             p = s->buf_ptr;
+ 
+-            re_emit_op_u8(s, REOP_save_start + 1 - is_backward_dir,
+-                          capture_index);
++            re_emit_op_u16(s, REOP_save_start + 1 - is_backward_dir,
++                           capture_index);
+ 
+             if (re_parse_expect(s, &p, ')'))
+                 return -1;
+@@ -1419,7 +1422,7 @@
+             emit_back_reference:
+                 last_atom_start = s->byte_code.size;
+                 last_capture_count = s->capture_count;
+-                re_emit_op_u8(s, REOP_back_reference + is_backward_dir, c);
++                re_emit_op_u16(s, REOP_back_reference + is_backward_dir, c);
+             }
+             break;
+         default:
+@@ -1580,11 +1583,13 @@
+                     /* need to reset the capture in case the atom is
+                        not executed */
+                     if (last_capture_count != s->capture_count) {
+-                        if (dbuf_insert(&s->byte_code, last_atom_start, 3))
++                        if (dbuf_insert(&s->byte_code, last_atom_start, 5))
+                             goto out_of_memory;
+                         s->byte_code.buf[last_atom_start++] = REOP_save_reset;
+-                        s->byte_code.buf[last_atom_start++] = last_capture_count;
+-                        s->byte_code.buf[last_atom_start++] = s->capture_count - 1;
++                        put_u16(s->byte_code.buf + last_atom_start, last_capture_count);
++                        last_atom_start += 2;
++                        put_u16(s->byte_code.buf + last_atom_start, s->capture_count - 1);
++                        last_atom_start += 2;
+                     }
+                     if (quant_max == 0) {
+                         s->byte_code.size = last_atom_start;
+@@ -1823,9 +1828,10 @@
+     dbuf_init2(&s->group_names, opaque, lre_realloc);
+ 
+     dbuf_put_u16(&s->byte_code, re_flags); /* first element is the flags */
+-    dbuf_putc(&s->byte_code, 0); /* second element is the number of captures */
++    dbuf_put_u16(&s->byte_code, 0); /* second element is the number of captures */
++    dbuf_put_u32(&s->byte_code, 0); /* bytecode length */
+     dbuf_putc(&s->byte_code, 0); /* stack size */
+-    dbuf_put_u32(&s->byte_code, 0); /* bytecode length */
++    dbuf_putc(&s->byte_code, 0); /* padding */
+ 
+     if (!is_sticky) {
+         /* iterate thru all positions (about the same as .*?( ... ) )
+@@ -1836,7 +1842,7 @@
+         re_emit_op(s, REOP_any);
+         re_emit_op_u32(s, REOP_goto, -(5 + 1 + 5));
+     }
+-    re_emit_op_u8(s, REOP_save_start, 0);
++    re_emit_op_u16(s, REOP_save_start, 0);
+ 
+     if (re_parse_disjunction(s, false)) {
+     error:
+@@ -1847,7 +1853,7 @@
+         return NULL;
+     }
+ 
+-    re_emit_op_u8(s, REOP_save_end, 0);
++    re_emit_op_u16(s, REOP_save_end, 0);
+ 
+     re_emit_op(s, REOP_match);
+ 
+@@ -1867,7 +1873,7 @@
+         goto error;
+     }
+ 
+-    s->byte_code.buf[RE_HEADER_CAPTURE_COUNT] = s->capture_count;
++    put_u16(s->byte_code.buf + RE_HEADER_CAPTURE_COUNT, s->capture_count);
+     s->byte_code.buf[RE_HEADER_STACK_SIZE] = stack_size;
+     put_u32(s->byte_code.buf + RE_HEADER_BYTECODE_LEN,
+             s->byte_code.size - RE_HEADER_LEN);
+@@ -2249,7 +2255,8 @@
+             break;
+         case REOP_save_start:
+         case REOP_save_end:
+-            val = *pc++;
++            val = get_u16(pc);
++            pc += 2;
+             if (val >= s->capture_count)
+                 return LRE_RET_BYTECODE_ERROR;
+             capture[2 * val + opcode - REOP_save_start] = (uint8_t *)cptr;
+@@ -2257,9 +2264,9 @@
+         case REOP_save_reset:
+             {
+                 uint32_t val2;
+-                val = pc[0];
+-                val2 = pc[1];
+-                pc += 2;
++                val = get_u16(pc);
++                val2 = get_u16(pc + 2);
++                pc += 4;
+                 if (val2 >= s->capture_count)
+                     return LRE_RET_BYTECODE_ERROR;
+                 while (val <= val2) {
+@@ -2321,7 +2328,8 @@
+                 const uint8_t *cptr1, *cptr1_end, *cptr1_start;
+                 uint32_t c1, c2;
+ 
+-                val = *pc++;
++                val = get_u16(pc);
++                pc += 2;
+                 if (val >= s->capture_count)
+                     goto no_match;
+                 cptr1_start = capture[2 * val];
+@@ -2506,7 +2514,7 @@
+     s->multi_line = (re_flags & LRE_FLAG_MULTILINE) != 0;
+     s->ignore_case = (re_flags & LRE_FLAG_IGNORECASE) != 0;
+     s->is_unicode = (re_flags & LRE_FLAG_UNICODE) != 0;
+-    s->capture_count = bc_buf[RE_HEADER_CAPTURE_COUNT];
++    s->capture_count = get_u16(bc_buf + RE_HEADER_CAPTURE_COUNT);
+     s->stack_size_max = bc_buf[RE_HEADER_STACK_SIZE];
+     s->cbuf = cbuf;
+     s->cbuf_end = cbuf + (clen << cbuf_type);
+@@ -2535,7 +2543,7 @@
+ 
+ int lre_get_capture_count(const uint8_t *bc_buf)
+ {
+-    return bc_buf[RE_HEADER_CAPTURE_COUNT];
++    return get_u16(bc_buf + RE_HEADER_CAPTURE_COUNT);
+ }
+ 
+ int lre_get_flags(const uint8_t *bc_buf)
+diff --git a/lre-test.c b/lre-test.c
+--- a/lre-test.c
++++ b/lre-test.c
+@@ -32,11 +32,12 @@
+     // Without validation this causes a heap-buffer-overflow in lre_exec_backtrack.
+     uint8_t bc[] = {
+         0x00, 0x00,              // RE_HEADER_FLAGS = 0
+-        0x01,                    // RE_HEADER_CAPTURE_COUNT = 1
++        0x01, 0x00,              // RE_HEADER_CAPTURE_COUNT = 1 (u16, little-endian)
++        0x05, 0x00, 0x00, 0x00, // RE_HEADER_BYTECODE_LEN = 5 (little-endian)
+         0x00,                    // RE_HEADER_STACK_SIZE = 0
+-        0x04, 0x00, 0x00, 0x00, // RE_HEADER_BYTECODE_LEN = 4 (little-endian)
++        0x00,                    // padding
+         0x05,                    // REOP_any
+-        0x0C, 0x64,             // REOP_save_start, index=100
++        0x0C, 0x64, 0x00,       // REOP_save_start, index=100 (u16)
+         0x0B,                    // REOP_match
+     };
+ 

@@ -8,6 +8,23 @@ Concrete clode-under-Node divergences from native Claude Code, to triage and fix
 That page is GENERATED from `scripts/build-graph.cjs` — the one declaration of the build — so it
 cannot drift from it; it is also where the honest answer to "does this need node?" lives.
 
+## QuickJS keeps captures across quantifier iterations: `/(?:(a)|(b))*/.exec("ab")` keeps group 1 (2026-11-21)
+
+The spec (RepeatMatcher, step 4) clears every capture inside a quantified atom at the start of each
+iteration, so after `ab` matches `(?:(a)|(b))*` group 1 is undefined: native Claude Code
+(JavaScriptCore) and node (V8) both answer `["ab",null,"b"]`. QuickJS-ng answers `["ab","a","b"]`:
+libregexp.c emits save_reset only when the quantifier's minimum is 0 AND only once before the loop,
+not per iteration. Same for `/((a)|b)*/` on `ab` (native `["ab","b",null]`, tjs `["ab","b","a"]`)
+and `/(?:(a)|b)*/` (native `["ab",null]`, tjs `["ab","a"]`). An optional group that does not take
+part (`(?:(a)?b)+` on `abb`) is cleared correctly. Any bundle code that reads a group from a
+repeated alternation can see stale text under quaude. Not caused by quickjs-ng-regexp-capture-u16.patch:
+the engine built without it answers the same. test/engine-regexp-captures.test.cjs leaves those
+shapes out and says why; the fix is a save_reset emitted at the head of each loop iteration (inside
+the loop body, before the atom), with this file's corpus as its native oracle.
+
+Measured: the same five-pattern probe inside native 2.1.330 (BUN_OPTIONS=--preload), under node
+24.21.0, and under tjs built with and without the u16 patch (2026-11-21).
+
 ## The engine's fetch and XMLHttpRequest send `Host` without the port, and an XHR to `http://h:p/` asks for `//` (2026-11-20)
 
 Seen while driving WebFetch against a local target (test/fidelity/webfetch.test.cjs; the security review of that fix
