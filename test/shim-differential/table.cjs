@@ -36,6 +36,8 @@ const SAMPLES = {
   fdw: [{ fd: 'file:r+' }, { fd: 'file:r' }, { fd: 'bad' }, { fd: 'brokenpipe' }],
   fdany: [{ fd: 'file:r' }, { fd: 'file:r+' }, { fd: 'bad' }],
   buffer: [{ buf: '0000000000000000' }],
+  // bytes for buffer.isAscii: empty, plain ASCII, the 0x7f/0x80 edge, a UTF-8 multibyte, a NUL
+  bytes: ['', '414243', '7f', '80', '41ff', 'e282ac', '00'].map((buf) => ({ buf })),
   offset: [{ v: 0 }, { v: 2 }],
   length: [{ v: 8 }, { v: 3 }],
   position: [{ v: null }, { v: 0 }, { v: 6 }],
@@ -101,6 +103,20 @@ const KEY_SAMPLES = {
   maxOutputLength: { v: 1048576 },
   // fs.createReadStream's fd: an open descriptor of `file`
   fd: { fd: 'file:r' },
+  // 2.1.330 (re-measured at the pin bump, 2026-11-21)
+  highWaterMark: { v: 65536 },
+  position: { v: 0 },
+  // fs.createWriteStream's `fs` (a custom fs implementation): undefined, the default
+  fs: { undef: true },
+  // util.inspect on an error-shaped object (the carve spreads an error's fields beside its options)
+  name: { v: 'Error' },
+  code: { v: 'ENOENT' },
+  errno: { v: -2 },
+  syscall: { v: 'open' },
+  address: { v: '127.0.0.1' },
+  breakLength: { v: 80 },
+  maxStringLength: { v: 100 },
+  maxArrayLength: { v: 10 },
 };
 
 const D = (args, more = {}) => ({ args, ...more });
@@ -120,6 +136,9 @@ const DRIVERS = {
   'fs.mkdirSync': D(['newpath', 'opts'], { mutates: true, extra: [[{ rel: 'new/sub' }, { obj: { recursive: { v: true } } }]] }),
   'fs.mkdtempSync': D(['prefix', 'opts'], { mutates: true, post: 'tmpname' }),
   'fs.openSync': D(['newpath', 'flags', 'mode'], { mutates: true, post: 'fd' }),
+  'fs.opendirSync': D(['path', 'opts'], { post: 'dir' }),
+  'fs.lutimesSync': D(['path', 'time', 'time'], { mutates: true }),
+  'fs.utimesSync': D(['path', 'time', 'time'], { mutates: true }),
   'fs.readdirSync': D(['path', 'opts'], { post: 'sorted' }),
   'fs.statfsSync': D(['path', 'opts'], { post: 'typeof', only: ['linux'] }),
   // a FIFO path is not in READ_PATHS (opening one for reading blocks without a writer, under node too);
@@ -140,8 +159,13 @@ const DRIVERS = {
   'fs.fstat': D(['fdany', 'opts']),
   'fs.readFile': D(['path', 'opts']),
   'fs.stat': D(['statpath', 'opts']),
-  'fs.unlink': D(['path'], { mutates: true }),
-  'fs.writeFile': D(['newpath', 'data', 'opts'], { mutates: true }),
+  // 2.1.330 calls these (it no longer calls fs.unlink or fs.writeFile, which were driven here at 2.1.283)
+  'fs.close': D(['fdany']),
+  'fs.open': D(['newpath', 'flags', 'mode'], { mutates: true, post: 'fd' }),
+  'fs.read': D(['fdr', 'buffer', 'offset', 'length', 'position']),
+  'fs.realpath': D(['statpath', 'opts']),
+  'fs.utimes': D(['path', 'time', 'time'], { mutates: true }),
+  'fs.write': D(['fdw', 'data', 'position'], { mutates: true }),
   'fs.createReadStream': D(['path', 'opts'], { post: 'readstream', style: 'sync' }),
   'fs.createWriteStream': D(['newpath', 'opts'], { post: 'writestream', style: 'sync', mutates: true }),
   // ---- fs/promises
@@ -187,6 +211,8 @@ const DRIVERS = {
   'os.uptime': D([], { post: 'sign' }),
   'os.userInfo': D(['opts']),
   'os.version': D([]),
+  'os.endianness': D([]),
+  'os.machine': D([]),
   // ---- path (property-driven: every sample string, in every position the carve fills)
   'path.basename': D(['pathstr', 'ext'], { extra: [[{ undef: true }], [{ v: 42 }]] }),
   'path.dirname': D(['pathstr'], { extra: [[{ undef: true }]] }),
@@ -200,6 +226,12 @@ const DRIVERS = {
   // ---- process
   'process.cwd': D([]),
   // ---- util
+  // ---- buffer: 2.1.330 imports isAscii (`import{isAscii as X}from"buffer"`, and the JSONL reader's
+  // `te.isAscii(e)`), and its carve now names isUtf8 too
+  'buffer.isAscii': D(['bytes'], { extra: [[{ v: 'not bytes' }], [{ v: null }]] }),
+  'buffer.isUtf8': D(['bytes'], { extra: [[{ v: 'not bytes' }], [{ v: null }]] }),
+  // ---- stream
+  'stream.Duplex': D(['opts'], { style: 'new', post: 'typeof' }),
   'util.format': D(['fmt', 'fmtarg', 'fmtarg'], { cap: 80 }),
   'util.formatWithOptions': D(['opts', 'fmt', 'fmtarg'], { extra: [[{ obj: { colors: { v: false } } }, { v: '%s %o' }, { v: 'a' }, { obj: { b: { v: 1 } } }]] }),
   'util.getSystemErrorName': D(['errno']),
@@ -216,7 +248,7 @@ const DRIVERS = {
   // ---- zlib
   'zlib.gzipSync': D(['data', 'opts'], { post: 'gzip' }),
   'zlib.deflateSync': D(['data', 'opts'], { post: 'deflate' }),
-  'zlib.inflateSync': D(['data', 'opts'], { extra: [[{ buf: '789c4b494c4ae402000694021f' }]] }),
+  'zlib.deflateRawSync': D(['data', 'opts'], { post: 'deflateraw' }),
   'zlib.inflateRawSync': D(['data', 'opts'], { extra: [[{ buf: '4b494c4ae40200' }]] }),
 };
 
@@ -226,7 +258,6 @@ const UNCOVERED = {
   'buffer.SlowBuffer': 'deprecated alias (node 24); feross buffer provides it; behaviour is Buffer.allocUnsafeSlow',
   'child_process.exec': 'callback with a child; a scenario driver is not written yet',
   'child_process.execFile': 'callback with a child; a scenario driver is not written yet',
-  'child_process.execFileSync': 'spawns; a scenario driver is not written yet',
   'child_process.execSync': 'spawns through a shell; a scenario driver is not written yet',
   'child_process.spawn': 'returns a live ChildProcess; a scenario driver is not written yet (node-shim-child-process.test.cjs judges it by hand)',
   'child_process.spawnSync': 'spawns; a scenario driver is not written yet (node-shim-child-process.test.cjs judges it by hand)',
@@ -238,18 +269,15 @@ const UNCOVERED = {
   'net.connect': 'needs a peer; a scenario driver is not written yet (node-shim-net.test.cjs judges it by hand)',
   'net.createConnection': 'needs a peer; a scenario driver is not written yet (node-shim-net.test.cjs judges it by hand)',
   'os.setPriority': 'changes the scheduling of the running process (judged instead by test/node-shim-os-priority.test.cjs, under nice)',
-  'process.exit': 'ends the executor',
   'stream.finished': 'needs a stream; a scenario driver is not written yet (node-shim-stream-finished.test.cjs judges it by hand)',
   'stream.PassThrough': 'a class; a scenario driver is not written yet (node-shim-stream.test.cjs judges it by hand)',
   'stream.pipeline': 'needs streams; a scenario driver is not written yet',
   'stream.Readable': 'a class; a scenario driver is not written yet (node-shim-stream.test.cjs judges it by hand)',
   'stream.Transform': 'a class; a scenario driver is not written yet',
   'tty.ReadStream': 'needs a terminal; node-shim-tty.test.cjs judges it under a pty',
-  'util.debuglog': 'its output depends on NODE_DEBUG; a scenario driver is not written yet',
   'util.deprecate': 'its warning is process-global; a scenario driver is not written yet',
   'util.inherits': 'a class wiring helper; a scenario driver is not written yet',
   'util.promisify': 'wraps a callback API; a scenario driver is not written yet',
-  'util.TextDecoder': 'a class; a scenario driver is not written yet',
   'zlib.createBrotliDecompress': 'a stream; a scenario driver is not written yet',
   'zlib.createGunzip': 'a stream; a scenario driver is not written yet',
   'zlib.createGzip': 'a stream; a scenario driver is not written yet',

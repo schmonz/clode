@@ -149,6 +149,8 @@ async function post(kind, r, ctx, args) {
     const back = kind === 'gzip' ? zlib.gunzipSync(r) : zlib.inflateSync(r);
     return { header: Buffer.from(r).subarray(0, kind === 'gzip' ? 10 : 2).toString('hex'), roundtrip: Buffer.from(back).toString('hex') };
   }
+  // raw deflate (no header): the bytes a compressor writes are its own choice, so judge what they inflate back to
+  if (kind === 'deflateraw') return { roundtrip: Buffer.from(require('zlib').inflateRawSync(r)).toString('hex') };
   if (kind === 'fd') {
     const st = fs.fstatSync(r);
     fs.closeSync(r);

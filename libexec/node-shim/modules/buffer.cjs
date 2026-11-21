@@ -59,32 +59,44 @@ if (B && !B.__clodeBase64Url) {
 // TextDecoder('utf-8',{fatal:true}) IS the WHATWG UTF-8 decode algorithm — it
 // throws iff the input is not valid UTF-8, which is exactly Node's isUtf8
 // contract (not an approximation).
+// The bytes of a buffer.isUtf8/isAscii input, or node's own ERR_INVALID_ARG_TYPE: node checks
+// `isTypedArray(input) || isAnyArrayBuffer(input)` (a DataView is refused) and words the error
+// with the input it received, as node 24 does (measured under 24.21.0, 2026-11-21).
+function bytesOf(input) {
+  const isDataView = typeof DataView !== 'undefined' && input instanceof DataView;
+  if (ArrayBuffer.isView(input) && !isDataView) {
+    return input instanceof Uint8Array ? input : new Uint8Array(input.buffer, input.byteOffset, input.byteLength);
+  }
+  if (input instanceof ArrayBuffer || (typeof SharedArrayBuffer !== 'undefined' && input instanceof SharedArrayBuffer)) {
+    return new Uint8Array(input);
+  }
+  throw require('../internal/node-errors.cjs').invalidArgType('The "input" argument must be an instance of ArrayBuffer, Buffer, or TypedArray', input);
+}
 if (impl && typeof impl.isUtf8 !== 'function') {
-  const isDataView = (v) => typeof DataView !== 'undefined' && v instanceof DataView;
-  const isSharedArrayBuffer = (v) => typeof SharedArrayBuffer !== 'undefined' && v instanceof SharedArrayBuffer;
   impl.isUtf8 = function isUtf8(input) {
-    let view;
-    if (ArrayBuffer.isView(input) && !isDataView(input)) {
-      view = input instanceof Uint8Array ? input : new Uint8Array(input.buffer, input.byteOffset, input.byteLength);
-    } else if (input instanceof ArrayBuffer || isSharedArrayBuffer(input)) {
-      view = new Uint8Array(input);
-    } else {
-      throw Object.assign(
-        new TypeError('The "input" argument must be an instance of Buffer, TypedArray, ArrayBuffer, or SharedArrayBuffer'),
-        { code: 'ERR_INVALID_ARG_TYPE' });
-    }
+    const view = bytesOf(input);
     // This tjs build's TextDecoder.decode() validates its argument with
     // `buf.buffer instanceof ArrayBuffer` (src/js/polyfills/text-encoding.js)
-    // — which is FALSE for a view backed by a SharedArrayBuffer (verified:
+    // -- which is FALSE for a view backed by a SharedArrayBuffer (verified:
     // SharedArrayBuffer is not `instanceof ArrayBuffer` on this engine), so
     // decode() would throw "Expected TypedArray or ArrayBuffer or
     // ArrayBufferView" on valid UTF-8 bytes and get silently swallowed by the
     // catch below into a wrong `false`. Normalize by copying into a fresh,
-    // plain-ArrayBuffer-backed Uint8Array first — `new Uint8Array(view)`
+    // plain-ArrayBuffer-backed Uint8Array first -- `new Uint8Array(view)`
     // always allocates a non-shared buffer regardless of the source, so this
     // sidesteps the engine's validation gap for every input shape uniformly.
     try { new TextDecoder('utf-8', { fatal: true }).decode(new Uint8Array(view)); return true; }
     catch { return false; }
+  };
+}
+// buffer.isAscii(input): 2.1.330 imports it (`import{isAscii as X}from"buffer"`, and its JSONL
+// reader's `te.isAscii(e)`), and neither feross `buffer` nor buffer-lite defines it. Node's
+// contract: true iff every byte is below 0x80, the same inputs as isUtf8.
+if (impl && typeof impl.isAscii !== 'function') {
+  impl.isAscii = function isAscii(input) {
+    const view = bytesOf(input);
+    for (let i = 0; i < view.length; i++) if (view[i] > 0x7f) return false;
+    return true;
   };
 }
 

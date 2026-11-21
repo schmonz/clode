@@ -72,4 +72,40 @@ function nodeErrorsFss(raw) {
   return out;
 }
 
-module.exports = { asNodeError, nodeErrorsFss, errnoName };
+// node's ERR_INVALID_ARG_TYPE, worded as node's determineSpecificType words what it received
+// (lib/internal/errors.js; measured against node 24.21.0, 2026-11-21): `Received null`,
+// `Received function f`, `Received an instance of DataView`, `Received type string ('x')` (a
+// string past 28 characters cut to 25 and '...').
+function received(v) {
+  if (v === null || v === undefined) return ` Received ${v}`;
+  if (typeof v === 'function') return ` Received function ${v.name}`;   // node's own trailing space when anonymous
+  if (typeof v === 'object') {
+    const name = v.constructor && v.constructor.name;
+    return name ? ` Received an instance of ${name}` : ' Received an instance of Object';
+  }
+  let shown = typeof v === 'string' ? `'${v.length > 28 ? v.slice(0, 25) + '...' : v}'` : String(v);
+  if (typeof v === 'bigint') shown += 'n';
+  return ` Received type ${typeof v} (${shown})`;
+}
+function invalidArgType(what, v) {
+  return Object.assign(new TypeError(`${what}.${received(v)}`), { code: 'ERR_INVALID_ARG_TYPE' });
+}
+// node's getValidatedFd (validateInt32(fd, 'fd', 0)).
+function validatedFd(fd) {
+  // node 24 words an anonymous function here with no trailing space ("Received function"), unlike
+  // the buffer validators' "Received function " (both measured under 24.21.0, 2026-11-21)
+  if (typeof fd !== 'number') {
+    const e = invalidArgType('The "fd" argument must be of type number', fd);
+    e.message = e.message.replace(/ $/, '');
+    throw e;
+  }
+  if (!Number.isInteger(fd)) {
+    throw Object.assign(new RangeError(`The value of "fd" is out of range. It must be an integer. Received ${fd}`), { code: 'ERR_OUT_OF_RANGE' });
+  }
+  if (fd < 0 || fd > 2147483647) {
+    throw Object.assign(new RangeError(`The value of "fd" is out of range. It must be >= 0 && <= 2147483647. Received ${fd}`), { code: 'ERR_OUT_OF_RANGE' });
+  }
+  return fd;
+}
+
+module.exports = { asNodeError, nodeErrorsFss, errnoName, received, invalidArgType, validatedFd };

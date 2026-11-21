@@ -603,7 +603,24 @@ function mkdirSync(p, opts) {
   return undefined;
 }
 
+// node's readSync(fd, buffer, offsetOrOptions, length, position): 2.1.330 calls the OPTIONS form,
+// `readSync(fd, buf, {position})`, which read 0 bytes here (length undefined) until 2026-11-21; with no
+// offset or length node reads from offset 0 to the end of the buffer.
+// As node (lib/fs.js): with 3 arguments or fewer, or an object third, the third is the options (offset 0,
+// length to the end of the buffer, position null); otherwise `length |= 0`, so an absent length reads nothing.
 function readSync(fd, buf, offset, length, position) {
+  if (arguments.length <= 3 || (offset !== null && typeof offset === 'object')) {
+    const o = offset == null ? {} : offset;
+    if (typeof o !== 'object') {
+      throw require('../internal/node-errors.cjs').invalidArgType('The "options" argument must be of type object', o);
+    }
+    offset = o.offset === undefined ? 0 : o.offset;
+    length = o.length === undefined ? buf.byteLength - offset : o.length;
+    position = o.position === undefined ? null : o.position;
+  } else {
+    length |= 0;
+  }
+  if (length === 0) return 0;
   const ab = FSS.read(fd, length, position ?? -1);
   const src = new Uint8Array(ab);
   buf.set(src, offset);
@@ -1169,9 +1186,19 @@ for (const name of ['readFile', 'writeFile', 'stat', 'lstat', 'fstat', 'access',
 }
 // fs.write / fs.read: callback receives (err, bytes, buffer) — extra trailing
 // arg beyond cbWrap's (err, val) shape, so wire them explicitly.
+// Both validate as node does BEFORE any callback (2.1.330's carve calls fs.write and fs.read): a
+// missing or wrong buffer is node's ERR_INVALID_ARG_TYPE, THROWN. Before this `fs.write(fd, cb)`
+// wrote the callback, handed its error to a no-op, and called nothing back, and `fs.read(fd, cb)`
+// threw "not a function": node reads into a fresh 16384-byte buffer then, and `fs.read(fd, buf,
+// cb)` / `fs.read(fd, buf, {offset,length,position}, cb)` are node's too.
+const NE = () => require('../internal/node-errors.cjs');
 fsMod.write = function write(fd, data, a, b, c, d) {
   // write(fd, buffer[, offset[, length[, position]]], cb) OR
   // write(fd, string[, position[, encoding]], cb)
+  NE().validatedFd(fd);
+  if (typeof data !== 'string' && !ArrayBuffer.isView(data)) {
+    throw NE().invalidArgType('The "buffer" argument must be of type string or an instance of Buffer, TypedArray, or DataView', data);
+  }
   const args = [a, b, c, d].filter((x) => typeof x !== 'function');
   const cb = [a, b, c, d].find((x) => typeof x === 'function') || (() => {});
   try {
@@ -1180,6 +1207,29 @@ fsMod.write = function write(fd, data, a, b, c, d) {
   } catch (e) { cb(e); }
 };
 fsMod.read = function read(fd, buffer, offset, length, position, cb) {
+  NE().validatedFd(fd);
+  if (typeof buffer === 'function') {                      // read(fd, cb)
+    cb = buffer; buffer = Buffer.alloc(16384); offset = 0; length = buffer.byteLength; position = null;
+  } else if (buffer && typeof buffer === 'object' && !ArrayBuffer.isView(buffer) && typeof offset === 'function') {
+    cb = offset;                                           // read(fd, { buffer, offset, length, position }, cb)
+    const o = buffer;
+    buffer = o.buffer === undefined ? Buffer.alloc(16384) : o.buffer;
+    offset = o.offset === undefined ? 0 : o.offset;
+    length = o.length === undefined ? buffer.byteLength - offset : o.length;
+    position = o.position === undefined ? null : o.position;
+  } else if (typeof offset === 'function') {               // read(fd, buffer, cb)
+    cb = offset; offset = 0; length = buffer && buffer.byteLength; position = null;
+  } else if (offset && typeof offset === 'object' && typeof length === 'function') {
+    cb = length;                                           // read(fd, buffer, { offset, length, position }, cb)
+    const o = offset;
+    offset = o.offset === undefined ? 0 : o.offset;
+    length = o.length === undefined ? buffer.byteLength - offset : o.length;
+    position = o.position === undefined ? null : o.position;
+  }
+  if (typeof cb !== 'function') throw NE().invalidArgType('The "cb" argument must be of type function', cb);
+  if (!ArrayBuffer.isView(buffer)) {
+    throw NE().invalidArgType('The "buffer" argument must be an instance of Buffer, TypedArray, or DataView', buffer);
+  }
   try { const n = readSync(fd, buffer, offset, length, position); cb(null, n, buffer); }
   catch (e) { cb(e); }
 };
@@ -1194,7 +1244,12 @@ promises.futimes = async () => {};
 fsMod.open = (p, flags, mode, cb) => { const c = typeof cb === 'function' ? cb : (typeof mode === 'function' ? mode : flags); try { c(null, fsMod.openSync(p, typeof flags === 'string' || typeof flags === 'number' ? flags : 'r')); } catch (e) { c(e); } };
 // fdPaths cleanup runs in `finally` (see closeSync's comment) so a throwing
 // close still drops the stale entry before the error reaches cb.
+// The fd is validated first, as node's getValidatedFd does, and that error is THROWN:
+// before this, `fs.close(cb)` (the carve's shape with the fd missing) tried to close the
+// callback, caught the engine's error, and then had no callback to give it to, so nothing
+// was ever called back (the shim differential's executor waited forever on it).
 fsMod.close = (fd, cb) => {
+  require('../internal/node-errors.cjs').validatedFd(fd);
   try {
     try { FSS.close(fd); } finally { fdPaths.delete(fd); }
     if (cb) cb(null);
