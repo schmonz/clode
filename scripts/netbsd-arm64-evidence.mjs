@@ -7,7 +7,7 @@
 // netbsd-arm64 is a shipping engine with no runner CI can drive at a usable speed: the emulated CI job this replaces
 // (netbsd-arm64-cells, TCG on an x64 runner) ran 10-18x slower than hardware, and upstream's fixed 20 s ripgrep timeout
 // tripped (CI 44838234742). The local NetBSD/arm64 guest (qemu+HVF, near native; boot it with `nb boot netbsd 10
-// arm64`) runs the same files in ~25 min. This script, on the developer's machine:
+// arm64`) runs the same files in minutes (2026-11-21: engine, provider, quaude and four lanes in 336 s). This script, on the developer's machine:
 //   1. refuses a tree with uncommitted tracked changes (the evidence names the commit it ran);
 //   2. ships a tarball of `git ls-files` ONLY (tracked files: a gitignored secret beside them never leaves the box) to
 //      a throwaway directory on the guest (`mktemp -d /tmp/clode-evidence.XXXXXX`), over ssh;
@@ -233,7 +233,7 @@ async function main(argv) {
   try {
     must(`cat > ${dir}/src.tgz`, { timeout: 10 * MIN, input: fs.readFileSync(tgz) });
     must(`mkdir ${dir}/repo && tar -xzf ${dir}/src.tgz -C ${dir}/repo`, { timeout: 10 * MIN });
-    say('building and driving in the guest (about 30-40 min)');
+    say('building and driving in the guest (about 6 min measured; the timeouts allow far more)');
     const g = ssh(`cd ${dir}/repo && /opt/pkg/bin/node scripts/netbsd-arm64-evidence.mjs --in-guest ${dir}`, { timeout: 180 * MIN, inherit: true });
     // the logs, for whoever reads a red result
     const logs = ssh(`cd ${dir} && tar -czf - logs`, { timeout: 5 * MIN });

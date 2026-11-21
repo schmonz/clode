@@ -1,0 +1,3535 @@
+{
+  "run": "netbsd-arm64-vm",
+  "engine": "netbsd-arm64",
+  "commit": "8f666722e873a70d429952a68bd0dc025df69a54",
+  "date": "2026-11-21",
+  "host": {
+    "platform": "netbsd",
+    "arch": "arm64",
+    "os": "NetBSD 11.0_RC2 evbarm",
+    "node": "v24.18.0"
+  },
+  "quaude": {
+    "sha256": "6ba904cc5f6e730f54b1c478c2f766ce03f15b18fdd347c9844f2154cbf76af9",
+    "bytes": 81085482,
+    "version": "2.1.283 (Claude Code)",
+    "provider": "2.1.283",
+    "engine": {
+      "sha256": "e6d925480815471825413a863f358e8d29807c1b9fd74112fc02c3971aeb8d72",
+      "bytes": 6812496
+    }
+  },
+  "inputs": {
+    "engine": "f906079f97870fd30f88a4f95b8f501a13fd8b0448836b623f83e39757dfb2c5",
+    "quaude": "8a18b6e5e17c081f24ae930ecc6bb32ed047a659ee12c83f2063a4810ec46038"
+  },
+  "command": "node scripts/netbsd-arm64-evidence.mjs",
+  "timeoutScale": 3,
+  "seconds": 336,
+  "steps": [
+    {
+      "name": "engine",
+      "seconds": 132,
+      "status": 0,
+      "signal": null
+    },
+    {
+      "name": "provider",
+      "seconds": 12,
+      "status": 0,
+      "signal": null
+    },
+    {
+      "name": "quaude",
+      "seconds": 35,
+      "status": 0,
+      "signal": null
+    },
+    {
+      "name": "harness",
+      "seconds": 7,
+      "status": 0,
+      "signal": null
+    },
+    {
+      "name": "harness-preflight",
+      "seconds": 0,
+      "status": 0,
+      "signal": null
+    }
+  ],
+  "lanes": [
+    {
+      "lane": 1,
+      "id": "rest-tools",
+      "file": "test/fidelity/tools-local.test.cjs",
+      "skips": [
+        "Phase A call in"
+      ],
+      "status": 0,
+      "signal": null,
+      "seconds": 52
+    },
+    {
+      "lane": 1,
+      "id": "rest-agentic",
+      "file": "test/fidelity/agentic-grep-glob.test.cjs",
+      "skips": [
+        "rg in a built quaude"
+      ],
+      "status": 0,
+      "signal": null,
+      "seconds": 0
+    },
+    {
+      "lane": 1,
+      "id": "rest-plan",
+      "file": "test/fidelity/agentic-grep-glob.test.cjs",
+      "names": [
+        "rg in a built quaude in permission:plan: every"
+      ],
+      "status": 0,
+      "signal": null,
+      "seconds": 28
+    },
+    {
+      "lane": 1,
+      "id": "webfetch",
+      "file": "test/fidelity/webfetch.test.cjs",
+      "status": 0,
+      "signal": null,
+      "seconds": 7
+    },
+    {
+      "lane": 2,
+      "id": "modes1-tools",
+      "file": "test/fidelity/tools-local.test.cjs",
+      "names": [
+        "Phase A call in (a built quaude in )?(print|permission:acceptEdits|permission:auto)[: ]"
+      ],
+      "status": 0,
+      "signal": null,
+      "seconds": 102
+    },
+    {
+      "lane": 2,
+      "id": "modes1-print",
+      "file": "test/fidelity/agentic-grep-glob.test.cjs",
+      "names": [
+        "rg in a built quaude: every"
+      ],
+      "status": 0,
+      "signal": null,
+      "seconds": 36
+    },
+    {
+      "lane": 3,
+      "id": "modes2-tools",
+      "file": "test/fidelity/tools-local.test.cjs",
+      "names": [
+        "Phase A call in (a built quaude in )?(permission:bypassPermissions|permission:dontAsk|permission:plan)[: ]"
+      ],
+      "status": 0,
+      "signal": null,
+      "seconds": 101
+    },
+    {
+      "lane": 3,
+      "id": "modes2-acceptEdits",
+      "file": "test/fidelity/agentic-grep-glob.test.cjs",
+      "names": [
+        "rg in a built quaude in permission:acceptEdits: every"
+      ],
+      "status": 0,
+      "signal": null,
+      "seconds": 19
+    },
+    {
+      "lane": 3,
+      "id": "modes2-auto",
+      "file": "test/fidelity/agentic-grep-glob.test.cjs",
+      "names": [
+        "rg in a built quaude in permission:auto: every"
+      ],
+      "status": 0,
+      "signal": null,
+      "seconds": 19
+    },
+    {
+      "lane": 4,
+      "id": "modes3-tools",
+      "file": "test/fidelity/tools-local.test.cjs",
+      "names": [
+        "Phase A call in (a built quaude in )?(unlisted|interactive)[: ]"
+      ],
+      "status": 0,
+      "signal": null,
+      "seconds": 113
+    },
+    {
+      "lane": 4,
+      "id": "modes3-bypassPermissions",
+      "file": "test/fidelity/agentic-grep-glob.test.cjs",
+      "names": [
+        "rg in a built quaude in permission:bypassPermissions: every"
+      ],
+      "status": 0,
+      "signal": null,
+      "seconds": 19
+    },
+    {
+      "lane": 4,
+      "id": "modes3-dontAsk",
+      "file": "test/fidelity/agentic-grep-glob.test.cjs",
+      "names": [
+        "rg in a built quaude in permission:dontAsk: every"
+      ],
+      "status": 0,
+      "signal": null,
+      "seconds": 16
+    }
+  ],
+  "tests": [
+    {
+      "type": "test:pass",
+      "file": "test/fidelity/agentic-grep-glob.test.cjs",
+      "line": 373,
+      "name": "Grep, Glob and the Bash tool's rg in a built quaude in permission:acceptEdits: every tool_result equals native's",
+      "nesting": 0
+    },
+    {
+      "type": "test:pass",
+      "file": "test/fidelity/agentic-grep-glob.test.cjs",
+      "line": 373,
+      "name": "Grep, Glob and the Bash tool's rg in a built quaude in permission:auto: every tool_result equals native's",
+      "nesting": 0
+    },
+    {
+      "type": "test:pass",
+      "file": "test/fidelity/agentic-grep-glob.test.cjs",
+      "line": 373,
+      "name": "Grep, Glob and the Bash tool's rg in a built quaude in permission:bypassPermissions: every tool_result equals native's",
+      "nesting": 0
+    },
+    {
+      "type": "test:pass",
+      "file": "test/fidelity/agentic-grep-glob.test.cjs",
+      "line": 373,
+      "name": "Grep, Glob and the Bash tool's rg in a built quaude in permission:dontAsk: every tool_result equals native's",
+      "nesting": 0
+    },
+    {
+      "type": "test:pass",
+      "file": "test/fidelity/agentic-grep-glob.test.cjs",
+      "line": 373,
+      "name": "Grep, Glob and the Bash tool's rg in a built quaude in permission:plan: every tool_result equals native's",
+      "nesting": 0
+    },
+    {
+      "type": "test:pass",
+      "file": "test/fidelity/agentic-grep-glob.test.cjs",
+      "line": 342,
+      "name": "Grep, Glob and the Bash tool's rg in a built quaude: every tool_result equals native's, with no rg and with a tripwire rg on PATH",
+      "nesting": 0
+    },
+    {
+      "type": "test:pass",
+      "file": "test/fidelity/agentic-grep-glob.test.cjs",
+      "line": 353,
+      "name": "native answers this script as NATIVE records (CLODE_E2E_NATIVE=1)",
+      "nesting": 0,
+      "skip": "opt-in: CLODE_E2E_NATIVE=1 re-measures native"
+    },
+    {
+      "type": "test:pass",
+      "file": "test/fidelity/agentic-grep-glob.test.cjs",
+      "line": 381,
+      "name": "native answers this script in permission:acceptEdits as NATIVE records (CLODE_E2E_NATIVE=1)",
+      "nesting": 0,
+      "skip": "opt-in: CLODE_E2E_NATIVE=1 re-measures native"
+    },
+    {
+      "type": "test:pass",
+      "file": "test/fidelity/agentic-grep-glob.test.cjs",
+      "line": 381,
+      "name": "native answers this script in permission:auto as NATIVE records (CLODE_E2E_NATIVE=1)",
+      "nesting": 0,
+      "skip": "opt-in: CLODE_E2E_NATIVE=1 re-measures native"
+    },
+    {
+      "type": "test:pass",
+      "file": "test/fidelity/agentic-grep-glob.test.cjs",
+      "line": 381,
+      "name": "native answers this script in permission:bypassPermissions as NATIVE records (CLODE_E2E_NATIVE=1)",
+      "nesting": 0,
+      "skip": "opt-in: CLODE_E2E_NATIVE=1 re-measures native"
+    },
+    {
+      "type": "test:pass",
+      "file": "test/fidelity/agentic-grep-glob.test.cjs",
+      "line": 381,
+      "name": "native answers this script in permission:dontAsk as NATIVE records (CLODE_E2E_NATIVE=1)",
+      "nesting": 0,
+      "skip": "opt-in: CLODE_E2E_NATIVE=1 re-measures native"
+    },
+    {
+      "type": "test:pass",
+      "file": "test/fidelity/agentic-grep-glob.test.cjs",
+      "line": 381,
+      "name": "native answers this script in permission:plan as NATIVE records (CLODE_E2E_NATIVE=1)",
+      "nesting": 0,
+      "skip": "opt-in: CLODE_E2E_NATIVE=1 re-measures native"
+    },
+    {
+      "type": "test:pass",
+      "file": "test/fidelity/agentic-grep-glob.test.cjs",
+      "line": 325,
+      "name": "pathWithoutRg hides only rg: a tool beside it still resolves (review M2)",
+      "nesting": 0
+    },
+    {
+      "type": "test:pass",
+      "file": "test/fidelity/tools-local.test.cjs",
+      "line": 352,
+      "name": "Bash with SHELL=zsh in a built quaude: the command runs under zsh, as native's does",
+      "nesting": 0
+    },
+    {
+      "type": "test:pass",
+      "file": "test/fidelity/tools-local.test.cjs",
+      "line": 133,
+      "name": "Read, Write and NotebookEdit in a built quaude: every tool_result, and the tree left, equal native's",
+      "nesting": 0
+    },
+    {
+      "type": "test:pass",
+      "file": "test/fidelity/tools-local.test.cjs",
+      "line": 682,
+      "name": "ReportFindings, Workflow and ListAgents in a built quaude: every tool_result equals native's (ListAgents: the named divergence)",
+      "nesting": 0
+    },
+    {
+      "type": "test:pass",
+      "file": "test/fidelity/tools-local.test.cjs",
+      "line": 516,
+      "name": "Skill, the worktree tools, the cron tools and ScheduleWakeup in a built quaude: every tool_result, and the repository left, equal native's",
+      "nesting": 0
+    },
+    {
+      "type": "test:pass",
+      "file": "test/fidelity/tools-local.test.cjs",
+      "line": 304,
+      "name": "TaskCreate, TaskGet, TaskUpdate, TaskList and TaskStop in a built quaude: every tool_result equals native's",
+      "nesting": 0
+    },
+    {
+      "type": "test:pass",
+      "file": "test/fidelity/tools-local.test.cjs",
+      "line": 918,
+      "name": "every Phase A call in a built quaude in interactive: each tool_result, and what the turn left, equal native's",
+      "nesting": 0
+    },
+    {
+      "type": "test:pass",
+      "file": "test/fidelity/tools-local.test.cjs",
+      "line": 918,
+      "name": "every Phase A call in a built quaude in permission:acceptEdits: each tool_result, and what the turn left, equal native's",
+      "nesting": 0
+    },
+    {
+      "type": "test:pass",
+      "file": "test/fidelity/tools-local.test.cjs",
+      "line": 918,
+      "name": "every Phase A call in a built quaude in permission:auto: each tool_result, and what the turn left, equal native's",
+      "nesting": 0
+    },
+    {
+      "type": "test:pass",
+      "file": "test/fidelity/tools-local.test.cjs",
+      "line": 918,
+      "name": "every Phase A call in a built quaude in permission:bypassPermissions: each tool_result, and what the turn left, equal native's",
+      "nesting": 0
+    },
+    {
+      "type": "test:pass",
+      "file": "test/fidelity/tools-local.test.cjs",
+      "line": 918,
+      "name": "every Phase A call in a built quaude in permission:dontAsk: each tool_result, and what the turn left, equal native's",
+      "nesting": 0
+    },
+    {
+      "type": "test:pass",
+      "file": "test/fidelity/tools-local.test.cjs",
+      "line": 918,
+      "name": "every Phase A call in a built quaude in permission:plan: each tool_result, and what the turn left, equal native's",
+      "nesting": 0
+    },
+    {
+      "type": "test:pass",
+      "file": "test/fidelity/tools-local.test.cjs",
+      "line": 918,
+      "name": "every Phase A call in a built quaude in print: each tool_result, and what the turn left, equal native's",
+      "nesting": 0
+    },
+    {
+      "type": "test:pass",
+      "file": "test/fidelity/tools-local.test.cjs",
+      "line": 918,
+      "name": "every Phase A call in a built quaude in unlisted: each tool_result, and what the turn left, equal native's",
+      "nesting": 0
+    },
+    {
+      "type": "test:pass",
+      "file": "test/fidelity/tools-local.test.cjs",
+      "line": 929,
+      "name": "native answers every Phase A call in interactive as recorded",
+      "nesting": 0,
+      "skip": "no Claude provider found. Looked at: CLODE_PROVIDER_BIN, CLODE_CLAUDE_BIN, and UPSTREAM_PIN's pinned version (2.1.283) under /tmp/clode-evidence.ZCjo9d/no-providers/2.1.283/ and /tmp/clode-evidence.ZCjo9d/state/share/clode/providers/2.1.283/. Set CLODE_PROVIDER_BIN=<path to a claude binary> to run this, or run the suite through test/run.mjs, which fetches the pinned version once."
+    },
+    {
+      "type": "test:pass",
+      "file": "test/fidelity/tools-local.test.cjs",
+      "line": 929,
+      "name": "native answers every Phase A call in permission:acceptEdits as recorded",
+      "nesting": 0,
+      "skip": "no Claude provider found. Looked at: CLODE_PROVIDER_BIN, CLODE_CLAUDE_BIN, and UPSTREAM_PIN's pinned version (2.1.283) under /tmp/clode-evidence.ZCjo9d/no-providers/2.1.283/ and /tmp/clode-evidence.ZCjo9d/state/share/clode/providers/2.1.283/. Set CLODE_PROVIDER_BIN=<path to a claude binary> to run this, or run the suite through test/run.mjs, which fetches the pinned version once."
+    },
+    {
+      "type": "test:pass",
+      "file": "test/fidelity/tools-local.test.cjs",
+      "line": 929,
+      "name": "native answers every Phase A call in permission:auto as recorded",
+      "nesting": 0,
+      "skip": "no Claude provider found. Looked at: CLODE_PROVIDER_BIN, CLODE_CLAUDE_BIN, and UPSTREAM_PIN's pinned version (2.1.283) under /tmp/clode-evidence.ZCjo9d/no-providers/2.1.283/ and /tmp/clode-evidence.ZCjo9d/state/share/clode/providers/2.1.283/. Set CLODE_PROVIDER_BIN=<path to a claude binary> to run this, or run the suite through test/run.mjs, which fetches the pinned version once."
+    },
+    {
+      "type": "test:pass",
+      "file": "test/fidelity/tools-local.test.cjs",
+      "line": 929,
+      "name": "native answers every Phase A call in permission:bypassPermissions as recorded",
+      "nesting": 0,
+      "skip": "no Claude provider found. Looked at: CLODE_PROVIDER_BIN, CLODE_CLAUDE_BIN, and UPSTREAM_PIN's pinned version (2.1.283) under /tmp/clode-evidence.ZCjo9d/no-providers/2.1.283/ and /tmp/clode-evidence.ZCjo9d/state/share/clode/providers/2.1.283/. Set CLODE_PROVIDER_BIN=<path to a claude binary> to run this, or run the suite through test/run.mjs, which fetches the pinned version once."
+    },
+    {
+      "type": "test:pass",
+      "file": "test/fidelity/tools-local.test.cjs",
+      "line": 929,
+      "name": "native answers every Phase A call in permission:dontAsk as recorded",
+      "nesting": 0,
+      "skip": "no Claude provider found. Looked at: CLODE_PROVIDER_BIN, CLODE_CLAUDE_BIN, and UPSTREAM_PIN's pinned version (2.1.283) under /tmp/clode-evidence.ZCjo9d/no-providers/2.1.283/ and /tmp/clode-evidence.ZCjo9d/state/share/clode/providers/2.1.283/. Set CLODE_PROVIDER_BIN=<path to a claude binary> to run this, or run the suite through test/run.mjs, which fetches the pinned version once."
+    },
+    {
+      "type": "test:pass",
+      "file": "test/fidelity/tools-local.test.cjs",
+      "line": 929,
+      "name": "native answers every Phase A call in permission:plan as recorded",
+      "nesting": 0,
+      "skip": "no Claude provider found. Looked at: CLODE_PROVIDER_BIN, CLODE_CLAUDE_BIN, and UPSTREAM_PIN's pinned version (2.1.283) under /tmp/clode-evidence.ZCjo9d/no-providers/2.1.283/ and /tmp/clode-evidence.ZCjo9d/state/share/clode/providers/2.1.283/. Set CLODE_PROVIDER_BIN=<path to a claude binary> to run this, or run the suite through test/run.mjs, which fetches the pinned version once."
+    },
+    {
+      "type": "test:pass",
+      "file": "test/fidelity/tools-local.test.cjs",
+      "line": 929,
+      "name": "native answers every Phase A call in print as recorded",
+      "nesting": 0,
+      "skip": "no Claude provider found. Looked at: CLODE_PROVIDER_BIN, CLODE_CLAUDE_BIN, and UPSTREAM_PIN's pinned version (2.1.283) under /tmp/clode-evidence.ZCjo9d/no-providers/2.1.283/ and /tmp/clode-evidence.ZCjo9d/state/share/clode/providers/2.1.283/. Set CLODE_PROVIDER_BIN=<path to a claude binary> to run this, or run the suite through test/run.mjs, which fetches the pinned version once."
+    },
+    {
+      "type": "test:pass",
+      "file": "test/fidelity/tools-local.test.cjs",
+      "line": 929,
+      "name": "native answers every Phase A call in unlisted as recorded",
+      "nesting": 0,
+      "skip": "no Claude provider found. Looked at: CLODE_PROVIDER_BIN, CLODE_CLAUDE_BIN, and UPSTREAM_PIN's pinned version (2.1.283) under /tmp/clode-evidence.ZCjo9d/no-providers/2.1.283/ and /tmp/clode-evidence.ZCjo9d/state/share/clode/providers/2.1.283/. Set CLODE_PROVIDER_BIN=<path to a claude binary> to run this, or run the suite through test/run.mjs, which fetches the pinned version once."
+    },
+    {
+      "type": "test:pass",
+      "file": "test/fidelity/tools-local.test.cjs",
+      "line": 692,
+      "name": "native answers the Task 5 script as T5_NATIVE records",
+      "nesting": 0,
+      "skip": "no Claude provider found. Looked at: CLODE_PROVIDER_BIN, CLODE_CLAUDE_BIN, and UPSTREAM_PIN's pinned version (2.1.283) under /tmp/clode-evidence.ZCjo9d/no-providers/2.1.283/ and /tmp/clode-evidence.ZCjo9d/state/share/clode/providers/2.1.283/. Set CLODE_PROVIDER_BIN=<path to a claude binary> to run this, or run the suite through test/run.mjs, which fetches the pinned version once."
+    },
+    {
+      "type": "test:pass",
+      "file": "test/fidelity/tools-local.test.cjs",
+      "line": 526,
+      "name": "native answers the session script as SESSION_NATIVE records",
+      "nesting": 0,
+      "skip": "no Claude provider found. Looked at: CLODE_PROVIDER_BIN, CLODE_CLAUDE_BIN, and UPSTREAM_PIN's pinned version (2.1.283) under /tmp/clode-evidence.ZCjo9d/no-providers/2.1.283/ and /tmp/clode-evidence.ZCjo9d/state/share/clode/providers/2.1.283/. Set CLODE_PROVIDER_BIN=<path to a claude binary> to run this, or run the suite through test/run.mjs, which fetches the pinned version once."
+    },
+    {
+      "type": "test:pass",
+      "file": "test/fidelity/tools-local.test.cjs",
+      "line": 316,
+      "name": "native answers the task script as TASK_NATIVE records",
+      "nesting": 0,
+      "skip": "no Claude provider found. Looked at: CLODE_PROVIDER_BIN, CLODE_CLAUDE_BIN, and UPSTREAM_PIN's pinned version (2.1.283) under /tmp/clode-evidence.ZCjo9d/no-providers/2.1.283/ and /tmp/clode-evidence.ZCjo9d/state/share/clode/providers/2.1.283/. Set CLODE_PROVIDER_BIN=<path to a claude binary> to run this, or run the suite through test/run.mjs, which fetches the pinned version once."
+    },
+    {
+      "type": "test:pass",
+      "file": "test/fidelity/tools-local.test.cjs",
+      "line": 364,
+      "name": "native answers the zsh Bash turn as ZSH_DONE records",
+      "nesting": 0,
+      "skip": "no Claude provider found. Looked at: CLODE_PROVIDER_BIN, CLODE_CLAUDE_BIN, and UPSTREAM_PIN's pinned version (2.1.283) under /tmp/clode-evidence.ZCjo9d/no-providers/2.1.283/ and /tmp/clode-evidence.ZCjo9d/state/share/clode/providers/2.1.283/. Set CLODE_PROVIDER_BIN=<path to a claude binary> to run this, or run the suite through test/run.mjs, which fetches the pinned version once."
+    },
+    {
+      "type": "test:pass",
+      "file": "test/fidelity/tools-local.test.cjs",
+      "line": 145,
+      "name": "native answers this script as NATIVE records",
+      "nesting": 0,
+      "skip": "no Claude provider found. Looked at: CLODE_PROVIDER_BIN, CLODE_CLAUDE_BIN, and UPSTREAM_PIN's pinned version (2.1.283) under /tmp/clode-evidence.ZCjo9d/no-providers/2.1.283/ and /tmp/clode-evidence.ZCjo9d/state/share/clode/providers/2.1.283/. Set CLODE_PROVIDER_BIN=<path to a claude binary> to run this, or run the suite through test/run.mjs, which fetches the pinned version once."
+    },
+    {
+      "type": "test:pass",
+      "file": "test/fidelity/webfetch.test.cjs",
+      "line": 116,
+      "name": "WebFetch in a built quaude fetches a TLS 1.2, rsa_pss_rsae_sha256 page as native does",
+      "nesting": 0
+    },
+    {
+      "type": "test:pass",
+      "file": "test/fidelity/webfetch.test.cjs",
+      "line": 126,
+      "name": "native fetches the same page and answers as recorded",
+      "nesting": 0,
+      "skip": "no Claude provider found. Looked at: CLODE_PROVIDER_BIN, CLODE_CLAUDE_BIN, and UPSTREAM_PIN's pinned version (2.1.283) under /tmp/clode-evidence.ZCjo9d/no-providers/2.1.283/ and /tmp/clode-evidence.ZCjo9d/state/share/clode/providers/2.1.283/. Set CLODE_PROVIDER_BIN=<path to a claude binary> to run this, or run the suite through test/run.mjs, which fetches the pinned version once."
+    }
+  ],
+  "cells": [
+    {
+      "tool": "Agent",
+      "mode": "interactive",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in interactive: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Agent",
+      "mode": "permission:acceptEdits",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:acceptEdits: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Agent",
+      "mode": "permission:auto",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:auto: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Agent",
+      "mode": "permission:bypassPermissions",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:bypassPermissions: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Agent",
+      "mode": "permission:dontAsk",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:dontAsk: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Agent",
+      "mode": "permission:plan",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:plan: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Agent",
+      "mode": "print",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "ReportFindings, Workflow and ListAgents in a built quaude: every tool_result equals native's (ListAgents: the named divergence)",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 682,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Agent",
+      "mode": "unlisted",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in unlisted: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Bash",
+      "mode": "interactive",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in interactive: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Bash",
+      "mode": "permission:acceptEdits",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:acceptEdits: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Bash",
+      "mode": "permission:auto",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:auto: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Bash",
+      "mode": "permission:bypassPermissions",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:bypassPermissions: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Bash",
+      "mode": "permission:dontAsk",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:dontAsk: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Bash",
+      "mode": "permission:plan",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:plan: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Bash",
+      "mode": "print",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "Grep, Glob and the Bash tool's rg in a built quaude in permission:acceptEdits: every tool_result equals native's",
+          "file": "test/fidelity/agentic-grep-glob.test.cjs",
+          "line": 373,
+          "outcome": "passed"
+        },
+        {
+          "name": "Grep, Glob and the Bash tool's rg in a built quaude in permission:auto: every tool_result equals native's",
+          "file": "test/fidelity/agentic-grep-glob.test.cjs",
+          "line": 373,
+          "outcome": "passed"
+        },
+        {
+          "name": "Grep, Glob and the Bash tool's rg in a built quaude in permission:bypassPermissions: every tool_result equals native's",
+          "file": "test/fidelity/agentic-grep-glob.test.cjs",
+          "line": 373,
+          "outcome": "passed"
+        },
+        {
+          "name": "Grep, Glob and the Bash tool's rg in a built quaude in permission:dontAsk: every tool_result equals native's",
+          "file": "test/fidelity/agentic-grep-glob.test.cjs",
+          "line": 373,
+          "outcome": "passed"
+        },
+        {
+          "name": "Grep, Glob and the Bash tool's rg in a built quaude in permission:plan: every tool_result equals native's",
+          "file": "test/fidelity/agentic-grep-glob.test.cjs",
+          "line": 373,
+          "outcome": "passed"
+        },
+        {
+          "name": "Grep, Glob and the Bash tool's rg in a built quaude: every tool_result equals native's, with no rg and with a tripwire rg on PATH",
+          "file": "test/fidelity/agentic-grep-glob.test.cjs",
+          "line": 342,
+          "outcome": "passed"
+        },
+        {
+          "name": "TaskCreate, TaskGet, TaskUpdate, TaskList and TaskStop in a built quaude: every tool_result equals native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 304,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Bash",
+      "mode": "shell:bash",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "Grep, Glob and the Bash tool's rg in a built quaude in permission:acceptEdits: every tool_result equals native's",
+          "file": "test/fidelity/agentic-grep-glob.test.cjs",
+          "line": 373,
+          "outcome": "passed"
+        },
+        {
+          "name": "Grep, Glob and the Bash tool's rg in a built quaude in permission:auto: every tool_result equals native's",
+          "file": "test/fidelity/agentic-grep-glob.test.cjs",
+          "line": 373,
+          "outcome": "passed"
+        },
+        {
+          "name": "Grep, Glob and the Bash tool's rg in a built quaude in permission:bypassPermissions: every tool_result equals native's",
+          "file": "test/fidelity/agentic-grep-glob.test.cjs",
+          "line": 373,
+          "outcome": "passed"
+        },
+        {
+          "name": "Grep, Glob and the Bash tool's rg in a built quaude in permission:dontAsk: every tool_result equals native's",
+          "file": "test/fidelity/agentic-grep-glob.test.cjs",
+          "line": 373,
+          "outcome": "passed"
+        },
+        {
+          "name": "Grep, Glob and the Bash tool's rg in a built quaude in permission:plan: every tool_result equals native's",
+          "file": "test/fidelity/agentic-grep-glob.test.cjs",
+          "line": 373,
+          "outcome": "passed"
+        },
+        {
+          "name": "Grep, Glob and the Bash tool's rg in a built quaude: every tool_result equals native's, with no rg and with a tripwire rg on PATH",
+          "file": "test/fidelity/agentic-grep-glob.test.cjs",
+          "line": 342,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Bash",
+      "mode": "shell:zsh",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "Bash with SHELL=zsh in a built quaude: the command runs under zsh, as native's does",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 352,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Bash",
+      "mode": "unlisted",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in unlisted: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "CronCreate",
+      "mode": "interactive",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in interactive: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "CronCreate",
+      "mode": "permission:acceptEdits",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:acceptEdits: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "CronCreate",
+      "mode": "permission:auto",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:auto: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "CronCreate",
+      "mode": "permission:bypassPermissions",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:bypassPermissions: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "CronCreate",
+      "mode": "permission:dontAsk",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:dontAsk: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "CronCreate",
+      "mode": "permission:plan",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:plan: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "CronCreate",
+      "mode": "print",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "Skill, the worktree tools, the cron tools and ScheduleWakeup in a built quaude: every tool_result, and the repository left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 516,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "CronCreate",
+      "mode": "unlisted",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in unlisted: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "CronDelete",
+      "mode": "interactive",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in interactive: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "CronDelete",
+      "mode": "permission:acceptEdits",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:acceptEdits: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "CronDelete",
+      "mode": "permission:auto",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:auto: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "CronDelete",
+      "mode": "permission:bypassPermissions",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:bypassPermissions: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "CronDelete",
+      "mode": "permission:dontAsk",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:dontAsk: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "CronDelete",
+      "mode": "permission:plan",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:plan: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "CronDelete",
+      "mode": "print",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "Skill, the worktree tools, the cron tools and ScheduleWakeup in a built quaude: every tool_result, and the repository left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 516,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "CronDelete",
+      "mode": "unlisted",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in unlisted: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "CronList",
+      "mode": "interactive",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in interactive: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "CronList",
+      "mode": "permission:acceptEdits",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:acceptEdits: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "CronList",
+      "mode": "permission:auto",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:auto: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "CronList",
+      "mode": "permission:bypassPermissions",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:bypassPermissions: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "CronList",
+      "mode": "permission:dontAsk",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:dontAsk: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "CronList",
+      "mode": "permission:plan",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:plan: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "CronList",
+      "mode": "print",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "Skill, the worktree tools, the cron tools and ScheduleWakeup in a built quaude: every tool_result, and the repository left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 516,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "CronList",
+      "mode": "unlisted",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in unlisted: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Edit",
+      "mode": "interactive",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in interactive: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Edit",
+      "mode": "permission:acceptEdits",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:acceptEdits: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Edit",
+      "mode": "permission:auto",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:auto: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Edit",
+      "mode": "permission:bypassPermissions",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:bypassPermissions: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Edit",
+      "mode": "permission:dontAsk",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:dontAsk: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Edit",
+      "mode": "permission:plan",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:plan: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Edit",
+      "mode": "print",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in print: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Edit",
+      "mode": "unlisted",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in unlisted: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "EnterWorktree",
+      "mode": "interactive",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in interactive: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "EnterWorktree",
+      "mode": "permission:acceptEdits",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:acceptEdits: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "EnterWorktree",
+      "mode": "permission:auto",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:auto: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "EnterWorktree",
+      "mode": "permission:bypassPermissions",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:bypassPermissions: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "EnterWorktree",
+      "mode": "permission:dontAsk",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:dontAsk: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "EnterWorktree",
+      "mode": "permission:plan",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:plan: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "EnterWorktree",
+      "mode": "print",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "Skill, the worktree tools, the cron tools and ScheduleWakeup in a built quaude: every tool_result, and the repository left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 516,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "EnterWorktree",
+      "mode": "unlisted",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in unlisted: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "ExitWorktree",
+      "mode": "interactive",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in interactive: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "ExitWorktree",
+      "mode": "permission:acceptEdits",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:acceptEdits: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "ExitWorktree",
+      "mode": "permission:auto",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:auto: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "ExitWorktree",
+      "mode": "permission:bypassPermissions",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:bypassPermissions: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "ExitWorktree",
+      "mode": "permission:dontAsk",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:dontAsk: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "ExitWorktree",
+      "mode": "permission:plan",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:plan: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "ExitWorktree",
+      "mode": "print",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "Skill, the worktree tools, the cron tools and ScheduleWakeup in a built quaude: every tool_result, and the repository left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 516,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "ExitWorktree",
+      "mode": "unlisted",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in unlisted: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Glob",
+      "mode": "interactive",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in interactive: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Glob",
+      "mode": "permission:acceptEdits",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "Grep, Glob and the Bash tool's rg in a built quaude in permission:acceptEdits: every tool_result equals native's",
+          "file": "test/fidelity/agentic-grep-glob.test.cjs",
+          "line": 373,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Glob",
+      "mode": "permission:auto",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "Grep, Glob and the Bash tool's rg in a built quaude in permission:auto: every tool_result equals native's",
+          "file": "test/fidelity/agentic-grep-glob.test.cjs",
+          "line": 373,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Glob",
+      "mode": "permission:bypassPermissions",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "Grep, Glob and the Bash tool's rg in a built quaude in permission:bypassPermissions: every tool_result equals native's",
+          "file": "test/fidelity/agentic-grep-glob.test.cjs",
+          "line": 373,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Glob",
+      "mode": "permission:dontAsk",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "Grep, Glob and the Bash tool's rg in a built quaude in permission:dontAsk: every tool_result equals native's",
+          "file": "test/fidelity/agentic-grep-glob.test.cjs",
+          "line": 373,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Glob",
+      "mode": "permission:plan",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "Grep, Glob and the Bash tool's rg in a built quaude in permission:plan: every tool_result equals native's",
+          "file": "test/fidelity/agentic-grep-glob.test.cjs",
+          "line": 373,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Glob",
+      "mode": "print",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "Grep, Glob and the Bash tool's rg in a built quaude in permission:acceptEdits: every tool_result equals native's",
+          "file": "test/fidelity/agentic-grep-glob.test.cjs",
+          "line": 373,
+          "outcome": "passed"
+        },
+        {
+          "name": "Grep, Glob and the Bash tool's rg in a built quaude in permission:auto: every tool_result equals native's",
+          "file": "test/fidelity/agentic-grep-glob.test.cjs",
+          "line": 373,
+          "outcome": "passed"
+        },
+        {
+          "name": "Grep, Glob and the Bash tool's rg in a built quaude in permission:bypassPermissions: every tool_result equals native's",
+          "file": "test/fidelity/agentic-grep-glob.test.cjs",
+          "line": 373,
+          "outcome": "passed"
+        },
+        {
+          "name": "Grep, Glob and the Bash tool's rg in a built quaude in permission:dontAsk: every tool_result equals native's",
+          "file": "test/fidelity/agentic-grep-glob.test.cjs",
+          "line": 373,
+          "outcome": "passed"
+        },
+        {
+          "name": "Grep, Glob and the Bash tool's rg in a built quaude in permission:plan: every tool_result equals native's",
+          "file": "test/fidelity/agentic-grep-glob.test.cjs",
+          "line": 373,
+          "outcome": "passed"
+        },
+        {
+          "name": "Grep, Glob and the Bash tool's rg in a built quaude: every tool_result equals native's, with no rg and with a tripwire rg on PATH",
+          "file": "test/fidelity/agentic-grep-glob.test.cjs",
+          "line": 342,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Grep",
+      "mode": "interactive",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in interactive: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Grep",
+      "mode": "permission:acceptEdits",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "Grep, Glob and the Bash tool's rg in a built quaude in permission:acceptEdits: every tool_result equals native's",
+          "file": "test/fidelity/agentic-grep-glob.test.cjs",
+          "line": 373,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Grep",
+      "mode": "permission:auto",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "Grep, Glob and the Bash tool's rg in a built quaude in permission:auto: every tool_result equals native's",
+          "file": "test/fidelity/agentic-grep-glob.test.cjs",
+          "line": 373,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Grep",
+      "mode": "permission:bypassPermissions",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "Grep, Glob and the Bash tool's rg in a built quaude in permission:bypassPermissions: every tool_result equals native's",
+          "file": "test/fidelity/agentic-grep-glob.test.cjs",
+          "line": 373,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Grep",
+      "mode": "permission:dontAsk",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "Grep, Glob and the Bash tool's rg in a built quaude in permission:dontAsk: every tool_result equals native's",
+          "file": "test/fidelity/agentic-grep-glob.test.cjs",
+          "line": 373,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Grep",
+      "mode": "permission:plan",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "Grep, Glob and the Bash tool's rg in a built quaude in permission:plan: every tool_result equals native's",
+          "file": "test/fidelity/agentic-grep-glob.test.cjs",
+          "line": 373,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Grep",
+      "mode": "print",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "Grep, Glob and the Bash tool's rg in a built quaude in permission:acceptEdits: every tool_result equals native's",
+          "file": "test/fidelity/agentic-grep-glob.test.cjs",
+          "line": 373,
+          "outcome": "passed"
+        },
+        {
+          "name": "Grep, Glob and the Bash tool's rg in a built quaude in permission:auto: every tool_result equals native's",
+          "file": "test/fidelity/agentic-grep-glob.test.cjs",
+          "line": 373,
+          "outcome": "passed"
+        },
+        {
+          "name": "Grep, Glob and the Bash tool's rg in a built quaude in permission:bypassPermissions: every tool_result equals native's",
+          "file": "test/fidelity/agentic-grep-glob.test.cjs",
+          "line": 373,
+          "outcome": "passed"
+        },
+        {
+          "name": "Grep, Glob and the Bash tool's rg in a built quaude in permission:dontAsk: every tool_result equals native's",
+          "file": "test/fidelity/agentic-grep-glob.test.cjs",
+          "line": 373,
+          "outcome": "passed"
+        },
+        {
+          "name": "Grep, Glob and the Bash tool's rg in a built quaude in permission:plan: every tool_result equals native's",
+          "file": "test/fidelity/agentic-grep-glob.test.cjs",
+          "line": 373,
+          "outcome": "passed"
+        },
+        {
+          "name": "Grep, Glob and the Bash tool's rg in a built quaude: every tool_result equals native's, with no rg and with a tripwire rg on PATH",
+          "file": "test/fidelity/agentic-grep-glob.test.cjs",
+          "line": 342,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "KillShell",
+      "mode": "interactive",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in interactive: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "KillShell",
+      "mode": "permission:acceptEdits",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:acceptEdits: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "KillShell",
+      "mode": "permission:auto",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:auto: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "KillShell",
+      "mode": "permission:bypassPermissions",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:bypassPermissions: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "KillShell",
+      "mode": "permission:dontAsk",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:dontAsk: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "KillShell",
+      "mode": "permission:plan",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:plan: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "KillShell",
+      "mode": "print",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "TaskCreate, TaskGet, TaskUpdate, TaskList and TaskStop in a built quaude: every tool_result equals native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 304,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "KillShell",
+      "mode": "unlisted",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in unlisted: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "ListAgents",
+      "mode": "interactive",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in interactive: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "ListAgents",
+      "mode": "permission:acceptEdits",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:acceptEdits: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "ListAgents",
+      "mode": "permission:auto",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:auto: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "ListAgents",
+      "mode": "permission:bypassPermissions",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:bypassPermissions: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "ListAgents",
+      "mode": "permission:dontAsk",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:dontAsk: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "ListAgents",
+      "mode": "permission:plan",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:plan: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "ListAgents",
+      "mode": "print",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "ReportFindings, Workflow and ListAgents in a built quaude: every tool_result equals native's (ListAgents: the named divergence)",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 682,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "ListAgents",
+      "mode": "unlisted",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in unlisted: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "NotebookEdit",
+      "mode": "interactive",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in interactive: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "NotebookEdit",
+      "mode": "permission:acceptEdits",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:acceptEdits: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "NotebookEdit",
+      "mode": "permission:auto",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:auto: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "NotebookEdit",
+      "mode": "permission:bypassPermissions",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:bypassPermissions: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "NotebookEdit",
+      "mode": "permission:dontAsk",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:dontAsk: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "NotebookEdit",
+      "mode": "permission:plan",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:plan: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "NotebookEdit",
+      "mode": "print",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "Read, Write and NotebookEdit in a built quaude: every tool_result, and the tree left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 133,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "NotebookEdit",
+      "mode": "unlisted",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in unlisted: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Read",
+      "mode": "interactive",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in interactive: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Read",
+      "mode": "permission:acceptEdits",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:acceptEdits: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Read",
+      "mode": "permission:auto",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:auto: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Read",
+      "mode": "permission:bypassPermissions",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:bypassPermissions: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Read",
+      "mode": "permission:dontAsk",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:dontAsk: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Read",
+      "mode": "permission:plan",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:plan: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Read",
+      "mode": "print",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "Read, Write and NotebookEdit in a built quaude: every tool_result, and the tree left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 133,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Read",
+      "mode": "unlisted",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in unlisted: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "ReportFindings",
+      "mode": "interactive",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in interactive: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "ReportFindings",
+      "mode": "permission:acceptEdits",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:acceptEdits: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "ReportFindings",
+      "mode": "permission:auto",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:auto: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "ReportFindings",
+      "mode": "permission:bypassPermissions",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:bypassPermissions: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "ReportFindings",
+      "mode": "permission:dontAsk",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:dontAsk: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "ReportFindings",
+      "mode": "permission:plan",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:plan: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "ReportFindings",
+      "mode": "print",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "ReportFindings, Workflow and ListAgents in a built quaude: every tool_result equals native's (ListAgents: the named divergence)",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 682,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "ReportFindings",
+      "mode": "unlisted",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in unlisted: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "ScheduleWakeup",
+      "mode": "interactive",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in interactive: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "ScheduleWakeup",
+      "mode": "permission:acceptEdits",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:acceptEdits: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "ScheduleWakeup",
+      "mode": "permission:auto",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:auto: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "ScheduleWakeup",
+      "mode": "permission:bypassPermissions",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:bypassPermissions: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "ScheduleWakeup",
+      "mode": "permission:dontAsk",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:dontAsk: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "ScheduleWakeup",
+      "mode": "permission:plan",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:plan: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "ScheduleWakeup",
+      "mode": "print",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "Skill, the worktree tools, the cron tools and ScheduleWakeup in a built quaude: every tool_result, and the repository left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 516,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "ScheduleWakeup",
+      "mode": "unlisted",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in unlisted: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Skill",
+      "mode": "interactive",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in interactive: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Skill",
+      "mode": "permission:acceptEdits",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:acceptEdits: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Skill",
+      "mode": "permission:auto",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:auto: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Skill",
+      "mode": "permission:bypassPermissions",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:bypassPermissions: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Skill",
+      "mode": "permission:dontAsk",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:dontAsk: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Skill",
+      "mode": "permission:plan",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:plan: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Skill",
+      "mode": "print",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "Skill, the worktree tools, the cron tools and ScheduleWakeup in a built quaude: every tool_result, and the repository left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 516,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Skill",
+      "mode": "unlisted",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in unlisted: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "TaskCreate",
+      "mode": "interactive",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in interactive: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "TaskCreate",
+      "mode": "permission:acceptEdits",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:acceptEdits: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "TaskCreate",
+      "mode": "permission:auto",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:auto: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "TaskCreate",
+      "mode": "permission:bypassPermissions",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:bypassPermissions: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "TaskCreate",
+      "mode": "permission:dontAsk",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:dontAsk: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "TaskCreate",
+      "mode": "permission:plan",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:plan: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "TaskCreate",
+      "mode": "print",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "TaskCreate, TaskGet, TaskUpdate, TaskList and TaskStop in a built quaude: every tool_result equals native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 304,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "TaskCreate",
+      "mode": "unlisted",
+      "engine": "netbsd-arm64",
+      "na": true,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in unlisted: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "TaskGet",
+      "mode": "interactive",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in interactive: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "TaskGet",
+      "mode": "permission:acceptEdits",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:acceptEdits: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "TaskGet",
+      "mode": "permission:auto",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:auto: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "TaskGet",
+      "mode": "permission:bypassPermissions",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:bypassPermissions: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "TaskGet",
+      "mode": "permission:dontAsk",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:dontAsk: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "TaskGet",
+      "mode": "permission:plan",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:plan: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "TaskGet",
+      "mode": "print",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "TaskCreate, TaskGet, TaskUpdate, TaskList and TaskStop in a built quaude: every tool_result equals native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 304,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "TaskGet",
+      "mode": "unlisted",
+      "engine": "netbsd-arm64",
+      "na": true,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in unlisted: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "TaskList",
+      "mode": "interactive",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in interactive: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "TaskList",
+      "mode": "permission:acceptEdits",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:acceptEdits: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "TaskList",
+      "mode": "permission:auto",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:auto: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "TaskList",
+      "mode": "permission:bypassPermissions",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:bypassPermissions: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "TaskList",
+      "mode": "permission:dontAsk",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:dontAsk: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "TaskList",
+      "mode": "permission:plan",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:plan: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "TaskList",
+      "mode": "print",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "TaskCreate, TaskGet, TaskUpdate, TaskList and TaskStop in a built quaude: every tool_result equals native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 304,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "TaskList",
+      "mode": "unlisted",
+      "engine": "netbsd-arm64",
+      "na": true,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in unlisted: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "TaskStop",
+      "mode": "interactive",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in interactive: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "TaskStop",
+      "mode": "permission:acceptEdits",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:acceptEdits: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "TaskStop",
+      "mode": "permission:auto",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:auto: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "TaskStop",
+      "mode": "permission:bypassPermissions",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:bypassPermissions: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "TaskStop",
+      "mode": "permission:dontAsk",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:dontAsk: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "TaskStop",
+      "mode": "permission:plan",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:plan: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "TaskStop",
+      "mode": "print",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "TaskCreate, TaskGet, TaskUpdate, TaskList and TaskStop in a built quaude: every tool_result equals native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 304,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "TaskStop",
+      "mode": "unlisted",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in unlisted: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "TaskUpdate",
+      "mode": "interactive",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in interactive: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "TaskUpdate",
+      "mode": "permission:acceptEdits",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:acceptEdits: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "TaskUpdate",
+      "mode": "permission:auto",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:auto: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "TaskUpdate",
+      "mode": "permission:bypassPermissions",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:bypassPermissions: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "TaskUpdate",
+      "mode": "permission:dontAsk",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:dontAsk: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "TaskUpdate",
+      "mode": "permission:plan",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:plan: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "TaskUpdate",
+      "mode": "print",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "TaskCreate, TaskGet, TaskUpdate, TaskList and TaskStop in a built quaude: every tool_result equals native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 304,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "TaskUpdate",
+      "mode": "unlisted",
+      "engine": "netbsd-arm64",
+      "na": true,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in unlisted: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "WebFetch",
+      "mode": "print",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "WebFetch in a built quaude fetches a TLS 1.2, rsa_pss_rsae_sha256 page as native does",
+          "file": "test/fidelity/webfetch.test.cjs",
+          "line": 116,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Workflow",
+      "mode": "interactive",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in interactive: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Workflow",
+      "mode": "permission:acceptEdits",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:acceptEdits: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Workflow",
+      "mode": "permission:auto",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:auto: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Workflow",
+      "mode": "permission:bypassPermissions",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:bypassPermissions: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Workflow",
+      "mode": "permission:dontAsk",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:dontAsk: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Workflow",
+      "mode": "permission:plan",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:plan: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Workflow",
+      "mode": "print",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "ReportFindings, Workflow and ListAgents in a built quaude: every tool_result equals native's (ListAgents: the named divergence)",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 682,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Workflow",
+      "mode": "unlisted",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in unlisted: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Write",
+      "mode": "interactive",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in interactive: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Write",
+      "mode": "permission:acceptEdits",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:acceptEdits: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Write",
+      "mode": "permission:auto",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:auto: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Write",
+      "mode": "permission:bypassPermissions",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:bypassPermissions: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Write",
+      "mode": "permission:dontAsk",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:dontAsk: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Write",
+      "mode": "permission:plan",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in permission:plan: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Write",
+      "mode": "print",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "Read, Write and NotebookEdit in a built quaude: every tool_result, and the tree left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 133,
+          "outcome": "passed"
+        }
+      ]
+    },
+    {
+      "tool": "Write",
+      "mode": "unlisted",
+      "engine": "netbsd-arm64",
+      "na": false,
+      "passed": true,
+      "tests": [
+        {
+          "name": "every Phase A call in a built quaude in unlisted: each tool_result, and what the turn left, equal native's",
+          "file": "test/fidelity/tools-local.test.cjs",
+          "line": 918,
+          "outcome": "passed"
+        }
+      ]
+    }
+  ],
+  "counts": {
+    "cells": 193,
+    "passed": 193,
+    "failed": 0,
+    "skipped": 0,
+    "tests": {
+      "passed": 21,
+      "failed": 0,
+      "skipped": 20
+    }
+  }
+}

@@ -508,21 +508,20 @@ with TJS_HOME unset creates $HOME/.tjs holding localStorage.db only (no cookies.
 Unmeasured. The suite-hermeticity claims (suite home, sentinel HOME byte-untouched, the 18/81 spawn counts) were not
 re-run; test/suite-home-hermetic.test.cjs and a full suite with a sentinel HOME would.
 
-## Every-tool Phase A is complete at cell level, pending the green CI run: 541 of the 2166 tool x mode x engine cells are CLAIMED by a CI job (180 of them only by netbsd-arm64-cells, placed: not yet run), 12 are not applicable; NO GREEN CI RUN HAS YET SHOWN THEM RAN; Phase A's 18 tools, Agent, Edit and Bash in print, interactive, unlisted and every permission mode (cells 2026-11-18; tools 2026-09-28; Grep and Glob driven 2026-10-05; Read, Write, NotebookEdit, the Task tools and TaskStop 2026-11-19; Skill, the worktree and cron tools, ScheduleWakeup, ReportFindings, Workflow and ListAgents 2026-11-20; the -p modes, interactive, Agent and the Grep/Glob modes 2026-11-20)
+## Every-tool Phase A is complete at cell level, pending the green CI run: of the 2166 tool x mode x engine cells, 363 are CLAIMED by a CI job, 181 (netbsd-arm64) are DRIVEN-LOCAL by committed VM evidence (2026-11-21, not CI), 12 are not applicable; NO GREEN CI RUN HAS YET SHOWN THE CI-CLAIMED ONES RAN; Phase A's 18 tools, Agent, Edit and Bash in print, interactive, unlisted and every permission mode (cells 2026-11-18; tools 2026-09-28; Grep and Glob driven 2026-10-05; Read, Write, NotebookEdit, the Task tools and TaskStop 2026-11-19; Skill, the worktree and cron tools, ScheduleWakeup, ReportFindings, Workflow and ListAgents 2026-11-20; the -p modes, interactive, Agent and the Grep/Glob modes 2026-11-20)
 
 Since observability Task 1 (2026-11-18) the gate counts CELLS, tool x mode x engine: 90 tools, 722
 tool x mode pairs (permission modes, sandbox, Bash shells, interactive, unlisted, from the carve where
 it says) over darwin-arm64, linux-x64-musl and netbsd-arm64, 2166 cells. Measured: the every-tool-driven
-gate's verdict over the 2.1.283 darwin-arm64 carve (test/build-gates/tool-coverage-gates.test.cjs, 2026-11-20):
-541 claimed by a CI job (180 of them only by netbsd-arm64-cells, placed: not yet run, CELL_JOBS' `placed`, deleted
-after its first green run; 24 hold the ListAgents pinned divergence), 1613 exempted, 12 not applicable, 0 neither,
-over five CI jobs (CELL_JOBS). CLAIMED IS NOT SEEN (final-review C1): the verdict is a static scan of what each job's
+gate's verdict over the 2.1.283 darwin-arm64 carve (test/build-gates/tool-coverage-gates.test.cjs, 2026-11-21):
+363 claimed by a CI job (16 hold the ListAgents pinned divergence), 181 driven-local (committed VM evidence, NOT CI:
+netbsd-arm64-vm 2026-11-21 @ 8f66672), 1610 exempted, 12 not applicable, 0 neither, over four CI jobs (CELL_JOBS). CLAIMED IS NOT SEEN (final-review C1): the verdict is a static scan of what each job's
 files declare. Only cells-ran-in-ci-job, gathered by gates-ran-in-ci on a green CI run, shows a cell ran, and no CI
 run has yet completed gates-ran-in-ci on the code that claims the interactive, Agent, not-applicable and E12 cells.
 The numbers here are updated from the first green run.
 
 What is claimed. test/fidelity/tools-local.test.cjs (node-shim-oracle-darwin and linux-x64-pty, each installing the
-pinned native that runs and building a quaude from it, and netbsd-arm64-cells) claims 23 tools (Read, Write, NotebookEdit, Edit, Bash, Agent,
+pinned native that runs and building a quaude from it; on netbsd-arm64 the local VM run, driven-local) claims 23 tools (Read, Write, NotebookEdit, Edit, Bash, Agent,
 the Task* tools, TaskStop, Skill, the worktree, cron and ScheduleWakeup tools, ReportFindings, Workflow, ListAgents)
 in print, `interactive`, `unlisted` and each of the five permission modes, each test judging every answer against
 native's. ListAgents' quaude answer is held as a NAMED divergence ("No reachable agents." without
@@ -535,7 +534,7 @@ interactiveTurn) runs in auto mode and backgrounds Agent. Ruling E10: a refusal 
 drives its cell, judged by a check and control of its own; a tool the mode does not REGISTER is not applicable
 (NOT_APPLICABLE: the Task list tools when unlisted, 4 tools x 3 engines). Each engine's cell is claimed only by an
 assertNotRegistered control in the job ON that engine (final-review I2): node-shim-oracle-darwin, linux-x64-pty, and
-netbsd-arm64-cells (placed). The proof's turn must be exactly the mode's own (ruling E12, modeTurnFinding).
+on netbsd-arm64 the driven-local VM evidence. The proof's turn must be exactly the mode's own (ruling E12, modeTurnFinding).
 test/fidelity/agentic-grep-glob.test.cjs claims Grep and Glob in print and every permission mode, and tools-local's
 interactive turn claims them interactive (final-review I4). Bash is also claimed in bypassPermissions, sandbox:on
 and shell:bash on musl, and shell:bash on darwin.
@@ -549,14 +548,21 @@ first classifier call through a gateway opens a billing notice that waits for En
 (autoModeClassifierBillingNoticeAcknowledgedAt in the profile shuts it for a day), and the classifier's own request,
 which does not stream (the mock's cannedMessage answers it).
 
-NETBSD-ARM64 (ruling E11b, 2026-11-20): ci.yml's netbsd-arm64-cells job claims the netbsd-arm64 cells of tools-local
-and agentic-grep-glob in a NetBSD/arm64 guest (cross-platform-actions, TCG on an x64 runner), against a quaude built
-there from the engine the netbsd-arm64 leg (now in the ci tier) built that push. Its settings are in
-scripts/tjs-legs.mjs GUEST_CELL_JOBS, with the measurements behind them: on the local HVF guest the two files pass,
-19 tests pass, 18 native tests skip by name, 0 fail, in about 23 minutes (1679fe5); TCG is about 10-18 times slower (the leg's engine build,
-54 minutes in release run 44691559850), so the job runs four lanes and scales every wait by CLODE_TIMEOUT_SCALE.
-NOT YET RUN IN CI (a870927 starts its first run): until that run is green, its cells are claimed only by a placed job. If it proves impossible or too slow, the fallback is driven-local
-(60865ea, reverted by a77092d): committed evidence from the local VM, with a 30-day window.
+NETBSD-ARM64: DRIVEN-LOCAL (USER RULING 2026-11-21, superseding E11b; ruling E11). The emulated CI job
+netbsd-arm64-cells is gone: CI 44838234742 showed it cannot pass (TCG ran 10-18x slower and upstream's fixed 20 s
+ripgrep timeout tripped). netbsd-arm64's cells are proven by the local NetBSD/arm64 VM (qemu+HVF, `nb boot netbsd 10
+arm64`, ssh -p 2230) through ONE re-run command, `node scripts/netbsd-arm64-evidence.mjs`: a `git ls-files` tarball
+to a mktemp dir on the guest, the engine and a quaude built there, tools-local, agentic-grep-glob and webfetch in the
+CI job's four lanes, and the committed evidence test/fidelity/evidence/netbsd-arm64.json (commit, date, guest OS,
+quaude/engine sha256, this tree's engine and quaude input hashes, every test record, the cells they prove). The gate
+counts those cells apart (DRIVEN-LOCAL), and only while the evidence is fresh: at most 30 days old AND recorded at a
+tree with the same engine recipe and quaude inputs (libexec/, scripts/stage0.mjs, UPSTREAM_PIN). An edit to any of
+those turns guard driven-local-evidence red until the command is re-run (libexec changed 21 times in the 30 days
+before this ruling, so expect to re-run it often; it takes about 6 minutes). MEASURED 2026-11-21 at 8f66672 (NetBSD
+11.0_RC2 evbarm, quaude 2.1.283): 193 evidence cells, 193 passed, 0 failed, 0 skipped; 21 tests passed, 20 native
+tests skipped by name (no native Claude Code on NetBSD), 0 failed; the whole run 336 s (each tools-local mode turn
+~33 s, interactive 82 s). The webfetch test first needed test/self-signed-cert.cjs: NetBSD's base openssl has no
+/etc/openssl/openssl.cnf, so `openssl req` died until the config was written beside the key.
 
 Nothing falls due 2026-12-15 any more: UNTIL_PHASE_A is retired (2026-11-20, plan Task 5 step 3), because it covered
 0 cells. USER RULING 2026-11-20 settled the last 8 Bash cells. The 3 shell:zsh cells are driven now (tools-local's
@@ -609,7 +615,8 @@ purpose). Its phases, each tool's `until` in the gate being its phase's constant
   against native, no tool exemption is left with UNTIL_PHASE_A, and driving them found and fixed shim defects (each in
   its task's report; among them readdir/readlink/opendir ignoring `encoding`, which kept quaude's ExitWorktree from
   removing a worktree) and named one divergence (ListAgents, above). CELL LEVEL: every Phase A cell is claimed by a
-  CI job (541), but no green run has yet shown the newest claims ran (above). The 5 sandbox cells moved to Phase B.
+  CI job (363) or, on netbsd-arm64, driven-local by committed VM evidence (181), but no green run has yet shown the
+  newest CI claims ran (above). The 5 sandbox cells moved to Phase B.
   UNTIL_PHASE_A is removed.
 - PLANNED, before Phase B's SendMessage (2026-11-20): a real `net.createServer` in the shim (unix-socket and loopback
   TCP listen, accepted sockets with data/end/close, server close). It is the one prerequisite shared by the sandbox's

@@ -1695,7 +1695,7 @@ const CELL_JOBS = [
 // THE LOCAL CELL RUNS (USER RULING 2026-11-21, superseding E11b; every-tool ruling E11): netbsd-arm64 has no runner CI
 // can drive it on at a usable speed. The emulated CI job (netbsd-arm64-cells, TCG on an x64 runner) could not pass: CI
 // 44838234742's tools-local turns ran 10-18x slower and upstream's fixed 20 s ripgrep timeout tripped. Its cells are
-// driven on the local NetBSD/arm64 VM (qemu+HVF, near native: the same files in ~25 min) by ONE command, which writes
+// driven on the local NetBSD/arm64 VM (qemu+HVF, near native: the whole run in 336 s, 2026-11-21) by ONE command, which writes
 // the committed evidence file; the gate judges that file (DRIVEN-LOCAL, above), never a CI run. Each test's native
 // half skips there by name (NetBSD has no native Claude Code); quaude is judged by the answers recorded from native.
 const LOCAL_CELL_RUNS = [
