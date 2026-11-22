@@ -91,13 +91,15 @@ fs.writeFileSync(cfg, JSON.stringify(kase.config(mock.port)));
 // which Winsock does not load), the temp dirs, and a throwaway home on EVERY platform (HOME alone was a no-op on
 // Windows, where the profile is USERPROFILE).
 function probeEnv(homeDir) {
-  const keep = ['PATH', 'Path', 'SystemRoot', 'SYSTEMROOT', 'windir', 'WINDIR', 'ComSpec', 'PATHEXT', 'SystemDrive',
-    'TEMP', 'TMP', 'TMPDIR', 'LANG', 'LC_ALL', 'TERM'];
-  const env = {};
-  for (const k of keep) if (process.env[k] !== undefined) env[k] = process.env[k];
   const cfgDir = path.join(homeDir, '.claude');
   fs.mkdirSync(cfgDir, { recursive: true });
-  return { ...env, HOME: homeDir, USERPROFILE: homeDir, CLAUDE_CONFIG_DIR: cfgDir, ANTHROPIC_API_KEY: 'sk-probe-notreal' };
+  // Literal names (no computed process.env read: test/env-indirect.cjs). node reads process.env case-insensitively
+  // on Windows, and drops an undefined value from a child's env, so an absent one is simply absent.
+  const e = process.env;
+  return {
+    PATH: e.PATH, SystemRoot: e.SystemRoot, windir: e.windir, ComSpec: e.ComSpec, PATHEXT: e.PATHEXT,
+    SystemDrive: e.SystemDrive, TEMP: e.TEMP, TMP: e.TMP, TMPDIR: e.TMPDIR, LANG: e.LANG, LC_ALL: e.LC_ALL, TERM: e.TERM,
+    HOME: homeDir, USERPROFILE: homeDir, CLAUDE_CONFIG_DIR: cfgDir, ANTHROPIC_API_KEY: 'sk-probe-notreal' };
 }
 
 let failed = false;
