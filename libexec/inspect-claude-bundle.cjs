@@ -193,7 +193,8 @@ const KNOWN_BUN_ANT = new Map([
     + 'with `typeof e?.openat==="function"?e:null`; null warns once ("anchor: this runtime has no '
     + 'Bun.ant.posixFsAt, so the macOS backend cannot come up") and the held-directory file backend answers '
     + '{unavailable:"no_ffi"}, the same shape Linux answers without /proc ({unavailable:"no_procfs"}), '
-    + 'which its callers already branch on. An openat family is a new C primitive; not now.'],
+    + 'which its callers already branch on. That fallback fails open (no TOCTOU guard); see windowsFsAt and '
+    + 'BACKLOG.md "posixFsAt and windowsFsAt are absent". An openat family is a new C primitive; not now.'],
   ['stringifyToBytes', 'MEASURED on the darwin-arm64 2.1.330 carve (2026-11-21), not inferred: one call site, the request-body fast '
     + 'path: `let r=Bun.ant?.stringifyToBytes,g=Bun.ant?.stringifyToBytesFallbacks;...if(r===void 0||g===void '
     + '0||...)return;`. Absent, the function returns undefined and the body is serialised as it always was '
@@ -229,8 +230,12 @@ const KNOWN_BUN_ANT = new Map([
     + 'Bun.ant.windowsFsAt unavailable (...)`,{level:"warn"}),T=null}return T}` (y() throws "not in this runtime" '
     + 'unless `typeof e?.open==="function"`). tQl is exported as loadNt, and the held-directory backend reads it '
     + 'as `case"windows":{...D=k();if(D===null)return{unavailable:"no_ffi"};...`; on Windows "no_ffi" is mapped to '
-    + '{outcome:"unanchored",reason:"no_ffi"}, the same reported fallback macOS takes without posixFsAt. An NT '
-    + 'handle-relative file API (NtCreateFile/rename/delete-by-handle) is a new C primitive; not now.'],
+    + '{outcome:"unanchored",reason:"no_ffi"}, the same reported fallback macOS takes without posixFsAt. RISK, '
+    + 'accepted with it: "unanchored" FAILS OPEN. Held-directory operations then go by path, not relative to a '
+    + 'held handle, so there is no TOCTOU guard: a component swapped for a link or junction between the check and '
+    + 'the use redirects the open, rename or delete outside the tree. Native refuses that; quaude on Windows (and '
+    + 'macOS) does not. An NT handle-relative file API (NtCreateFile/rename/delete-by-handle) is a new C primitive; '
+    + 'not now. BACKLOG.md: "posixFsAt and windowsFsAt are absent".'],
   ['windowsProcessPin', 'MEASURED on the win32-x64 2.1.330 carve (2026-11-21), not inferred: one call site, the Windows '
     + 'killProcessTree: `r.id=typeof Bun<"u"&&typeof Bun.ant?.windowsProcessPin==="function"?Bun.ant.windowsProcessPin(e)'
     + ':null;` and then `taskkill.exe /PID e /T /F` runs either way. Absent, the pin is null and taskkill kills the '

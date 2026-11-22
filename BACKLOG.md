@@ -8,6 +8,44 @@ Concrete clode-under-Node divergences from native Claude Code, to triage and fix
 That page is GENERATED from `scripts/build-graph.cjs` — the one declaration of the build — so it
 cannot drift from it; it is also where the honest answer to "does this need node?" lives.
 
+## posixFsAt and windowsFsAt are absent, so quaude's held-directory file operations fail OPEN on macOS and Windows (2026-11-21)
+
+Accepted absent in KNOWN_BUN_ANT (libexec/inspect-claude-bundle.cjs). The bun-ant-member-surface review of the
+darwin-arm64 and win32-x64 2.1.330 carves recorded them. This entry is the cost of that acceptance.
+
+**What native guards.** 2.1.330's held-directory backend (`openTreeAnchor`, the
+`darwin_at` / `win32_handle` / Linux `/proc` backends) opens the working root once and holds it: a directory fd
+with O_NOFOLLOW on macOS, a handle on Windows. Every later lstat, open, mkdir, rename, link, symlink, readlink
+and unlink beneath it then goes relative to that held directory: openat, lstatat, mkdirat, renameat, linkat,
+symlinkat, readlinkat, unlinkat and rmdirat on macOS, and NtCreateFile with a RootDirectory handle on Windows. A
+component swapped for a symlink or junction between the check and the use cannot redirect the operation out of
+the tree; it fails ELOOP/ENOTDIR and native refuses ("is a link, or changed while it was being opened"). The
+same members back the worktree-removal check, and the stale-link cleanup (`k3`) does its lstat, rename and
+unlink at the held fd.
+
+**What quaude loses.** Without the member, the backend answers `{unavailable:"no_ffi"}`:
+- On Windows, the anchor maps that to `{outcome:"unanchored",reason:"no_ffi"}`. The operation goes ahead BY
+  PATH, with no TOCTOU guard: fail open, reported but not refused.
+- On macOS, the same happens, except the worktree-removal path falls back to `darwinNoFollowAnyEnforced`.
+- The `k3` cleanup does path-based lstat and unlink on both platforms.
+- Linux is NOT affected. Its backend uses /proc/self/fd paths, which node-shim answers on Linux (no_procfs only
+  where /proc is absent).
+A local attacker who can race a link into the working tree can make a file write or delete land outside it on
+quaude where native would refuse. That is the same exposure every pre-2.1.330 build had.
+
+**What a C primitive would take.**
+- POSIX: an engine module (`__tjs_fs_at`, sync like `__tjs_fs_sync`) exposing openat (O_NOFOLLOW, O_DIRECTORY),
+  fstatat (AT_SYMLINK_NOFOLLOW) shaped as the shim's Stats, mkdirat, renameat, linkat, symlinkat, readlinkat and
+  unlinkat (with AT_REMOVEDIR for rmdirat). These go over fds from the existing sync open. libuv has no *at
+  calls, so this is raw POSIX, with a per-platform floor check (Tiger has no *at family: such legs keep the
+  fallback, by name). Then a `Bun.ant.posixFsAt` in bun-shim with the member shape the carve probes
+  (`typeof e?.openat==="function"`, plus lstatat, renameat and unlinkat for `k3`).
+- Windows: a HANDLE table exposed to JS. NtCreateFile/NtOpenFile with OBJECT_ATTRIBUTES.RootDirectory and
+  FILE_OPEN_REPARSE_POINT, renames through SetFileInformationByHandle(FileRenameInfoEx with RootDirectory),
+  deletes through FileDispositionInfoEx, and closing the handle. Then `Bun.ant.windowsFsAt` with the shape
+  `y()` checks (`typeof e?.open==="function"`).
+- Each needs a differential against native: race a link swap during an anchored write and confirm both refuse.
+
 ## txiki-sync-fs.patch's other Windows branches answer differently from node; none is ENOSYS any more (2026-11-21)
 
 Audited when readlink and symlink moved to libuv (txiki-sync-links.patch). Those two were the only `#if
