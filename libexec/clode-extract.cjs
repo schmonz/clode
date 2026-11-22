@@ -328,10 +328,23 @@ function extractIfNeeded(opts) {
 
   fs.mkdirSync(cacheDir, { recursive: true });
 
+  // EXTRACT-TO-TEMP-THEN-RENAME (2026-11-21). The stage used to be written in place: graph.json first UNMERGED,
+  // minutes of merging, then rewritten merged, while the previous .extractor-sig still stood. A concurrent reader
+  // (two suites sharing the oracle stage cache; two `clode build`s) passed the hit check and read a half-written or
+  // unmerged graph.json ("14 require(s) of a graph module survived staging"). Now the sig goes FIRST, so no reader
+  // can call this entry a hit until it is whole; everything is written to names private to this process in the same
+  // directory and renamed into place (atomic on one filesystem) only once checked; the sig is written LAST.
+  try { fs.rmSync(sigPath, { force: true }); } catch { /* none */ }
+  const tmpOf = (p) => `${p}.tmp-${process.pid}-${Date.now()}`;
+  const tmpMain = tmpOf(cliPath);
+  const finalRunner = path.join(cacheDir, 'cli.cjs');
+  const tmpRunner = split ? tmpOf(finalRunner) : null;
+  const dropTemps = () => { for (const p of [tmpMain, tmpRunner]) if (p) { try { fs.rmSync(p, { force: true }); } catch { /* gone */ } } };
+
   try {
     runQuiet(verbose, () => {
-      if (!split) return extractToFile(bin, cliPath);
-      const res = extractGraphToFile(bin, cliPath);
+      if (!split) return extractToFile(bin, tmpMain);
+      const res = extractGraphToFile(bin, tmpMain);
       // A SPLIT STAGE CARRIES BOTH SHAPES, from ONE extraction. graph.json feeds the
       // blobulate worker, which compiles each module to bytecode — that is where quaude's
       // load-time win comes from and it must stay. cli.cjs is the same graph as ONE
@@ -341,18 +354,21 @@ function extractIfNeeded(opts) {
       // disagree about what the bundle says. Writing only the first is what left naude
       // and the whole oracle apparatus dead on 2.1.243+ while `clode build` was green:
       // the consumer's input silently stopped existing and nothing declared the edge.
-      const doc = JSON.parse(fs.readFileSync(cliPath, 'utf8'));
+      const doc = JSON.parse(fs.readFileSync(tmpMain, 'utf8'));
       // BEFORE either consumer sees it: the residual cyclic requires upstream 2.1.248+
       // leaves behind are unanswerable by both of them, so they are merged away once,
       // here, and graph.json is rewritten with the result.
-      mergeStagedGraph(doc, cliPath, { libexec, cacheDir, env: process.env, log: clodeLog });
+      mergeStagedGraph(doc, tmpMain, { libexec, cacheDir, env: process.env, log: clodeLog });
       // GRAPH-WRITE-PIECEWISE (extract-claude-js.cjs): both written a module at a time, never built whole
-      if (doc.sccMerge) writeGraphJson(doc, cliPath);
-      writeGraphRunner(doc, path.join(cacheDir, 'cli.cjs'));
+      if (doc.sccMerge) writeGraphJson(doc, tmpMain);
+      writeGraphRunner(doc, tmpRunner);
       return res;
     });
   } catch (e) {
-    try { fs.rmSync(cliPath); } catch { /* ignore */ }
+    // the partial files are this process's own temps (graph.json AND cli.cjs); the entry keeps no sig
+    dropTemps();
+    try { fs.rmSync(cliPath, { force: true }); } catch { /* ignore */ }
+    if (split) { try { fs.rmSync(finalRunner, { force: true }); } catch { /* ignore */ } }
     process.stderr.write('clode: extraction failed (see error above); not caching.\n');
     throw e;
   }
@@ -368,7 +384,7 @@ function extractIfNeeded(opts) {
       // a source, and that the entry is among them. The authoritative SYNTAX check is
       // the blobulate step, which compiles every module under the TARGET engine — the only
       // parser whose opinion matters — and fails loudly naming the module.
-      const doc = JSON.parse(fs.readFileSync(cliPath, 'utf8'));
+      const doc = JSON.parse(fs.readFileSync(tmpMain, 'utf8'));
       if (doc.format !== 'clode-bun-graph-v1') throw new Error(`staged graph format ${doc.format}`);
       if (!Array.isArray(doc.order) || !doc.order.length) throw new Error('staged graph has no order');
       for (const name of doc.order) {
@@ -376,16 +392,21 @@ function extractIfNeeded(opts) {
       }
       if (typeof doc.sources[doc.entry] !== 'string') throw new Error(`staged graph entry ${doc.entry} has no source`);
     } else {
-      const src = fs.readFileSync(cliPath, 'utf8');
+      const src = fs.readFileSync(tmpMain, 'utf8');
       new vm.Script(Module.wrap(src), { filename: cliPath });
     }
   } catch (e) {
-    try { fs.rmSync(cliPath); } catch { /* ignore */ }
+    dropTemps();
+    try { fs.rmSync(cliPath, { force: true }); } catch { /* ignore */ }
+    if (split) { try { fs.rmSync(finalRunner, { force: true }); } catch { /* ignore */ } }
     if (e && e.stack) process.stderr.write(e.stack + '\n');
     process.stderr.write(`clode: extracted ${split ? 'module graph' : 'JS'} failed the check; not caching.\n`);
     throw new Error('extracted JS failed the syntax check');
   }
 
+  // whole and checked: into place, each by one rename
+  if (split) fs.renameSync(tmpRunner, finalRunner);
+  fs.renameSync(tmpMain, cliPath);
   fs.copyFileSync(srcShim, cacheShim);
   for (const c of companions) fs.copyFileSync(c.src, c.cache);
   fs.writeFileSync(sigPath, extractorSig + '\n');

@@ -10647,6 +10647,19 @@ work.
 Measured: `awk` over libexec/clode-extract.cjs's extractIfNeeded: mkdirSync then writeFileSync straight into the
 shared cache dir, no temp-and-rename; the product-side race is still open (2026-11-18).
 
+**SEEN AND FIXED, 2026-11-21.** Two agents' suites running at once on this box shared the oracle stage cache
+(/var/folders/.../clode-oracle-stage/2.1.330, keyed by version, not by checkout). One re-extracted with its own
+extractor while the other's sig still stood, and the other's node-shim-staged-graph read a half-written, UNMERGED
+graph.json as a cache hit ("14 require(s) of a graph module survived staging"). run.mjs's pre-warm cannot stop that:
+it serialises staging within ONE run, not across runs or `clode build`s. 18debc4's piecewise graph write (the
+netbsd-sparc OOM fix) made each in-place write take longer, so the window got wider. The fix landed with this note
+(clode-extract.cjs, EXTRACT-TO-TEMP-THEN-RENAME): the stale .extractor-sig is removed BEFORE the first byte, graph.json
+and cli.cjs are written to process-private temp names in the same directory, checked, renamed into place, and the
+sig is written LAST; a throw removes the temps and any partial cli.cjs. Held by test/clode-extract.test.cjs (no write
+lands on a real name, none while a sig stands, the sig last, nothing left behind on failure). STILL OPEN, narrower:
+two extractors finishing at once can each rename and write their own sig, so the last sig can name the other's
+files for an instant; a per-entry lock would close it.
+
 ## Release acceptance: the checks only a human with credentials can run (2026-09-04)
 
 **Decision (user, 2026-09-04):** the login-gated tests are not CI tests. They are aimed

@@ -197,3 +197,45 @@ test('loud failure: a non-bundle binary throws and does not cache cli.cjs', () =
     assert.ok(!fs.existsSync(path.join(s.cacheDir, 'cli.cjs')), 'no cli.cjs cached');
   } finally { cleanup(s); }
 });
+
+// EXTRACT-TO-TEMP-THEN-RENAME (2026-11-21): a reader sharing the cache never sees a partial stage. Two concurrent
+// suites served a half-written, UNMERGED graph.json from the oracle stage cache because it was written in place
+// under the previous .extractor-sig. Every write of a (re-)extraction now goes to this process's own temp name, the
+// stale sig is gone before the first byte, and the stage reaches its real names by rename, with the sig last.
+test('a re-extraction writes nothing at the real names and keeps no sig until the stage is whole', () => {
+  const s = setup('v1');
+  try {
+    run(s);
+    const cli = path.join(s.cacheDir, 'cli.cjs'), sig = path.join(s.cacheDir, '.extractor-sig');
+    fs.writeFileSync(sig, 'another-extractor\n');           // a stale entry: this extractor re-extracts
+    const seen = [];
+    const orig = { writeFileSync: fs.writeFileSync, openSync: fs.openSync, renameSync: fs.renameSync };
+    const note = (op, p) => seen.push({ op, p: String(p), sig: fs.existsSync(sig) });
+    fs.writeFileSync = function (p, ...a) { if (typeof p === 'string') note('write', p); return orig.writeFileSync.call(this, p, ...a); };
+    fs.openSync = function (p, flags, ...a) { if (typeof p === 'string' && /[wa]/.test(String(flags))) note('open', p); return orig.openSync.call(this, p, flags, ...a); };
+    fs.renameSync = function (a, b) { note('rename', b); return orig.renameSync.call(this, a, b); };
+    try { run(s); } finally { Object.assign(fs, orig); }
+    const intoCache = seen.filter((x) => x.p.startsWith(s.cacheDir));
+    assert.ok(intoCache.length > 0, 'the re-extraction wrote into the cache');
+    for (const x of intoCache) {
+      if (x.p === sig) continue;
+      assert.strictEqual(x.sig, false, `${x.op} ${x.p} happened while a sig still stood`);
+      if (x.op !== 'rename') assert.notStrictEqual(x.p, cli, 'cli.cjs was written in place, not renamed into place');
+    }
+    assert.ok(intoCache.some((x) => x.op === 'rename' && x.p === cli), 'cli.cjs arrived by rename');
+    const last = intoCache[intoCache.length - 1];
+    assert.deepStrictEqual([last.op, last.p], ['write', sig], 'the sig is written last');
+    assert.deepStrictEqual(fs.readdirSync(s.cacheDir).filter((n) => n.includes('.tmp-')), [], 'no temp left behind');
+  } finally { cleanup(s); }
+});
+test('a failed extraction leaves neither its temps nor a partial cli.cjs', () => {
+  const s = setup('v1');
+  try {
+    run(s);
+    fs.writeFileSync(path.join(s.cacheDir, '.extractor-sig'), 'another-extractor\n');
+    fs.writeFileSync(s.bin, 'not a bundle');
+    assert.throws(() => run(s));
+    const left = fs.readdirSync(s.cacheDir);
+    assert.deepStrictEqual(left.filter((n) => n.includes('.tmp-') || n === 'cli.cjs' || n === '.extractor-sig'), []);
+  } finally { cleanup(s); }
+});

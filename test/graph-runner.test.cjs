@@ -198,7 +198,8 @@ test('extract-claude-js produces a RUNNABLE file for either bundle shape', () =>
     + 'about twenty test files and scripts/build-naude.mjs depend on exactly that');
   const ex = fs.readFileSync(path.join(REPO, 'libexec/clode-extract.cjs'), 'utf8');
   // writeGraphRunner is graphRunnerSource's bytes, written a module at a time (GRAPH-WRITE-PIECEWISE, below)
-  assert.match(ex, /writeGraphRunner\(doc, path\.join\(cacheDir, 'cli\.cjs'\)\)/,
+  // ...to a temp name renamed into place as cli.cjs (EXTRACT-TO-TEMP-THEN-RENAME, clode-extract.cjs)
+  assert.match(ex, /writeGraphRunner\(doc, tmpRunner\)[\s\S]*fs\.renameSync\(tmpRunner, finalRunner\)/,
     'a staged SPLIT bundle must write cli.cjs beside graph.json. Writing only the graph '
     + 'is what left naude and the oracle apparatus dead while clode build was green');
 });
