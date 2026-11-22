@@ -71,8 +71,10 @@ test('quaude survives Ctrl-Z: the TUI stays alive and responsive after suspend',
   if (SKIP) { t.skip(SKIP); return; }
   // Did NOT crash on Ctrl-Z: the welcome box is still (re)painted...
   assert.match(SCREEN, /Claude Code/, `TUI did not survive Ctrl-Z (no welcome box):\n${SCREEN}`);
-  // ...it did suspend, the way upstream says it does...
-  assert.match(SCREEN, /has been suspended/, `Ctrl-Z did not suspend:\n${SCREEN}`);
+  // ...it did suspend, the way upstream says it does (2.1.330's words: "Claude Code is suspended. Run `fg` to bring it
+  // back."; through 2.1.283 they were "Claude Code has been suspended", and this row read the old words as no suspend
+  // at all, while the screen showed the suspend, the SIGCONT repaint and the marker in the prompt)...
+  assert.match(SCREEN, /Claude Code is suspended\. Run `fg` to bring it back\./, `Ctrl-Z did not suspend:\n${SCREEN}`);
   // ...and input works after the resume: the marker typed after SIGCONT is in the PROMPT,
   // not merely echoed somewhere by a terminal left in cooked mode.
   // The prompt glyph U+276F is followed by U+00A0, not a space (sessions.cjs's slash-menu
