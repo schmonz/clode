@@ -264,7 +264,7 @@ function _rgCall(method, file, args, rest) {
   if (method === 'spawn') return _rgNative.rgSpawn(args, opts, _rgCtx);
   const r = _rgNative.runRg(args, {
     ..._rgCtx, cwd: opts.cwd, env: opts.env || process.env, input: opts.input, timeout: opts.timeout,
-    maxBuffer: opts.maxBuffer, killSignal: opts.killSignal,
+    maxBuffer: opts.maxBuffer, killSignal: opts.killSignal, stdio: opts.stdio,
   });
   if (method === 'spawnSync') return _rgNative.rgSpawnSync(r, opts);
   return _rgNative.rgExecFileSync(r, opts, file, args);

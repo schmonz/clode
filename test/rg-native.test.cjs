@@ -1846,6 +1846,74 @@ test('RG-PID-FD: a file named /proc/<our pid>/fd/N is searched as the file it is
   } finally { fs.closeSync(fd); fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
+// RG-HELD-FD (found by the Linux end to end at 2.1.330, where EVERY single-file Grep failed): the 2.1.330 bundle on
+// Linux spawns rg for a single file it holds open with stdio ['pipe', 'pipe', 'pipe', fd] and the target
+// `/proc/self/fd/3` (Grep's content, count and files modes; Glob's --files). To native that is rg's own fd 3, the
+// file; quaude's rg runs inside its caller, so it looks the name up in the spawn's stdio and searches the file that
+// descriptor holds, printing the name as given. Nothing here needs /proc: the name is never opened, so the row runs
+// (and catches a regression) on every host, darwin included, where the bundle does not take this route.
+test('RG-HELD-FD: a descriptor name is looked up in the descriptor table, never opened by name', () => {
+  for (const [p, n] of [['/proc/self/fd/3', 3], ['/dev/fd/3', 3], ['/proc/thread-self/fd/12', 12], ['/dev/stdin', 0], ['/dev/stderr', 2]]) {
+    assert.strictEqual(rgn.childDescriptor(p), n, p);
+  }
+  for (const p of ['/proc/4242/fd/3', '/tmp/x', '/dev/fdx/3', '/dev/null']) assert.strictEqual(rgn.childDescriptor(p), null, p);
+  const d = rgn.spawnDescriptors(['pipe', 'pipe', 'inherit', 41, 'ignore']);
+  assert.deepStrictEqual([0, 1, 2, 3, 4, 5].map(d), [undefined, undefined, 2, 41, undefined, undefined]);
+  assert.deepStrictEqual([0, 1, 2, 3].map(rgn.spawnDescriptors('inherit')), [0, 1, 2, undefined]);
+  assert.deepStrictEqual([0, 3].map(rgn.spawnDescriptors(undefined)), [undefined, undefined]);
+  const isFile = (yes) => () => ({ isFile: () => yes });
+  assert.strictEqual(rgn.heldFile('/proc/self/fd/3', d, { fstat: isFile(true) }), 41);
+  assert.strictEqual(rgn.heldFile('/proc/self/fd/3', d, { fstat: isFile(false) }), null, 'a FIFO or device stays RG-REFUSE-SPECIAL-FILE');
+  assert.strictEqual(rgn.heldFile('/proc/self/fd/5', d, { fstat: isFile(true) }), null, 'a descriptor the spawn did not hand over');
+  assert.strictEqual(rgn.heldFile('/tmp/x', d, { fstat: isFile(true) }), null);
+  assert.strictEqual(rgn.heldFile('/proc/self/fd/3', undefined, { fstat: isFile(true) }), null);
+});
+test('RG-HELD-FD: rg spawned with the file it searches as stdio[3] and target /proc/self/fd/3 or /dev/fd/3 searches that file, as the 2.1.330 bundle on Linux spawns it (both twins)', {
+  skip: needUgrep.skip || (process.platform === 'win32' ? 'no descriptor names on Windows' : false),
+}, async () => {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'rg-held-fd-')));
+  const file = path.join(dir, 'app.js');
+  fs.writeFileSync(file, "const a = 1;\nfunction f() {\n  return 'needle one';\n}\nconst Needle = 'needle two';\n");
+  const fd = fs.openSync(file, 'r');
+  // what fd 3 is in THIS process is something else: a file that holds no match
+  const decoy = path.join(dir, 'decoy.txt');
+  fs.writeFileSync(decoy, 'nothing here\n');
+  try {
+    const ctx = { spawn: cp.spawn, spawnSync: cp.spawnSync, ugrep: () => UGREP };
+    const stdio = ['pipe', 'pipe', 'pipe', fd];
+    const spawned = (argv) => new Promise((res) => {
+      const c = rgn.rgSpawn(argv, { cwd: dir, stdio }, ctx);
+      const outs = [], errs = [];
+      c.stdout.on('data', (b) => outs.push(Buffer.from(b)));
+      c.stderr.on('data', (b) => errs.push(Buffer.from(b)));
+      c.on('close', (status) => res({ status, stdout: Buffer.concat(outs), stderr: Buffer.concat(errs) }));
+    });
+    for (const T of ['/proc/self/fd/3', '/dev/fd/3']) {
+      for (const argv of [['needle', T], ['-n', '-i', '-C', '1', 'needle', T], ['-l', 'needle', T], ['-c', 'needle', T], ['--json', 'needle', T],
+        ['-H', '-n', 'needle', T], ['--files', T], ['-l', 'absent', T]]) {
+        const want = rgn.runRg(argv.map((a) => (a === T ? file : a)), { ...ctx, cwd: dir });
+        // the same answer under the descriptor's name (--json's bytes_printed counts the name it printed)
+        const printed = (x) => x.replace(/"bytes_printed":\d+/g, '"bytes_printed":0');
+        const named = (b) => printed(normalizeRg(Buffer.from(String(b).split(file).join(T)), argv));
+        const got = (b) => printed(normalizeRg(b, argv));
+        const label = argv.join(' ');
+        const s = rgn.runRg(argv, { ...ctx, cwd: dir, stdio });
+        assert.deepStrictEqual([s.status, got(s.stdout), String(s.stderr)], [want.status, named(want.stdout), ''], `sync ${label}`);
+        const a = await spawned(argv);
+        assert.deepStrictEqual([a.status, got(a.stdout), String(a.stderr)], [want.status, named(want.stdout), ''], `async ${label}`);
+      }
+    }
+    assert.strictEqual(fs.readFileSync(file, 'utf8').length > 0, true);
+    // the held descriptor's offset is untouched: positional reads only
+    const b = Buffer.alloc(5);
+    assert.strictEqual(fs.readSync(fd, b, 0, 5, null), 5);
+    assert.strictEqual(String(b), 'const');
+    // a descriptor the spawn did not hand over is still refused by name, never read
+    const r = rgn.runRg(['needle', '/proc/self/fd/7'], { ...ctx, cwd: dir, stdio });
+    assert.match(rgn.parseRgRefusal(r.stderr).reason, /RG-REFUSE-SPECIAL-FILE/);
+  } finally { fs.closeSync(fd); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 // 2.1.330's Grep/Glob consumer, on an rc-2 run with no output whose stderr passes its usage-error regex, runs the
 // SAME argv again with --no-messages first, and throws its usage error only if that retry's stderr matches at
 // offset 0 (rg-probe-gates reads both rules from the carve). So quaude's refusal must survive --no-messages

@@ -1190,6 +1190,14 @@ Bash tool instead".
     (review M-2). /dev/null (by its resolved path) is an empty file and a socket's failed open is
     rg's per-path error (RG-SPECIAL-FILE, re-review N1); neither takes the rest of the search down.
     Accepted, not changed: /dev/fd/1 refuses where native says EACCES (review M4).
+    NARROWED 2026-11-21 (RG-HELD-FD): 2.1.330's Linux Grep spawns rg for a single file it holds open
+    with stdio[3] = that file and the target /proc/self/fd/3, so the by-name refusal failed EVERY
+    single-file Grep on Linux (darwin never takes that route: the bundle's choice is a runtime
+    platform branch, so the darwin suite was green). A descriptor name is now looked up in the call's
+    descriptor table (the spawn's stdio; a command's rg its own) and one holding a REGULAR FILE is
+    searched through it. STILL REFUSED, open: a descriptor holding a FIFO or a device (native reads it
+    to its end; quaude's in-process rg would block its caller), and a descriptor the spawn never handed
+    over (native: that fd's open error).
   - A UGREP PASS THAT FAILS refuses, whatever it printed first (re-review N3): the Grep tool shows
     rc-2 output to the model as the whole answer. Only ugrep's per-path warnings (`cannot read X:
     ...`, `X: No such file or directory`, naming a path it was given) are rg's own errors, the rest

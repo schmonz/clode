@@ -187,7 +187,8 @@ function main(io = {}) {
   const input = () => { const all = []; for (let c; (c = stdinChunk());) all.push(c); return Buffer.concat(all); };
   let r;
   try {
-    r = rgn.runRg(argv, { cwd, env, implicit, input, stdinChunk, stream: true, sink: out, ugrep: () => findUgrep(env), debug });
+    // RG-HELD-FD: a command's rg is its own process, so a descriptor name names its own descriptor
+    r = rgn.runRg(argv, { cwd, env, implicit, input, stdinChunk, stream: true, sink: out, ugrep: () => findUgrep(env), debug, descriptors: (n) => n });
   } catch (e) {
     if (e && e.sinkClosed) { exit(141); return; }
     throw e;

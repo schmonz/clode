@@ -228,6 +228,38 @@ test('RG-CONFIG: native with --no-config searches as with no config (native)', {
   assert.deepStrictEqual([r.status, r.stdout.toString()], [0, 'sub/deep/nested.txt\n']);
 });
 
+// RG-HELD-FD, as a command: a command's rg is its own process, so `rg needle /dev/fd/3 3<file` (or /proc/self/fd/3)
+// names ITS fd 3, a regular file, and native searches it as a named file. quaude's rg refused every descriptor name
+// by name until 2.1.330's Linux Grep made the same shape the bundle's own (rg-native.test.cjs RG-HELD-FD).
+test('RG-HELD-FD: rg-entry searches a regular file it holds as fd 3, named /dev/fd/3, as native does (tjs; native)', { skip: POSIX || NEED.skip || (!tjsPath() ? 'no tjs engine' : false) }, () => {
+  const t = tree();
+  const names = ['/dev/fd/3', ...(fs.existsSync('/proc/self/fd') ? ['/proc/self/fd/3'] : [])];
+  const run = (cmd, args, argv0) => {
+    const held = fs.openSync(path.join(t, 'a.txt'), 'r'), null0 = fs.openSync('/dev/null', 'r');
+    try {
+      return cp.spawnSync(cmd, args, { cwd: t, stdio: [null0, 'pipe', 'pipe', held], timeout: 60000, ...(argv0 ? { argv0 } : {}),
+        env: { HOME: BASE, PATH: process.env.PATH, CLODE_UGREP: UGREP } });
+    } finally { fs.closeSync(held); fs.closeSync(null0); }
+  };
+  const want = cp.spawnSync(process.execPath, [ENTRY, '-n', 'needle', 'a.txt'], { cwd: t, encoding: 'latin1', env: { PATH: process.env.PATH, CLODE_UGREP: UGREP } });
+  assert.strictEqual(want.status, 0, want.stderr);
+  for (const name of names) {
+    for (const argv of [['-n', 'needle', name], ['-l', 'needle', name], ['-c', 'needle', name]]) {
+      const [cmd, a] = engineSpawn(['run', LOADER, ENTRY, ...argv]);
+      const ours = run(cmd, a);
+      assert.strictEqual(ours.stderr.toString(), '', argv.join(' '));
+      assert.strictEqual(ours.status, 0, argv.join(' '));
+      if (argv[0] === '-n') assert.strictEqual(ours.stdout.toString('latin1'), want.stdout, argv.join(' '));
+      if (argv[0] === '-l') assert.strictEqual(ours.stdout.toString(), `${name}\n`);
+      if (NATIVE) {
+        const n = run(NATIVE, argv, 'rg');
+        assert.deepStrictEqual([ours.status, ours.stdout.toString('latin1'), ours.stderr.toString()],
+          [n.status, n.stdout.toString('latin1'), n.stderr.toString()], `${argv.join(' ')} vs native`);
+      }
+    }
+  }
+});
+
 // No ugrep: the same refusal the bundle's rg gives (rg-native's), never a host rg.
 test('rg-entry with no ugrep refuses by name, rc 2, never a host rg', { skip: POSIX }, () => {
   const t = tree();

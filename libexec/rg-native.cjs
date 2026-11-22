@@ -853,6 +853,9 @@ function ugrepMatchesAsync(files, pattern, opts = {}) {
 //   RG-REFUSE-SPECIAL-FILE     a named /dev/stdin, /dev/fd/N, /proc/self/fd/N, FIFO, character device
 //                              other than /dev/null, or block device refuses: rg reads it until it
 //                              ends; quaude's rg cannot without blocking or reading its caller's input
+//   RG-HELD-FD                 a descriptor name is rg's OWN descriptor: looked up in the call's descriptor
+//                              table (a spawn's stdio; a command's own), and one holding a regular file is
+//                              searched as a named file through it (2.1.330's Linux Grep: /proc/self/fd/3)
 //   RG-EXIT                    0 found, 1 not found, 2 when any path failed (its error on stderr, the
 //                              rest still searched and printed): never quaude's refusal
 //   RG-BINARY-QUIT, RG-BINARY-CONVERT, RG-BINARY-MMAP  (grep-native Task 8) what a NUL does to a walked
@@ -1173,10 +1176,14 @@ const MMAP_MAX_PATHS = 10;            // hiargs.rs: memory maps for at most 10 p
 function binaryHow(e, mmap, spec) { return spec && spec.text ? 'text' : e.walked ? 'quit' : e.stdin || !mmap ? 'convert' : 'mmap'; }
 // Whether rg memory-maps this search's named files (RG-BINARY-MMAP): every path (`-` too, as a file of
 // that name) a regular file, following symlinks; at most 10. On every host (RG-MMAP-EVERYWHERE).
-function mmapsNamedFiles(spec, cwd) {
+// A held descriptor (RG-HELD-FD) is the regular file it holds.
+function mmapsNamedFiles(spec, cwd, kinds = []) {
   if (spec.paths.length > MMAP_MAX_PATHS) return false;
   const fs = require('fs'), path = require('path');
-  return spec.paths.every((P) => { try { return fs.statSync(path.resolve(cwd, P)).isFile(); } catch { return false; } });
+  return spec.paths.every((P, i) => {
+    if (kinds[i] && kinds[i].kind === 'held') return true;
+    try { return fs.statSync(path.resolve(cwd, P)).isFile(); } catch { return false; }
+  });
 }
 // rg's view of one file: { how, text, read, nul }. text is rg's text (RG-TEXT-BOM) with, for
 // RG-BINARY-CONVERT, every NUL a newline; nul the first NUL's offset (-1: none). A file with a BOM is read,
@@ -1815,6 +1822,55 @@ function isDescriptorPath(p) {
   if (DESCRIPTOR_PATH.test(p)) return true;
   try { return DESCRIPTOR_PATH.test(require('fs').realpathSync(p)); } catch { return false; }
 }
+// RG-HELD-FD (found by the Linux end to end at 2.1.330): a descriptor name in rg's argv names rg's OWN descriptor,
+// and a spawned rg's descriptors are what its spawn handed it. The 2.1.330 bundle on Linux searches a single file
+// it holds open by spawning rg with stdio ['pipe', 'pipe', 'pipe', fd] and the target `/proc/self/fd/3`; native rg
+// opens its fd 3, a regular file, and searches it like any named file (its name printed as given). quaude's rg runs
+// inside its caller, where fd 3 is something else, so a descriptor name (/dev/fd/N, /proc/self/fd/N,
+// /proc/thread-self/fd/N, /dev/std{in,out,err}) is looked up in the call's descriptor table: the spawn's stdio for
+// the in-process surfaces (spawnDescriptors), the process's own for a command's rg (rg-entry.cjs). One that is a
+// regular file is searched as a named file through that descriptor, read in place (positional reads: no offset
+// moves, nothing blocks), on every platform, whatever the platform spells its descriptor names. The rest (a FIFO,
+// a device, a directory, a descriptor the table has not) stays as RG-REFUSE-SPECIAL-FILE says.
+const CHILD_FD_NAME = /^\/(?:dev\/fd|proc\/(?:self|thread-self)\/fd)\/(\d+)$/;
+const STD_FD_NAME = { '/dev/stdin': 0, '/dev/stdout': 1, '/dev/stderr': 2 };
+function childDescriptor(p) {
+  if (Object.prototype.hasOwnProperty.call(STD_FD_NAME, p)) return STD_FD_NAME[p];
+  const m = CHILD_FD_NAME.exec(p);
+  return m ? Number(m[1]) : null;
+}
+// A spawn's stdio as rg's descriptor table: N -> the caller's descriptor the child gets as its fd N.
+function spawnDescriptors(stdio) {
+  return (n) => {
+    const s = Array.isArray(stdio) ? stdio[n] : (n <= 2 ? stdio : undefined);
+    if (Number.isInteger(s) && s >= 0) return s;
+    if (s === 'inherit' && n <= 2) return n;
+    return undefined;
+  };
+}
+// The caller's descriptor holding the regular file a named descriptor path is to rg, or null.
+function heldFile(p, descriptors, { fstat = (fd) => require('fs').fstatSync(fd) } = {}) {
+  if (typeof descriptors !== 'function') return null;
+  const n = childDescriptor(p);
+  if (n === null) return null;
+  const fd = descriptors(n);
+  if (!Number.isInteger(fd) || fd < 0) return null;
+  try { return fstat(fd).isFile() ? fd : null; } catch { return null; }
+}
+// A held regular file's bytes, read in place from its start.
+function readHeld(fd) {
+  const fs = require('fs');
+  const parts = [];
+  let pos = 0;
+  for (;;) {
+    const b = Buffer.alloc(Math.max(STREAM_READ, Math.min(fs.fstatSync(fd).size - pos, 1 << 26)));
+    const n = fs.readSync(fd, b, 0, b.length, pos);
+    if (n <= 0) break;
+    parts.push(n === b.length ? b : b.subarray(0, n));
+    pos += n;
+  }
+  return Buffer.concat(parts);
+}
 function specialKind(p, st) {
   if (st.isFIFO()) return { kind: 'refuse' };
   const fs = require('fs');
@@ -2177,9 +2233,11 @@ function* sortedByModified(spec, entries, cwd) {
   const keyed = [], rest = [];
   let n = 0;
   for (const e of entries) {
-    if (!e.file && !e.stdin) { rest.push(e); continue; }
+    if (!e.file && !e.stdin && e.held === undefined) { rest.push(e); continue; }
     let t = null;
-    try { t = fs.statSync(path.resolve(cwd, e.stdin ? '-' : e.file), { bigint: true }).mtimeNs; } catch { /* sorted last */ }
+    try {
+      t = (e.held !== undefined ? fs.fstatSync(e.held, { bigint: true }) : fs.statSync(path.resolve(cwd, e.stdin ? '-' : e.file), { bigint: true })).mtimeNs;
+    } catch { /* sorted last */ }
     keyed.push({ e, t, i: keyed.length });
     if (++n % TICK_EVERY === 0) { searchStats.ticks.sort++; yield TICK; }
   }
@@ -2198,7 +2256,7 @@ function* printListing(spec, entries, cwd, sink) {
   for (const e of list) {
     if (e.error) { err.push(Buffer.from(e.error + '\n')); broke = true; continue; }
     if (e.message) { err.push(Buffer.from(e.message + '\n')); continue; }
-    if (!e.file) continue;
+    if (!e.file && e.held === undefined) continue;
     out.push(Buffer.from(e.disp + term));
     if (++listed % TICK_EVERY === 0) { searchStats.ticks.list++; yield TICK; }
   }
@@ -2482,7 +2540,11 @@ function* searchCore(spec, opts) {
   }
   const kinds = spec.paths.map((P) => {
     if (P === '-') return { kind: 'stdin' };
-    if (process.platform !== 'win32' && descriptorRefused(path.resolve(cwd, P))) return { kind: 'refuse' };
+    if (process.platform !== 'win32') {
+      const held = heldFile(path.resolve(cwd, P), opts.descriptors);
+      if (held !== null) return { kind: 'held', fd: held };
+      if (descriptorRefused(path.resolve(cwd, P))) return { kind: 'refuse' };
+    }
     try {
       const st = fs.statSync(path.resolve(cwd, P));
       return { kind: st.isDirectory() ? 'dir' : st.isFile() ? 'file' : 'special', st };
@@ -2525,6 +2587,7 @@ function* searchCore(spec, opts) {
     else if (k.kind === 'error') entries.push({ error: `rg: ${P}: ${sequential ? `IO error for operation on ${P}: ` : ''}${osErrorText(k.e)}` });
     else if (k.kind === 'openError') entries.push({ error: `rg: ${P}: ${osErrorText(k.e)}` });
     else if (k.kind === 'empty') continue;
+    else if (k.kind === 'held') entries.push({ disp: P, held: k.fd, walked: false });
     else if (k.kind === 'file') {
       let err = null;
       try { fs.closeSync(fs.openSync(path.resolve(cwd, P), 'r')); } catch (e) { err = e; }
@@ -2584,7 +2647,7 @@ function* searchCore(spec, opts) {
     }
   }
   // RG-BINARY-MMAP: whether rg memory-maps this search's named files (never on macOS).
-  const mmap = mmapsNamedFiles(spec, cwd);
+  const mmap = mmapsNamedFiles(spec, cwd, kinds);
   // A literal's matches are the same in a file's bytes and in RG-BINARY-CONVERT's text (it holds no
   // newline or NUL), so ugrep's ranges stand; anything else is decided again over rg's text.
   const literal = takesUgrepRanges(t);
@@ -2608,7 +2671,9 @@ function* searchCore(spec, opts) {
       // searcher does, a walked one with binary quit (RG-MULTILINE-BINARY)
       let bytes;
       if (e.stdin) bytes = toBuf(yield { op: 'stdin' });
-      else {
+      else if (e.held !== undefined) {
+        try { bytes = readHeld(e.held); } catch (x) { err.push(Buffer.from(`rg: ${e.disp}: ${osErrorText(x)}\n`)); broke = true; continue; }
+      } else {
         if (!matches.has(e.file)) continue;
         pastDeadline();
         try { bytes = readRgBytes(e.file, cwd); } catch (x) { err.push(Buffer.from(`rg: ${e.disp}: ${osErrorText(x)}\n`)); broke = true; continue; }
@@ -2627,7 +2692,13 @@ function* searchCore(spec, opts) {
     }
     let v = null, m;
     const how = binaryHow(e, mmap, spec);
-    if (e.stdin) {
+    if (e.held !== undefined) {
+      // RG-HELD-FD: a named file read through the descriptor that holds it, decided by the matcher (as stdin is)
+      try { v = rgView(readHeld(e.held), how); } catch (x) { err.push(Buffer.from(`rg: ${e.disp}: ${osErrorText(x)}\n`)); broke = true; continue; }
+      m = yield { op: 'decide', text: v.text, t, first };
+      if (m.refusal) return m.refusal;
+      m = m.matches;
+    } else if (e.stdin) {
       v = rgView(e.wholeStdin || toBuf(yield { op: 'stdin' }), how, { stdin: true });
       m = yield { op: 'decide', text: v.text, t, first };
       if (m.refusal) return m.refusal;
@@ -2758,6 +2829,7 @@ function searchSync(plan, opts) {
   };
   let res;
   try { res = driveSync(searchCore(spec, { cwd: opts.cwd, env, onRejected: opts.onRejected, ugrepName: ugrep && leafOf(ugrep), deadline, maxBuffer: opts.maxBuffer,
+    descriptors: opts.descriptors || spawnDescriptors(opts.stdio),
     stream: !!opts.stream, sink: opts.sink, streamRead: opts.streamRead }), handlers); } catch (e) {
     if (e && e.timedOut) return { stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), status: null, signal: opts.killSignal || 'SIGTERM', errorCode: 'ETIMEDOUT' };
     throw e;
@@ -2846,7 +2918,10 @@ function searchChild(plan, opts, ctx) {
     child.emit('spawn');
     if (stopped) { sh.finish({ status: null, signal: stopped, stderr: null }); return; }
     let res;
-    try { res = await driveAsync(searchCore(spec, { cwd: opts.cwd, env, onRejected: ctx.onRejected, ugrepName: ugrep && leafOf(ugrep), maxBuffer: ctx.maxBuffer }), handlers, () => !!stopped); }
+    try {
+      res = await driveAsync(searchCore(spec, { cwd: opts.cwd, env, onRejected: ctx.onRejected, ugrepName: ugrep && leafOf(ugrep), maxBuffer: ctx.maxBuffer,
+        descriptors: spawnDescriptors(opts.stdio) }), handlers, () => !!stopped);
+    }
     catch (e) { res = stopped ? null : rgRefusal(`quaude's rg failed (${(e && e.message) || e}); nothing was found`); }
     if (stopped || !res) { sh.finish({ status: null, signal: stopped, stderr: null }); return; }
     sh.out(toBuf(res.stdout));
@@ -3035,6 +3110,6 @@ function rgExecFileSync(r, opts, file, args) {
   return s.stdout;
 }
 
-module.exports = { isRgExe, rgRefusal, parseRgRefusal, untranslatableReason, runRg, rgSpawnCwd, descriptorRefused, rgSpawn, rgExecFile, rgSpawnSync, rgExecFileSync, RG_MAX_BUFFER,
+module.exports = { isRgExe, rgRefusal, parseRgRefusal, untranslatableReason, runRg, rgSpawnCwd, descriptorRefused, childDescriptor, spawnDescriptors, heldFile, rgSpawn, rgExecFile, rgSpawnSync, rgExecFileSync, RG_MAX_BUFFER,
   UGREP_MIN, parseUgrepVersion, versionAtLeast, ugrepCapabilities, ugrepCapabilitiesAsync, ugrepMatchArgv, chunkFiles, parseUgrepRanges,
   ugrepMatches, ugrepMatchesAsync, matchFilesAlone, parseRgSearch, UgrepError, rgText, searchStats, FILL_TICK_BYTES, osErrorText, RG_VALUE_FLAG_NAMES };
