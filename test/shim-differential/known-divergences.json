@@ -970,6 +970,13 @@
   }
  },
  "fs.createWriteStream(<dir>)": {
+  "r.closed": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin",
+    "linux"
+   ]
+  },
   "r.end.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
@@ -1070,6 +1077,13 @@
   }
  },
  "fs.createWriteStream(<dir>, {encoding:\"utf8\",mode:384})": {
+  "r.closed": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin",
+    "linux"
+   ]
+  },
   "r.end.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
@@ -1170,6 +1184,13 @@
   }
  },
  "fs.createWriteStream(<dir>, {fd:fd:file:r,autoClose:false})": {
+  "r.closed": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin",
+    "linux"
+   ]
+  },
   "r.end.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
@@ -1263,6 +1284,13 @@
   }
  },
  "fs.createWriteStream(<dir>, {fd:fd:file:r,autoClose:true})": {
+  "r.closed": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin",
+    "linux"
+   ]
+  },
   "r.end.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
@@ -1356,6 +1384,13 @@
   }
  },
  "fs.createWriteStream(<dir>, {flags:\"a\",fs:undefined})": {
+  "r.closed": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin",
+    "linux"
+   ]
+  },
   "r.end.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
@@ -1456,6 +1491,13 @@
   }
  },
  "fs.createWriteStream(<dir>, {flags:\"a\",mode:384})": {
+  "r.closed": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin",
+    "linux"
+   ]
+  },
   "r.end.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
@@ -1556,6 +1598,13 @@
   }
  },
  "fs.createWriteStream(<dir>, {flags:\"a\"})": {
+  "r.closed": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin",
+    "linux"
+   ]
+  },
   "r.end.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
@@ -1656,6 +1705,13 @@
   }
  },
  "fs.createWriteStream(<dir>, {flags:\"w\"})": {
+  "r.closed": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin",
+    "linux"
+   ]
+  },
   "r.end.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
@@ -1756,6 +1812,13 @@
   }
  },
  "fs.createWriteStream(<dir>, {flags:\"wx\",highWaterMark:4194304})": {
+  "r.closed": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin",
+    "linux"
+   ]
+  },
   "r.end.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
@@ -1856,6 +1919,13 @@
   }
  },
  "fs.createWriteStream(<dir>, {flags:\"wx\"})": {
+  "r.closed": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin",
+    "linux"
+   ]
+  },
   "r.end.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
@@ -1956,6 +2026,13 @@
   }
  },
  "fs.createWriteStream(<dir>, {highWaterMark:4194304})": {
+  "r.closed": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin",
+    "linux"
+   ]
+  },
   "r.end.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
@@ -2056,6 +2133,13 @@
   }
  },
  "fs.createWriteStream(<dir>, {mode:384,flags:\"w\"})": {
+  "r.closed": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin",
+    "linux"
+   ]
+  },
   "r.end.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
@@ -2156,6 +2240,13 @@
   }
  },
  "fs.createWriteStream(<dir>, {mode:384,flags:\"wx\"})": {
+  "r.closed": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin",
+    "linux"
+   ]
+  },
   "r.end.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
@@ -2256,6 +2347,13 @@
   }
  },
  "fs.createWriteStream(<dir>, {mode:384})": {
+  "r.closed": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin",
+    "linux"
+   ]
+  },
   "r.end.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
@@ -2486,6 +2584,13 @@
   }
  },
  "fs.createWriteStream(<file>, {flags:\"wx\",highWaterMark:4194304})": {
+  "r.closed": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin",
+    "linux"
+   ]
+  },
   "r.end.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
@@ -2586,6 +2691,13 @@
   }
  },
  "fs.createWriteStream(<file>, {flags:\"wx\"})": {
+  "r.closed": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin",
+    "linux"
+   ]
+  },
   "r.end.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
@@ -2686,6 +2798,13 @@
   }
  },
  "fs.createWriteStream(<file>, {mode:384,flags:\"wx\"})": {
+  "r.closed": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin",
+    "linux"
+   ]
+  },
   "r.end.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
@@ -2786,6 +2905,13 @@
   }
  },
  "fs.createWriteStream(<missing/x>)": {
+  "r.closed": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin",
+    "linux"
+   ]
+  },
   "r.end.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
@@ -2886,6 +3012,13 @@
   }
  },
  "fs.createWriteStream(<missing/x>, {encoding:\"utf8\",mode:384})": {
+  "r.closed": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin",
+    "linux"
+   ]
+  },
   "r.end.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
@@ -2986,6 +3119,13 @@
   }
  },
  "fs.createWriteStream(<missing/x>, {fd:fd:file:r,autoClose:false})": {
+  "r.closed": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin",
+    "linux"
+   ]
+  },
   "r.end.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
@@ -3079,6 +3219,13 @@
   }
  },
  "fs.createWriteStream(<missing/x>, {fd:fd:file:r,autoClose:true})": {
+  "r.closed": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin",
+    "linux"
+   ]
+  },
   "r.end.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
@@ -3172,6 +3319,13 @@
   }
  },
  "fs.createWriteStream(<missing/x>, {flags:\"a\",fs:undefined})": {
+  "r.closed": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin",
+    "linux"
+   ]
+  },
   "r.end.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
@@ -3272,6 +3426,13 @@
   }
  },
  "fs.createWriteStream(<missing/x>, {flags:\"a\",mode:384})": {
+  "r.closed": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin",
+    "linux"
+   ]
+  },
   "r.end.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
@@ -3372,6 +3533,13 @@
   }
  },
  "fs.createWriteStream(<missing/x>, {flags:\"a\"})": {
+  "r.closed": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin",
+    "linux"
+   ]
+  },
   "r.end.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
@@ -3472,6 +3640,13 @@
   }
  },
  "fs.createWriteStream(<missing/x>, {flags:\"w\"})": {
+  "r.closed": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin",
+    "linux"
+   ]
+  },
   "r.end.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
@@ -3572,6 +3747,13 @@
   }
  },
  "fs.createWriteStream(<missing/x>, {flags:\"wx\",highWaterMark:4194304})": {
+  "r.closed": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin",
+    "linux"
+   ]
+  },
   "r.end.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
@@ -3672,6 +3854,13 @@
   }
  },
  "fs.createWriteStream(<missing/x>, {flags:\"wx\"})": {
+  "r.closed": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin",
+    "linux"
+   ]
+  },
   "r.end.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
@@ -3772,6 +3961,13 @@
   }
  },
  "fs.createWriteStream(<missing/x>, {highWaterMark:4194304})": {
+  "r.closed": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin",
+    "linux"
+   ]
+  },
   "r.end.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
@@ -3872,6 +4068,13 @@
   }
  },
  "fs.createWriteStream(<missing/x>, {mode:384,flags:\"w\"})": {
+  "r.closed": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin",
+    "linux"
+   ]
+  },
   "r.end.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
@@ -3972,6 +4175,13 @@
   }
  },
  "fs.createWriteStream(<missing/x>, {mode:384,flags:\"wx\"})": {
+  "r.closed": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin",
+    "linux"
+   ]
+  },
   "r.end.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
@@ -4072,6 +4282,13 @@
   }
  },
  "fs.createWriteStream(<missing/x>, {mode:384})": {
+  "r.closed": {
+   "cause": "DIFF-WRITESTREAM-THROWS",
+   "on": [
+    "darwin",
+    "linux"
+   ]
+  },
   "r.end.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
@@ -9863,13 +10080,6 @@
     "darwin",
     "linux"
    ]
-  },
-  "r.keys.toNamespacedPath": {
-   "cause": "DIFF-MISSING-MEMBERS",
-   "on": [
-    "darwin",
-    "linux"
-   ]
   }
  },
  "path.resolve(undefined, \"..\")": {
@@ -9925,13 +10135,6 @@
    ]
   },
   "r.keys.matchesGlob": {
-   "cause": "DIFF-MISSING-MEMBERS",
-   "on": [
-    "darwin",
-    "linux"
-   ]
-  },
-  "r.keys.toNamespacedPath": {
    "cause": "DIFF-MISSING-MEMBERS",
    "on": [
     "darwin",

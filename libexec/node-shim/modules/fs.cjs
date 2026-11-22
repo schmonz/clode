@@ -854,6 +854,14 @@ class ReadStream extends require('node:stream').Readable {
     const hasEnd = typeof o.end === 'number';
     this.path = p;
     this.close = this.destroy;
+    // node's autoClose (destroy after 'end' or an error) and emitClose (a 'close' event when destroyed), both on by
+    // default, and .closed, true once closed. Without them no fs.ReadStream ever emitted 'close'.
+    const autoClose = o.autoClose !== false;
+    this._emitClose = o.emitClose !== false;
+    this.closed = false;
+    this.once('close', () => { this.closed = true; });
+    // after every 'end' listener has run, as node's autoDestroy: a listener sees the stream not yet destroyed
+    if (autoClose) this.once('end', () => queueMicrotask(() => this.destroy()));
     if (o.encoding) this.setEncoding(o.encoding);
     queueMicrotask(async () => {
       try {
@@ -863,8 +871,15 @@ class ReadStream extends require('node:stream').Readable {
         const CH = 65536;
         for (let i = 0; i < data.length; i += CH) this.push(data.subarray(i, Math.min(i + CH, data.length)));
         this.push(null);
-      } catch (e) { this.emit('error', e); }
+      } catch (e) { if (autoClose) this.destroy(e); else this.emit('error', e); }
     });
+  }
+  destroy(err) {
+    if (this._emitClose || this.destroyed) return super.destroy(err);
+    this.destroyed = true;
+    if (err) queueMicrotask(() => this.emit('error', err));
+    setTimeout(() => { this.closed = true; }, 0);
+    return this;
   }
 }
 function createReadStream(p, opts) { return new ReadStream(p, opts); }
@@ -877,6 +892,8 @@ function createWriteStream(p, opts) {
   const o = typeof opts === 'string' ? { encoding: opts } : (opts || {});
   const fd = openPath(p, o.flags || 'w', o.mode);
   let pos = typeof o.start === 'number' ? o.start : null;
+  const autoClose = o.autoClose !== false;
+  const emitClose = o.emitClose !== false;
   const w = new stream.Writable({
     write(chunk, enc, cb) {
       try {
@@ -884,14 +901,30 @@ function createWriteStream(p, opts) {
         writeAll(fd, bytes, pos);
         if (pos !== null) pos += bytes.length;
         cb();
-      } catch (e) { cb(e); }
+      } catch (e) { cb(e); if (autoClose) w.destroy(); }
     },
   });
   w.path = p;
-  let closed = false;
-  const closeFd = () => { if (!closed) { closed = true; try { FSS.close(fd); } catch (_) { /* already closed */ } } };
-  w.on('finish', closeFd);
-  w.on('close', closeFd);
+  // node's fs.WriteStream lifecycle: destroy() closes the fd and THEN emits 'close' (if emitClose, the default) with
+  // .closed true; autoClose (the default) destroys after 'finish' or a write error. The shim used to close the fd on
+  // 'finish' and never emit 'close', so anything waiting for it (stream.finished, the differential driver) waited for
+  // nothing; node emits it a tick after the close.
+  w.closed = false;
+  let fdClosed = false;
+  w.destroy = function destroy(err) {
+    if (this.destroyed) return this;
+    this.destroyed = true;
+    if (err) queueMicrotask(() => this.emit('error', err));
+    if (!fdClosed) { fdClosed = true; try { FSS.close(fd); } catch (_) { /* already closed */ } }
+    setTimeout(() => { this.closed = true; if (emitClose) this.emit('close'); }, 0);
+    return this;
+  };
+  w.close = function close(cb) {
+    if (typeof cb === 'function') this.once('close', () => cb());
+    if (!this.writableEnded) { this.once('finish', () => this.destroy()); this.end(); } else this.destroy();
+    return this;
+  };
+  if (autoClose) w.on('finish', () => queueMicrotask(() => w.destroy()));
   return w;
 }
 

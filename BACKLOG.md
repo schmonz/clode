@@ -465,7 +465,7 @@ per-API cap leaves out (path.join, path.resolve, path.basename, the open and wri
 shapes cut to the driver's argument count.
 
 - DIFF-WRITESTREAM-THROWS: `fs.createWriteStream` on a directory or a missing parent throws at once; node returns
-  the stream and emits 'error'.
+  the stream and emits 'error' (and then 'close', so r.closed is listed too: there is no stream to report it).
 - DIFF-WRITESTREAM-FD: `fs.createWriteStream(p, {fd})` ignores the fd and writes to the path.
 - DIFF-ASYNC-ERRORS: errors from tjs's async calls (fs.promises.readFile, link, utimes, lutimes, statfs; the
   callback readFile; a read stream's 'error') carry no errno, syscall or path, and their message lacks node's

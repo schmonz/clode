@@ -142,13 +142,15 @@ const withTimeout = (p, what) => Promise.race([p, new Promise((_, rej) => {
 // (closeSync), and snapshot() opened the case directory, which the kernel gave the number just freed; the stream's
 // late close then closed THAT, and node's snapshot threw "EBADF: bad file descriptor, scandir '<case>'" (node-shim-
 // oracle, linux-musl, CI 44945260530: fs.createWriteStream(<file>, {fd: <read-only fd>, autoClose: true})). A driver
-// double close, not node's answer: waiting for 'close' takes the race out on both sides. Bounded, so a stream that
-// never emits 'close' cannot hang the case; that it did not is not judged here.
+// double close, not node's answer: waiting for 'close' takes the race out on both sides. It answers whether the
+// stream closed (`closed`, which the case records and the differential judges): node-shim's fs streams emitted no
+// 'close' and had no .closed before 2026-11-21. Bounded, so a stream that never closes cannot hang the case.
 function streamClosed(r) {
-  if (!r || typeof r.once !== 'function' || r.closed === true) return Promise.resolve();
+  if (!r || typeof r.once !== 'function') return Promise.resolve(show(r && r.closed));
+  if (r.closed === true) return Promise.resolve(true);
   return new Promise((res) => {
-    const t = setTimeout(res, 2000);
-    r.once('close', () => { clearTimeout(t); res(); });
+    const t = setTimeout(() => res(r.closed === true), 2000);
+    r.once('close', () => { clearTimeout(t); res(r.closed === true); });
   });
 }
 
@@ -183,8 +185,8 @@ async function post(kind, r, ctx, args) {
       r.on('end', () => res('end'));
       r.on('error', (e) => res(errShape(e)));
     });
-    await streamClosed(r);
-    return { end, data: Buffer.concat(chunks).toString('hex') };
+    const closed = await streamClosed(r);
+    return { end, data: Buffer.concat(chunks).toString('hex'), closed };
   }
   if (kind === 'writestream') {
     const end = await new Promise((res) => {
@@ -195,8 +197,8 @@ async function post(kind, r, ctx, args) {
       // node said "finish" alone and EBADF in the suite, 2026-11-21). Both now give the error's shape.
       r.end((e) => res(e ? errShape(e) : 'finish'));
     });
-    await streamClosed(r);
-    return { end };
+    const closed = await streamClosed(r);
+    return { end, closed };
   }
   if (kind === 'dir') {
     const names = [];
