@@ -1579,8 +1579,14 @@ jobs:
       # needs a (nested) unprivileged user namespace, and this Ubuntu 24.04 runner refuses one by default
       # (kernel.apparmor_restrict_unprivileged_userns = 1: "apply-seccomp: write /proc/self/setgroups (nested userns is
       # capability-restricted ...): Permission denied", CI 45017307973). A user's machine that runs native's sandbox allows
-      # it, so the runner is made to: that one sysctl, the minimal setting (measured on a stock Ubuntu 24.04.5 VM with
-      # bubblewrap: at 1 bwrap and a nested `unshare -Ur` both fail, at 0 both run; unprivileged_userns_clone is already 1).
+      # it, so the runner is made to, in two parts, each measured:
+      #   - the sysctl: on a stock Ubuntu 24.04.5 VM with bubblewrap, at 1 bwrap and a nested `unshare -Ur` both fail, at 0
+      #     both run (unprivileged_userns_clone is already 1);
+      #   - the runner ALSO confines bwrap with Ubuntu's bwrap-userns-restrict AppArmor profile (bwrap gets a userns, its
+      #     children are stacked with unpriv_bwrap, which denies every capability), so at 0 the nested namespace still
+      #     failed there: "unshare: write failed /proc/self/uid_map: Operation not permitted" (CI 45052931964). That
+      #     profile loaded on the VM reproduces it exactly, and unloading every AppArmor profile for bwrap clears it. A
+      #     24.04 user who installed bubblewrap without that profile, or any Debian or Fedora user, has this configuration.
       # Verified before the tests, and the native first-call test may not skip here (gates-ran-in-ci; and the check below).
       - name: sandboxed Bash fails closed — agentic-sandbox-fail-closed against a built quaude
         if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
@@ -1592,6 +1598,14 @@ jobs:
           sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends bubblewrap socat
           command -v bwrap && command -v socat
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          echo 'AppArmor profiles for bwrap before:'; sudo grep -E '(^|[^a-z_])(unpriv_)?bwrap' /sys/kernel/security/apparmor/profiles || echo '  (none)'
+          for f in $(sudo grep -lE '^[[:space:]]*profile[[:space:]]+(unpriv_)?bwrap([[:space:]]|$)' /etc/apparmor.d/* 2>/dev/null || true); do
+            echo "unloading $f"; sudo apparmor_parser -R "$f"
+          done
+          for p in $(sudo sed -nE 's/^((unpriv_)?bwrap) \(.*\)$/\1/p' /sys/kernel/security/apparmor/profiles); do
+            echo "removing loaded profile $p"; printf '%s' "$p" | sudo tee /sys/kernel/security/apparmor/.remove >/dev/null
+          done
+          echo 'AppArmor profiles for bwrap after:'; sudo grep -E '(^|[^a-z_])(unpriv_)?bwrap' /sys/kernel/security/apparmor/profiles || echo '  (none)'
           bwrap --ro-bind / / --dev /dev --proc /proc --unshare-user --unshare-pid -- unshare --user --map-root-user true \
             || { echo "ERROR: native's sandbox still cannot make a nested user namespace on this runner (see above)" >&2; exit 1; }
           mkdir -p "$RUNNER_TEMP/cells"
