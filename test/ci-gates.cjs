@@ -92,6 +92,9 @@ const PLACED = {
   // node-shim-oracle: CLODE_TJS + the staged provider + the seeded pinned carve.
   'shim-surface': { jobs: ['node-shim-oracle'], why: `${NO_ENGINE}; it measures the shim under the engine quaude ships` },
   'node-shim-differential': { jobs: ['node-shim-oracle', 'node-shim-oracle-darwin'], why: NO_ENGINE },
+  // The Intl members the carve names, judged on the engine's Intl (test/node-shim-intl.test.cjs, 4be962a); both
+  // oracle jobs run it through their test/node-shim-*.test.cjs glob and passed it in run 44991586139.
+  'intl-members-the-bundle-names': { jobs: ['node-shim-oracle', 'node-shim-oracle-darwin'], why: NO_ENGINE },
   'node-shim-wall-tripwires': { jobs: ['node-shim-oracle', 'node-shim-oracle-darwin'], why: NO_STAGE },
   'zstd-gap-carved-walls': { jobs: ['node-shim-oracle'], why: NO_STAGE },
   'regexp-capture-census': { jobs: ['node-shim-oracle'], why: NO_STAGE },
