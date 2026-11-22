@@ -8,6 +8,16 @@ Concrete clode-under-Node divergences from native Claude Code, to triage and fix
 That page is GENERATED from `scripts/build-graph.cjs` — the one declaration of the build — so it
 cannot drift from it; it is also where the honest answer to "does this need node?" lives.
 
+## windowsProcessPin is absent: taskkill /T /F by bare PID can kill an unrelated process tree (2026-11-21)
+
+2.1.330's Windows killProcessTree pins the target first (`Bun.ant.windowsProcessPin(pid)` holds a process
+handle, so the PID cannot be recycled), then runs `taskkill.exe /PID <pid> /T /F`, then unpins. Under quaude
+the member is absent (KNOWN_BUN_ANT), so the pin is null and taskkill runs by bare PID. If the target exits and
+Windows hands its PID to a new process before taskkill runs, `/T /F` force-kills that unrelated process AND
+its whole tree. It is a narrow window, the same one every pre-2.1.330 build had. The fix is a C primitive:
+OpenProcess(SYNCHRONIZE|PROCESS_QUERY_LIMITED_INFORMATION) held in a handle table and returned as an id, with
+CloseHandle on unpin. Then bun-shim's `Bun.ant.windowsProcessPin` and `windowsProcessUnpin`.
+
 ## posixFsAt and windowsFsAt are absent, so quaude's held-directory file operations fail OPEN on macOS and Windows (2026-11-21)
 
 Accepted absent in KNOWN_BUN_ANT (libexec/inspect-claude-bundle.cjs). The bun-ant-member-surface review of the

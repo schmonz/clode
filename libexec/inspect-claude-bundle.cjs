@@ -240,7 +240,9 @@ const KNOWN_BUN_ANT = new Map([
     + 'killProcessTree: `r.id=typeof Bun<"u"&&typeof Bun.ant?.windowsProcessPin==="function"?Bun.ant.windowsProcessPin(e)'
     + ':null;` and then `taskkill.exe /PID e /T /F` runs either way. Absent, the pin is null and taskkill kills the '
     + 'tree by bare PID, as it did before 2.1.330; what is lost is holding the process open across the taskkill so '
-    + 'its PID cannot be recycled in that window. Holding a process handle is a new C primitive; not now.'],
+    + 'its PID cannot be recycled in that window. RISK: `taskkill /T /F` on a recycled PID kills an unrelated '
+    + 'process and its whole tree. Holding a process handle is a new C primitive; not now. BACKLOG.md: '
+    + '"windowsProcessPin is absent".'],
   ['windowsProcessUnpin', 'MEASURED on the win32-x64 2.1.330 carve (2026-11-21), not inferred: one call site, '
     + '`function xb(e){let r=e.id;if(e.id=null,r===null)return;try{Bun.ant.windowsProcessUnpin(r)}catch{}}`. It only '
     + 'releases a pin windowsProcessPin made, so with Pin absent (id null) it is never reached; see windowsProcessPin.'],
