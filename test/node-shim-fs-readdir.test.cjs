@@ -14,6 +14,11 @@
 // uv_fs_scandir on every platform now (txiki-sync-readdir.patch), the call node's readdirSync makes, which also
 // gives node's order (sorted by byte on POSIX, the file system's order on Windows).
 //
+// AND every name it lists opens again. readdir is libuv's wide call, but the shim's open/mkdir/rename/unlink are the
+// narrow CRT on Windows, which read a name in the ANSI code page (cp1252 on the runners) until txiki-win32-utf8.patch
+// made the process code page UTF-8 (manifest + setlocale): a non-ANSI name was listed right and then could not be
+// opened (or was created as mojibake). Created, listed, reopened, renamed, removed, and a non-ANSI argv, against node.
+//
 // The stale-errno shape is driven directly: a readlink of a plain directory (EINVAL) right before each missing
 // readdir. Judged on every host the suite runs on, and on the real Windows kernels (ci.yml windows-*-tests).
 const test = require('node:test');
@@ -26,6 +31,9 @@ const { runLoader, skipUnlessTjs } = require('./node-shim-helper.cjs');
 
 // Created out of order, mixed case, digits, and names outside every ANSI code page.
 const NAMES = ['zeta.txt', 'Alpha', 'beta', '10', '9', '_u', 'caf\u00e9.txt', '\u65e5\u672c', 'B-dir'];
+
+// An argument outside every ANSI code page (the manifest in txiki-win32-utf8.patch is what reads it right).
+const ARG = NAMES[6] + '-' + NAMES[7];
 
 const PROG = `
 const fs = require('node:fs'), path = require('node:path');
@@ -47,6 +55,22 @@ out.missingDeep = err(() => fs.readdirSync(path.join(dir, 'no', 'such', 'dir')))
 staleEinval();
 out.file = err(() => fs.readdirSync(path.join(dir, 'zeta.txt')));
 out.empty = fs.readdirSync(path.join(dir, 'B-dir'));
+// Every name readdir listed opens again, through the shim's OTHER sync calls (open, mkdir, rename, unlink: the
+// narrow CRT on Windows, where readdir is libuv's wide one): created, listed, reopened, as node does.
+out.reopen = out.list.map((n) => {
+  const p = path.join(dir, n);
+  return n + ' ' + (fs.statSync(p).isDirectory() ? 'dir' : fs.readFileSync(p, 'utf8'));
+});
+const sub = path.join(dir, 'd-' + names[7]);
+fs.mkdirSync(sub);
+fs.writeFileSync(path.join(sub, names[6]), 'inner');
+fs.renameSync(path.join(sub, names[6]), path.join(sub, names[7] + '.txt'));
+out.sub = fs.readdirSync(sub).map((n) => n + ' ' + fs.readFileSync(path.join(sub, n), 'utf8'));
+fs.unlinkSync(path.join(sub, names[7] + '.txt'));
+fs.rmdirSync(sub);
+out.subGone = fs.existsSync(sub);
+// argv: the engine's argv on Windows is the CRT's narrow one (the code page decides how it reads).
+out.argv = process.argv[3];
 console.log(JSON.stringify(out));`;
 
 test('fs.readdirSync answers as host node does: names and order, ENOENT and ENOTDIR even right after an EINVAL', (t) => {
@@ -57,13 +81,15 @@ test('fs.readdirSync answers as host node does: names and order, ENOENT and ENOT
     fs.writeFileSync(prog, PROG);
     const nodeDir = path.join(base, 'node'), shimDir = path.join(base, 'shim');
     fs.mkdirSync(nodeDir); fs.mkdirSync(shimDir);
-    const node = spawnSync(process.execPath, [prog, nodeDir], { encoding: 'utf8' });
+    const node = spawnSync(process.execPath, [prog, nodeDir, ARG], { encoding: 'utf8' });
     assert.strictEqual(node.status, 0, node.stderr);
     const want = JSON.parse(node.stdout.trim());
     assert.strictEqual(want.einval, 'EINVAL readlink Alpha', 'the host node oracle answers EINVAL for a plain directory');
     assert.strictEqual(want.missing, 'ENOENT scandir dev-mods', 'the host node oracle answers ENOENT for no directory');
     assert.deepStrictEqual([...want.list].sort(), [...NAMES].sort(), 'the host node oracle lists every name');
-    const r = runLoader(prog, [shimDir]);
+    assert.strictEqual(want.argv, ARG, 'the host node oracle reads a non-ANSI argument');
+    assert.strictEqual(want.reopen.length, NAMES.length, 'the host node oracle reopens every name');
+    const r = runLoader(prog, [shimDir, ARG]);
     assert.strictEqual(r.status, 0, String(r.stderr));
     assert.deepStrictEqual(JSON.parse(r.stdout.trim().split('\n').pop()), want);
   } finally { fs.rmSync(base, { recursive: true, force: true }); }

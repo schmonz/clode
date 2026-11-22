@@ -1,0 +1,68 @@
+# WIN32-UTF8: on Windows the engine's narrow paths (and argv) are UTF-8, as libuv's are: an activeCodePage=UTF-8
+# manifest embedded in tjs (Windows 10 1903+), and setlocale(LC_CTYPE, ".UTF8") at TJS_Initialize (1803+).
+#
+# WHY. node-shim's sync fs is half libuv (readdir, stat, lstat, readlink, symlink, utime: UTF-8 through the wide
+# calls) and half the narrow CRT (open, mkdir, rmdir, unlink, rename, chmod, access, realpath), which converts a
+# narrow name with the ANSI code page (cp1252 on the runners): txiki set no UTF-8 locale and had no manifest. Since
+# txiki-sync-readdir.patch, readdir lists a non-ANSI name correctly, and the sync open could not open it again (and
+# created such names as mojibake). The process code page is the root: with it UTF-8, every narrow call agrees with
+# libuv. The manifest also makes the CRT's narrow argv UTF-8 (a non-ANSI argument was mangled before main). Console
+# output is untouched: txiki already writes UTF-8 with the console output code page set to CP_UTF8 and stdout/stderr
+# in binary mode. LC_CTYPE only, so LC_NUMERIC stays "C". Child processes are libuv's (wide), unaffected.
+# Moving every remaining sync call to libuv would fix the paths too, but not argv, and is ten rewrites; this is one
+# switch with the same meaning everywhere. CMakeLists.txt (tjs-cli, MSVC only), src/vm.c, new src/win/tjs-utf8.manifest.
+# test/node-shim-fs-readdir.test.cjs (create, list, reopen non-ANSI names vs node), run in both Windows jobs.
+#
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -202,6 +202,11 @@ target_link_libraries(tjs-cli tjs)
+ set_target_properties(tjs-cli
+     PROPERTIES OUTPUT_NAME tjs
+ )
++# Windows: the process code page is UTF-8 (activeCodePage, Windows 10 1903+), so the CRT's narrow argv and every
++# narrow path the C runtime and the -A Win32 calls take are UTF-8, as libuv's are. MSVC embeds a .manifest source.
++if(MSVC)
++    target_sources(tjs-cli PRIVATE src/win/tjs-utf8.manifest)
++endif()
+ # On Windows with MSVC the stack size if by default 1MB, same as our engine.
+ # Bump it up to 8MB.
+ if(WIN32)
+diff --git a/src/vm.c b/src/vm.c
+--- a/src/vm.c
++++ b/src/vm.c
+@@ -29,6 +29,7 @@
+ #include <mbedtls/error.h>
+ #include <mbedtls/x509_crt.h>
+ #include <assert.h>
++#include <locale.h>
+ #include <signal.h>
+ #include <stdatomic.h>
+ #include <stdio.h>
+@@ -791,6 +792,13 @@ void TJS_Initialize(int argc, char **argv) {
+     setvbuf(stderr, NULL, _IONBF, 0);
+ 
+ #ifdef _WIN32
++    /* Narrow paths are UTF-8, as libuv's are. The UCRT converts a narrow file name with the locale's code page when
++     * that is UTF-8 and with the ANSI code page otherwise, and node-shim's sync open/mkdir/rename/... go through it
++     * while readdir/stat/readlink go through libuv: a name outside the ANSI code page was listed right and could not
++     * be opened again. The manifest (src/win/tjs-utf8.manifest) makes the ANSI code page UTF-8 on Windows 10 1903+
++     * (argv too); this covers 1803+, where the UCRT has the UTF-8 locale. LC_CTYPE only: LC_NUMERIC stays "C", so
++     * number formatting cannot pick up a user's decimal comma. */
++    setlocale(LC_CTYPE, ".UTF8");
+     _setmode(_fileno(stdout), _O_BINARY);
+     _setmode(_fileno(stderr), _O_BINARY);
+ 
+diff --git a/src/win/tjs-utf8.manifest b/src/win/tjs-utf8.manifest
+new file mode 100644
+--- /dev/null
++++ b/src/win/tjs-utf8.manifest
+@@ -0,0 +1,8 @@
++<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
++<assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
++  <application>
++    <windowsSettings>
++      <activeCodePage xmlns="http://schemas.microsoft.com/SMI/2019/WindowsSettings">UTF-8</activeCodePage>
++    </windowsSettings>
++  </application>
++</assembly>

@@ -513,6 +513,7 @@ const TXIKI_PATCH_ORDER = [
   'txiki-sync-open-excl.patch',               // __tjs_fs_sync.open takes 'x' (O_EXCL) and reports its letters in openFlags: node-shim's exclusive create on Windows (CREATE_NEW), where the symlink claim + rename cannot work. mod_fs_sync.c: after sync-links
   'txiki-sync-readdir.patch',                 // __tjs_fs_sync.readdir through libuv's uv_fs_scandir on every platform (node's names, order and errors); on Windows the FindFirstFileA emulation threw a STALE errno for a missing directory, so 2.1.330's dev-mods check called every Edit sensitive. mod_fs_sync.c: after sync-open-excl
   'txiki-engine-module-meta.patch',          // PROBE: engine.moduleMeta(mod) — requires/exports/top-level locals, read-only               // ws.close() sends an RFC6455 CLOSE frame (opcode 0x8) instead of just dropping the TCP connection: lws only emits one via close_via_role_protocol, which the old PENDING_TIMEOUT_USER_OK path skipped (ws.c; after ws-root-path, same file)
+  'txiki-win32-utf8.patch',                   // Windows: the process code page is UTF-8 (activeCodePage manifest on tjs-cli + setlocale(LC_CTYPE, ".UTF8") in TJS_Initialize), so the CRT's narrow paths and argv agree with libuv's UTF-8 (a non-ANSI name readdir listed could not be opened). CMakeLists/vm.c regions no fixup anchors on; LAST, generated against the fully patched tree
 ];
 
 function orderedPatches(prefix) {
