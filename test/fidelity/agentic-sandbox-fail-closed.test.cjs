@@ -74,8 +74,9 @@ const ON = { sandbox: { enabled: true } };
 const PRINT = ['-p', 'write the markers', '--allowedTools', 'Bash'];
 // One turn of a case. `source` writes ON to user, project or local settings ('off': none). `files` are written to the
 // run's base dir first (a value may be a function of { base, work }); `args` is argv, or a function of { base, work };
-// `script` the tool calls the mock answers with, in order. -> { mock, markers, r, files } (files: base's entries after).
-async function runCase(bin, { source = 'off', sourceSettings = ON, args = PRINT, script = SCRIPT, files = {}, cfgFiles = {} }) {
+// `script` the tool calls the mock answers with, in order (none by default: a caller that drives Bash names SCRIPT, so a
+// test that only judges whether native starts reaches no tool_use at all, and is no live tool check). -> { mock, markers, r, files } (files: base's entries after).
+async function runCase(bin, { source = 'off', sourceSettings = ON, args = PRINT, script = [], files = {}, cfgFiles = {} }) {
   const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-fail-closed-')));
   try {
     const work = path.join(base, 'work'), home = path.join(base, 'home'), cfg = path.join(home, '.claude'), tjsHome = path.join(base, 'tjs-home');
@@ -214,7 +215,7 @@ const SKIP = process.platform === 'win32' ? 'the Bash tool needs bash; Windows s
 // (test/build-gates/tool-coverage-gates.test.cjs, cells-ran-in-ci-job). Both judge the sandbox-off turn (print, in
 // bash), so whichever branch applies, that cell is driven and the other test's skip is no finding.
 const sandboxOff = async (q, findings) => {
-  const off = await runCase(q.path, {});
+  const off = await runCase(q.path, { script: SCRIPT });
   const offVerdict = verdicts(off.mock);
   if (!offVerdict.ran.every(Boolean)) findings.push(`off: not every call ran: ${JSON.stringify(offVerdict)} rc ${off.r.status} ${off.r.stderr.slice(0, 300)}`);
   if (off.markers.length !== 6) findings.push(`off: markers ${off.markers.join(', ')} (want all six)`);
@@ -232,7 +233,7 @@ test('sandboxed Bash fails CLOSED under quaude: every call refused, nothing writ
   assertFailsOnMissingOutput(ran3, M3, ['print', 'shell:bash']);
   const findings = [];
   for (const c of ON_CASES) {
-    const run = await runCase(q.path, c);
+    const run = await runCase(q.path, { script: SCRIPT, ...c });
     const { mock, markers, r } = run;
     if (c.startup) { const f = startupFinding(c.name, run, c.startup.reason); if (f) findings.push(f); continue; }
     const verdict = verdicts(mock);
@@ -275,7 +276,9 @@ test('native refuses to start on the startup rows\' input as recorded, and start
   const { bin: native, skip: noNative } = runnableNative(process.env);
   if (!native) { t.skip(noNative); return; }
   if (!nativeWouldSandbox()) { t.skip('native would not sandbox here: the startup rows are the fail-closed branch\'s'); return; }
-  // the checks' own controls: each fails on the other's answer
+  // It judges a start, not a tool's answer: these runs script no tool call (the mock answers text), so a started
+  // session's first call, which runs in native's sandbox, is the next test's. The checks' own controls: each fails on
+  // the other's answer.
   const refusedRun = { mock: { requests: [] }, markers: [], r: { status: 1, stderr: `x\n\n${STARTUP_REFUSED('why')}\n` } };
   const startedRun = { mock: { requests: [{ method: 'POST' }] }, markers: [], r: { status: 0, stderr: '' } };
   assert.strictEqual(startupFinding('c', refusedRun, 'why'), null);
@@ -312,7 +315,7 @@ test('native, started on the startup rows\' input without the sandbox named, run
   for (const c of ON_CASES.filter((x) => x.startup)) {
     const starts = { ...c, files: c.startup.nativeStarts };
     for (const [label, extra] of [['native, sandbox not named', []], ['native + quaude\'s layer, sandbox not named', QUAUDE_LAYER]]) {
-      const run = await runCase(native, { ...starts, args: (ctx) => [...starts.args(ctx), ...extra] });
+      const run = await runCase(native, { ...starts, script: SCRIPT, args: (ctx) => [...starts.args(ctx), ...extra] });
       const f = startedFinding(`${c.name}, ${label}`, run);
       if (f) findings.push(f);
       else if (!ran1(run.mock)) findings.push(`${c.name}, ${label}: started, but its first call did not run: ${JSON.stringify(toolResult(run.mock, M1.id))}`);
@@ -332,7 +335,7 @@ test('where native would not sandbox, quaude does as native does (D2): its warni
   assertFailsOnMissingOutput(ran3, M3, ['print', 'shell:bash']);
   const findings = [];
   for (const c of ON_CASES) {
-    const { mock, markers, r } = await runCase(q.path, c);
+    const { mock, markers, r } = await runCase(q.path, { script: SCRIPT, ...c });
     const verdict = verdicts(mock);
     if (STARTUP_REFUSAL.test(r.stderr)) findings.push(`${c.name}: refused to START (native starts): rc ${r.status} ${r.stderr.slice(0, 300)}`);
     if (!NATIVE_WARNING.test(r.stderr)) findings.push(`${c.name}: no native sandbox warning: rc ${r.status} ${r.stderr.slice(0, 300)}`);
