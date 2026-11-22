@@ -197,7 +197,8 @@ test('extract-claude-js produces a RUNNABLE file for either bundle shape', () =>
     'the CLI must give every caller one runnable file whichever shape the provider is — '
     + 'about twenty test files and scripts/build-naude.mjs depend on exactly that');
   const ex = fs.readFileSync(path.join(REPO, 'libexec/clode-extract.cjs'), 'utf8');
-  assert.match(ex, /graphRunnerSource\(doc\)/,
+  // writeGraphRunner is graphRunnerSource's bytes, written a module at a time (GRAPH-WRITE-PIECEWISE, below)
+  assert.match(ex, /writeGraphRunner\(doc, path\.join\(cacheDir, 'cli\.cjs'\)\)/,
     'a staged SPLIT bundle must write cli.cjs beside graph.json. Writing only the graph '
     + 'is what left naude and the oracle apparatus dead while clode build was green');
 });
@@ -331,4 +332,81 @@ test('a REAL provider with text rows round-trips through the minimiser', (t) => 
   assert.strictEqual(after.size, before.size, 'minimising dropped text assets');
   for (const [n, body] of before) assert.strictEqual(after.get(n), body, `asset ${n} changed`);
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+// --- GRAPH-WRITE-PIECEWISE ------------------------------------------------------------
+// graph.json and the runner are written a module at a time (netbsd-sparc's 512MB guest was killed out of swap
+// building them whole at 2.1.330). The pieces must be the whole-string formulas' bytes exactly, on both hosts the
+// builder runs on: JSON.stringify(doc), and JSON.stringify(JSON.stringify(doc with meta headers)) with U+2028/2029
+// escaped. The doc holds what could break a piecewise escape: non-Latin-1 text, an astral character (a surrogate
+// pair), a lone surrogate, U+2028/2029, quotes and backslashes, an undefined value JSON leaves out, nested objects
+// (assets, sccMerge) and an array.
+const PIECEWISE_CHECK = `
+const fs = require('fs'), path = require('path');
+const x = require(process.argv[2]);
+const out = process.argv[3];
+const doc = {
+  format: 'clode-bun-graph-v1', prelude: 'globalThis.Bun = globalThis.Bun || {};', entry: '/$bunfs/root/cli',
+  order: ['/$bunfs/root/a.js', '/$bunfs/root/cli'], externals: [], moduleCount: 2, skipped: undefined,
+  sources: {
+    '/$bunfs/root/a.js': 'export const s = "\\u00e9\\u4e2d\\ud83d\\ude00 \\\\" + \\'\\u2028\\u2029\\' + "\\ud800";',
+    '/$bunfs/root/cli': 'import {s} from "/$bunfs/root/a.js"; console.log(s);',
+  },
+  assets: { 'x.txt': 'caf\\u00e9 \\ud83d\\ude00\\n', 'y.md': '"quoted" \\\\ \\u2028' },
+  sccMerge: { groups: [2, 49], merger: 15, nested: { deep: 'v\\u00e9' } },
+};
+const want = { json: JSON.stringify(doc) };
+const withMeta = Object.assign({}, doc, { sources: {} });
+for (const n of Object.keys(doc.sources)) withMeta.sources[n] = x.moduleWithMeta(n, doc.sources[n]);
+want.lit = JSON.stringify(JSON.stringify(withMeta)).replace(/\\u2028/g, '\\\\u2028').replace(/\\u2029/g, '\\\\u2029');
+x.writeGraphJson(doc, path.join(out, 'graph.json'));
+x.writeGraphRunner(doc, path.join(out, 'cli.cjs'));
+const json = fs.readFileSync(path.join(out, 'graph.json'), 'utf8');
+const runner = fs.readFileSync(path.join(out, 'cli.cjs'), 'utf8');
+const src = x.graphRunnerSource(doc);
+const res = {
+  json: json === want.json,
+  runnerIsSource: runner === src,
+  literal: src.includes('JSON.parse(' + want.lit + ');'),
+  roundTrip: JSON.stringify(JSON.parse(JSON.parse(want.lit))) === JSON.stringify(withMeta),
+};
+process.stdout.write(JSON.stringify(res));
+`;
+for (const host of ['node', 'tjs']) {
+  test(`GRAPH-WRITE-PIECEWISE: graph.json and the runner, written a module at a time, are the whole-string bytes (${host})`, (t) => {
+    if (host === 'tjs' && !tjsAvailable(t)) return;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'graph-piecewise-'));
+    try {
+      const f = path.join(dir, 'check.cjs');
+      fs.writeFileSync(f, PIECEWISE_CHECK);
+      const lib = path.join(REPO, 'libexec', 'extract-claude-js.cjs');
+      const run = host === 'node'
+        ? execFileSync(process.execPath, [f, lib, dir], { encoding: 'utf8' })
+        : execFileSync(TJS, ['run', path.join(REPO, 'libexec/node-shim/loader.cjs'), f, lib, dir], { encoding: 'utf8', env: { ...process.env, ...throwawayHome(`${dir}-home`) } });
+      assert.deepStrictEqual(JSON.parse(run), { json: true, runnerIsSource: true, literal: true, roundTrip: true });
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); fs.rmSync(`${dir}-home`, { recursive: true, force: true }); }
+  });
+}
+// ...and the bound itself, the property the sparc guest needs: no write ever carries more than one module's (or one
+// asset's) text, however many modules the graph has, so the peak stays the doc plus one module.
+test('GRAPH-WRITE-PIECEWISE: no piece written holds more than one module or asset', () => {
+  const x = require('../libexec/extract-claude-js.cjs');
+  const big = (c) => c.repeat(4096);
+  const doc = { format: 'clode-bun-graph-v1', prelude: '', entry: '/$bunfs/root/m0.js', order: [], sources: {}, assets: {} };
+  for (let i = 0; i < 40; i++) { doc.order.push(`/$bunfs/root/m${i}.js`); doc.sources[`/$bunfs/root/m${i}.js`] = big(String.fromCharCode(97 + (i % 26))); }
+  for (let i = 0; i < 10; i++) doc.assets[`a${i}.txt`] = big(String.fromCharCode(0xe9));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'graph-pieces-'));
+  const orig = fs.writeSync;
+  let most = 0, writes = 0;
+  fs.writeSync = function (fd, data, ...rest) { writes++; most = Math.max(most, String(data).length); return orig.call(this, fd, data, ...rest); };
+  try {
+    x.writeGraphJson(doc, path.join(dir, 'graph.json'));
+    x.writeGraphRunner(doc, path.join(dir, 'cli.cjs'));
+  } finally { fs.writeSync = orig; }
+  try {
+    // one module's text with its name and meta header (and, in the runner, its escapes) is under 2 x 4096
+    assert.ok(most < 2 * 4096, `a piece of ${most} chars: the writer built more than one module at once`);
+    assert.ok(writes > 2 * 50, `${writes} writes for 50 entries in two files`);
+    assert.strictEqual(fs.readFileSync(path.join(dir, 'graph.json'), 'utf8'), JSON.stringify(doc));
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

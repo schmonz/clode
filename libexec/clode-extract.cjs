@@ -19,7 +19,7 @@ const vm = require('node:vm');
 const crypto = require('node:crypto');
 const Module = require('node:module');
 const { sigOf } = require('./clode-resolve.cjs');
-const { extractToFile, extractGraphToFile, graphRunnerSource, isSplitBundle, providerPlatformOf } = require('./extract-claude-js.cjs');
+const { extractToFile, extractGraphToFile, writeGraphJson, writeGraphRunner, isSplitBundle, providerPlatformOf } = require('./extract-claude-js.cjs');
 const plan = require('./bun-graph-plan.cjs');
 const merger = require('./scc-merge.cjs');
 const scc = require('./graph-scc-merge.cjs');
@@ -162,7 +162,7 @@ function resolveEngine(libexec, env) {
 
 // metaOf for every name in `want`, via the engine. Refuses rather than guessing: see
 // libexec/graph-meta.js.
-function moduleMetas(docPath, want, { libexec, cacheDir, env, log }) {
+function moduleMetas(docPath, want, { libexec, cacheDir, env, log }, staged = null) {
   const engine = resolveEngine(libexec, env);
   if (!engine) {
     throw new Error('clode: this provider\'s module graph has residual cyclic require(s), which '
@@ -175,7 +175,8 @@ function moduleMetas(docPath, want, { libexec, cacheDir, env, log }) {
   }
   if (engine.inProcess) {
     const enc = new TextEncoder();
-    const doc = JSON.parse(fs.readFileSync(docPath, 'utf8'));
+    // the caller's doc when it has one (still unmerged here): a second parse would hold the whole graph twice
+    const doc = staged || JSON.parse(fs.readFileSync(docPath, 'utf8'));
     const wanted = new Set(want);
     const out = {};
     for (const name of doc.order) {
@@ -215,7 +216,7 @@ function mergeStagedGraph(doc, docPath, opts) {
   const groups = scc.cyclicGroupsOf(doc, plan);
   const want = [];
   for (const g of groups) for (const n of g) want.push(n);
-  const metas = moduleMetas(docPath, want, opts);
+  const metas = moduleMetas(docPath, want, opts, doc);
   scc.mergeCyclicGroups(doc, {
     plan,
     merger,
@@ -345,8 +346,9 @@ function extractIfNeeded(opts) {
       // leaves behind are unanswerable by both of them, so they are merged away once,
       // here, and graph.json is rewritten with the result.
       mergeStagedGraph(doc, cliPath, { libexec, cacheDir, env: process.env, log: clodeLog });
-      if (doc.sccMerge) fs.writeFileSync(cliPath, JSON.stringify(doc));
-      fs.writeFileSync(path.join(cacheDir, 'cli.cjs'), graphRunnerSource(doc));
+      // GRAPH-WRITE-PIECEWISE (extract-claude-js.cjs): both written a module at a time, never built whole
+      if (doc.sccMerge) writeGraphJson(doc, cliPath);
+      writeGraphRunner(doc, path.join(cacheDir, 'cli.cjs'));
       return res;
     });
   } catch (e) {

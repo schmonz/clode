@@ -1528,7 +1528,7 @@ function extractGraphToFile(binpath, out) {
   // one this graph can hand over. See unservedReferences() above for the three releases that
   // shipped past this check because it did not exist.
   assertGraphServesWhatItReferences(unservedReferences({ rows: full.rows, sources, assets }));
-  fs.writeFileSync(out, JSON.stringify(doc));
+  writeGraphJson(doc, out);                            // GRAPH-WRITE-PIECEWISE: JSON.stringify(doc)'s bytes, a module at a time
   return {
     name: plan.entry,
     units: plan.order.length,
@@ -1636,24 +1636,81 @@ function moduleNameOfMetaUrl(url) {
   return /^\/[A-Za-z]:/.test(body) ? body.slice(1) : body;
 }
 
+// GRAPH-WRITE-PIECEWISE (found by netbsd-sparc at 2.1.330: the 512MB guest's clode-builder was killed "out of
+// swap" in the write that follows the SCC merge). A staged graph's JSON, and the runner that carries it as a string
+// literal, used to be built WHOLE: JSON.stringify(doc) for graph.json, then a copy of every source with its meta
+// header, its JSON, the JSON of that JSON and two replace() copies for cli.cjs, all alive at once beside the doc.
+// That is several times the graph (2.1.283's 52.9MB provider already peaked past 1.4GB of RSS + swap there;
+// 2.1.330's 76.4MB one could not fit). The same bytes are now produced piece by piece, one module (or one asset) at
+// a time, and written as they are made: JSON's text of a string is each character's own escape, so the JSON of a
+// concatenation is the concatenation of each piece's escapes, as long as no piece boundary splits a surrogate pair
+// (every boundary here falls between ASCII punctuation). graphRunnerSource() is the same pieces joined, and
+// test/graph-runner.test.cjs holds both writers byte-identical to the whole-string formulas.
+const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v) && Object.getPrototypeOf(v) === Object.prototype;
+// JSON.stringify(obj)'s text, in pieces: one per entry down to `depth` levels of plain objects, each entry's value
+// whole below that. `mapSources` (name, src) -> src rewrites the top level's `sources` entries on the way.
+function* jsonPieces(obj, depth, mapSources) {
+  yield '{';
+  let first = true;
+  for (const k of Object.keys(obj)) {
+    let v = obj[k];
+    if (mapSources && k === 'sources' && isPlainObject(v)) {
+      yield `${first ? '' : ','}${JSON.stringify(k)}:{`;
+      first = false;
+      let f = true;
+      for (const n of Object.keys(v)) {
+        const s = JSON.stringify(mapSources(n, v[n]));
+        if (s === undefined) continue;
+        yield `${f ? '' : ','}${JSON.stringify(n)}:${s}`;
+        f = false;
+      }
+      yield '}';
+      continue;
+    }
+    if (v !== null && typeof v === 'object' && typeof v.toJSON === 'function') v = v.toJSON(k);
+    if (depth > 0 && isPlainObject(v)) {
+      yield `${first ? '' : ','}${JSON.stringify(k)}:`;
+      first = false;
+      yield* jsonPieces(v, depth - 1, null);
+      continue;
+    }
+    const s = JSON.stringify(v);
+    if (s === undefined) continue;                     // undefined, a function, a symbol: JSON leaves the key out
+    yield `${first ? '' : ','}${JSON.stringify(k)}:${s}`;
+    first = false;
+  }
+  yield '}';
+}
+// graph.json's text: JSON.stringify(doc), in pieces.
+const graphJsonPieces = (doc) => jsonPieces(doc, 1, (n, src) => src);
+// Each piece of a generator written to `file` as it is made.
+function writePieces(file, pieces) {
+  const fd = fs.openSync(file, 'w');
+  try { for (const p of pieces) fs.writeSync(fd, p); } finally { fs.closeSync(fd); }
+}
+function writeGraphJson(doc, file) { writePieces(file, graphJsonPieces(doc)); }
+function writeGraphRunner(doc, file) { writePieces(file, graphRunnerPieces(doc)); }
+
 function graphRunnerSource(doc) {
+  return Array.from(graphRunnerPieces(doc)).join('');
+}
+
+function* graphRunnerPieces(doc) {
   // JSON.stringify twice = a valid JS string literal. U+2028/2029 are legal in JS
   // strings since ES2019 but not in every engine this output may meet, so escape them.
-  const withMeta = Object.assign({}, doc, { sources: {} });
-  for (const name of Object.keys(doc.sources)) withMeta.sources[name] = moduleWithMeta(name, doc.sources[name]);
-  doc = withMeta;
-  const lit = JSON.stringify(JSON.stringify(doc))
-    .replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
+  // GRAPH-WRITE-PIECEWISE (above): the literal is JSON.stringify(JSON.stringify(doc with every source behind its
+  // meta header)), made one piece at a time.
+  const LIT = '\u0000clode-graph-literal\u0000';
   // FIRST LINE IS A CONTRACT, not decoration: node-shim's loader applies CJS text
   // transforms (`import(` rewriting, regex-flag fixups) to every CJS it evaluates, and
   // those would edit the 34MB of UPSTREAM SOURCE carried below. This marker turns them
   // off. Keep it byte-identical to GRAPH_RUNNER_MARKER in libexec/node-shim/loader.cjs;
   // test/graph-runner.test.cjs asserts they match.
-  return `//clode:graph-runner:1
+  const text = `//clode:graph-runner:1
 'use strict';
 // GENERATED BY clode — a Claude Code code-split module graph, carried verbatim, plus
 // the ~40 lines that make it runnable. Do not edit: rebuild with extract-claude-js.
-const __CLODE_GRAPH = JSON.parse(${lit});
+const __CLODE_GRAPH = JSON.parse(${LIT});
 (function () {
   const doc = __CLODE_GRAPH;
   const has = (n) => Object.prototype.hasOwnProperty.call(doc.sources, n);
@@ -1748,6 +1805,14 @@ const __CLODE_GRAPH = JSON.parse(${lit});
   });
 })();
 `;
+  const at = text.indexOf(LIT);
+  yield text.slice(0, at);
+  yield '"';
+  for (const p of jsonPieces(doc, 1, moduleWithMeta)) {
+    yield JSON.stringify(p).slice(1, -1).replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
+  }
+  yield '"';
+  yield text.slice(at + LIT.length);
 }
 
 // Same inputs as extractGraphToFile, same hooks, same fail-loud reporting — one file out.
@@ -1760,9 +1825,8 @@ function extractGraphRunnerToFile(binpath, out) {
   } finally {
     try { fs.rmSync(tmp); } catch (e) { /* best effort */ }
   }
-  const src = graphRunnerSource(doc);
-  fs.writeFileSync(out, src);
-  return Object.assign({}, res, { bytes: src.length });
+  writeGraphRunner(doc, out);
+  return Object.assign({}, res, { bytes: fs.statSync(out).size });
 }
 
 function main(argv) {
@@ -1943,6 +2007,8 @@ module.exports = {
   extractGraphToFile,
   extractGraphRunnerToFile,
   graphRunnerSource,
+  writeGraphJson,
+  writeGraphRunner,
   isSplitBundle,
   main,
   PRELUDE,
