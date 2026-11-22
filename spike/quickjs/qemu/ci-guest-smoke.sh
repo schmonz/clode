@@ -46,14 +46,26 @@ swapctl -a /var/tmp/swap; echo "swap-add-exit=$?"
 # liveness in the CI log AND resets the driver's silence timeout. It samples the
 # whole fuse family RSS (parent clode-builder + the template-tjs worker + the
 # quaude smoke/attest children).
+#
+# RSS IS ONLY WHAT IS RESIDENT. Run 45005386065 (2.1.330) died "template-tjs killed: out of
+# swap" while fam_rss FELL and swap_used ROSE: the family was being paged OUT, and RSS could
+# not say by whom. So each tick also prints, per process, VSZ (resident + swapped address
+# space) — the column that names who holds the swap — and how full the build's scratch
+# filesystem is (df of TMPDIR or /tmp, with its device: on this image /tmp is the root FFS
+# on sd0a, NOT swap-backed tmpfs, which the same log's `df -m / /tmp` showed; a later image
+# that mounts tmpfs there would show it here, in the line that dies).
 START=$(date +%s)
+TMPD=${TMPDIR:-/tmp}
 ( set +x   # don't xtrace the sampler's awk program every tick (CI log noise)
   while :; do
     el=$(( $(date +%s) - START ))
     sw=$(swapctl -lk 2>/dev/null | awk 'NR>1{u+=$3} END{print u+0}')
-    ps -axo rss,comm 2>/dev/null | awk -v t="$el" -v sw="$sw" '
-      /clode-builder|template-tjs|quaude|tjs/ { s+=$1; if($1>mx){mx=$1; mc=$2} }
-      END { printf "PROGRESS t=%ss fam_rss_kb=%d top=%s:%dkb swap_used_kb=%s\n", t, s+0, mc, mx+0, sw }'
+    tmp=$(df -k "$TMPD" 2>/dev/null | awk 'NR==2{printf "%s:%dkb/%dkb", $1, $3, $2}')
+    ps -axo rss,vsz,comm 2>/dev/null | awk -v t="$el" -v sw="$sw" -v tmp="$tmp" '
+      /clode-builder|template-tjs|quaude|tjs/ {
+        s+=$1; v+=$2; if($1>mx){mx=$1; mc=$3}
+        n=$3; sub(/.*\//, "", n); each=each sprintf(" %s:%d/%d", n, $1, $2) }
+      END { printf "PROGRESS t=%ss fam_rss_kb=%d top=%s:%dkb swap_used_kb=%s fam_vsz_kb=%d tmp=%s procs(rss/vsz kb)=%s\n", t, s+0, mc, mx+0, sw, v+0, tmp, each }'
     sleep 20
   done ) &
 SAMPLER=$!
