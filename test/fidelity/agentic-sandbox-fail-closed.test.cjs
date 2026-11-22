@@ -181,6 +181,21 @@ function onPath(name) {
     try { fs.accessSync(path.join(d, name), fs.constants.X_OK); return fs.statSync(path.join(d, name)).isFile(); } catch { return false; }
   });
 }
+// The native this file drives: CLODE_NATIVE_ORACLE when it is the PINNED version (linux-x64-pty installs that full
+// native for the text gates; the provider it hands the tests is scripts/stage-provider.mjs's minimised carve, which
+// cannot run), else the provider when it runs (rgOracle: a real native on a dev box). The skip names both.
+function runnableNative(env) {
+  const { rgOracle, rgOracleSkip, pinnedVersion } = require('../provider-resolve.cjs');
+  if (env.CLODE_NATIVE_ORACLE) {
+    const { nativeVersion } = require('../../scripts/lib/native-oracle.cjs');
+    const pin = pinnedVersion();
+    const v = fs.existsSync(env.CLODE_NATIVE_ORACLE) ? nativeVersion(env.CLODE_NATIVE_ORACLE) : '(absent)';
+    if (pin && v.split(' ')[0] === pin) return { bin: env.CLODE_NATIVE_ORACLE };
+    if (!rgOracle(env)) return { skip: `CLODE_NATIVE_ORACLE ${env.CLODE_NATIVE_ORACLE} says ${JSON.stringify(v)}, not the pinned ${pin}; and ${rgOracleSkip(env)}` };
+  }
+  const bin = rgOracle(env);
+  return bin ? { bin } : { skip: `${rgOracleSkip(env)}; and CLODE_NATIVE_ORACLE is unset` };
+}
 function nativeWouldSandbox() {
   if (process.platform !== 'linux') return true;
   let v = '';
@@ -230,9 +245,8 @@ test('sandboxed Bash fails CLOSED under quaude: every call refused, nothing writ
 });
 
 test('native refuses to start on the startup rows\' input as recorded, and starts on the same input without the sandbox named', { skip: SKIP }, async (t) => {
-  const { rgOracle, rgOracleSkip } = require('../provider-resolve.cjs');
-  const native = rgOracle(process.env);
-  if (!native) { t.skip(rgOracleSkip(process.env)); return; }
+  const { bin: native, skip: noNative } = runnableNative(process.env);
+  if (!native) { t.skip(noNative); return; }
   if (!nativeWouldSandbox()) { t.skip('native would not sandbox here: the startup rows are the fail-closed branch\'s'); return; }
   // the checks' own controls: each fails on the other's answer; a start is judged by its first call's answer too
   assertFailsOnMissingOutput(ran1, M1, ['print', 'shell:bash']);
