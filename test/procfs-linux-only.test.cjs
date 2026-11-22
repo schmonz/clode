@@ -68,7 +68,9 @@ function makeFSS() {
 }
 
 // Load a fs.cjs-shaped source with a given process.platform and stand-in primitive.
-function loadShim(fsShimSrc, { platform, fss }) {
+// hostPath: 'win32' or 'posix' stands in for the HOST the test runs on, whose node:path the shim gets in this
+// sandbox (a Windows CI host hands it path.win32); omitted, this host's own.
+function loadShim(fsShimSrc, { platform, fss, hostPath }) {
   const os = require('node:os');
   const engineConstants = {
     REQUIRED_ABI: 1,
@@ -99,7 +101,9 @@ function loadShim(fsShimSrc, { platform, fss }) {
   };
   sandbox.globalThis = sandbox;
   vm.createContext(sandbox);
-  sandboxRequire = require('./fs-shim-sandbox.cjs').shimRequire(sandbox, engineConstants);
+  const req = require('./fs-shim-sandbox.cjs').shimRequire(sandbox, engineConstants);
+  sandboxRequire = !hostPath ? req
+    : (id) => (/^(node:)?path$/.test(String(id)) ? path[hostPath] : req(id));
   vm.runInContext(
     `(function (module, exports, require) {\n${fsShimSrc}\n})(module, exports, require);`,
     sandbox, { filename: 'fs.cjs' });
@@ -278,5 +282,32 @@ for (const [what, call] of [...ASYNC_REFUSED, ...ASYNC_REACHES]) {
     const shim = loadShim(FS_SRC, { platform: 'linux', fss });
     try { await call(shim); } catch (e) { assert.notStrictEqual(e.code, 'ENOENT', `refused on Linux: ${e.message}`); }
     assert.ok(reachedProc(fss), `the engine was never reached on Linux: ${JSON.stringify(fss.calls)}`);
+  });
+}
+
+// The HOST must not leak in. fs.cjs's Windows symlink handling (target and link namespacing, '/' to '\') keys on
+// the platform the shim was loaded as, never on its path module's default, which in this sandbox is the host's: on
+// the windows-latest suite the default was path.win32, so loaded as netbsd/sunos/darwin/linux the shim rewrote
+// '/work/link' to '\\?\C:\work\link' and the gate's symlink row failed (CI 44977529851). Here every non-Windows
+// host reproduces that, by handing the shim path.win32 as a Windows host would. Control: loaded as win32, the link
+// and an absolute target ARE namespaced, so the row cannot pass because the handling vanished.
+for (const hostPath of ['win32', 'posix']) {
+  test(`a ${hostPath} host: symlinkSync reaches the primitive untouched on every non-Windows platform`, () => {
+    for (const platform of ['netbsd', 'sunos', 'darwin', 'linux']) {
+      const fss = makeFSS();
+      const shim = loadShim(FS_SRC, { platform, fss, hostPath });
+      shim.symlinkSync(FD, '/work/link');
+      shim.symlinkSync('a/b', '/work/rel');
+      const calls = fss.calls.filter((c) => c[0] === 'symlink').map((c) => c.slice(1, 3));
+      assert.deepStrictEqual(calls, [[FD, '/work/link'], ['a/b', '/work/rel']], `${platform} on a ${hostPath} host`);
+    }
+  });
+  test(`a ${hostPath} host: loaded as win32, symlinkSync namespaces as node does on Windows (control)`, () => {
+    const fss = makeFSS();
+    const shim = loadShim(FS_SRC, { platform: 'win32', fss, hostPath });
+    shim.symlinkSync('C:\\t\\x', 'C:\\work\\link', 'file');
+    shim.symlinkSync('a/b', 'C:\\work\\rel', 'file');
+    const calls = fss.calls.filter((c) => c[0] === 'symlink').map((c) => c.slice(1, 3));
+    assert.deepStrictEqual(calls, [['\\\\?\\C:\\t\\x', '\\\\?\\C:\\work\\link'], ['a\\b', '\\\\?\\C:\\work\\rel']]);
   });
 }

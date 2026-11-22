@@ -301,16 +301,21 @@ function symlinkAs(target, p, type) {
     throw e;
   }
   let t = String(target);
+  let link = String(p);
+  // Keyed on the shim's OWN platform, and through path.win32 explicitly: never the path module's default, which
+  // in a test that loads this file as another platform is the HOST's (on a Windows host, it rewrote a posix
+  // /proc target and link: procfs-linux-only, CI 44977529851).
   if (globalThis.process && process.platform === 'win32') {
+    const W = path.win32;
     if (type === undefined || type === null) {
-      try { if (FSS.stat(path.resolve(String(p), '..', t)).kind === 'dir') type = 'dir'; } catch { /* no such target: a file link */ }
+      try { if (FSS.stat(W.resolve(link, '..', t)).kind === 'dir') type = 'dir'; } catch { /* no such target: a file link */ }
     }
-    if (type === 'junction') t = path.toNamespacedPath(path.resolve(String(p), '..', t));
-    else if (path.isAbsolute(t)) t = path.toNamespacedPath(t);
+    if (type === 'junction') t = W.toNamespacedPath(W.resolve(link, '..', t));
+    else if (W.isAbsolute(t)) t = W.toNamespacedPath(t);
     else t = t.replace(/\//g, '\\');
+    link = W.toNamespacedPath(link);   // node namespaces the link path too
   }
-  // node passes the link path through toNamespacedPath too (the identity on posix)
-  return FSS.symlink(t, path.toNamespacedPath(String(p)), SYMLINK_TYPES[type] || 0);
+  return FSS.symlink(t, link, SYMLINK_TYPES[type] || 0);
 }
 
 function createExclusive(p, base, mode) {
