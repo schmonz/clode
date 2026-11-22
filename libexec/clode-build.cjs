@@ -615,8 +615,25 @@ function resolveClaudeNmDir({ libexec, here, verbose, env, ROOT }) {
 // surface), and answers in <request>.result.json. Its stderr is the builder's, so its
 // verbose lines read exactly as an in-process stage's did.
 const STAGE_REQUEST_ENV = 'CLODE_STAGE_REQUEST';
-function stageRelaunchArgv() {
-  return globalThis.__quaudeVFS ? [process.execPath] : [process.execPath, process.argv[1]];
+// EXACTLY how this process was launched: under tjs the node-shim loader records it
+// (globalThis.__clodeRelaunchArgv — process.argv has lost `run loader.cjs` by then, and a
+// blobulated builder is its own entry); under node, the interpreter, its execArgv, the script.
+// Injectable for the test: `g` / `proc` default to the real globals.
+function stageRelaunchArgv(g = globalThis, proc = process) {
+  if (Array.isArray(g.__clodeRelaunchArgv) && g.__clodeRelaunchArgv.length) return [...g.__clodeRelaunchArgv];
+  if (g.__quaudeVFS) return [proc.execPath];
+  return [proc.execPath, ...(proc.execArgv || []), proc.argv[1]];
+}
+// A CLODE_STAGE_REQUEST clode-main.cjs will act on: request.json directly inside a
+// clode-stage-* dir in the temp dir (what stageInChild makes). Anything else is a stray
+// variable, refused by name rather than quietly answered.
+function isStageRequestPath(p) {
+  if (typeof p !== 'string' || path.basename(p) !== 'request.json') return false;
+  const dir = path.dirname(p);
+  if (!/^clode-stage-/.test(path.basename(dir))) return false;
+  const real = (x) => { try { return fs.realpathSync(x); } catch { return null; } };
+  const tmp = real(os.tmpdir());
+  return tmp !== null && real(path.dirname(dir)) === tmp && fs.existsSync(p);
 }
 function stageInChild(request, env) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-stage-'));
@@ -647,7 +664,13 @@ function stageInChild(request, env) {
 // builder from 3MB to 460MB at the verify step, just before blobulate. The JUDGEMENT stays in
 // the builder (assertNoUnknownBareSpecifiers, opts.scanned); a scan failure travels back as
 // that file's error and is thrown there, so it names the gate exactly as before.
-function runStageRequest(reqPath) {
+function runStageRequest(reqPath, stderr = process.stderr) {
+  if (!isStageRequestPath(reqPath)) {
+    stderr.write(`clode: refusing ${STAGE_REQUEST_ENV}=${reqPath}: it is the builder's private channel to the `
+      + `staging child it starts, and only names request.json inside a clode-stage-* dir in ${os.tmpdir()}. `
+      + `Unset it.\n`);
+    return 2;
+  }
   const resPath = `${reqPath}.result.json`;
   let res;
   try {
@@ -2336,5 +2359,5 @@ module.exports = {
   scanBareSpecifiers, scannableTexts, specifierPackageName, isBuiltinSpecifier, shimProvidedModules,
   assertNoUnknownBareSpecifiers, KNOWN_UNREACHABLE, resolveClaudeNmDir,
   resolveManifest, releaseBaseUrl, thisTjsPin, staleLibexecSource,
-  STAGE_REQUEST_ENV, runStageRequest, stageRelaunchArgv,
+  STAGE_REQUEST_ENV, runStageRequest, stageRelaunchArgv, isStageRequestPath,
 };

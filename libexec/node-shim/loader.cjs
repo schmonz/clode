@@ -1064,6 +1064,12 @@ if (__QVFS) {
 // argv[1] presents the .cjs identity for a bytecode entry (matching the module
 // identity evalBytecodeEntry establishes; the bundle inspects its own argv[1]).
 process.argv = [tjs.exePath ?? 'tjs', entryAbs.replace(/\.qbc$/, '.cjs'), ...extraArgv];
+// HOW TO START THIS SAME ENTRY AGAIN, which process.argv above can no longer say: it drops
+// `run loader.cjs`. Read by clode-build.cjs's stageRelaunchArgv to relaunch the builder as a
+// staging child exactly as this process was launched. A blobulated binary is its own entry.
+globalThis.__clodeRelaunchArgv = __QVFS
+  ? [tjs.exePath ?? tjs.args[0]]
+  : [tjs.exePath ?? tjs.args[0], tjs.args[1], P.resolve(tjs.args[2]), entryAbs];
 if (tjs.env.CLODE_PROBE) { try { evalModule(P.resolve(tjs.env.CLODE_PROBE)); } catch (e) { console.error('probe err', e); } }
 // NATURAL-EXIT SEMANTICS. Node exits with `process.exitCode` when the entry
 // finishes and the loop drains; it also emits 'exit' listeners first. tjs has

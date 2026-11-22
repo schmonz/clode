@@ -98,3 +98,66 @@ test('the dep-closure gate judges the staging child\'s scan, not the staged file
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 });
+
+// RELAUNCH EXACTLY AS LAUNCHED. Relaunching [execPath, argv[1]] dropped node's execArgv, and
+// under `tjs run loader.cjs <entry>` dropped `run loader.cjs` (the loader rewrites process.argv
+// to [tjs, entry]), so a checkout run under tjs died "ended without an answer".
+test('stageRelaunchArgv: the loader\'s record wins, a blobulated builder is its own entry, node keeps execArgv', () => {
+  const { stageRelaunchArgv } = require('../libexec/clode-build.cjs');
+  const proc = { execPath: '/n/node', execArgv: ['--stack-size=4000', '--require', '/p.cjs'], argv: ['/n/node', '/c/stage0.mjs', 'build'] };
+  assert.deepStrictEqual(stageRelaunchArgv({ __clodeRelaunchArgv: ['/t/tjs', 'run', '/c/loader.cjs', '/c/clode-main.cjs'] }, proc),
+    ['/t/tjs', 'run', '/c/loader.cjs', '/c/clode-main.cjs']);
+  assert.deepStrictEqual(stageRelaunchArgv({ __quaudeVFS: {} }, proc), ['/n/node']);
+  assert.deepStrictEqual(stageRelaunchArgv({}, proc), ['/n/node', '--stack-size=4000', '--require', '/p.cjs', '/c/stage0.mjs']);
+});
+
+test('clode build under `tjs run loader.cjs` stages in a child the same way (the child\'s answer arrives)', (t) => {
+  const tjs = tjsPath();
+  if (!tjs) { t.skip('no tjs binary (CLODE_TJS or build/tjs/tjs)'); return; }
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'stage-in-child-tjs-'));
+  try {
+    const provider = path.join(tmp, 'claude');
+    fs.writeFileSync(provider, 'not a provider\n', { mode: 0o755 });
+    const loader = path.join(__dirname, '..', 'libexec', 'node-shim', 'loader.cjs');
+    const r = spawnSync(tjs, ['run', loader, ENTRY, 'build', '--out', path.join(tmp, 'q')], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        HOME: tmp, CLODE_STATE_ROOT: tmp, CLODE_CACHE: path.join(tmp, 'cache'), CLODE_DEPS: path.join(tmp, 'deps'),
+        CLODE_WATCH_DIR: path.join(tmp, 'watch'), CLODE_OFFLINE: '1', CLODE_TJS: tjs, CLODE_CLAUDE_BIN: provider,
+        CLODE_STAGE_REQUEST: '',
+      },
+    });
+    assert.strictEqual(r.status, 1, r.stderr);
+    assert.doesNotMatch(r.stderr, /ended without an answer/);
+    assert.match(r.stderr, /build: extraction failed: no Bun @bun-cjs entry marker found/);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+// A stray CLODE_STAGE_REQUEST used to turn ANY invocation into a silent staging child that
+// wrote <path>.result.json and exited. Only request.json in a clode-stage-* temp dir counts.
+test('a stray CLODE_STAGE_REQUEST is refused by name, and nothing is written beside it', () => {
+  const { isStageRequestPath } = require('../libexec/clode-build.cjs');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'stage-in-child-stray-'));
+  const ours = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-stage-'));
+  try {
+    const stray = path.join(tmp, 'request.json');
+    fs.writeFileSync(stray, '{}');
+    const r = spawnSync(process.execPath, [ENTRY, '--version'], {
+      encoding: 'utf8', env: { ...process.env, CLODE_STAGE_REQUEST: stray },
+    });
+    assert.strictEqual(r.status, 2, r.stderr);
+    assert.match(r.stderr, /refusing CLODE_STAGE_REQUEST=.*Unset it/);
+    assert.ok(!fs.existsSync(`${stray}.result.json`), 'a refused request must write nothing');
+    const req = path.join(ours, 'request.json');
+    assert.strictEqual(isStageRequestPath(req), false, 'absent: not a request');
+    fs.writeFileSync(req, '{}');
+    assert.strictEqual(isStageRequestPath(req), true, 'what stageInChild makes is a request');
+    assert.strictEqual(isStageRequestPath(path.join(ours, 'other.json')), false);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(ours, { recursive: true, force: true });
+  }
+});
