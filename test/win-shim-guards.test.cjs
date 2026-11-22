@@ -18,7 +18,7 @@ function loadP({ win, cwd }) {
   const tjs = { cwd };
   const sandbox = { navigator, tjs, module: { exports: {} } };
   vm.createContext(sandbox);
-  vm.runInContext(m[1] + '\nmodule.exports = { P, IS_WIN };', sandbox);
+  vm.runInContext(m[1] + '\nmodule.exports = { P, IS_WIN, hasPathSep };', sandbox);
   return sandbox.module.exports;
 }
 
@@ -42,6 +42,22 @@ test('loader P: Windows UNC path preserves the \\\\server\\share root', () => {
   assert.equal(P.resolve('\\\\wsl.localhost\\Ubuntu\\a\\loader.cjs'), '//wsl.localhost/Ubuntu/a/loader.cjs');
   assert.equal(P.dirname('//wsl.localhost/Ubuntu/a/loader.cjs'), '//wsl.localhost/Ubuntu/a');
   assert.equal(P.join('//wsl.localhost/Ubuntu/a/node-shim', 'modules'), '//wsl.localhost/Ubuntu/a/node-shim/modules');
+});
+
+// The package resolver tells a deep request (es-errors/eval) from a bare package name by hasPathSep. On win32 a
+// request may be pkg\sub or C:\x, which a slash-only test reads as a bare name (windows-path-ratchet).
+test('loader hasPathSep: win32 counts backslash and drive letter, POSIX only slash', () => {
+  const win = loadP({ win: true, cwd: 'C:\\proj' }).hasPathSep;
+  assert.equal(win('es-errors/eval'), true);
+  assert.equal(win('es-errors\\eval'), true);
+  assert.equal(win('C:\\x\\y.js'), true);
+  assert.equal(win('C:x'), true);
+  assert.equal(win('axios'), false);
+  const posix = loadP({ win: false, cwd: '/proj' }).hasPathSep;
+  assert.equal(posix('es-errors/eval'), true);
+  assert.equal(posix('es-errors\\eval'), false);
+  assert.equal(posix('C:x'), false);
+  assert.equal(posix('axios'), false);
 });
 
 test('loader P: POSIX behavior unchanged', () => {

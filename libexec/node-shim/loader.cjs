@@ -86,6 +86,10 @@ const P = {
     return P.normalize(r);
   },
 };
+// Does a require() request name a path (a separator in it), as resolveExe in modules/child_process.cjs decides it:
+// a slash, and on win32 also a backslash or a drive letter (C:\x, a\b). The package resolver uses it to tell a deep
+// request (es-errors/eval, pkg\sub) from a bare package name.
+const hasPathSep = (s) => s.includes("/") || (IS_WIN && (s.includes("\\") || /^[a-zA-Z]:/.test(s)));
 /* @loader-paths-end */
 
 /* ---- quaude VFS seam ---------------------------------------------------------
@@ -284,7 +288,7 @@ function resolveRequest(request, fromDir) {
     // A deep request (`es-errors/eval`, `pkg/lib/x`) names a FILE inside the package, as node resolves it:
     // the path itself, then with .js/.cjs/.json. This resolver used to try only directory entries, so
     // `require('es-errors/eval')` (get-intrinsic, under form-data, under axios) failed to resolve.
-    if (request.includes('/')) {
+    if (hasPathSep(request)) {
       for (const c of [pkgDir, pkgDir + '.js', pkgDir + '.cjs', pkgDir + '.json']) if (existsFileSync(c)) return { file: c };
     }
     for (const c of [P.join(pkgDir, 'index.js'), P.join(pkgDir, 'index.cjs')]) if (existsFileSync(c)) return { file: c };
