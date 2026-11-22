@@ -85,6 +85,21 @@ const home = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-probe-home-'));
 const cfg = path.join(home, 'mcp.json');
 fs.writeFileSync(cfg, JSON.stringify(kase.config(mock.port)));
 
+// A MINIMAL environment, not ...process.env: the client runs with --debug --debug-to-stderr and the FAIL path
+// prints its stderr, so a developer's ANTHROPIC_*/CLAUDE_* token or OAuth state must never reach it. Only what a
+// process needs to start and resolve localhost (PATH, and on Windows SystemRoot/windir/ComSpec/PATHEXT, without
+// which Winsock does not load), the temp dirs, and a throwaway home on EVERY platform (HOME alone was a no-op on
+// Windows, where the profile is USERPROFILE).
+function probeEnv(homeDir) {
+  const keep = ['PATH', 'Path', 'SystemRoot', 'SYSTEMROOT', 'windir', 'WINDIR', 'ComSpec', 'PATHEXT', 'SystemDrive',
+    'TEMP', 'TMP', 'TMPDIR', 'LANG', 'LC_ALL', 'TERM'];
+  const env = {};
+  for (const k of keep) if (process.env[k] !== undefined) env[k] = process.env[k];
+  const cfgDir = path.join(homeDir, '.claude');
+  fs.mkdirSync(cfgDir, { recursive: true });
+  return { ...env, HOME: homeDir, USERPROFILE: homeDir, CLAUDE_CONFIG_DIR: cfgDir, ANTHROPIC_API_KEY: 'sk-probe-notreal' };
+}
+
 let failed = false;
 try {
   // No credentials and no network: the transport handshake happens during MCP
@@ -93,7 +108,7 @@ try {
   const r = spawnSync(binary, ['--mcp-config', cfg, '-p', 'say hi', '--debug', '--debug-to-stderr'], {
     encoding: 'utf8',
     timeout: 45000,
-    env: { ...process.env, HOME: home, ANTHROPIC_API_KEY: 'sk-probe-notreal' },
+    env: probeEnv(home),
   });
   if (verbose && r.stderr) process.stderr.write(r.stderr.slice(0, 2000));
 
