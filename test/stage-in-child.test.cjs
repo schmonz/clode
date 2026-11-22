@@ -127,7 +127,7 @@ test('in-process from a node:test file, the staging child is clode-main.cjs, not
     `the relaunch names the running test file: ${JSON.stringify(argv)}`);
 });
 
-test('recursion fuse: a staging child refuses to start another, by name', () => {
+test('recursion stop: a staging child refuses to start another, by name', () => {
   const { stageInChild, STAGE_CHILD_REFUSAL } = require('../libexec/clode-build.cjs');
   globalThis.__clodeStageChild = true;
   try {

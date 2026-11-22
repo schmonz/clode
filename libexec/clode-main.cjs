@@ -79,7 +79,7 @@ async function main(argv, opts = {}) {
   if (env.CLODE_STAGE_REQUEST) {
     const reqPath = env.CLODE_STAGE_REQUEST;
     delete env.CLODE_STAGE_REQUEST;
-    globalThis.__clodeStageChild = true; // the recursion fuse stageInChild checks
+    globalThis.__clodeStageChild = true; // the recursion stop stageInChild checks
     return process.exit(require('./clode-build.cjs').runStageRequest(reqPath));
   }
 

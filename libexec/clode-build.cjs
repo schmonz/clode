@@ -630,7 +630,7 @@ function stageRelaunchArgv(g = globalThis, proc = process) {
   const execArgv = (proc.execArgv || []).filter((a) => !/^--(test|watch)(\b|-|=)/.test(a));
   return [proc.execPath, ...execArgv, entry];
 }
-// RECURSION FUSE: a staging child is told to stage, never to build, so it must never start a
+// RECURSION STOP: a staging child is told to stage, never to build, so it must never start a
 // staging child of its own; clode-main.cjs marks the process (globalThis.__clodeStageChild)
 // before it runs the request, and stageInChild refuses by name if it is ever reached there.
 const STAGE_CHILD_REFUSAL = 'a staging child (CLODE_STAGE_REQUEST) was asked to start another staging child — '
@@ -647,7 +647,7 @@ function isStageRequestPath(p) {
   return tmp !== null && real(path.dirname(dir)) === tmp && fs.existsSync(p);
 }
 function stageInChild(request, env) {
-  if (globalThis.__clodeStageChild || (env && env[STAGE_REQUEST_ENV])) return { error: STAGE_CHILD_REFUSAL };
+  if (globalThis.__clodeStageChild || (env && env.CLODE_STAGE_REQUEST)) return { error: STAGE_CHILD_REFUSAL };
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-stage-'));
   const reqPath = path.join(dir, 'request.json');
   const resPath = `${reqPath}.result.json`;
