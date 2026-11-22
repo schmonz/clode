@@ -241,7 +241,7 @@ test('RG-HELD-FD: rg-entry searches a regular file it holds as fd 3, named /dev/
         env: { HOME: BASE, PATH: process.env.PATH, CLODE_UGREP: UGREP } });
     } finally { fs.closeSync(held); fs.closeSync(null0); }
   };
-  const want = cp.spawnSync(process.execPath, [ENTRY, '-n', 'needle', 'a.txt'], { cwd: t, encoding: 'latin1', env: { PATH: process.env.PATH, CLODE_UGREP: UGREP } });
+  const want = cp.spawnSync(process.execPath, [ENTRY, '-n', 'needle', 'a.txt'], { cwd: t, encoding: 'latin1', env: { HOME: BASE, PATH: process.env.PATH, CLODE_UGREP: UGREP } });
   assert.strictEqual(want.status, 0, want.stderr);
   for (const name of names) {
     for (const argv of [['-n', 'needle', name], ['-l', 'needle', name], ['-c', 'needle', name]]) {

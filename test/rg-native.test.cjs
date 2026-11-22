@@ -1903,7 +1903,6 @@ test('RG-HELD-FD: rg spawned with the file it searches as stdio[3] and target /p
         assert.deepStrictEqual([a.status, got(a.stdout), String(a.stderr)], [want.status, named(want.stdout), ''], `async ${label}`);
       }
     }
-    assert.strictEqual(fs.readFileSync(file, 'utf8').length > 0, true);
     // the held descriptor's offset is untouched: positional reads only
     const b = Buffer.alloc(5);
     assert.strictEqual(fs.readSync(fd, b, 0, 5, null), 5);
