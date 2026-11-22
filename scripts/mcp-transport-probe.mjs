@@ -89,7 +89,8 @@ let failed = false;
 try {
   // No credentials and no network: the transport handshake happens during MCP
   // startup, well before any API turn, so a bogus key is enough to reach it.
-  const r = spawnSync(binary, ['--mcp-config', cfg, '-p', 'say hi'], {
+  const t0 = Date.now();
+  const r = spawnSync(binary, ['--mcp-config', cfg, '-p', 'say hi', '--debug', '--debug-to-stderr'], {
     encoding: 'utf8',
     timeout: 45000,
     env: { ...process.env, HOME: home, ANTHROPIC_API_KEY: 'sk-probe-notreal' },
@@ -130,6 +131,14 @@ try {
         + 'concluding anything: it does not complete an MCP-over-ws exchange either.');
     }
     failed = kase.conclusive;
+    // A FAIL must carry what the client said, or the next step is a blind rerun (CI 44980741750,
+    // windows-arm64: "(nothing arrived)" after the full 45s, with no way to tell a hang from a crash
+    // from a slow start). The exit, the time it ran and the tail of its stderr, on every FAIL.
+    if (failed) {
+      console.error(`  client: status ${r.status} signal ${r.signal} error ${r.error ? r.error.code : 'none'}`
+        + ` after ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+      console.error(`  client stderr tail:\n${String(r.stderr || '').slice(-3000) || '(empty)'}`);
+    }
   } else {
     console.log(`PASS: ${transport}: reached the server at the expected target`);
   }
