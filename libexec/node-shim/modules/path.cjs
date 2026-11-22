@@ -255,7 +255,23 @@ function win32Parse(p) {
   return { root, dir: win32Dirname(p), base, ext, name: base.slice(0, base.length - ext.length) };
 }
 
+// path.toNamespacedPath, as node's: on win32 an absolute drive path gets \\?\ and a UNC path \\?\UNC\ (a device or
+// already-namespaced path, or anything shorter than a root, is returned as given); on posix the identity. fs.cjs's
+// symlinkSync uses it for a junction's target, as node's preprocessSymlinkDestination does.
+function win32ToNamespacedPath(p) {
+  if (typeof p !== 'string' || p.length === 0) return p;
+  const r = win32Resolve(p);
+  if (r.length <= 2) return p;
+  if (r[0] === '\\' && r[1] === '\\') {
+    if (r[2] !== '?' && r[2] !== '.') return `\\\\?\\UNC\\${r.slice(2)}`;
+  } else if (/^[A-Za-z]$/.test(r[0]) && r[1] === ':' && r[2] === '\\') {
+    return `\\\\?\\${r}`;
+  }
+  return p;
+}
+
 const win32 = {
+  toNamespacedPath: win32ToNamespacedPath,
   sep: win32sep,
   delimiter: win32delimiter,
   isAbsolute: win32IsAbsolute,
@@ -269,7 +285,7 @@ const win32 = {
   parse: win32Parse,
 };
 
-const posix = { sep, delimiter, isAbsolute, normalize, join, resolve, dirname, basename, extname, relative, parse, posix: null, win32 };
+const posix = { toNamespacedPath: (p) => p, sep, delimiter, isAbsolute, normalize, join, resolve, dirname, basename, extname, relative, parse, posix: null, win32 };
 posix.posix = posix;
 win32.win32 = win32;
 win32.posix = posix;

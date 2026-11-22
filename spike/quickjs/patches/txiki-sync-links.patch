@@ -1,0 +1,103 @@
+# SYNC-LINKS: __tjs_fs_sync.readlink and .symlink through libuv (uv_fs_readlink, uv_fs_symlink with no callback, so
+# synchronously), the calls node's fs.readlinkSync and fs.symlinkSync make, on every platform.
+#
+# WHY. txiki-sync-fs.patch called readlink(2) and symlink(2) on POSIX and threw ENOSYS for both on Windows. Under
+# quaude on Windows every fs.readlinkSync threw ENOSYS. 2.1.330's link-walk (the permission check's "is any component
+# of this path a link or junction") asks readlinkSync of each directory on the path and reads EINVAL as "a plain
+# directory"; ENOSYS made the path unclassifiable, which the check treats as sensitive, so every Edit on Windows was
+# refused with "... which is a sensitive file" (CI 44945260530, windows-amd64-tests and windows-arm64-tests). libuv
+# answers EINVAL for a directory that is no reparse point and a junction's or symlink's target, as node does.
+# symlink takes a third argument, node's libuv flags (UV_FS_SYMLINK_DIR, UV_FS_SYMLINK_JUNCTION for its 'dir' and
+# 'junction' types; node-shim's fs.cjs maps the type, and does node's Windows target preprocessing). POSIX ignores
+# the flags. One implementation everywhere: POSIX moves to libuv too, the same syscalls underneath.
+# These were the only two ENOSYS sync ops in txiki-sync-fs.patch.
+# mod_fs_sync.c only, after every other patch that touches it (TXIKI_PATCH_ORDER, last of them; uses sync-utime's
+# uv_to_errno).
+#
+diff --git a/src/mod_fs_sync.c b/src/mod_fs_sync.c
+--- a/src/mod_fs_sync.c
++++ b/src/mod_fs_sync.c
+@@ -374,23 +374,26 @@
+     return ret;
+ }
+ 
++/* readlink through libuv (uv_fs_readlink with no callback, so synchronously, on this thread), the call node's
++ * fs.readlinkSync makes, on every platform. It was readlink(2) on POSIX and ENOSYS on Windows, so on Windows every
++ * readlinkSync threw ENOSYS: 2.1.330's link-walk asks readlinkSync of each directory on a path and expects EINVAL
++ * ("not a link") for a plain one, so ENOSYS made every path unclassifiable and every Edit "a sensitive file". libuv
++ * answers EINVAL for a directory that is no reparse point, and a junction's or symlink's target as node does. */
+ static JSValue js_fss_readlink(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv) {
+     const char *path = JS_ToCString(ctx, argv[0]);
+     if (!path) return JS_EXCEPTION;
+-#if defined(_WIN32)
+-    errno = ENOSYS;
+-    JSValue ret = throw_errno(ctx, "readlink", path);
+-    JS_FreeCString(ctx, path);
+-    return ret;
+-#else
+-    char buf[PATH_MAX];
+-    ssize_t n = readlink(path, buf, sizeof(buf) - 1);
++    uv_fs_t req;
++    int r = uv_fs_readlink(tjs_get_loop(ctx), &req, path, NULL);
+     JSValue ret;
+-    if (n < 0) ret = throw_errno(ctx, "readlink", path);
+-    else { buf[n] = 0; ret = JS_NewString(ctx, buf); }
++    if (r < 0) {
++        errno = uv_to_errno(r);
++        ret = throw_errno(ctx, "readlink", path);
++    } else {
++        ret = JS_NewString(ctx, (const char *) req.ptr);
++    }
++    uv_fs_req_cleanup(&req);
+     JS_FreeCString(ctx, path);
+     return ret;
+-#endif
+ }
+ 
+ static JSValue js_fss_readdir(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv) {
+@@ -457,19 +460,29 @@
+     return ret;                                                                          \
+ }
+ FSS_2PATH(rename, rename(a, b))
+-#if defined(_WIN32)
++/* symlink through libuv (uv_fs_symlink with no callback, so synchronously), the call node's fs.symlinkSync makes,
++ * on every platform: symlink(target, path, flags), flags being node's UV_FS_SYMLINK_DIR / UV_FS_SYMLINK_JUNCTION
++ * for its 'dir' / 'junction' types (POSIX ignores them, as node's libuv does). It was symlink(2) on POSIX and ENOSYS
++ * on Windows, where node makes file and directory symlinks and junctions. */
+ static JSValue js_fss_symlink(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv) {
+     const char *a = JS_ToCString(ctx, argv[0]);
+     const char *b = JS_ToCString(ctx, argv[1]);
+-    if (!a || !b) return JS_EXCEPTION;
+-    errno = ENOSYS;
+-    JSValue ret = throw_errno(ctx, "symlink", a);
++    int32_t flags = 0;
++    if (!a || !b || (argc > 2 && JS_ToInt32(ctx, &flags, argv[2]))) {
++        JS_FreeCString(ctx, a); JS_FreeCString(ctx, b);
++        return JS_EXCEPTION;
++    }
++    uv_fs_t req;
++    int r = uv_fs_symlink(tjs_get_loop(ctx), &req, a, b, flags, NULL);
++    JSValue ret = JS_UNDEFINED;
++    if (r < 0) {
++        errno = uv_to_errno(r);
++        ret = throw_errno(ctx, "symlink", a);
++    }
++    uv_fs_req_cleanup(&req);
+     JS_FreeCString(ctx, a); JS_FreeCString(ctx, b);
+     return ret;
+ }
+-#else
+-FSS_2PATH(symlink, symlink(a, b))
+-#endif
+ 
+ /* STRERROR: the platform's own text for an errno, as its C library's strerror(3) gives it. libuv's
+  * uv_strerror (what tjs.Error and node's messages carry) is libuv's OWN table, so it says "too many
+@@ -499,7 +512,7 @@
+     JS_CFUNC_DEF("unlink", 1, js_fss_unlink),
+     JS_CFUNC_DEF("rename", 2, js_fss_rename),
+     JS_CFUNC_DEF("access", 2, js_fss_access),
+-    JS_CFUNC_DEF("symlink", 2, js_fss_symlink),
++    JS_CFUNC_DEF("symlink", 3, js_fss_symlink),
+     JS_CFUNC_DEF("chmod", 2, js_fss_chmod),
+     JS_CFUNC_DEF("strerror", 1, js_fss_strerror),
+     JS_CFUNC_DEF("utime", 3, js_fss_utime),

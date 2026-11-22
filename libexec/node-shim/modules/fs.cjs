@@ -286,6 +286,32 @@ const realpathJs = (p) => { try { return FSS.realpath(p); } catch (e) { throw re
 //   4. rename the file over our own link (rename never follows the link it replaces) and rmdir.
 // The descriptor opened in 2 is the file now at the path. Returns null when the filesystem cannot
 // make a symlink (EPERM, ENOSYS, ENOTSUP...): the caller falls back to check-then-open.
+// fs.symlinkSync(target, path, type) as node does it (lib/fs.js symlinkSync, internal/fs/utils.js
+// stringToSymlinkType and preprocessSymlinkDestination): type 'dir' and 'junction' become libuv's UV_FS_SYMLINK_DIR (1)
+// and UV_FS_SYMLINK_JUNCTION (2), which the engine's symlink passes to uv_fs_symlink (txiki-sync-links.patch); POSIX
+// ignores them. On Windows only, an untyped link to an existing directory is made a 'dir' link, a junction's target is
+// resolved against the link's directory and namespaced, an absolute target is namespaced and a relative one has its
+// '/' turned to '\'. Those are Windows facts node applies, not a choice made here.
+const SYMLINK_TYPES = { dir: 1, junction: 2, file: 0 };
+function symlinkAs(target, p, type) {
+  if (type !== undefined && type !== null && !Object.prototype.hasOwnProperty.call(SYMLINK_TYPES, type)) {
+    const shown = typeof type === 'string' ? `'${type}'` : String(type);
+    const e = new TypeError(`The argument 'type' must be one of: 'dir', 'file', 'junction', null, undefined. Received ${shown}`);
+    e.code = 'ERR_INVALID_ARG_VALUE';
+    throw e;
+  }
+  let t = String(target);
+  if (globalThis.process && process.platform === 'win32') {
+    if (type === undefined || type === null) {
+      try { if (FSS.stat(path.resolve(String(p), '..', t)).kind === 'dir') type = 'dir'; } catch { /* no such target: a file link */ }
+    }
+    if (type === 'junction') t = path.toNamespacedPath(path.resolve(String(p), '..', t));
+    else if (path.isAbsolute(t)) t = path.toNamespacedPath(t);
+    else t = t.replace(/\//g, '\\');
+  }
+  return FSS.symlink(t, p, SYMLINK_TYPES[type] || 0);
+}
+
 function createExclusive(p, base, mode) {
   const dir = path.dirname(p);
   const priv = path.join(dir, `.clode-create-${_rand()}`);
@@ -897,7 +923,7 @@ function cpSync(src, dest, opts = {}) {
 // SessionStart hook non-executable ("hook error: Permission denied").
 function cpDir(src, dest, opts) {
   const st = lstatSync(src);
-  if (st.isSymbolicLink && st.isSymbolicLink()) { FSS.symlink(FSS.readlink(src), dest); return; }
+  if (st.isSymbolicLink && st.isSymbolicLink()) { symlinkAs(FSS.readlink(src), dest); return; }
   if (st.isDirectory()) {
     mkdirSync(dest, { recursive: true });
     for (const n of FSS.readdir(src)) cpDir(path.join(src, n), path.join(dest, n), opts);
@@ -1029,7 +1055,7 @@ const fsMod = {
   // fd->path map exists to avoid, so the cleanup is unconditional.
   closeSync: (fd) => { try { FSS.close(fd); } finally { fdPaths.delete(fd); } },
   copyFileSync: (a, b) => { writeFileSync(b, readFileSync(a)); chmodBestEffort(b, statSync(a).mode & 0o7777); },
-  symlinkSync: (target, p) => FSS.symlink(target, p),
+  symlinkSync: (target, p, type) => symlinkAs(target, p, type),
   chmodSync: (p, m) => chmodBestEffort(p, m),
   // fs.truncate/truncateSync: the bundle reaches truncate via fs.promises and
   // FileHandle (below); the sync form has no fd-less primitive in the sync-fs
@@ -1200,7 +1226,7 @@ const promises = {
   copyFile: async (a, b) => { writeFileSync(b, readFileSync(a)); chmodBestEffort(b, statSync(a).mode & 0o7777); },
   appendFile: async (p, data, opts) => { appendFileSync(p, data, opts); },
   chmod: async (p, m) => chmodBestEffort(p, m),
-  symlink: async (target, p) => FSS.symlink(target, p),
+  symlink: async (target, p, type) => symlinkAs(target, p, type),
   // hardlink: no SYNC primitive in the sync-fs patch, but tjs exposes an async
   // uv link — use it for the async surface (linkSync remains a wall).
   link: async (existing, p) => { _refuseProcFdOffLinux('link', existing); _refuseProcFdOffLinux('link', p); await tjs.link(existing, p); },

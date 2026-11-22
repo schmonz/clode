@@ -8,6 +8,23 @@ Concrete clode-under-Node divergences from native Claude Code, to triage and fix
 That page is GENERATED from `scripts/build-graph.cjs` — the one declaration of the build — so it
 cannot drift from it; it is also where the honest answer to "does this need node?" lives.
 
+## txiki-sync-fs.patch's other Windows branches answer differently from node; none is ENOSYS any more (2026-11-21)
+
+Audited when readlink and symlink moved to libuv (txiki-sync-links.patch). Those two were the only `#if
+defined(_WIN32)` branches that threw ENOSYS. These Windows branches remain in mod_fs_sync.c. Each runs, but none
+is the call node makes. Each fix is the same move: the uv_fs_* call with no callback, on every platform.
+
+- **realpath**: `_fullpath(3)` only normalises the path. It does not follow a symlink or a junction, and it does
+  not fail ENOENT for a missing path. Node resolves both: fs.realpathSync walks lstat and readlink, and
+  fs.realpathSync.native is uv_fs_realpath. Where node-shim calls the engine's realpath on Windows, a junction
+  answers its own path. Fix: uv_fs_realpath.
+- **read / write at a position**: `_lseeki64` to the position, then `_read`/`_write`, then seek back. Node's
+  calls are uv_fs_read/uv_fs_write, which use pread semantics (an OVERLAPPED offset) and leave the file pointer
+  alone. The emulation is not atomic: a second user of the fd between the seeks reads or writes at the wrong
+  place. Fix: uv_fs_read/uv_fs_write with the offset.
+- **mkdir**: `_mkdir(p)`, which drops the mode. Node ignores the mode on Windows too, so this one is not a
+  divergence. It is listed so the next audit need not reread it.
+
 ## QuickJS keeps captures across quantifier iterations: `/(?:(a)|(b))*/.exec("ab")` keeps group 1 (2026-11-21)
 
 The spec (RepeatMatcher, step 4) clears every capture inside a quantified atom at the start of each
