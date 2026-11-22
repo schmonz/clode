@@ -510,6 +510,7 @@ const TXIKI_PATCH_ORDER = [
   'txiki-uname-global.patch',                 // globalThis.__tjs_uname(): libuv's uv_os_uname for node-shim's os.machine() (node says "x86_64" where process.arch says "x64"). vm.c, beside ca-bundle-global's globals: after it
   'txiki-rusage-global.patch',                // globalThis.__tjs_getrusage(): libuv's uv_getrusage for node-shim's process.resourceUsage(), in node's field names and units. vm.c, beside uname-global's global: after it
   'txiki-sync-links.patch',                   // __tjs_fs_sync.readlink and .symlink through libuv's uv_fs_readlink/uv_fs_symlink on every platform, symlink taking node's dir/junction flags (both were ENOSYS on Windows; readlink's made 2.1.330's link-walk call every path sensitive). mod_fs_sync.c: after every other patch that touches it (sync-fs, strerror, sync-stat-identity, sync-utime, sync-spawn, vm-context)
+  'txiki-sync-open-excl.patch',               // __tjs_fs_sync.open takes 'x' (O_EXCL) and reports its letters in openFlags: node-shim's exclusive create on Windows (CREATE_NEW), where the symlink claim + rename cannot work. mod_fs_sync.c: after sync-links
   'txiki-engine-module-meta.patch',          // PROBE: engine.moduleMeta(mod) — requires/exports/top-level locals, read-only               // ws.close() sends an RFC6455 CLOSE frame (opcode 0x8) instead of just dropping the TCP connection: lws only emits one via close_via_role_protocol, which the old PENDING_TIMEOUT_USER_OK path skipped (ws.c; after ws-root-path, same file)
 ];
 

@@ -196,6 +196,7 @@ const O = constants;
 //   O_CREAT, path absent   createExclusive() below: the file is made, moded and put in place by
 //                          primitives that are each atomic, so nobody else's file is truncated or
 //                          taken and nobody else ever sees it at a mode other than the caller's
+//                          (on Windows, createExclusiveWin(): the kernel's own O_EXCL, CREATE_NEW)
 //   O_EXCL with O_CREAT    EEXIST from that same atomic claim, not from a check before an open
 //   O_NOFOLLOW             ELOOP when the path is a symlink, checked before AND after the open
 //                          (identity: the file opened must be the one lstat names)
@@ -207,8 +208,8 @@ const O = constants;
 // (test/node-shim-fs-nonblock.test.cjs). The engine has no read+append, so a+ opens 'a'. What is
 // still not node's is in BACKLOG ("node-shim's exclusive create ..."): O_WRONLY without O_TRUNC on an
 // existing file needs read permission ('r+'); O_TRUNC|O_NOFOLLOW can truncate a link swapped in after
-// the check; and where the filesystem refuses a symlink (Windows without the privilege, FAT) the
-// create falls back to check-then-open, with its window.
+// the check; and where a POSIX filesystem refuses a symlink (FAT) the create falls back to
+// check-then-open, with its window.
 const STRING_FLAGS = (() => {
   const S = O.O_SYNC || 0;
   const W = O.O_TRUNC | O.O_CREAT | O.O_WRONLY;
@@ -326,6 +327,8 @@ function createExclusive(p, base, mode) {
   try { FSS.mkdir(priv, 0o700); } catch (e) { throw e && e.code ? sysError(e.code, 'open', p) : e; }
   let fd = -1;
   let placed = false;
+  let claimed = false;
+  const linkText = path.join(path.basename(priv), 'f');
   try {
     fd = FSS.open(inner, base === 'r' ? 'w' : base);
     if (typeof mode === 'number') {
@@ -334,7 +337,8 @@ function createExclusive(p, base, mode) {
     }
     if (base === 'r') { FSS.close(fd); fd = -1; fd = FSS.open(inner, 'r'); }
     try {
-      FSS.symlink(path.join(path.basename(priv), 'f'), p);
+      FSS.symlink(linkText, p);
+      claimed = true;
     } catch (e) {
       if (e.code === 'EEXIST') throw sysError('EEXIST', 'open', p);
       if (e.code === 'ENOENT' || e.code === 'ENOTDIR' || e.code === 'EACCES' || e.code === 'EROFS') throw e;
@@ -348,8 +352,41 @@ function createExclusive(p, base, mode) {
     if (fd >= 0) { try { FSS.close(fd); } catch { /* closing */ } }
     throw e;
   } finally {
+    // A claim the rename did not complete leaves OUR link at the path, pointing into the directory removed below:
+    // a dangling link where the caller asked for a file, which every later create of that path then trips over. It
+    // goes, if it is still ours (still a link, still our text).
+    if (claimed && !placed) {
+      try { if (typeIs(FSS.lstat(p).mode, 'symlink') && FSS.readlink(p) === linkText) FSS.unlink(p); } catch { /* gone */ }
+    }
     if (!placed) { try { FSS.unlink(inner); } catch { /* not made */ } }
     try { FSS.rmdir(priv); } catch { /* best effort */ }
+  }
+}
+
+// The exclusive create on Windows: the kernel's own, open(O_CREAT|O_EXCL), which is CreateFile CREATE_NEW and what
+// node's 'wx' and O_EXCL are there (libuv uv_fs_open). createExclusive's symlink claim cannot finish on Windows: the
+// CRT rename() refuses to replace the claimed link and an open file, so every create failed "EACCES ... rename
+// '...\.clode-create-...\f'" once symlink worked there (CI 44977529851; it fell back to check-then-open while
+// symlink was ENOSYS). A mode on Windows is only the read-only attribute, which node sets when the mode has no
+// owner-write bit, so there is no mode window for a staging directory to close. Needs the engine's 'x'
+// (txiki-sync-open-excl.patch). An engine without it (every released one, which a Windows build may bootstrap on)
+// takes the route it always took there, check-then-open (null: openPath's fallback), and says so in
+// CLODE_ENGINE_FLOOR_LOG, as Timeout#unref does on a stale engine; never the symlink claim, which cannot finish.
+function createExclusiveWin(p, base, mode, nb) {
+  if (!String(FSS.openFlags || '').includes('x')) {
+    require('../internal/engine-floor-log.cjs').engineFloorLog('node-shim: this engine has no exclusive open '
+      + '(__tjs_fs_sync.openFlags; it predates txiki-sync-open-excl.patch), so a new file on Windows is created '
+      + 'check-then-open, NOT exclusively; rebuild it: ./build.sh --only engine.compile');
+    return null;
+  }
+  let fd = FSS.open(p, (base === 'r' ? 'w' : base) + 'x' + nb);
+  try {
+    if (typeof mode === 'number' && !(mode & 0o200)) chmodBestEffort(p, mode & 0o7777);
+    if (base === 'r') { FSS.close(fd); fd = -1; fd = FSS.open(p, 'r' + nb); }
+    return fd;
+  } catch (e) {
+    if (fd >= 0) { try { FSS.close(fd); } catch { /* closing */ } }
+    throw e;
   }
 }
 
@@ -365,7 +402,7 @@ function openPath(p, flags, mode) {
   try { pre = FSS.lstat(p); } catch { /* absent, or the open below says why */ }
   if (creat && !pre) {
     try {
-      const fd = createExclusive(p, createBase, mode);
+      const fd = _isWin ? createExclusiveWin(p, createBase, mode, nb) : createExclusive(p, createBase, mode);
       if (fd !== null) return directoryCheck(fd, p, has);
     } catch (e) {
       if (e.code !== 'EEXIST' || excl) throw e;

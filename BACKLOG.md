@@ -449,8 +449,15 @@ ELOOP, the victim untouched, as node (2026-11-19).
 Measured: the same three rows in a node:24.22.0-alpine container (linux-x64 musl, tjs-linux-x64-musl of CI run
 44460009323): 0 double winners, 0 of 92857 looks at another mode, the planted link refused (2026-11-19).
 
-Unmeasured. What is still not node's: where the filesystem refuses a symlink (Windows without the privilege, FAT)
-the create falls back to check-then-open, with both windows; O_NOFOLLOW without O_CREAT is an lstat before the
+Windows (2026-11-22) does not take that route: once txiki-sync-links.patch made symlink work there, the claim
+succeeded and the rename over it failed (the CRT rename refuses an existing link and an open file: "EACCES ...
+rename '...\\.clode-create-...\\f'", CI 44977529851), and the claim link was left dangling at the path. Windows now
+creates with the engine's O_EXCL (txiki-sync-open-excl.patch, CREATE_NEW, node's own call); its mode is only the
+read-only attribute, set as node sets it. A claim left by any failed rename is removed. Row:
+test/node-shim-fs-exclusive-win32.test.cjs, off Windows (a vm load of fs.cjs as win32 over a CRT-like stand-in).
+
+Unmeasured. What is still not node's: where a POSIX filesystem refuses a symlink (FAT) the create falls back to
+check-then-open, with both windows; O_NOFOLLOW without O_CREAT is an lstat before the
 open and an identity check after it, so a link swapped in between is opened (and, with O_TRUNC, truncated) before
 the check refuses it; O_WRONLY without O_TRUNC on an existing file opens 'r+' and so needs read permission; and the
 transient `.clode-create-*` directory and claim link are visible to a directory watcher. Each needs the engine's

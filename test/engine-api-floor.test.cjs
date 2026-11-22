@@ -105,11 +105,13 @@ test('every floor entry declares its build-host role, and every build-host exemp
   // Today's build-host exemptions, by name: widening this set is a decision, so it is a diff here.
   // __tjs_fs_sync.utime (2026-11-21, ruling: a *Sync that is not synchronous is a product bug): the last release's
   // engine, which CI bootstraps the build on, has none, and no build step sets times; the call is refused, not faked.
+  // __tjs_fs_sync.openFlags (2026-11-22): Windows only (the exclusive create); POSIX needs nothing new, and a Windows
+  // build host without it (a released engine) creates check-then-open, as it always has, and logs that.
   // __tjs_uname (2026-11-21): the same, for os.machine(), which no build step calls.
   // __tjs_getrusage (2026-11-21): the same, for process.resourceUsage(), which no build step calls (grepped: no caller
   // in scripts/, libexec/ outside node-shim, or build.sh); only the bundle's event-loop-stall sampler does.
   assert.deepStrictEqual(ENGINE_API_FLOOR.filter((b) => !b.buildHost).map((b) => b.name),
-    ['__tjs_fs_sync.stat identity', '__tjs_fs_sync.strerror', '__tjs_fs_sync.utime', '__tjs_uname', '__tjs_getrusage',
+    ['__tjs_fs_sync.stat identity', '__tjs_fs_sync.strerror', '__tjs_fs_sync.utime', '__tjs_fs_sync.openFlags', '__tjs_uname', '__tjs_getrusage',
       '__tjs_timer_setref']);
   assert.deepStrictEqual(floorFor('build-host').map((b) => b.name), ['__tjs_fs_sync', '__tjs_spawn_sync', 'tjs.engine.moduleMeta']);
   assert.throws(() => floorFor('shipped'), /unknown role/);

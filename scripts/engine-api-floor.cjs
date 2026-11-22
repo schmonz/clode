@@ -124,6 +124,20 @@ const ENGINE_API_FLOOR = [
       + 'CLODE_ENGINE_FLOOR_LOG, so the gates listed above refuse a build path that ever reaches it',
   },
   {
+    // Without it node-shim has no atomic exclusive create on Windows: the symlink claim + rename it uses on POSIX
+    // cannot replace a link or an open file there (CI 44977529851), so every new file would fail.
+    name: '__tjs_fs_sync.openFlags',
+    expr: 'globalThis.__tjs_fs_sync.openFlags',
+    kind: 'string',
+    from: 'txiki-sync-open-excl.patch',
+    why: 'node-shim\'s exclusive create on Windows: open(O_CREAT|O_EXCL), CreateFile CREATE_NEW, as node\'s \'wx\' is',
+    buildHost: false,
+    notForBuildHost: 'only Windows uses it; POSIX creates go through the symlink claim, which needs nothing new. A '
+      + 'Windows build host on an engine without it (a released engine the build bootstraps on) creates check-then-open, '
+      + 'as every released engine always has there, and node-shim appends that to CLODE_ENGINE_FLOOR_LOG, so the gates '
+      + 'listed above refuse a build path that reaches it',
+  },
+  {
     // Without it node-shim's os.machine() can only guess from process.arch ("x64" where node says "x86_64").
     name: '__tjs_uname',
     expr: 'globalThis.__tjs_uname',

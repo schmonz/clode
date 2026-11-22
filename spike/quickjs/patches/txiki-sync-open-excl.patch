@@ -1,0 +1,49 @@
+# SYNC-OPEN-EXCL: __tjs_fs_sync.open takes an 'x' suffix, O_EXCL ("wx", "w+x", "ax", each optionally then "n"), and
+# __tjs_fs_sync.openFlags names the letters it takes ("rwa+xn"), so node-shim can tell an engine that has it.
+#
+# WHY. node-shim's exclusive create (fs.cjs createExclusive) claims the path with symlink(2) and renames a moded file
+# over its own link: atomic, and nobody sees the file at another mode, on POSIX. On Windows it cannot work: the CRT
+# rename() refuses an existing destination (the link) and an open file, so once txiki-sync-links.patch made symlink
+# work there, every create claimed the path and then failed "EACCES: unknown error, rename '...\.clode-create-...\f'"
+# (CI 44977529851, windows-arm64-tests: Edit did not apply, the Bash tool's output file, sessions/<pid>.json).
+# Before that, symlink was ENOSYS and the create fell back to check-then-open, which is not exclusive. Windows'
+# own atomic exclusive create is CreateFile CREATE_NEW, which the CRT's open(O_CREAT|O_EXCL) is, and it is the call
+# node makes for 'wx' and O_EXCL there (libuv's uv_fs_open). node-shim uses it on Windows, where a mode is only the
+# read-only attribute, so there is no mode window to close with the staging directory.
+# mod_fs_sync.c only, after txiki-sync-links.patch (TXIKI_PATCH_ORDER).
+#
+diff --git a/src/mod_fs_sync.c b/src/mod_fs_sync.c
+--- a/src/mod_fs_sync.c
++++ b/src/mod_fs_sync.c
+@@ -146,6 +146,10 @@
+     size_t flen = strlen(flags);
+     int nonblock = 0;
+     if (flen > 0 && flags[flen - 1] == 'n') { nonblock = 1; flen--; }
++    /* Then an optional 'x' = O_EXCL (e.g. "wx", "w+xn"), only with a creating base: the kernel's atomic exclusive
++     * create (CreateFile CREATE_NEW on Windows), which node's 'wx' and O_CREAT|O_EXCL are. */
++    int excl = 0;
++    if (flen > 0 && flags[flen - 1] == 'x') { excl = 1; flen--; }
+     if (flen >= sizeof(base)) { JS_FreeCString(ctx, path); JS_FreeCString(ctx, flags);
+                                 return JS_ThrowTypeError(ctx, "fs_sync.open: bad flags"); }
+     memcpy(base, flags, flen); base[flen] = '\0';  /* flen==0 -> base="" -> bad-flags throw below */
+@@ -158,6 +162,11 @@
+     else { JS_FreeCString(ctx, path); JS_FreeCString(ctx, flags);
+            return JS_ThrowTypeError(ctx, "fs_sync.open: bad flags"); }
+     if (nonblock) oflags |= O_NONBLOCK;
++    if (excl) {
++        if (!(oflags & O_CREAT)) { JS_FreeCString(ctx, path); JS_FreeCString(ctx, flags);
++                                   return JS_ThrowTypeError(ctx, "fs_sync.open: x needs a creating flag"); }
++        oflags |= O_EXCL;
++    }
+     /* CLOEXEC by default, matching libuv/Node (every fd it opens is FD_CLOEXEC):
+      * a parent-only fd must never leak into a spawned child. The sync-spawn
+      * primitive's POSIX_SPAWN_CLOEXEC_DEFAULT covers only Apple; this is the
+@@ -498,6 +507,8 @@
+ 
+ static const JSCFunctionListEntry fss_funcs[] = {
+     JS_CFUNC_DEF("open", 2, js_fss_open),
++    /* the open flag letters this engine takes: node-shim checks for the 'x' before an exclusive create relies on it */
++    JS_PROP_STRING_DEF("openFlags", "rwa+xn", JS_PROP_CONFIGURABLE),
+     JS_CFUNC_DEF("read", 3, js_fss_read),
+     JS_CFUNC_DEF("write", 3, js_fss_write),
+     JS_CFUNC_DEF("close", 1, js_fss_close),
