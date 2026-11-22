@@ -244,12 +244,38 @@ test('sandboxed Bash fails CLOSED under quaude: every call refused, nothing writ
   assert.deepStrictEqual(findings, []);
 });
 
+// WHERE NATIVE'S SANDBOX CANNOT LAUNCH A COMMAND. The startup rows' "starts" input still enables the sandbox in user
+// settings (source 'user', as every startup row does: they are the fail-closed branch); only the --settings file
+// leaves it unnamed. So native, started, runs its first Bash call INSIDE its sandbox: bubblewrap, then its
+// apply-seccomp helper, which makes a NESTED user namespace and writes /proc/self/setgroups. A host that restricts
+// unprivileged user namespaces refuses that, and native's call comes back "Exit code 1\napply-seccomp: write
+// /proc/self/setgroups (nested userns is capability-restricted; caller must provide CAP_SYS_ADMIN): Permission
+// denied" (CI 45017307973, linux-x64-pty: the GitHub Ubuntu 24.04 runner, kernel.apparmor_restrict_unprivileged_userns
+// = 1). Not an upstream change (native sandboxes Bash because the row's user settings enable it, and nothing runs it
+// unsandboxed) and not quaude's (quaude refuses every call on this branch): a host fact. Measured here, the same two
+// ways the kernel answers native: the sysctl, and an unprivileged `unshare --user --map-root-user`, which needs the
+// same uid map and setgroups write. -> the reason this host cannot, or null.
+function hostRefusesNestedUserns() {
+  if (process.platform !== 'linux') return null;
+  const why = [];
+  try {
+    const v = fs.readFileSync('/proc/sys/kernel/apparmor_restrict_unprivileged_userns', 'utf8').trim();
+    if (v === '1') why.push('kernel.apparmor_restrict_unprivileged_userns = 1');
+  } catch { /* no such knob: not restricted that way */ }
+  if (onPath('unshare')) {
+    const { spawnSync } = require('node:child_process');
+    const u = spawnSync('unshare', ['--user', '--map-root-user', 'true'], { encoding: 'utf8', timeout: 10000 });
+    if (u.status !== 0) why.push(`unshare --user --map-root-user: rc ${u.status} ${String(u.stderr || u.error || '').trim()}`);
+  }
+  return why.length ? `this host refuses an unprivileged user namespace (${why.join('; ')}), so native's sandbox `
+    + 'cannot launch a command (bubblewrap\'s apply-seccomp needs a nested one): a started session\'s first call cannot run' : null;
+}
+
 test('native refuses to start on the startup rows\' input as recorded, and starts on the same input without the sandbox named', { skip: SKIP }, async (t) => {
   const { bin: native, skip: noNative } = runnableNative(process.env);
   if (!native) { t.skip(noNative); return; }
   if (!nativeWouldSandbox()) { t.skip('native would not sandbox here: the startup rows are the fail-closed branch\'s'); return; }
-  // the checks' own controls: each fails on the other's answer; a start is judged by its first call's answer too
-  assertFailsOnMissingOutput(ran1, M1, ['print', 'shell:bash']);
+  // the checks' own controls: each fails on the other's answer
   const refusedRun = { mock: { requests: [] }, markers: [], r: { status: 1, stderr: `x\n\n${STARTUP_REFUSED('why')}\n` } };
   const startedRun = { mock: { requests: [{ method: 'POST' }] }, markers: [], r: { status: 0, stderr: '' } };
   assert.strictEqual(startupFinding('c', refusedRun, 'why'), null);
@@ -264,6 +290,27 @@ test('native refuses to start on the startup rows\' input as recorded, and start
       const f = startupFinding(`${c.name}, ${label}`, await runCase(native, { ...kase, args: (ctx) => [...kase.args(ctx), ...extra] }), c.startup.reason);
       if (f) findings.push(f);
     }
+    for (const [label, extra] of [['native, sandbox not named', []], ['native + quaude\'s layer, sandbox not named', QUAUDE_LAYER]]) {
+      const f = startedFinding(`${c.name}, ${label}`, await runCase(native, { ...starts, args: (ctx) => [...starts.args(ctx), ...extra] }));
+      if (f) findings.push(f);
+    }
+  }
+  assert.deepStrictEqual(findings, [], `native moved:\n${findings.join('\n')}`);
+});
+
+// The started sessions' first call, judged apart: it runs inside native's sandbox (see hostRefusesNestedUserns), so it
+// can be judged only where that sandbox can launch a command. Its cell (Bash x print/shell:bash) is driven by the
+// fail-closed test's sandbox-off turn in every job that runs this file, so this skip is no cell finding.
+test('native, started on the startup rows\' input without the sandbox named, runs its first call in its sandbox', { skip: SKIP }, async (t) => {
+  const { bin: native, skip: noNative } = runnableNative(process.env);
+  if (!native) { t.skip(noNative); return; }
+  if (!nativeWouldSandbox()) { t.skip('native would not sandbox here: the startup rows are the fail-closed branch\'s'); return; }
+  const noUserns = hostRefusesNestedUserns();
+  if (noUserns) { t.skip(noUserns); return; }
+  assertFailsOnMissingOutput(ran1, M1, ['print', 'shell:bash']);
+  const findings = [];
+  for (const c of ON_CASES.filter((x) => x.startup)) {
+    const starts = { ...c, files: c.startup.nativeStarts };
     for (const [label, extra] of [['native, sandbox not named', []], ['native + quaude\'s layer, sandbox not named', QUAUDE_LAYER]]) {
       const run = await runCase(native, { ...starts, args: (ctx) => [...starts.args(ctx), ...extra] });
       const f = startedFinding(`${c.name}, ${label}`, run);
