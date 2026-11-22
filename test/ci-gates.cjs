@@ -197,6 +197,7 @@ const FILES = {
   // kernels: their engine bindings were ENOSYS / absent there, and 2.1.330's Edit permission check reads the first.
   'test/node-shim-fs-readlink.test.cjs': { jobs: ['windows-amd64-tests', 'windows-arm64-tests'] },
   'test/node-shim-fs-noinherit.test.cjs': { jobs: ['windows-amd64-tests', 'windows-arm64-tests'] },
+  'test/node-shim-fs-readdir.test.cjs': { jobs: ['windows-amd64-tests', 'windows-arm64-tests'] },
   'test/node-shim-fs-exclusive-win32.test.cjs': { jobs: ['windows-amd64-tests', 'windows-arm64-tests'] },
   'test/node-shim-resource-usage.test.cjs': { jobs: ['windows-amd64-tests', 'windows-arm64-tests'] },
   // os.getPriority/setPriority through real PowerShell on the real Windows kernel; the POSIX nice(1) row skips there.

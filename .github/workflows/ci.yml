@@ -343,6 +343,7 @@ jobs:
               test/node-shim-os-priority.test.cjs \
               test/node-shim-fs-readlink.test.cjs \
               test/node-shim-fs-noinherit.test.cjs \
+              test/node-shim-fs-readdir.test.cjs \
               test/node-shim-fs-exclusive-win32.test.cjs \
               test/node-shim-resource-usage.test.cjs
 
@@ -530,6 +531,7 @@ jobs:
               test/node-shim-os-devnull.test.cjs \
               test/node-shim-fs-readlink.test.cjs \
               test/node-shim-fs-noinherit.test.cjs \
+              test/node-shim-fs-readdir.test.cjs \
               test/node-shim-fs-exclusive-win32.test.cjs \
               test/node-shim-resource-usage.test.cjs
 

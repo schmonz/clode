@@ -511,6 +511,7 @@ const TXIKI_PATCH_ORDER = [
   'txiki-rusage-global.patch',                // globalThis.__tjs_getrusage(): libuv's uv_getrusage for node-shim's process.resourceUsage(), in node's field names and units. vm.c, beside uname-global's global: after it
   'txiki-sync-links.patch',                   // __tjs_fs_sync.readlink and .symlink through libuv's uv_fs_readlink/uv_fs_symlink on every platform, symlink taking node's dir/junction flags (both were ENOSYS on Windows; readlink's made 2.1.330's link-walk call every path sensitive). mod_fs_sync.c: after every other patch that touches it (sync-fs, strerror, sync-stat-identity, sync-utime, sync-spawn, vm-context)
   'txiki-sync-open-excl.patch',               // __tjs_fs_sync.open takes 'x' (O_EXCL) and reports its letters in openFlags: node-shim's exclusive create on Windows (CREATE_NEW), where the symlink claim + rename cannot work. mod_fs_sync.c: after sync-links
+  'txiki-sync-readdir.patch',                 // __tjs_fs_sync.readdir through libuv's uv_fs_scandir on every platform (node's names, order and errors); on Windows the FindFirstFileA emulation threw a STALE errno for a missing directory, so 2.1.330's dev-mods check called every Edit sensitive. mod_fs_sync.c: after sync-open-excl
   'txiki-engine-module-meta.patch',          // PROBE: engine.moduleMeta(mod) — requires/exports/top-level locals, read-only               // ws.close() sends an RFC6455 CLOSE frame (opcode 0x8) instead of just dropping the TCP connection: lws only emits one via close_via_role_protocol, which the old PENDING_TIMEOUT_USER_OK path skipped (ws.c; after ws-root-path, same file)
 ];
 
@@ -3232,14 +3233,14 @@ static int getopt(int argc, char *const argv[], const char *optstring) {
 
 function fixupModFsSyncMsvc(dir) {
   // cl.exe (MSVC-native Windows leg, Phase A CI proving run 2026-07-13) has
-  // neither <dirent.h> nor <unistd.h> — mingw ships both as Win32 wrappers,
-  // MSVC ships neither. txiki-sync-fs.patch (our own added module) includes
-  // both unconditionally. _MSC_VER-guarded so mingw and every POSIX/darwin
-  // leg keep the byte-identical <dirent.h>/<unistd.h> path; only cl.exe gets
-  // the shim. dirent: minimal opendir/readdir/closedir over
-  // FindFirstFileA/FindNextFileA/FindClose, just enough for the readdir
-  // loop below (js_fss_readdir already skips "." and ".." itself, so the
-  // shim returns them like POSIX readdir does). unistd: MSVC's <io.h>
+  // no <unistd.h> (mingw ships one), which txiki-sync-fs.patch (our own added
+  // module) includes unconditionally, and lacks mode_t/ssize_t. _MSC_VER-guarded
+  // so every POSIX/darwin leg keeps the byte-identical <unistd.h> path. There
+  // used to be a <dirent.h> opendir/readdir emulation here too, over
+  // FindFirstFileA: it failed WITHOUT setting errno, so a missing directory
+  // threw a stale code (2.1.330 then called every Edit a sensitive file). The
+  // sync readdir is libuv's uv_fs_scandir now (txiki-sync-readdir.patch, which
+  // also drops the include). unistd: MSVC's <io.h>
   // (already included below, unconditionally under _WIN32) declares
   // read/write/close/access/unlink/lseek etc. as deprecated aliases for the
   // _-prefixed names, and <direct.h> (also already included) covers
@@ -3250,13 +3251,12 @@ function fixupModFsSyncMsvc(dir) {
   // candidate (see the patch header).
   const f = path.join(dir, 'src/mod_fs_sync.c');
   const src = fs.readFileSync(f, 'utf8');
-  if (src.includes('MSVC has neither <dirent.h>')) {
+  if (src.includes('MSVC has no <unistd.h>')) {
     console.log('fixup mod-fs-sync-msvc: already applied');
     return;
   }
   const anchor = '#include "private.h"\n'
     + '#include "utils.h"\n'
-    + '#include <dirent.h>\n'
     + '#include <errno.h>\n'
     + '#include <fcntl.h>\n'
     + '#include <limits.h>\n'
@@ -3273,12 +3273,10 @@ function fixupModFsSyncMsvc(dir) {
   if (!src.includes(anchor)) {
     throw new Error('fixup mod-fs-sync-msvc: anchor not found (mod_fs_sync.c changed under the pin — re-derive the fixup)');
   }
-  const direntShim = '#if defined(_MSC_VER)\n'
-    + '/* MSVC has neither <dirent.h> nor <unistd.h> (mingw ships both as Win32\n'
-    + ' * wrappers over the same Win32 APIs). Minimal opendir/readdir/closedir\n'
-    + ' * shim over FindFirstFileA/FindNextFileA/FindClose — just enough for the\n'
-    + ' * readdir loop below, which already skips "." and ".." itself, so the\n'
-    + ' * shim need not filter them either. */\n'
+  const msvcTypes = '#if defined(_MSC_VER)\n'
+    + '/* MSVC has no <unistd.h> (mingw ships one). The sync readdir is libuv\'s\n'
+    + ' * uv_fs_scandir on every platform (txiki-sync-readdir.patch), so there is\n'
+    + ' * no <dirent.h> and no opendir emulation here. */\n'
     + '#include <windows.h>\n'
     + '#include <stdio.h>\n'
     + '#include <stdlib.h>\n'
@@ -3290,41 +3288,6 @@ function fixupModFsSyncMsvc(dir) {
     + ' * above). */\n'
     + 'typedef int mode_t;\n'
     + 'typedef SSIZE_T ssize_t;\n'
-    + 'typedef struct DIR {\n'
-    + '    HANDLE handle;\n'
-    + '    WIN32_FIND_DATAA data;\n'
-    + '    int first;\n'
-    + '} DIR;\n'
-    + 'struct dirent {\n'
-    + '    char d_name[MAX_PATH];\n'
-    + '};\n'
-    + 'static DIR *opendir(const char *path) {\n'
-    + '    char pattern[MAX_PATH];\n'
-    + '    snprintf(pattern, sizeof(pattern), "%s\\\\*", path);\n'
-    + '    pattern[sizeof(pattern) - 1] = \'\\0\';\n'
-    + '    DIR *d = (DIR *)malloc(sizeof(DIR));\n'
-    + '    if (!d) return NULL;\n'
-    + '    d->handle = FindFirstFileA(pattern, &d->data);\n'
-    + '    if (d->handle == INVALID_HANDLE_VALUE) { free(d); return NULL; }\n'
-    + '    d->first = 1;\n'
-    + '    return d;\n'
-    + '}\n'
-    + 'static struct dirent *readdir(DIR *d) {\n'
-    + '    static struct dirent de;\n'
-    + '    if (!d->first && !FindNextFileA(d->handle, &d->data)) return NULL;\n'
-    + '    d->first = 0;\n'
-    + '    snprintf(de.d_name, sizeof(de.d_name), "%s", d->data.cFileName);\n'
-    + '    de.d_name[sizeof(de.d_name) - 1] = \'\\0\';\n'
-    + '    return &de;\n'
-    + '}\n'
-    + 'static int closedir(DIR *d) {\n'
-    + '    if (!d) return -1;\n'
-    + '    FindClose(d->handle);\n'
-    + '    free(d);\n'
-    + '    return 0;\n'
-    + '}\n'
-    + '#else\n'
-    + '#include <dirent.h>\n'
     + '#endif';
   const inject = '#if defined(_MSC_VER)\n'
     + '#ifndef _CRT_NONSTDC_NO_WARNINGS\n'
@@ -3336,7 +3299,7 @@ function fixupModFsSyncMsvc(dir) {
     + '#endif\n'
     + '#include "private.h"\n'
     + '#include "utils.h"\n'
-    + direntShim + '\n'
+    + msvcTypes + '\n'
     + '#include <errno.h>\n'
     + '#include <fcntl.h>\n'
     + '#include <limits.h>\n'

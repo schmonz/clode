@@ -1,0 +1,121 @@
+# SYNC-READDIR: __tjs_fs_sync.readdir through libuv on every platform, as node lists a directory: readdir(path) is
+# uv_fs_scandir (fs.readdirSync's call: sorted by byte on POSIX, the file system's order on Windows), readdir(path,
+# true) is uv_fs_opendir + uv_fs_readdir (fs.opendir's: the directory's own order). Node's names and node's errors.
+#
+# WHY. On Windows (MSVC) the sync readdir ran on an opendir/readdir emulation over FindFirstFileA/FindNextFileA (the
+# mod-fs-sync-msvc fixup in scripts/build-tjs.cjs, which now supplies only the MSVC typedefs). When FindFirstFileA
+# failed (no such directory) it returned NULL WITHOUT setting errno -- a Win32 call sets GetLastError, not the CRT's
+# errno -- so throw_errno reported whatever errno the last failing call had left. 2.1.330 lists <config>/dev-mods
+# before every Edit and reads anything but ENOENT/ENOTDIR as "could not be read", so every path counts as mod code;
+# the error it got was the EINVAL its link walk had just left (readlink of a plain directory). Every Edit on Windows
+# came back "Claude requested permissions to edit ... which is a sensitive file" (CI 44980741750, windows-amd64-tests
+# and windows-arm64-tests). The emulation also read names through the ANSI code page, so a name outside it came back
+# mangled. On POSIX, readdirSync gave the directory's own order where node's scandir sorts; it now sorts, and
+# node-shim's opendir asks for the directory's order, as node's does.
+# mod_fs_sync.c only (it also drops <dirent.h>, which nothing uses now), after txiki-sync-open-excl.patch
+# (TXIKI_PATCH_ORDER). test/node-shim-fs-readdir.test.cjs, test/node-shim-fs-opendir.test.cjs.
+#
+diff --git a/src/mod_fs_sync.c b/src/mod_fs_sync.c
+--- a/src/mod_fs_sync.c
++++ b/src/mod_fs_sync.c
+@@ -4,7 +4,6 @@
+  * See the accompanying feature-proposal writeup. */
+ #include "private.h"
+ #include "utils.h"
+-#include <dirent.h>
+ #include <errno.h>
+ #include <fcntl.h>
+ #include <limits.h>
+@@ -343,21 +342,73 @@
+     return ret;
+ }
+ 
++/* readdir through libuv, run with no callback (so synchronously, on this thread), as node does, on every platform:
++ *   readdir(path)        uv_fs_scandir, the call node's fs.readdirSync makes: names sorted by byte on POSIX, in the
++ *                        file system's order on Windows;
++ *   readdir(path, true)  uv_fs_opendir + uv_fs_readdir, the calls node's fs.opendir / Dir make: the directory's own
++ *                        order everywhere.
++ * Either way node's names ("." and ".." left out) and node's errors. On Windows (MSVC) this was an opendir emulation
++ * over FindFirstFileA, which fails WITHOUT setting errno, so its error carried whatever errno the last failing call
++ * left (2.1.330's link walk leaves EINVAL, and its dev-mods check reads anything but ENOENT/ENOTDIR as "could not be
++ * read": every Edit "a sensitive file"), and which read names through the ANSI code page. No <dirent.h> any more. */
++#define FSS_DIRENTS 64
++static JSValue fss_readdir_dir_order(JSContext *ctx, const char *path) {
++    uv_loop_t *loop = tjs_get_loop(ctx);
++    uv_fs_t req;
++    int r = uv_fs_opendir(loop, &req, path, NULL);
++    if (r < 0) {
++        uv_fs_req_cleanup(&req);
++        errno = uv_to_errno(r);
++        return throw_errno(ctx, "readdir", path);
++    }
++    uv_dir_t *dir = (uv_dir_t *) req.ptr;
++    uv_fs_req_cleanup(&req);
++    uv_dirent_t ents[FSS_DIRENTS];
++    dir->dirents = ents;
++    dir->nentries = FSS_DIRENTS;
++    JSValue ret = JS_NewArray(ctx);
++    uint32_t i = 0;
++    for (;;) {
++        r = uv_fs_readdir(loop, &req, dir, NULL);
++        if (r <= 0) { uv_fs_req_cleanup(&req); break; }
++        for (int k = 0; k < r; k++)
++            JS_DefinePropertyValueUint32(ctx, ret, i++, JS_NewString(ctx, ents[k].name), JS_PROP_C_W_E);
++        uv_fs_req_cleanup(&req);
++    }
++    uv_fs_t creq;
++    uv_fs_closedir(loop, &creq, dir, NULL);
++    uv_fs_req_cleanup(&creq);
++    if (r < 0) {
++        JS_FreeValue(ctx, ret);
++        errno = uv_to_errno(r);
++        return throw_errno(ctx, "readdir", path);
++    }
++    return ret;
++}
++
+ static JSValue js_fss_readdir(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv) {
+     const char *path = JS_ToCString(ctx, argv[0]);
+     if (!path) return JS_EXCEPTION;
+-    DIR *d = opendir(path);
+-    if (!d) { JSValue e = throw_errno(ctx, "readdir", path); JS_FreeCString(ctx, path); return e; }
+-    JSValue arr = JS_NewArray(ctx);
+-    uint32_t i = 0;
+-    struct dirent *de;
+-    while ((de = readdir(d))) {
+-        if (!strcmp(de->d_name, ".") || !strcmp(de->d_name, "..")) continue;
+-        JS_DefinePropertyValueUint32(ctx, arr, i++, JS_NewString(ctx, de->d_name), JS_PROP_C_W_E);
++    JSValue ret;
++    if (argc > 1 && JS_ToBool(ctx, argv[1])) {
++        ret = fss_readdir_dir_order(ctx, path);
++    } else {
++        uv_fs_t req;
++        int r = uv_fs_scandir(tjs_get_loop(ctx), &req, path, 0, NULL);
++        if (r < 0) {
++            errno = uv_to_errno(r);
++            ret = throw_errno(ctx, "readdir", path);
++        } else {
++            ret = JS_NewArray(ctx);
++            uint32_t i = 0;
++            uv_dirent_t ent;
++            while (uv_fs_scandir_next(&req, &ent) == 0)
++                JS_DefinePropertyValueUint32(ctx, ret, i++, JS_NewString(ctx, ent.name), JS_PROP_C_W_E);
++        }
++        uv_fs_req_cleanup(&req);
+     }
+-    closedir(d);
+     JS_FreeCString(ctx, path);
+-    return arr;
++    return ret;
+ }
+ 
+ /* one-path / two-path / path+int syscall wrappers */
+@@ -455,7 +506,7 @@
+     JS_CFUNC_DEF("fstat", 1, js_fss_fstat),
+     JS_CFUNC_DEF("realpath", 1, js_fss_realpath),
+     JS_CFUNC_DEF("readlink", 1, js_fss_readlink),
+-    JS_CFUNC_DEF("readdir", 1, js_fss_readdir),
++    JS_CFUNC_DEF("readdir", 2, js_fss_readdir),
+     JS_CFUNC_DEF("mkdir", 2, js_fss_mkdir),
+     JS_CFUNC_DEF("rmdir", 1, js_fss_rmdir),
+     JS_CFUNC_DEF("unlink", 1, js_fss_unlink),

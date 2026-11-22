@@ -866,8 +866,11 @@ function readdirCore(p, opts) {
   const recursive = !!(opts && opts.recursive);
   const enc = nameEncoding(opts);
   const named = (d, n) => { if (enc !== 'utf8' && enc !== 'utf-8') d.name = encodeName(n, enc); return d; };
-  // node's readdir is a scandir: its errors say so ("ENOENT: ..., scandir '<p>'")
-  const scandir = (d) => { try { return FSS.readdir(d); } catch (e) { throw retold(e, 'scandir', d); } };
+  // node's readdir is a scandir: its errors say so ("ENOENT: ..., scandir '<p>'"), and so is its order (sorted
+  // by byte on POSIX). dirOrder (node-shim's own, for opendir) asks the engine for the directory's own order, as
+  // node's Dir reads it (uv_fs_opendir/uv_fs_readdir; txiki-sync-readdir.patch).
+  const dirOrder = !!(opts && opts.dirOrder);
+  const scandir = (d) => { try { return dirOrder ? FSS.readdir(d, true) : FSS.readdir(d); } catch (e) { throw retold(e, 'scandir', d); } };
   if (!recursive) {
     const names = scandir(p);
     return wft ? names.map((n) => named(direntFor(p, n), n)) : names.map((n) => encodeName(n, enc));
@@ -1019,8 +1022,8 @@ function cpDir(src, dest, opts) {
 }
 
 function openDir(p, opts, withPath) {
-  // A Dir over an eager Dirent list in the OS's readdir order (the engine's readdir does not sort,
-  // as node's Dir does not: test/node-shim-fs-opendir.test.cjs): readSync()/read() hand over the next
+  // A Dir over an eager Dirent list in the OS's readdir order (the engine's readdir(p, true) does not sort,
+  // as node's Dir does not, where readdirSync's does: test/node-shim-fs-opendir.test.cjs): readSync()/read() hand over the next
   // entry or null, an async iterator, and closeSync()/close(), after which a read is node's
   // ERR_DIR_CLOSED.
   // `encoding` names the entries as readdir's does (a Dirent's name a Buffer for 'buffer'), as node's Dir does.
@@ -1028,7 +1031,7 @@ function openDir(p, opts, withPath) {
   // directory, opendir") but the path from fs.promises.opendir and the callback form (measured, node
   // 24.21.0). { recursive } walks as node's Dir does, breadth-first: the directory's entries, then each
   // subdirectory's in the order met, without following symlinks.
-  const listed = (d) => { try { return readdirCore(d, { withFileTypes: true }); } catch (e) { throw retold(e, 'opendir', withPath ? d : undefined); } };
+  const listed = (d) => { try { return readdirCore(d, { withFileTypes: true, dirOrder: true }); } catch (e) { throw retold(e, 'opendir', withPath ? d : undefined); } };
   const ents = listed(p);
   if (opts && opts.recursive) {
     for (let k = 0; k < ents.length; k++) if (ents[k].isDirectory()) ents.push(...listed(path.join(ents[k].parentPath, ents[k].name)));
