@@ -2,11 +2,14 @@
 'use strict';
 // Generate the GENERATED region of libexec/unicode-text.cjs.
 //
-// RULES from pinned UCD (the Unicode version native Bun turns out to use); WIDTHS from
+// RULES from pinned UCD (the Unicode version native turns out to use); WIDTHS from
 // native itself, per code point, under both ambiguous settings. Nothing hand-written.
 // Two rule sets, because native has two clusterers (ruling R15-amended): `uax29` data at
-// the width version (native Intl.Segmenter), and `*Cell` data at CELL_UNICODE (native
-// Bun.ant.CellSegmenter's own clusterer) — see CELL_UNICODE below for the measurement.
+// the version native's Intl.Segmenter REPORTS (process.versions.unicode, from a linux
+// native: INTL-FOLLOWS-BUNDLED-ICU in scripts/lib/native-intl.cjs), and `*Cell` data at
+// CELL_UNICODE (native Bun.ant.CellSegmenter's own clusterer) — see CELL_UNICODE below.
+// A native of another platform keeps the header's intl version (its Intl is the host OS's
+// ICU, a different oracle), so regenerating on darwin moves widths, never uax29's rules.
 //
 //   node scripts/gen-unicode-data.cjs --pin VERSION                # fill missing sha256 pins (TOFU; review the diff)
 //   node scripts/gen-unicode-data.cjs --native BIN                 # regenerate
@@ -26,6 +29,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { runInNative, nativeVersion } = require('./lib/native-oracle.cjs');
 const ucd = require('./lib/ucd.cjs');
+const { INTL_PLATFORM, nativeIntl, versionKey, compareVersions } = require('./lib/native-intl.cjs');
 const { clodeCacheDir } = require('../libexec/clode-paths.cjs');
 
 const REPO = path.resolve(__dirname, '..');
@@ -191,7 +195,7 @@ function fromRanges(flat, stride, absent = 0) {
   return arr;
 }
 
-const TABLES = { gcb: [3, 0], incb: [3, 0], extPict: [2, 0], width: [3, 1], ambiguous: [2, 0],   // [stride, absent]
+const TABLES = { gcb: [3, 0], incb: [3, 0], extPict: [2, 0], extPictWidth: [2, 0], width: [3, 1], ambiguous: [2, 0],   // [stride, absent]
   emoji: [2, 0], gcbCell: [3, 0], incbCell: [3, 0], extPictCell: [2, 0], cc: [2, 0], emojiModifier: [2, 0], emojiModifierBase: [2, 0] };
 
 // One emoji-data property as a 0/1 membership array.
@@ -254,6 +258,43 @@ function currentData(src) {
   if (a < 0) return null;
   const b = src.indexOf(';\n', a);
   try { return JSON.parse(src.slice(a + 'const UNICODE_DATA = '.length, b)); } catch { return null; }
+}
+
+// The pinned inputs the uax29 profile's tables (and its GraphemeBreakTest conformance) read.
+const INTL_INPUTS = ['GraphemeBreakProperty', 'DerivedCoreProperties', 'emoji-data', 'GraphemeBreakTest'];
+
+// The UAX #29 revision libexec/unicode-text.cjs's rules implement, read from its SOURCE (a broken
+// generated region must not stop the generator that repairs it).
+function rulesThrough(src) {
+  const m = /^const UAX29_RULES_THROUGH = '(\d+\.\d+\.\d+)';/m.exec(src);
+  if (!m) throw new Error('libexec/unicode-text.cjs declares no UAX29_RULES_THROUGH');
+  return m[1];
+}
+
+// Which Unicode version uax29's tables are generated at: the one a linux native's Intl reports
+// (INTL-FOLLOWS-BUNDLED-ICU); a native of another platform keeps the current header's. Refused:
+// a version not pinned (a new Unicode needs its inputs first), and a version past the rules
+// libexec/unicode-text.cjs implements. THE TABLE-VERSION CHECK: a Unicode release can change a
+// RULE, not only data (UAX #29 rev 49, for 18.0, rewrote GB9c), and tables at a version whose
+// rules were never read pass every row the old and new rules share and fail only the rest.
+function chooseIntl(n, header, pins, through) {
+  let intl;
+  if (n.platform === INTL_PLATFORM) intl = { unicode: versionKey(n.unicode), icu: n.icu, platform: n.platform };
+  else if (header && header.intl && header.intl.platform === INTL_PLATFORM) {
+    intl = { unicode: header.intl.unicode, icu: header.intl.icu, platform: header.intl.platform,
+      kept: `kept from the header: this native's Intl is ${n.platform}'s ICU ${n.icu} (Unicode ${n.unicode}), a different oracle` };
+  } else {
+    throw new Error(`uax29's tables follow a ${INTL_PLATFORM} native's Intl (INTL-FOLLOWS-BUNDLED-ICU), and this native is ${n.platform} `
+      + `with no ${INTL_PLATFORM} intl version in the current header to keep: generate once with a ${INTL_PLATFORM} native`);
+  }
+  if (!pins[intl.unicode]) {
+    throw new Error(`native's Intl tracks Unicode ${intl.unicode}, which scripts/unicode-inputs.json does not pin: add it and run --pin ${intl.unicode}`);
+  }
+  if (compareVersions(intl.unicode, through) > 0) {
+    throw new Error(`native's Intl tracks Unicode ${intl.unicode}, past UAX29_RULES_THROUGH ${through} in libexec/unicode-text.cjs: read `
+      + 'UAX #29\'s Modifications for every revision since, implement any rule change in graphemeBoundaries, then raise it');
+  }
+  return intl;
 }
 
 async function pinVersion(version, o) {   // TOFU pinning, one version, reviewed in the diff
@@ -319,8 +360,16 @@ async function main(argv, env = process.env) {
   }
   const ver = best.ver;
 
-  const gcb = mapValues(ucd.parseRanges(await ucd.fetchVerified(ver, 'GraphemeBreakProperty', o)), GCB, 'GraphemeBreakProperty');
-  const incb = mapValues(ucd.parseRanges(await ucd.fetchVerified(ver, 'DerivedCoreProperties', o), 'InCB'), INCB, 'InCB');
+  // uax29's rule tables, at the Unicode version native's Intl.Segmenter reports (see the
+  // header). Not the width version: on 2.1.330 they part (widths 17.0.0, linux Intl 18.0).
+  const cur = fs.readFileSync(TARGET, 'utf8');
+  const intl = chooseIntl(nativeIntl(o.native), (currentData(cur) || {}).header, ucd.pins(), rulesThrough(cur));
+  process.stdout.write(`intl: Unicode ${intl.unicode} (ICU ${intl.icu}, ${intl.platform})${intl.kept ? ` — ${intl.kept}` : ''}\n`);
+  const intlUsed = {};
+  for (const name of INTL_INPUTS) { await ucd.fetchVerified(intl.unicode, name, o); intlUsed[name] = ucd.pins()[intl.unicode][name].sha256; }
+  const gcb = mapValues(ucd.parseRanges(await ucd.fetchVerified(intl.unicode, 'GraphemeBreakProperty', o)), GCB, `GraphemeBreakProperty ${intl.unicode}`);
+  const incb = mapValues(ucd.parseRanges(await ucd.fetchVerified(intl.unicode, 'DerivedCoreProperties', o), 'InCB'), INCB, `InCB ${intl.unicode}`);
+  const intlExt = propertySet(await ucd.fetchVerified(intl.unicode, 'emoji-data', o), 'Extended_Pictographic');
   const emojiText = await ucd.fetchVerified(ver, 'emoji-data', o);
   const ext = propertySet(emojiText, 'Extended_Pictographic');
   const emoji = propertySet(emojiText, 'Emoji');
@@ -340,13 +389,17 @@ async function main(argv, env = process.env) {
   const data = {
     header: { unicode: ver, ucdSha256: pinsUsed, nativeClaude, nativeBun: nat.bun,
       versionChoice: counts, generatorSha256: GENERATOR_SHA,
+      intl: { unicode: intl.unicode, icu: intl.icu, platform: intl.platform, ucdSha256: intlUsed,
+        why: 'native Intl.Segmenter (the uax29 profile) is ICU ' + intl.icu + ' on ' + intl.platform + ', where Bun bundles it, '
+          + 'and reports Unicode ' + intl.unicode + ' (process.versions.unicode); see INTL-FOLLOWS-BUNDLED-ICU in scripts/lib/native-intl.cjs' },
       cell: { unicode: CELL_UNICODE, ucdSha256: cellUsed,
         why: 'native Bun.ant.CellSegmenter clusters with Unicode ' + CELL_UNICODE + ' GCB/InCB/ExtPict while its widths track '
           + ver + ': 13 join templates over every code point match ' + CELL_UNICODE + ' and no other pinned version '
           + '(measured 2026-09-24; see CELL_UNICODE in scripts/gen-unicode-data.cjs)' } },
     gcb: toRanges(gcb, (v) => v !== 0),
     incb: toRanges(incb, (v) => v !== 0),
-    extPict: toSpans(ext),
+    extPict: toSpans(intlExt),
+    extPictWidth: toSpans(ext),
     width: toRanges(nat.narrow, (v) => v !== 1),     // absent = width 1
     ambiguous: toSpans(amb),
     emoji: toSpans(emoji),
@@ -365,7 +418,6 @@ async function main(argv, env = process.env) {
   };
   const region = `${BEGIN}\n// DO NOT EDIT. Regenerate: node scripts/gen-unicode-data.cjs --native <claude ${data.header.nativeClaude}>\n`
     + `const UNICODE_DATA = ${JSON.stringify(data)};\n${END}`;
-  const cur = fs.readFileSync(TARGET, 'utf8');
   const a = cur.indexOf(BEGIN); const b = cur.indexOf(END);
   if (a < 0 || b < 0) throw new Error(`${TARGET} lacks the GENERATED markers`);
   const next = cur.slice(0, a) + region + cur.slice(b + END.length);
@@ -386,7 +438,7 @@ async function main(argv, env = process.env) {
 // run could not look" from "this run looked and refused".
 function exitCodeFor(e) { return e && e.name === 'UcdOfflineMiss' ? 3 : 2; }
 
-module.exports = { CELL_UNICODE, propertySet, emojiNotWidthBase, toRanges, toSpans, ambiguousFrom, eawAssigned, eawPredicted, widthDisagreements, mapValues, fromRanges, describeDrift, main, exitCodeFor };
+module.exports = { CELL_UNICODE, chooseIntl, rulesThrough, propertySet, emojiNotWidthBase, toRanges, toSpans, ambiguousFrom, eawAssigned, eawPredicted, widthDisagreements, mapValues, fromRanges, describeDrift, main, exitCodeFor };
 
 if (require.main === module) {
   main(process.argv.slice(2)).then((c) => process.exit(c), (e) => { process.stderr.write(`gen-unicode-data: ${e.message}\n`); process.exit(exitCodeFor(e)); });

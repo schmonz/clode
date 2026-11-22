@@ -69,6 +69,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { defineGuard, guardTests } = require('../guard.cjs');
 const { resolveNativeOracle, nativeVersion } = require('../../scripts/lib/native-oracle.cjs');
+const { nativeIntl, intlVerdict } = require('../../scripts/lib/native-intl.cjs');
 const { runNative, runOurs, compareTextResults, BASIC_WRAPS, FULL_WRAPS } = require('../../scripts/lib/text-probe.cjs');
 const C = require('../../scripts/lib/text-corpus.cjs');
 const ucd = require('../../scripts/lib/ucd.cjs');
@@ -98,6 +99,10 @@ const PART_FLOORS = {
 };
 
 let SKIP = null, STRINGS = null, NATIVE = null, OURS = null, WHAT = '', PARTS = null;
+// May this native's Intl judge the uax29 profile (scripts/lib/native-intl.cjs intlVerdict)? A darwin
+// native's Intl is macOS's ICU, a different oracle (INTL-FOLLOWS-BUNDLED-ICU): text-diff-intl skips,
+// naming both. The same platform reporting another Unicode is STALE tables: a finding, never a skip.
+let INTL_VERDICT = null;
 // The SECOND run (ruling W1): corpusWraps() alone, at FULL_WRAPS (every width 1-80), judged by
 // text-diff-wrapansi-cases. Shares SKIP with the main run (both need the same tjs + matching
 // native precondition; the cases run does not itself need emoji-test, but before() only gets
@@ -131,6 +136,7 @@ before(async () => {
       + 'set CLODE_NATIVE_ORACLE to that version';
     return;
   }
+  INTL_VERDICT = intlVerdict(nativeIntl(bin), UNICODE_DATA.header.intl);
   const ver = UNICODE_DATA.header.unicode;
   let emoji;
   try {
@@ -175,6 +181,8 @@ const judge = (key, source = 'main') => ({
   floor: source === 'cases' ? PART_FLOORS.wraps : CORPUS_FLOOR,
   read() {
     if (SKIP) return { skip: SKIP };
+    if (key === 'intl' && INTL_VERDICT && INTL_VERDICT.other) return { skip: INTL_VERDICT.other };
+    if (key === 'intl' && INTL_VERDICT && INTL_VERDICT.stale) return { stale: INTL_VERDICT.stale };
     const native = source === 'cases' ? WRAP_NATIVE : NATIVE;
     const ours = source === 'cases' ? WRAP_OURS : OURS;
     if (!native[key]) return { skip: `native (${native.runtime}) has no ${key} to compare against` };
@@ -186,7 +194,8 @@ const judge = (key, source = 'main') => ({
   // A part under its floor: nothing counts as examined (so the verdict is BROKEN, with the
   // note naming the part), because a verdict over a corpus missing a part says nothing about
   // what that part is in the corpus to judge.
-  scan({ strings, native, ours, what, parts }) {
+  scan({ strings, native, ours, what, parts, stale }) {
+    if (stale) return { examined: 0, findings: [stale], note: stale };
     const short = parts.filter((p) => p.count < p.floor);
     if (short.length) {
       const named = short.map((p) => `the ${p.name} part has ${p.count} strings, under its floor of ${p.floor}`);

@@ -10,12 +10,19 @@
 // is re-proven here.
 //
 //   node scripts/cell-profile-diff.cjs --native BIN [--corpus NAME]...
-//     NAME: gbt (GraphemeBreakTest at the width version), gbt-cell (at the cell version),
-//           emoji-test, composed, probes, sweep; default all six
+//     NAME: gbt (GraphemeBreakTest at uax29's version, header.intl), gbt-cell (at the cell
+//           version), emoji-test, composed, probes, sweep; default all six
 //
 // Exit 0 when every compared pair is identical, 1 when any differs, 2 on harness failure
 // (no native, a native of another version than the tables were generated from, a native
-// refusal, a UCD input not cached while offline, a bad argument).
+// refusal, a UCD input not cached while offline, a bad argument) — and when uax29 was NOT
+// JUDGED because native's Intl is another platform's ICU (INTL-FOLLOWS-BUNDLED-ICU,
+// scripts/lib/native-intl.cjs: a darwin native's Intl is the host OS's), so a run that
+// compared only bun-cell never reads as a full pass.
+//
+// THE TABLE-VERSION CHECK: before any string, native's Intl reports its Unicode and ICU
+// versions; on the platform uax29's tables came from, a version other than header.intl's is
+// a finding by name ("native's Intl now reports ... regenerate"), not four stray Indic rows.
 //
 // COMPARING LIKE WITH LIKE: ours is the text bun-shim's CellSegmenter makes, through the
 // SAME functions (libexec/unicode-text.cjs's escapeLayer and forEachCell, where each rule is
@@ -30,6 +37,7 @@ const path = require('node:path');
 const C = require('./lib/text-corpus.cjs');
 const ucd = require('./lib/ucd.cjs');
 const { runInNative, nativeVersion } = require('./lib/native-oracle.cjs');
+const { nativeIntl, intlVerdict } = require('./lib/native-intl.cjs');
 const { clodeCacheDir } = require('../libexec/clode-paths.cjs');
 const U = require('../libexec/unicode-text.cjs');
 
@@ -97,12 +105,12 @@ function ourSegments(s) {
 const hex = (s) => Array.from(s, (c) => c.codePointAt(0).toString(16).toUpperCase().padStart(4, '0')).join(' ');
 const fmtCells = (row) => row.map(([t, w]) => `[${hex(t)}]=${w & 255}${w & 256 ? '/tab' : ''}`).join(' ') || '(no cells)';
 
-function compareStrings(name, strings, native, cases) {
-  const r = { name, examined: strings.length, bunCell: 0, uax29: 0, gbt: null, findings: [] };
+function compareStrings(name, strings, native, cases, judgeIntl = true) {
+  const r = { name, examined: strings.length, bunCell: 0, uax29: judgeIntl ? 0 : null, gbt: null, findings: [] };
   const note = (f) => { if (r.findings.length < SHOW) r.findings.push(f); };
   strings.forEach((s, i) => {
     const [nNarrow, nWide, nIntl] = native[i];
-    const oIntl = ourSegments(s);
+    const oIntl = judgeIntl ? ourSegments(s) : nIntl;
     if (JSON.stringify(nIntl) !== JSON.stringify(oIntl)) { r.uax29++; note(`uax29 ${hex(s)}: native Intl ${nIntl.map(hex).join(' | ')} ours ${oIntl.map(hex).join(' | ')}`); }
     for (const [narrow, n] of [[true, nNarrow], [false, nWide]]) {
       const o = ourCells(s, narrow);
@@ -168,7 +176,9 @@ async function main(argv, env = process.env) {
   const corpora = o.corpora.length ? o.corpora : CORPORA;
   const opts = { cacheDir: path.join(clodeCacheDir(env), 'unicode'), offline: env.CLODE_OFFLINE === '1' };
   const width = U.UNICODE_DATA.header.unicode; const cell = U.UNICODE_DATA.header.cell.unicode;
+  const intlHeader = U.UNICODE_DATA.header.intl || {};
   const results = [];
+  let verdict = null;
   try {
     // The tables were generated from one native (ruling R11); another one is a different
     // oracle, so it is REFUSED (exit 2), not compared. Until task 8 this only warned, and
@@ -182,18 +192,26 @@ async function main(argv, env = process.env) {
         + `${JSON.stringify(from)}: a different native is a different oracle, not a verdict on ours (ruling R11)`);
     }
     process.stdout.write(`native ${v}; libexec/unicode-text.cjs was generated from ${from}\n`);
+    // Which Intl is this (the table-version check, see the header)? Unicode's own answers
+    // (uax29-vs-GraphemeBreakTest) need no native and are judged either way.
+    const ni = nativeIntl(o.native);
+    verdict = intlVerdict(ni, intlHeader);
+    process.stdout.write(`native Intl: ICU ${ni.icu}, Unicode ${ni.unicode}, ${ni.platform}; uax29's tables: ICU ${intlHeader.icu}, `
+      + `Unicode ${intlHeader.unicode}, ${intlHeader.platform}\n`);
+    if (verdict.stale) process.stdout.write(`uax29: STALE — ${verdict.stale}\n`);
+    if (verdict.other) process.stdout.write(`uax29-vs-Intl: NOT JUDGED — ${verdict.other}\n`);
     for (const name of corpora) {
       if (name === 'sweep') { results.push(sweep(o.native)); continue; }
       let strings; let cases = null;
       if (name === 'gbt' || name === 'gbt-cell') {
-        cases = C.graphemeBreakTestCases(await ucd.fetchVerified(name === 'gbt' ? width : cell, 'GraphemeBreakTest', opts));
+        cases = C.graphemeBreakTestCases(await ucd.fetchVerified(name === 'gbt' ? intlHeader.unicode : cell, 'GraphemeBreakTest', opts));
         strings = cases.map((c) => c.s);
         if (name === 'gbt-cell') cases = null;   // Unicode's answers there are 16.0's, not uax29's
       } else if (name === 'emoji-test') strings = C.corpusEmojiTest(await ucd.fetchVerified(width, 'emoji-test', opts));
       else if (name === 'composed') strings = C.corpusComposed();
       else strings = C.corpusCellProbes();
       if (!strings.length) throw new Error(`corpus ${name} is empty`);
-      results.push(compareStrings(name, strings, runInNative(o.native, CORPUS_PROBE, { input: strings, timeoutMs: 600000 }), cases));
+      results.push(compareStrings(name, strings, runInNative(o.native, CORPUS_PROBE, { input: strings, timeoutMs: 600000 }), cases, verdict.judge));
     }
   } catch (e) {
     process.stderr.write(`cell-profile-diff: ${e && e.message ? e.message : e}\n`);
@@ -208,7 +226,8 @@ async function main(argv, env = process.env) {
     for (const f of r.findings) process.stdout.write(`  ${f}\n`);
     if (r.bunCell || r.uax29 || (r.gbt && r.gbt.bad)) differs = true;
   }
-  return differs ? 1 : 0;
+  if (differs || verdict.stale) return 1;
+  return verdict.other ? 2 : 0;
 }
 
 module.exports = { ourCells, main };

@@ -703,6 +703,8 @@ test('the controlled set is EXACTLY the modules a guard was deliberately written
     'scripts/carve-probe.mjs',
     'scripts/gen-rg-regex-data.cjs',
     'scripts/gen-rg-types.cjs',
+    'scripts/gen-unicode-data.cjs',  // ADDED 2026-11-22: the table-version check (chooseIntl; new gate, born controlled by unicode-intl-gates)
+    'scripts/lib/native-intl.cjs',  // ADDED 2026-11-22: which Intl may judge uax29 (intlVerdict; new gate, born controlled by unicode-intl-gates)
     'scripts/lib/paint-probe.cjs',
     'scripts/lib/reset-patch.cjs',
     'scripts/lib/rg-probe.cjs',

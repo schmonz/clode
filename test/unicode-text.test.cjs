@@ -19,10 +19,10 @@ const { defineGuard, guardTests } = require('./guard.cjs');
 const ucd = require('../scripts/lib/ucd.cjs');
 
 async function breakTest(t) {
-  const ver = UNICODE_DATA.header.unicode;
+  const ver = UNICODE_DATA.header.intl.unicode;   // uax29's version (graphemeBoundaries' default profile)
   // The tables and the corpus must be the same release's: a pin moved without a
   // regeneration would test the rules against a corpus the data never saw.
-  assert.strictEqual(ucd.pins()[ver].GraphemeBreakTest.sha256, UNICODE_DATA.header.ucdSha256.GraphemeBreakTest,
+  assert.strictEqual(ucd.pins()[ver].GraphemeBreakTest.sha256, UNICODE_DATA.header.intl.ucdSha256.GraphemeBreakTest,
     `scripts/unicode-inputs.json pins a different GraphemeBreakTest ${ver} than the generated header names`);
   try {
     return await ucdInput(ver, 'GraphemeBreakTest');
@@ -150,6 +150,61 @@ test('bun-cell CLUSTER-DATA-16 (InCB): the scripts Unicode 17.0 added to InCB ge
   assert.deepStrictEqual(B('\u17a0\u17d2\u17ab\u1791\u17d0\u1799', 'bun-cell'), [2, 3, 5, 6]);
   // Devanagari was InCB before 17.0, so it still joins: native [0915 094D 0937]=2.
   assert.deepStrictEqual(B('\u0915\u094d\u0937', 'bun-cell'), [3]);
+});
+
+test('GB9c has two forms: uax29 (UAX #29 rev 49, Unicode 18.0) joins a Consonant after any Linker Extend*, bun-cell still wants a Consonant first', () => {
+  // Measured 2026-11-21, 2.1.330 through the BUN_OPTIONS preload: linux native Intl.Segmenter
+  // (ICU 79.1, Unicode 18.0) and native CellSegmenter, on both platforms; and GraphemeBreakTest
+  // 18.0.0's [9.3] lines. Darwin native's Intl (macOS ICU 78.1, Unicode 17.0) still splits
+  // these — a different oracle (INTL-FOLLOWS-BUNDLED-ICU, scripts/lib/native-intl.cjs).
+  const cp = (...a) => String.fromCodePoint(...a);
+  const uax = [
+    [cp(0x94d, 0x915), [2]],                 // CI 44980741750: native `094D 0915`, ours had `094D | 0915`
+    [cp(0x94d, 0x308, 0x915), [3]],          // an InCB Extend between Linker and Consonant
+    [cp(0x61, 0x94d, 0x924), [3]],
+    [cp(0x3f, 0x94d, 0x924), [3]],
+    [cp(0x94d, 0x94d, 0x915), [3]],
+    [cp(0xa, 0x94d, 0x915), [1, 3]],         // GB4 still breaks after LF; GB9c joins after it
+    [cp(0x915, 0x61, 0x94d, 0x924), [1, 4]],
+    [cp(0x94d, 0x61), [1, 2]],               // only a Consonant joins
+    [cp(0x1cf5, 0x915), [2]],                // a Linker that is not a virama (GraphemeBreakTest 18.0.0)
+    [cp(0x94d, 0x903, 0x915), [2, 3]],       // a SpacingMark is no InCB Extend
+  ];
+  for (const [s, want] of uax) assert.deepStrictEqual(B(s, 'uax29'), want, `uax29 ${Array.from(s, (c) => c.codePointAt(0).toString(16)).join(' ')}`);
+  assert.deepStrictEqual(B(cp(0x94d, 0x915), 'bun-cell'), [1, 2], 'native CellSegmenter: [094D] [0915]');
+  assert.deepStrictEqual(B(cp(0x94d, 0x308, 0x915), 'bun-cell'), [2, 3]);
+  assert.deepStrictEqual(B(cp(0x915, 0x94d, 0x915), 'bun-cell'), [3], 'the old form still joins after a Consonant');
+});
+
+test('the uax29 tables are the version linux native\'s Intl reports, and the rules have been read through it', () => {
+  const h = UNICODE_DATA.header;
+  assert.strictEqual(h.intl.platform, require('../scripts/lib/native-intl.cjs').INTL_PLATFORM);
+  assert.ok(ucd.pins()[h.intl.unicode], `scripts/unicode-inputs.json pins Unicode ${h.intl.unicode}`);
+  for (const [name, sha] of Object.entries(h.intl.ucdSha256)) assert.strictEqual(ucd.pins()[h.intl.unicode][name].sha256, sha, `${h.intl.unicode}/${name}`);
+  const { chooseIntl, rulesThrough } = require('../scripts/gen-unicode-data.cjs');
+  const src = require('node:fs').readFileSync(require.resolve('../libexec/unicode-text.cjs'), 'utf8');
+  const through = rulesThrough(src);
+  assert.ok(require('../scripts/lib/native-intl.cjs').compareVersions(h.intl.unicode, through) <= 0, `tables at ${h.intl.unicode}, rules through ${through}`);
+  // THE TABLE-VERSION CHECK: the next Unicode a linux native's Intl reports is refused until pinned,
+  // then until its rules are read; a darwin native keeps the header's version; nothing else moves it.
+  const pins = { ...ucd.pins(), '19.0.0': {} };
+  assert.throws(() => chooseIntl({ unicode: '19.0', icu: '80.1', platform: 'linux' }, h, ucd.pins(), through), /does not pin: add it and run --pin 19\.0\.0/);
+  assert.throws(() => chooseIntl({ unicode: '19.0', icu: '80.1', platform: 'linux' }, h, pins, through), /past UAX29_RULES_THROUGH 18\.0\.0/);
+  assert.deepStrictEqual(chooseIntl({ unicode: h.intl.unicode.replace(/\.0$/, ''), icu: h.intl.icu, platform: 'linux' }, h, pins, through),
+    { unicode: h.intl.unicode, icu: h.intl.icu, platform: 'linux' });
+  assert.strictEqual(chooseIntl({ unicode: '17.0', icu: '78.1', platform: 'darwin' }, h, pins, through).unicode, h.intl.unicode);
+  assert.throws(() => chooseIntl({ unicode: '17.0', icu: '78.1', platform: 'darwin' }, {}, pins, through), /generate once with a linux native/);
+  assert.throws(() => rulesThrough('const x = 1;\n'), /declares no UAX29_RULES_THROUGH/);
+});
+
+test('intlVerdict: same platform and version judges; same platform, new version is STALE; another platform is a different oracle', () => {
+  const { intlVerdict } = require('../scripts/lib/native-intl.cjs');
+  const h = { unicode: '18.0.0', icu: '79.1', platform: 'linux' };
+  assert.deepStrictEqual(intlVerdict({ unicode: '18.0', icu: '79.1', platform: 'linux' }, h), { judge: true });
+  assert.match(intlVerdict({ unicode: '19.0', icu: '80.1', platform: 'linux' }, h).stale, /now reports ICU 80\.1, Unicode 19\.0.*regenerate/);
+  assert.match(intlVerdict({ unicode: '18.0', icu: '79.2', platform: 'linux' }, h).stale, /ICU 79\.2/);
+  assert.match(intlVerdict({ unicode: '17.0', icu: '78.1', platform: 'darwin' }, h).other, /darwin's ICU 78\.1.*different oracle/);
+  assert.match(intlVerdict({ unicode: '18.0', icu: '79.1', platform: 'linux' }, undefined).stale, /names no intl version/);
 });
 
 test('bun-cell CLUSTER-DATA-16 (ExtPict): U+2701 is still pictographic, so 2701 ZWJ 2701 is one cluster', () => {
