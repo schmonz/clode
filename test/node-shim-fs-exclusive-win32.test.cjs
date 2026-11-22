@@ -126,31 +126,25 @@ test('win32: a mode without owner-write sets the read-only attribute, as node do
   assert.deepStrictEqual(fss.calls.filter((c) => c[0] === 'chmod'), [['chmod', '/w/ro.txt', 0o444]]);
 });
 
-// An engine without 'x' (every released one), two ways. Neither ever takes the symlink claim.
-// SHIPPED RUNTIME (no CLODE_ENGINE_FLOOR_LOG; a quaude never has it): refused by name, as the utime and rusage floors
-// refuse. An exclusive create is a security property, so a non-exclusive one is never handed out in its place.
-test('win32, shipped runtime: an engine without the exclusive open is REFUSED by name; nothing is created', () => {
-  floorLines.length = 0;
-  const fss = crtFSS({ openFlags: null });
-  const shim = loadShim({ platform: 'win32', fss });
-  assert.throws(() => shim.openSync('/w/f.txt', 'w'),
-    (e) => e.code === 'ERR_CLODE_ENGINE_FLOOR' && /txiki-sync-open-excl\.patch/.test(e.message) && !/check-then-open/.test(e.message));
-  assert.ok(!fss.files.has('/w/f.txt'), 'nothing created');
-  assert.ok(!fss.calls.some((c) => c[0] === 'open' || c[0] === 'symlink'), JSON.stringify(fss.calls));
-});
-
-// BOOTSTRAP (CLODE_ENGINE_FLOOR_LOG set: build-leg sets it on exactly the steps that run on the bootstrap engine, and
-// fails the leg on any line): check-then-open, the route released engines always took there, and the line logged.
-test('win32, bootstrap engine: without the exclusive open it creates check-then-open and logs it', () => {
-  floorLines.length = 0;
-  const fss = crtFSS({ openFlags: null });
-  const shim = loadShim({ platform: 'win32', fss, env: { CLODE_ENGINE_FLOOR_LOG: '/w/floor.log' } });
-  shim.closeSync(shim.openSync('/w/f.txt', 'w'));
-  assert.strictEqual((fss.files.get('/w/f.txt') || {}).kind, 'file', 'a file, not a link');
-  assert.ok(!fss.calls.some((c) => c[0] === 'symlink' || c[0] === 'rename'), JSON.stringify(fss.calls));
-  assert.strictEqual(floorLines.length, 1);
-  assert.match(floorLines[0], /no exclusive open .*txiki-sync-open-excl\.patch.*bootstrap engine.*check-then-open/);
-});
+// An engine without 'x' (every released one) is ALWAYS refused by name, as the utime and rusage floors refuse: an
+// exclusive create is a security property, so a non-exclusive one is never handed out in its place, and the symlink
+// claim is never taken. With CLODE_ENGINE_FLOOR_LOG set too: that is the control for the hole a security review found
+// in an earlier cut, which fell back to check-then-open whenever that variable was set, and any user's environment
+// can set it.
+for (const [label, env] of [['', {}], [' (CLODE_ENGINE_FLOOR_LOG set: no environment opens a way around it)',
+  { CLODE_ENGINE_FLOOR_LOG: '/w/floor.log' }]]) {
+  test(`win32: an engine without the exclusive open is REFUSED by name; nothing is created${label}`, () => {
+    floorLines.length = 0;
+    const fss = crtFSS({ openFlags: null });
+    const shim = loadShim({ platform: 'win32', fss, env });
+    assert.throws(() => shim.openSync('/w/f.txt', 'w'),
+      (e) => e.code === 'ERR_CLODE_ENGINE_FLOOR' && /txiki-sync-open-excl\.patch/.test(e.message));
+    assert.throws(() => shim.writeFileSync('/w/g.txt', 'x'), (e) => e.code === 'ERR_CLODE_ENGINE_FLOOR');
+    assert.ok(!fss.files.has('/w/f.txt') && !fss.files.has('/w/g.txt'), 'nothing created');
+    assert.ok(!fss.calls.some((c) => c[0] === 'open' || c[0] === 'symlink'), JSON.stringify(fss.calls));
+    assert.strictEqual(floorLines.length, 2, 'each refusal reaches CLODE_ENGINE_FLOOR_LOG');
+  });
+}
 
 test('posix: a claim whose rename fails is removed, not left dangling at the path', () => {
   const fss = crtFSS({ openFlags: 'rwa+xn' });

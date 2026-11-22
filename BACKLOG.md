@@ -8,6 +8,20 @@ Concrete clode-under-Node divergences from native Claude Code, to triage and fix
 That page is GENERATED from `scripts/build-graph.cjs` — the one declaration of the build — so it
 cannot drift from it; it is also where the honest answer to "does this need node?" lives.
 
+## The engine's sync open on Windows shares no DELETE access, unlike libuv's (2026-11-22)
+
+libuv's uv_fs_open (what node's fs.openSync is) opens with FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+so a file node holds open can still be renamed or deleted by someone else. The engine's sync open
+(txiki-sync-fs.patch js_fss_open) is the CRT's open(), whose share mode has no FILE_SHARE_DELETE. While quaude holds
+a file open, a rename over it or an unlink of it, by quaude itself or another program, fails with a sharing
+violation where node's would succeed. The other difference, inheritable handles, is closed: txiki-sync-open-excl.patch
+adds _O_NOINHERIT (row: test/node-shim-fs-noinherit.test.cjs). The fix is the sync open through uv_fs_open (no
+callback) on Windows, as readlink and symlink went (txiki-sync-links.patch), taking the fd the CRT gives back for
+the HANDLE libuv opens.
+
+Unmeasured. Read from libuv's fs__open and the CRT's documented share mode; no row holds a file open in quaude
+while another process renames it.
+
 ## windowsProcessPin is absent: taskkill /T /F by bare PID can kill an unrelated process tree (2026-11-21)
 
 2.1.330's Windows killProcessTree pins the target first (`Bun.ant.windowsProcessPin(pid)` holds a process
@@ -453,9 +467,9 @@ Windows (2026-11-22) does not take that route: once txiki-sync-links.patch made 
 succeeded and the rename over it failed (the CRT rename refuses an existing link and an open file: "EACCES ...
 rename '...\\.clode-create-...\\f'", CI 44977529851), and the claim link was left dangling at the path. Windows now
 creates with the engine's O_EXCL (txiki-sync-open-excl.patch, CREATE_NEW, node's own call); its mode is only the
-read-only attribute, set as node sets it. An engine without it is refused by name (ERR_CLODE_ENGINE_FLOOR), except
-on the bootstrap engine (CLODE_ENGINE_FLOOR_LOG set), which creates check-then-open and logs it (ruling 2026-11-22:
-exclusive create is a security property, so a shipped quaude never falls back). A claim left by any failed rename
+read-only attribute, set as node sets it. An engine without it is ALWAYS refused by name (ERR_CLODE_ENGINE_FLOOR),
+with no environment-dependent fallback (security review 2026-11-22: a fallback keyed on CLODE_ENGINE_FLOOR_LOG was
+removed, since any user environment could set it). A claim left by any failed rename
 is removed. Row:
 test/node-shim-fs-exclusive-win32.test.cjs, off Windows (a vm load of fs.cjs as win32 over a CRT-like stand-in).
 

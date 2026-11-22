@@ -342,6 +342,8 @@ jobs:
               test/node-shim-os-devnull.test.cjs \
               test/node-shim-os-priority.test.cjs \
               test/node-shim-fs-readlink.test.cjs \
+              test/node-shim-fs-noinherit.test.cjs \
+              test/node-shim-fs-exclusive-win32.test.cjs \
               test/node-shim-resource-usage.test.cjs
 
       # THIS JOB'S GATE LIST (observability plan Task 5): every record test/cell-reporter.mjs wrote above, for ci.yml's
@@ -527,6 +529,8 @@ jobs:
               test/node-shim-fs-stat-identity.test.cjs \
               test/node-shim-os-devnull.test.cjs \
               test/node-shim-fs-readlink.test.cjs \
+              test/node-shim-fs-noinherit.test.cjs \
+              test/node-shim-fs-exclusive-win32.test.cjs \
               test/node-shim-resource-usage.test.cjs
 
       # THIS JOB'S GATE LIST (observability plan Task 5): every record test/cell-reporter.mjs wrote above, for ci.yml's

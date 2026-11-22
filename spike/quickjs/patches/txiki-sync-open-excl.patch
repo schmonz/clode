@@ -10,6 +10,10 @@
 # own atomic exclusive create is CreateFile CREATE_NEW, which the CRT's open(O_CREAT|O_EXCL) is, and it is the call
 # node makes for 'wx' and O_EXCL there (libuv's uv_fs_open). node-shim uses it on Windows, where a mode is only the
 # read-only attribute, so there is no mode window to close with the staging directory.
+# Also on Windows: _O_NOINHERIT on every sync open. O_CLOEXEC is 0 under the CRT, so each handle was INHERITABLE, and
+# libuv spawns with bInheritHandles TRUE (the child's stdio), so every child inherited it and held the file open after
+# we closed it (a later rename or unlink of it failed while the child ran). libuv's uv_fs_open never makes an
+# inheritable handle. (FILE_SHARE_DELETE, which uv_fs_open also passes and the CRT open cannot, is in BACKLOG.)
 # mod_fs_sync.c only, after txiki-sync-links.patch (TXIKI_PATCH_ORDER).
 #
 diff --git a/src/mod_fs_sync.c b/src/mod_fs_sync.c
@@ -38,7 +42,21 @@ diff --git a/src/mod_fs_sync.c b/src/mod_fs_sync.c
      /* CLOEXEC by default, matching libuv/Node (every fd it opens is FD_CLOEXEC):
       * a parent-only fd must never leak into a spawned child. The sync-spawn
       * primitive's POSIX_SPAWN_CLOEXEC_DEFAULT covers only Apple; this is the
-@@ -498,6 +507,8 @@
+@@ -165,7 +174,13 @@
+     oflags |= O_CLOEXEC;
+ #if defined(_WIN32)
+     oflags |= O_BINARY;   /* mingw defaults to text mode; force byte-exact I/O */
++#ifdef _O_NOINHERIT
++    /* O_CLOEXEC is 0 here, so every handle this open made was INHERITABLE: libuv spawns with bInheritHandles
++     * TRUE (for the child's stdio), so it leaked into every child, which then held the file open after we closed it.
++     * libuv's own uv_fs_open never makes an inheritable handle; this is the CRT's spelling of that. */
++    oflags |= _O_NOINHERIT;
+ #endif
++#endif
+     int fd = open(path, oflags, 0666);
+     JSValue ret = (fd < 0) ? throw_errno(ctx, "open", path) : JS_NewInt32(ctx, fd);
+     JS_FreeCString(ctx, path); JS_FreeCString(ctx, flags);
+@@ -498,6 +513,8 @@
  
  static const JSCFunctionListEntry fss_funcs[] = {
      JS_CFUNC_DEF("open", 2, js_fss_open),
