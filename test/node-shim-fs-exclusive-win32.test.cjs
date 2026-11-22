@@ -16,6 +16,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const vm = require('node:vm');
+const { defineGuard, guardTests } = require('./guard.cjs');
 
 const FS_SRC = fs.readFileSync(path.join(__dirname, '..', 'libexec/node-shim/modules/fs.cjs'), 'utf8');
 
@@ -72,10 +73,11 @@ function crtFSS({ openFlags }) {
   return fss;
 }
 
+
 // What node-shim's engine-floor-log would append to CLODE_ENGINE_FLOOR_LOG (it writes through the real engine, which
 // this sandbox has none of), recorded instead.
-const floorLines = [];
-function loadShim({ platform, fss, env = {} }) {
+let floorLines = [];
+function loadShim(fsShimSrc, { platform, fss, env = {} }) {
   let sandboxRequire = null;
   const sandbox = {
     module: { exports: {} }, exports: {},
@@ -95,62 +97,116 @@ function loadShim({ platform, fss, env = {} }) {
     if (/engine-floor-log\.cjs$/.test(String(id))) return { engineFloorLog: (line) => floorLines.push(line) };
     return req(id);
   };
-  vm.runInContext(`(function (module, exports, require) {\n${FS_SRC}\n})(module, exports, require);`, sandbox, { filename: 'fs.cjs' });
+  vm.runInContext(`(function (module, exports, require) {\n${fsShimSrc}\n})(module, exports, require);`, sandbox, { filename: 'fs.cjs' });
   return sandbox.module.exports;
 }
 
-test('win32: a new file is created with the engine\'s O_EXCL, never the symlink claim and rename the CRT refuses', () => {
-  const fss = crtFSS({ openFlags: 'rwa+xn' });
-  const shim = loadShim({ platform: 'win32', fss });
-  const fd = shim.openSync('/w/f.txt', 'w');
-  shim.closeSync(fd);
-  assert.strictEqual((fss.files.get('/w/f.txt') || {}).kind, 'file', 'the file is there');
-  assert.deepStrictEqual(fss.calls.filter((c) => c[0] === 'open').map((c) => c[2]), ['wx']);
-  assert.ok(!fss.calls.some((c) => c[0] === 'symlink' || c[0] === 'rename' || c[0] === 'mkdir'),
-    `no claim, no rename, no staging directory: ${JSON.stringify(fss.calls)}`);
-});
+// The error a call threw, or null.
+const thrown = (f) => { try { f(); return null; } catch (e) { return e; } };
+const cmd = (fss, op) => fss.calls.filter((c) => c[0] === op);
 
-test('win32: \'wx\' over an existing file is EEXIST, from the kernel\'s claim, and the file is untouched', () => {
-  const fss = crtFSS({ openFlags: 'rwa+xn' });
-  const shim = loadShim({ platform: 'win32', fss });
-  shim.closeSync(shim.openSync('/w/f.txt', 'wx'));
-  assert.throws(() => shim.openSync('/w/f.txt', 'wx'), (e) => e.code === 'EEXIST');
-  assert.strictEqual(fss.files.get('/w/f.txt').kind, 'file');
-});
-
-test('win32: a mode without owner-write sets the read-only attribute, as node does; one with it sets nothing', () => {
-  const fss = crtFSS({ openFlags: 'rwa+xn' });
-  const shim = loadShim({ platform: 'win32', fss });
-  shim.closeSync(shim.openSync('/w/ro.txt', 'wx', 0o444));
-  shim.closeSync(shim.openSync('/w/rw.txt', 'wx', 0o600));
-  assert.deepStrictEqual(fss.calls.filter((c) => c[0] === 'chmod'), [['chmod', '/w/ro.txt', 0o444]]);
-});
-
-// An engine without 'x' (every released one) is ALWAYS refused by name, as the utime and rusage floors refuse: an
-// exclusive create is a security property, so a non-exclusive one is never handed out in its place, and the symlink
-// claim is never taken. With CLODE_ENGINE_FLOOR_LOG set too: that is the control for the hole a security review found
-// in an earlier cut, which fell back to check-then-open whenever that variable was set, and any user's environment
-// can set it.
-for (const [label, env] of [['', {}], [' (CLODE_ENGINE_FLOOR_LOG set: no environment opens a way around it)',
-  { CLODE_ENGINE_FLOOR_LOG: '/w/floor.log' }]]) {
-  test(`win32: an engine without the exclusive open is REFUSED by name; nothing is created${label}`, () => {
-    floorLines.length = 0;
+// Each scenario loads the given fs.cjs source and answers the problems it saw ([] when it behaves as node does).
+const OLD_ENGINE_ENVS = [['', {}],
+  // The control for the hole a security review found in an earlier cut, which fell back to check-then-open whenever
+  // this variable was set; any user's environment can set it.
+  [' (CLODE_ENGINE_FLOOR_LOG set: no environment opens a way around it)', { CLODE_ENGINE_FLOOR_LOG: '/w/floor.log' }]];
+const SCENARIOS = [
+  ['win32: a new file is created with the engine\'s O_EXCL, never the symlink claim and rename the CRT refuses', (src) => {
+    const fss = crtFSS({ openFlags: 'rwa+xn' });
+    const shim = loadShim(src, { platform: 'win32', fss });
+    const e = thrown(() => shim.closeSync(shim.openSync('/w/f.txt', 'w')));
+    const out = [];
+    if (e) out.push(`threw ${e.code}: ${e.message}`);
+    if ((fss.files.get('/w/f.txt') || {}).kind !== 'file') out.push('no file at the path');
+    if (JSON.stringify(cmd(fss, 'open').map((c) => c[2])) !== '["wx"]') out.push(`opens ${JSON.stringify(cmd(fss, 'open'))}, not one 'wx'`);
+    if (['symlink', 'rename', 'mkdir'].some((op) => cmd(fss, op).length)) out.push(`claimed, renamed or staged: ${JSON.stringify(fss.calls)}`);
+    return out;
+  }],
+  ['win32: \'wx\' over an existing file is EEXIST, from the kernel\'s claim, and the file is untouched', (src) => {
+    const fss = crtFSS({ openFlags: 'rwa+xn' });
+    const shim = loadShim(src, { platform: 'win32', fss });
+    fss.files.set('/w/f.txt', { kind: 'file', mode: 0o666 });
+    const e = thrown(() => shim.openSync('/w/f.txt', 'wx'));
+    const out = [];
+    if (!e || e.code !== 'EEXIST') out.push(`'wx' over a file answered ${e ? e.code : 'no error'}, not EEXIST`);
+    if ((fss.files.get('/w/f.txt') || {}).kind !== 'file') out.push('the existing file was disturbed');
+    return out;
+  }],
+  ['win32: a mode without owner-write sets the read-only attribute, as node does; one with it sets nothing', (src) => {
+    const fss = crtFSS({ openFlags: 'rwa+xn' });
+    const shim = loadShim(src, { platform: 'win32', fss });
+    const e = thrown(() => {
+      shim.closeSync(shim.openSync('/w/ro.txt', 'wx', 0o444));
+      shim.closeSync(shim.openSync('/w/rw.txt', 'wx', 0o600));
+    });
+    if (e) return [`threw ${e.code}: ${e.message}`];
+    const chmods = JSON.stringify(cmd(fss, 'chmod'));
+    return chmods === JSON.stringify([['chmod', '/w/ro.txt', 0o444]]) ? [] : [`chmods ${chmods}`];
+  }],
+  // An engine without 'x' (every released one) is ALWAYS refused by name, as the utime and rusage floors refuse: an
+  // exclusive create is a security property, so a non-exclusive one is never handed out in its place, and the symlink
+  // claim is never taken.
+  ...OLD_ENGINE_ENVS.map(([label, env]) => [`win32: an engine without the exclusive open is REFUSED by name; nothing is created${label}`, (src) => {
+    floorLines = [];
     const fss = crtFSS({ openFlags: null });
-    const shim = loadShim({ platform: 'win32', fss, env });
-    assert.throws(() => shim.openSync('/w/f.txt', 'w'),
-      (e) => e.code === 'ERR_CLODE_ENGINE_FLOOR' && /txiki-sync-open-excl\.patch/.test(e.message));
-    assert.throws(() => shim.writeFileSync('/w/g.txt', 'x'), (e) => e.code === 'ERR_CLODE_ENGINE_FLOOR');
-    assert.ok(!fss.files.has('/w/f.txt') && !fss.files.has('/w/g.txt'), 'nothing created');
-    assert.ok(!fss.calls.some((c) => c[0] === 'open' || c[0] === 'symlink'), JSON.stringify(fss.calls));
-    assert.strictEqual(floorLines.length, 2, 'each refusal reaches CLODE_ENGINE_FLOOR_LOG');
-  });
+    const shim = loadShim(src, { platform: 'win32', fss, env });
+    const out = [];
+    for (const [what, call] of [['openSync', () => shim.openSync('/w/f.txt', 'w')], ['writeFileSync', () => shim.writeFileSync('/w/g.txt', 'x')]]) {
+      const e = thrown(call);
+      if (!e || e.code !== 'ERR_CLODE_ENGINE_FLOOR' || !/txiki-sync-open-excl\.patch/.test(e.message)) {
+        out.push(`${what} answered ${e ? `${e.code}: ${e.message}` : 'no error'}, not the floor refusal`);
+      }
+    }
+    if (fss.files.has('/w/f.txt') || fss.files.has('/w/g.txt')) out.push('a file was created');
+    if (cmd(fss, 'open').length || cmd(fss, 'symlink').length) out.push(`reached the engine: ${JSON.stringify(fss.calls)}`);
+    if (floorLines.length !== 2) out.push(`${floorLines.length} CLODE_ENGINE_FLOOR_LOG line(s), not one per refusal`);
+    return out;
+  }]),
+  ['posix: a claim whose rename fails is removed, not left dangling at the path', (src) => {
+    const fss = crtFSS({ openFlags: 'rwa+xn' });
+    const shim = loadShim(src, { platform: 'darwin', fss });
+    const e = thrown(() => shim.openSync('/w/f.txt', 'w'));
+    const out = [];
+    if (!e || e.code !== 'EACCES') out.push(`the failed rename answered ${e ? e.code : 'no error'}, not its EACCES`);
+    if (!cmd(fss, 'symlink').some((c) => c[2] === '/w/f.txt')) out.push('no claim was made (the stand-in did not reach the case)');
+    if (JSON.stringify([...fss.files.keys()]) !== '["/w"]') out.push(`left behind: ${JSON.stringify([...fss.files])}`);
+    return out;
+  }],
+];
+
+// PURE: each load is deterministic given the shim text and the stand-in.
+function scanExclusiveCreate({ fsShimSrc }) {
+  const findings = [];
+  for (const [what, run] of SCENARIOS) {
+    let problems;
+    try { problems = run(fsShimSrc); } catch (e) { problems = [`the load itself threw: ${e && e.message}`]; }
+    for (const p of problems) findings.push(`${what}: ${p}`);
+  }
+  return { findings, examined: SCENARIOS.length, note: 'the real fs.cjs, loaded as win32 and darwin over a CRT-contract stand-in' };
 }
 
-test('posix: a claim whose rename fails is removed, not left dangling at the path', () => {
-  const fss = crtFSS({ openFlags: 'rwa+xn' });
-  const shim = loadShim({ platform: 'darwin', fss });
-  assert.throws(() => shim.openSync('/w/f.txt', 'w'), (e) => e.code === 'EACCES');
-  assert.ok(fss.calls.some((c) => c[0] === 'symlink' && c[2] === '/w/f.txt'), 'the claim was made');
-  assert.ok(!fss.files.has('/w/f.txt'), `the claim is gone: ${JSON.stringify([...fss.files])}`);
-  assert.deepStrictEqual([...fss.files.keys()], ['/w'], 'and the staging directory with it');
+const guard = defineGuard({
+  name: 'node-shim-exclusive-create-win32',
+  read: () => ({ fsShimSrc: FS_SRC }),
+  scan: scanExclusiveCreate,
+  // every scenario runs; fewer examined means the table was cut
+  floor: SCENARIOS.length,
+  // The bug as CI met it (44977529851): fs.cjs with the Windows dispatch removed, so win32 takes the POSIX symlink
+  // claim and rename the CRT refuses, and an old engine is never refused.
+  control: () => {
+    const from = '_isWin ? createExclusiveWin(p, createBase, mode, nb) : createExclusive(p, createBase, mode)';
+    if (!FS_SRC.includes(from)) throw new Error('control: the Windows dispatch in openPath has moved; re-model the bug');
+    return { fsShimSrc: FS_SRC.replace(from, 'createExclusive(p, createBase, mode)') };
+  },
+});
+guardTests(guard);
+
+// The control is the bug where it bites: a new file, a moded new file, and both old-engine refusals. ('wx' over an
+// existing file is EEXIST either way, and the POSIX claim cleanup is not behind the dispatch.)
+test('the control fails each scenario the Windows dispatch decides', () => {
+  const r = scanExclusiveCreate(guard.control());
+  const failed = (what) => r.findings.some((f) => f.startsWith(`${what}: `));
+  const decided = SCENARIOS.map(([what]) => what).filter((w) => w.startsWith('win32:') && !w.includes('over an existing file'));
+  assert.strictEqual(decided.length, 4);
+  for (const what of decided) assert.ok(failed(what), `${what}: ${JSON.stringify(r.findings)}`);
 });
