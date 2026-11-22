@@ -315,6 +315,7 @@ jobs:
           echo "provider pin: @anthropic-ai/claude-code@$V (deliberately behind upstream — see UPSTREAM_PIN)"
           npm i -g @anthropic-ai/claude-code@"$V" 2>&1 | tail -3
       - name: Install runtime deps (semver et al.) for the oracles
+        id: deps
         run: npm ci --prefix deps/claude
       - name: Sync-primitive battery on the real Windows kernel
         run: |
@@ -327,6 +328,9 @@ jobs:
       # devNull): files, a directory and a symlink. They skip without CLODE_TJS, so this job is
       # the only place they run on Windows at all.
       - name: node-shim oracles (roundtrip + agentic + stat identity + os) on the real Windows kernel
+        # Its own gate, not the battery's dependent: a red battery must not hide these
+        # (test/ci-step-chaining.test.cjs). Still red if either fails.
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
         run: |
           set -euo pipefail
           PROV="$(node scripts/stage-provider.mjs)" || exit 1
@@ -416,12 +420,17 @@ jobs:
           echo "provider pin: @anthropic-ai/claude-code@$V (deliberately behind upstream — see UPSTREAM_PIN)"
           npm i -g @anthropic-ai/claude-code@"$V" 2>&1 | tail -3
       - name: Install root runtime deps (render seed deps)
+        id: deps
         run: npm ci --prefix deps/claude
       - name: Install the PTY harness (node-pty win32-x64 prebuilt + @xterm/headless)
+        id: harness
         run: npm install --prefix test
       - name: Preflight — node-pty can open a ConPTY on this kernel
         run: node test/harness-preflight.cjs
+      # The two gates below each run whatever the gate before concluded, needing only the
+      # setup they use (test/ci-step-chaining.test.cjs); the job is still red if any failed.
       - name: Render the real TUI under ConPTY and assert the welcome box
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' && steps.harness.outcome == 'success' }}
         run: |
           set -euo pipefail
           PROV="$(node scripts/stage-provider.mjs)" || exit 1
@@ -434,6 +443,7 @@ jobs:
               --test-reporter=./test/cell-reporter.mjs --test-reporter-destination="$RUNNER_TEMP/gates/tui.jsonl" \
               test/e2e-tui-tjs.test.cjs
       - name: Characterize the node-shim TTY input path under ConPTY (D2)
+        if: ${{ !cancelled() && steps.harness.outcome == 'success' }}
         run: |
           set -euo pipefail
           chmod +x ./tjs.exe || true
@@ -504,6 +514,7 @@ jobs:
           echo "provider pin: @anthropic-ai/claude-code@$V (deliberately behind upstream — see UPSTREAM_PIN)"
           npm i -g @anthropic-ai/claude-code@"$V" 2>&1 | tail -3
       - name: Install runtime deps (semver et al.) for the oracles
+        id: deps
         run: npm ci --prefix deps/claude
       - name: Sync-primitive battery on the real Windows kernel
         run: |
@@ -516,6 +527,9 @@ jobs:
       # devNull): files, a directory and a symlink. They skip without CLODE_TJS, so this job is
       # the only place they run on Windows at all.
       - name: node-shim oracles (roundtrip + agentic + stat identity + os) on the real Windows kernel
+        # Its own gate, not the battery's dependent: a red battery must not hide these
+        # (test/ci-step-chaining.test.cjs). Still red if either fails.
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
         run: |
           set -euo pipefail
           PROV="$(node scripts/stage-provider.mjs)" || exit 1
@@ -1034,6 +1048,9 @@ jobs:
       # first boot ("sea.getRawAsset is not a function") stayed green.
       - name: full-binary oracle — real naude vs real quaude
         id: oracle
+        # Packages its own naude and quaude: a red build step above must not hide it
+        # (test/ci-step-chaining.test.cjs).
+        if: ${{ !cancelled() }}
         env:
           # /tjs/tjs, not /tjs: download-artifact unpacks INTO ${{ runner.temp }}/tjs,
           # so that dir is the artifact, and the engine is the file inside it. Pointing
@@ -1062,6 +1079,7 @@ jobs:
       # (FILES accepts none for it), for the same reason as clode-native's acceptances: a gate that skipped is a gate
       # that is not there.
       - name: naude shim boundary — the bytes that make the oracle an oracle
+        if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/cells"
@@ -1124,7 +1142,10 @@ jobs:
       # — it does not assert the product is broken, only that this job could not prove it
       # isn't.
       - name: if THE PRODUCT build/oracle failed, say so plainly (the shipped artifact is broken)
-        if: steps.build.outcome == 'failure' || steps.oracle.outcome == 'failure'
+        # failure() is load-bearing: an `if:` naming no status function is ANDed with an
+        # implicit success(), so the bare outcome test this had could never be true when it
+        # mattered — the banner was skipped exactly when build or oracle failed.
+        if: ${{ failure() && (steps.build.outcome == 'failure' || steps.oracle.outcome == 'failure') }}
         run: |
           MSG='native-builder-oracle failed at the build or the full-binary oracle step: this job builds THE PRODUCT node-free with a real provider (clode-native builds a quaude+naude and diffs the two packaged targets). A red HERE means the ARTIFACT USERS GET is broken -- the same class of break as the 2.1.251-era zstd carve regression this job exists to catch on day one -- not an ordinary test failure to triage whenever there is time.'
           echo "::error title=SHIPPED ARTIFACT BROKEN::$MSG"
@@ -1284,7 +1305,10 @@ jobs:
         run: npm install --prefix test
       - name: Preflight — node-pty can open a PTY on this kernel
         run: node test/harness-preflight.cjs
+      # From here every gate runs whatever an earlier one concluded, needing only the setup it
+      # uses (test/ci-step-chaining.test.cjs): a red TUI step must not hide the notify surface.
       - name: quaude-build + e2e-tui-tjs + e2e-ctrlz-tui + interactive-render/frame/resize-diff
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' && steps.harness.outcome == 'success' }}
         # Named explicitly rather than a glob, so a future reader can tell what
         # is covered without running it. Each of these files builds its OWN
         # throwaway quaude internally — no shared state between them, hence no
@@ -1310,6 +1334,8 @@ jobs:
       # tjs/provider directly — build one explicitly (cost: see this job's
       # header comment). Paid once, shared by the 3 tests below.
       - name: Build a quaude for update-notify.pty (CLODE_QUAUDE)
+        id: notifyquaude
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
         env:
           CLODE_TJS: ${{ runner.temp }}/tjs/tjs
         run: |
@@ -1320,6 +1346,7 @@ jobs:
           mkdir -p "${{ runner.temp }}/quaude-notify"
           CLODE_CLAUDE_BIN="$PROV" scripts/stage0.mjs build --out "${{ runner.temp }}/quaude-notify/quaude"
       - name: fidelity/update-notify.pty — the auto-update NOTIFY surface
+        if: ${{ !cancelled() && steps.notifyquaude.outcome == 'success' && steps.harness.outcome == 'success' }}
         env:
           CLODE_QUAUDE: ${{ runner.temp }}/quaude-notify/quaude
         run: |
@@ -1788,11 +1815,17 @@ jobs:
       # test/clode-target-build.test.cjs, test/clode-manifest-fetch.test.cjs et al.) — if
       # phase 3's target-naming work renames it (e.g. to a fully-dashed canonical
       # `linux-amd64`), that is ONE LINE of churn here, not a rewrite.
+      # Independent of the local-tools turns above: a red turn must not hide the graph oracle
+      # (test/ci-step-chaining.test.cjs), so these three chain only on each other.
       - uses: actions/download-artifact@v8.0.2
+        id: linuxengine
+        if: ${{ !cancelled() }}
         with:
           name: tjs-linux-x64-musl   # a SECOND platform's engine — bytes only, never executed here
           path: ${{ runner.temp }}/tjs-linux
       - name: Stage a second platform's provider (linux-x64, via npm pack — carved, never run)
+        id: linuxprovider
+        if: ${{ !cancelled() && steps.linuxengine.outcome == 'success' }}
         run: |
           set -euo pipefail
           chmod +x "${{ runner.temp }}/tjs-linux/tjs"
@@ -1804,6 +1837,7 @@ jobs:
           test -s "$DIR/package/claude"
           echo "LINUX_PROVIDER=$DIR/package/claude" >> "$GITHUB_ENV"
       - name: SECOND-PLATFORM graph oracle — cross-build a linux-x64 quaude from this darwin host
+        if: ${{ !cancelled() && steps.linuxprovider.outcome == 'success' }}
         env:
           CLODE_TJS: ${{ runner.temp }}/tjs/tjs
           CLODE_TARGET_TEMPLATE: ${{ runner.temp }}/tjs-linux/tjs
