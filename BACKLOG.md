@@ -18,6 +18,9 @@ its whole tree. It is a narrow window, the same one every pre-2.1.330 build had.
 OpenProcess(SYNCHRONIZE|PROCESS_QUERY_LIMITED_INFORMATION) held in a handle table and returned as an id, with
 CloseHandle on unpin. Then bun-shim's `Bun.ant.windowsProcessPin` and `windowsProcessUnpin`.
 
+Unmeasured. The race needs a real Windows box that recycles a PID between the pin and the taskkill. This entry is
+read from the win32-x64 2.1.330 carve's killProcessTree only.
+
 ## posixFsAt and windowsFsAt are absent, so quaude's held-directory file operations fail OPEN on macOS and Windows (2026-11-21)
 
 Accepted absent in KNOWN_BUN_ANT (libexec/inspect-claude-bundle.cjs). The bun-ant-member-surface review of the
@@ -56,6 +59,9 @@ quaude where native would refuse. That is the same exposure every pre-2.1.330 bu
   `y()` checks (`typeof e?.open==="function"`).
 - Each needs a differential against native: race a link swap during an anchored write and confirm both refuse.
 
+Unmeasured. No link-swap race has been driven against native or quaude yet; that differential is the measurement.
+The behaviour above is read from the darwin-arm64 and win32-x64 2.1.330 carves.
+
 ## txiki-sync-fs.patch's other Windows branches answer differently from node; none is ENOSYS any more (2026-11-21)
 
 Audited when readlink and symlink moved to libuv (txiki-sync-links.patch). Those two were the only `#if
@@ -72,6 +78,9 @@ is the call node makes. Each fix is the same move: the uv_fs_* call with no call
   place. Fix: uv_fs_read/uv_fs_write with the offset.
 - **mkdir**: `_mkdir(p)`, which drops the mode. Node ignores the mode on Windows too, so this one is not a
   divergence. It is listed so the next audit need not reread it.
+
+Unmeasured. Read from mod_fs_sync.c only; no Windows run has compared realpathSync over a junction, or a positional
+read racing a second fd user, with node's.
 
 ## QuickJS keeps captures across quantifier iterations: `/(?:(a)|(b))*/.exec("ab")` keeps group 1 (2026-11-21)
 
