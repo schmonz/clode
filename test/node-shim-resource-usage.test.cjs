@@ -61,3 +61,38 @@ console.log(JSON.stringify(out));`);
     assert.strictEqual(fs.readFileSync(log, 'utf8').split('\n')[0], msg);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+// process.cpuUsage([prev]) is the same uv_getrusage source in node: user and system time in microseconds, a delta
+// when given prev, and node's errors for a bad prev. It answered zeros while resourceUsage() was real. The deltas are
+// compared by shape (positive after a busy loop, and no larger than the cumulative figure); the errors exactly.
+const CPU_PROG = `
+const t = (f) => { try { return JSON.stringify(f()); } catch (e) { return e.constructor.name + ' ' + e.code + ' ' + e.message; } };
+const a = process.cpuUsage();
+const t0 = Date.now(); let x = 0; while (Date.now() - t0 < 150) x++;
+const d = process.cpuUsage(a);
+const ru = process.resourceUsage();
+const c = process.cpuUsage();
+console.log(JSON.stringify([
+  Object.keys(a).join(','), Number.isInteger(a.user) && Number.isInteger(a.system),
+  d.user + d.system >= 50000, d.user <= c.user && d.system <= c.system,
+  Math.abs(c.user - ru.userCPUTime) < 1000000,
+  t(() => process.cpuUsage({ user: 1 })), t(() => process.cpuUsage({ user: -1, system: 0 })),
+  t(() => process.cpuUsage(5)), t(() => process.cpuUsage({ user: 'x', system: 0 })),
+  Object.keys(process.cpuUsage(null)).join(','),
+]));`;
+
+test('process.cpuUsage() is uv_getrusage microseconds, with node\'s prev-delta and errors', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-cpu-usage-'));
+  try {
+    const prog = path.join(dir, 'p.cjs');
+    fs.writeFileSync(prog, CPU_PROG);
+    const node = spawnSync(process.execPath, [prog], { encoding: 'utf8' });
+    assert.strictEqual(node.status, 0, node.stderr);
+    const want = JSON.parse(node.stdout.trim());
+    assert.deepStrictEqual(want.slice(0, 5), ['user,system', true, true, true, true], 'the host node oracle');
+    const r = runLoader(prog, []);
+    assert.strictEqual(r.status, 0, String(r.stderr));
+    assert.deepStrictEqual(JSON.parse(r.stdout.trim().split('\n').pop()), want);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});

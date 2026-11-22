@@ -26,6 +26,19 @@
 // which is a pipe, and the flush test (test/node-shim-core.test.cjs) goes
 // green with this approach. The getWriter machinery is dropped entirely.
 // console.log is tjs-native and untouched by this change.
+
+// The engine's rusage (txiki-rusage-global.patch), or the floor refusal by name for an engine that predates it.
+function engineRusage(caller) {
+  if (typeof globalThis.__tjs_getrusage !== 'function') {
+    const e = new Error('node-shim: this engine has no __tjs_getrusage (it predates txiki-rusage-global.patch), so '
+      + caller + ' cannot answer; rebuild it: ./build.sh --only engine.compile');
+    e.code = 'ERR_CLODE_ENGINE_FLOOR';
+    require('../internal/engine-floor-log.cjs').engineFloorLog(e.message);
+    throw e;
+  }
+  return globalThis.__tjs_getrusage();
+}
+
 const { writeSyncFd } = require('../internal/stdio-write.cjs');
 const { isTerminalFd } = require('../internal/terminal-fd.cjs');
 // The 5-case uaPlatform->node switch below used to be duplicated
@@ -454,25 +467,35 @@ module.exports = {
     () => ({ rss: 0, heapTotal: 0, heapUsed: 0, external: 0, arrayBuffers: 0 }),
     { rss: () => 0 },
   ),
-  // process.cpuUsage() — used on the adjacent event-loop-stall diagnostics path
-  // (`cpu:process.cpuUsage()` alongside memoryUsage.rss()); tjs has no CPU
-  // accounting. Node returns cumulative {user,system} microseconds; zeros keep
-  // any prev-relative delta well-defined.
-  cpuUsage: () => ({ user: 0, system: 0 }),
+  // process.cpuUsage([prev]) — used on the event-loop-stall diagnostics path (`cpu:process.cpuUsage()` alongside
+  // memoryUsage.rss()). Node's is uv_getrusage's user and system time in microseconds, minus prev's when given, prev
+  // validated as node's (lib/internal/process/per_thread.js). It was zeros, while resourceUsage() answered real
+  // figures from the same source.
+  cpuUsage: (prev) => {
+    const ru = engineRusage('process.cpuUsage()');
+    const now = { user: ru.userCPUTime, system: ru.systemCPUTime };
+    if (prev === undefined || prev === null) return now;
+    const { TypeError: TE, RangeError: RE } = globalThis;
+    const typeName = (v) => (typeof v === 'object' ? 'an instance of ' + ((v && v.constructor && v.constructor.name) || 'Object') : `type ${typeof v} (${typeof v === 'string' ? `'${v}'` : String(v)})`);
+    if (typeof prev !== 'object') {
+      throw Object.assign(new TE(`The "prevValue" argument must be of type object. Received ${typeName(prev)}`), { code: 'ERR_INVALID_ARG_TYPE' });
+    }
+    for (const k of ['user', 'system']) {
+      const v = prev[k];
+      if (typeof v !== 'number') {
+        throw Object.assign(new TE(`The "prevValue.${k}" property must be of type number. Received ${v === undefined ? 'undefined' : typeName(v)}`), { code: 'ERR_INVALID_ARG_TYPE' });
+      }
+      if (!(v >= 0) || !Number.isFinite(v)) {
+        throw Object.assign(new RE(`The property 'prevValue.${k}' is invalid. Received ${v}`), { code: 'ERR_INVALID_ARG_VALUE' });
+      }
+    }
+    return { user: now.user - prev.user, system: now.system - prev.system };
+  },
   // process.resourceUsage(): libuv's uv_getrusage, as node answers it (node_process_methods.cc ResourceUsage), from
   // the engine's __tjs_getrusage (txiki-rusage-global.patch), which already uses node's field names and units. 2.1.330's
   // event-loop-stall sampler calls it; missing, every run logged "process.resourceUsage() failed: not a function"
   // (CI 44945260530, Windows agentic legs). An engine without it is REFUSED by name (scripts/engine-api-floor.cjs).
-  resourceUsage: () => {
-    if (typeof globalThis.__tjs_getrusage !== 'function') {
-      const e = new Error('node-shim: this engine has no __tjs_getrusage (it predates txiki-rusage-global.patch), so '
-        + 'process.resourceUsage() cannot answer; rebuild it: ./build.sh --only engine.compile');
-      e.code = 'ERR_CLODE_ENGINE_FLOOR';
-      require('../internal/engine-floor-log.cjs').engineFloorLog(e.message);
-      throw e;
-    }
-    return globalThis.__tjs_getrusage();
-  },
+  resourceUsage: () => engineRusage('process.resourceUsage()'),
   // Event registry: process EventEmitter surface (Task 4 wall): the -p boot
   // registers handlers and calls process.removeAllListeners('warning'). A real
   // registry over __handlers backs on/once/off/removeListener/
