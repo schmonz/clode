@@ -21,6 +21,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
+
+const { probeEnv } = createRequire(import.meta.url)('./lib/probe-env.cjs');
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURES = path.join(HERE, '..', 'test/fixtures/mcp');
@@ -85,22 +88,7 @@ const home = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-probe-home-'));
 const cfg = path.join(home, 'mcp.json');
 fs.writeFileSync(cfg, JSON.stringify(kase.config(mock.port)));
 
-// A MINIMAL environment, not ...process.env: the client runs with --debug --debug-to-stderr and the FAIL path
-// prints its stderr, so a developer's ANTHROPIC_*/CLAUDE_* token or OAuth state must never reach it. Only what a
-// process needs to start and resolve localhost (PATH, and on Windows SystemRoot/windir/ComSpec/PATHEXT, without
-// which Winsock does not load), the temp dirs, and a throwaway home on EVERY platform (HOME alone was a no-op on
-// Windows, where the profile is USERPROFILE).
-function probeEnv(homeDir) {
-  const cfgDir = path.join(homeDir, '.claude');
-  fs.mkdirSync(cfgDir, { recursive: true });
-  // Literal names (no computed process.env read: test/env-indirect.cjs). node reads process.env case-insensitively
-  // on Windows, and drops an undefined value from a child's env, so an absent one is simply absent.
-  const e = process.env;
-  return {
-    PATH: e.PATH, SystemRoot: e.SystemRoot, windir: e.windir, ComSpec: e.ComSpec, PATHEXT: e.PATHEXT,
-    SystemDrive: e.SystemDrive, TEMP: e.TEMP, TMP: e.TMP, TMPDIR: e.TMPDIR, LANG: e.LANG, LC_ALL: e.LC_ALL, TERM: e.TERM,
-    HOME: homeDir, USERPROFILE: homeDir, CLAUDE_CONFIG_DIR: cfgDir, ANTHROPIC_API_KEY: 'sk-probe-notreal' };
-}
+// The client's env: scripts/lib/probe-env.cjs (minimal, and why its spellings matter).
 
 let failed = false;
 try {
