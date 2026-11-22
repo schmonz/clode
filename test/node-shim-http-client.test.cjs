@@ -111,7 +111,6 @@ probe('socketPath', () => http.request({ socketPath: '/tmp/x', path: '/' }));
 probe('createConnection', () => http.request({ host: 'h', createConnection: () => {}, path: '/' }));
 probe('lookup', () => http.request({ host: 'h', lookup: () => {}, path: '/' }));
 probe('localAddress', () => http.request({ host: 'h', localAddress: '10.0.0.1', path: '/' }));
-probe('family', () => http.request({ host: 'h', family: 6, path: '/' }));
 probe('pfx', () => https.request({ host: 'h', pfx: 'x', path: '/' }));
 probe('ciphers', () => https.request({ host: 'h', ciphers: 'HIGH', path: '/' }));
 probe('checkServerIdentity', () => https.request({ host: 'h', checkServerIdentity: () => {}, path: '/' }));

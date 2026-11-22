@@ -155,8 +155,17 @@ function connectUnimpl() { throw new Error('node-shim: net.connect/createConnect
 // call stays unreachable (test/bun-shim-ant-gap.test.cjs).
 function createServerUnsupported() { throw new Error('quaude does not support the sandbox yet: net.createServer'); }
 
+// node's process-wide Happy Eyeballs defaults, the ones node-shim's http client connects by
+// (internal/connect-multiple.cjs).
+const {
+  setDefaultAutoSelectFamily, getDefaultAutoSelectFamily,
+  setDefaultAutoSelectFamilyAttemptTimeout, getDefaultAutoSelectFamilyAttemptTimeout,
+} = require('../internal/connect-multiple.cjs');
+
 module.exports = {
   isIP, isIPv4, isIPv6, BlockList, Socket, Server, Stream: Socket,
+  setDefaultAutoSelectFamily, getDefaultAutoSelectFamily,
+  setDefaultAutoSelectFamilyAttemptTimeout, getDefaultAutoSelectFamilyAttemptTimeout,
   connect: connectUnimpl, createConnection: connectUnimpl, createServer: createServerUnsupported,
 };
 module.exports.default = module.exports;

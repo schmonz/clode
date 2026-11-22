@@ -61,6 +61,7 @@
 //   - res.write() buffers; bytes go out on end() (no incremental streaming).
 const { EventEmitter } = require('node:events');
 const { Readable } = require('node:stream');
+const { connectHost } = require('../internal/connect-multiple.cjs');
 
 class Agent extends EventEmitter {
   constructor(options = {}) {
@@ -513,7 +514,7 @@ function createServer(options, handler) {
  * codebase has been bitten by repeatedly (MessageEvent handing back the init
  * dict; CustomEvent.detail coerced to a boolean; a throwing module left in the
  * require cache and reported as loaded).
- *   - `socketPath` / `createConnection` / `lookup` / `localAddress` / `family`:
+ *   - `socketPath` / `createConnection` / `lookup` / `localAddress`:
  *     ERR_SHIM_HTTP_UNSUPPORTED_OPTION. These decide WHERE or HOW the
  *     connection is made; ignoring one sends bytes somewhere the caller did not
  *     ask for. (npm `ws` always sets createConnection — see the note in
@@ -825,8 +826,9 @@ class ClientSocket extends EventEmitter {
     this._timer = null;
   }
 
-  async _open(transport, host, port, opts) {
-    const sock = await tjs.connect(transport, host, port, opts);
+  // Every address, in node's order (autoSelectFamily): libexec/node-shim/internal/connect-multiple.cjs says why.
+  async _open(transport, host, port, opts, policy) {
+    const sock = await connectHost(transport, host, port, opts, policy);
     const info = await sock.opened;
     this._sock = sock;
     this._writer = info.writable.getWriter();
@@ -944,7 +946,8 @@ class ClientSocket extends EventEmitter {
   address() { return { address: this.localAddress, family: String(this.localAddress || '').includes(':') ? 'IPv6' : 'IPv4', port: this.localPort }; }
 }
 
-const UNSUPPORTED_REQUEST_OPTIONS = ['socketPath', 'createConnection', 'lookup', 'localAddress', 'family'];
+// `family` is honoured (connect-multiple.cjs), as are autoSelectFamily and autoSelectFamilyAttemptTimeout.
+const UNSUPPORTED_REQUEST_OPTIONS = ['socketPath', 'createConnection', 'lookup', 'localAddress'];
 const UNSUPPORTED_TLS_OPTIONS = ['pfx', 'passphrase', 'secureContext', 'ciphers', 'minVersion', 'maxVersion', 'checkServerIdentity', 'secureProtocol'];
 
 // request(url[, options][, cb]) | request(options[, cb]) — node's signatures.
@@ -1106,7 +1109,7 @@ class ClientRequest extends EventEmitter {
         const target = this._proxy
           ? { transport: this._proxy.protocol === 'https:' ? 'tls' : 'tcp', host: this._proxy.host, port: this._proxy.port }
           : { transport: this._tls ? 'tls' : 'tcp', host: this.host, port: this.port };
-        await sock._open(target.transport, target.host, target.port, this._connectOptions());
+        await sock._open(target.transport, target.host, target.port, this._connectOptions(), this._familyPolicy());
         if (this.destroyed) { sock.destroy(); return; }
         this._readResponse(sock);
         this._drain();
@@ -1124,6 +1127,14 @@ class ClientRequest extends EventEmitter {
         this._fail(err);
       }
     })();
+  }
+  // node's family / autoSelectFamily / autoSelectFamilyAttemptTimeout, from the request or its agent's options.
+  _familyPolicy() {
+    const agent = this._opts.agent;
+    const ag = (agent && typeof agent === 'object' && agent.options) || {};
+    const pick = (k) => (this._opts[k] !== undefined ? this._opts[k] : ag[k]);
+    return { family: pick('family'), autoSelectFamily: pick('autoSelectFamily'),
+             autoSelectFamilyAttemptTimeout: pick('autoSelectFamilyAttemptTimeout') };
   }
   _connectOptions() {
     const o = { noDelay: true };
