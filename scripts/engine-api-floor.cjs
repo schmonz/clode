@@ -133,9 +133,9 @@ const ENGINE_API_FLOOR = [
     why: 'node-shim\'s exclusive create on Windows: open(O_CREAT|O_EXCL), CreateFile CREATE_NEW, as node\'s \'wx\' is',
     buildHost: false,
     notForBuildHost: 'only Windows uses it; POSIX creates go through the symlink claim, which needs nothing new. A '
-      + 'Windows build host on an engine without it (a released engine the build bootstraps on) creates check-then-open, '
-      + 'as every released engine always has there, and node-shim appends that to CLODE_ENGINE_FLOOR_LOG, so the gates '
-      + 'listed above refuse a build path that reaches it',
+      + 'Windows engine without it is REFUSED by name at the first new file (ERR_CLODE_ENGINE_FLOOR), except on the '
+      + 'bootstrap engine (CLODE_ENGINE_FLOOR_LOG set), where it creates check-then-open as released engines always did '
+      + 'and appends that to the log, so the gates listed above refuse a build path that reaches it',
   },
   {
     // Without it node-shim's os.machine() can only guess from process.arch ("x64" where node says "x86_64").

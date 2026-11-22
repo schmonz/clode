@@ -106,7 +106,7 @@ test('every floor entry declares its build-host role, and every build-host exemp
   // __tjs_fs_sync.utime (2026-11-21, ruling: a *Sync that is not synchronous is a product bug): the last release's
   // engine, which CI bootstraps the build on, has none, and no build step sets times; the call is refused, not faked.
   // __tjs_fs_sync.openFlags (2026-11-22): Windows only (the exclusive create); POSIX needs nothing new, and a Windows
-  // build host without it (a released engine) creates check-then-open, as it always has, and logs that.
+  // engine without it is refused at the first new file, except a bootstrap engine, which logs a check-then-open.
   // __tjs_uname (2026-11-21): the same, for os.machine(), which no build step calls.
   // __tjs_getrusage (2026-11-21): the same, for process.resourceUsage(), which no build step calls (grepped: no caller
   // in scripts/, libexec/ outside node-shim, or build.sh); only the bundle's event-loop-stall sampler does.

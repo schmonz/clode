@@ -369,15 +369,29 @@ function createExclusive(p, base, mode) {
 // '...\.clode-create-...\f'" once symlink worked there (CI 44977529851; it fell back to check-then-open while
 // symlink was ENOSYS). A mode on Windows is only the read-only attribute, which node sets when the mode has no
 // owner-write bit, so there is no mode window for a staging directory to close. Needs the engine's 'x'
-// (txiki-sync-open-excl.patch). An engine without it (every released one, which a Windows build may bootstrap on)
-// takes the route it always took there, check-then-open (null: openPath's fallback), and says so in
-// CLODE_ENGINE_FLOOR_LOG, as Timeout#unref does on a stale engine; never the symlink claim, which cannot finish.
+// (txiki-sync-open-excl.patch). An engine without it is met in one of two ways, never with the symlink claim:
+//   - SHIPPED RUNTIME (a quaude, or anything else on its own engine): REFUSED by name, ERR_CLODE_ENGINE_FLOOR, as the
+//     utime and rusage floors refuse. An exclusive create is a security property (BACKLOG, "SECURITY: node-shim's
+//     exclusive create"), so a non-exclusive one is never handed out in its place.
+//   - BOOTSTRAP (the build running on a released engine, scripts/bootstrap-engine.sh's build-host floor, which has
+//     no openFlags): check-then-open (null: openPath's fallback), the route released engines always took, and the
+//     line in CLODE_ENGINE_FLOOR_LOG. That log is what already marks a bootstrap: build-leg sets it for exactly the
+//     steps that run on the bootstrap engine and fails the leg if anything lands in it (internal/engine-floor-log.cjs).
+//     A shipped quaude never has it set.
+const onBootstrapEngine = () => !!((globalThis.tjs && globalThis.tjs.env) || {}).CLODE_ENGINE_FLOOR_LOG;
 function createExclusiveWin(p, base, mode, nb) {
   if (!String(FSS.openFlags || '').includes('x')) {
-    require('../internal/engine-floor-log.cjs').engineFloorLog('node-shim: this engine has no exclusive open '
-      + '(__tjs_fs_sync.openFlags; it predates txiki-sync-open-excl.patch), so a new file on Windows is created '
-      + 'check-then-open, NOT exclusively; rebuild it: ./build.sh --only engine.compile');
-    return null;
+    const what = 'node-shim: this engine has no exclusive open (__tjs_fs_sync.openFlags; it predates '
+      + 'txiki-sync-open-excl.patch), so a new file on Windows cannot be created exclusively';
+    const floorLog = require('../internal/engine-floor-log.cjs').engineFloorLog;
+    if (onBootstrapEngine()) {
+      floorLog(`${what}; on this bootstrap engine it is created check-then-open; rebuild it: ./build.sh --only engine.compile`);
+      return null;
+    }
+    const e = new Error(`${what}; rebuild it: ./build.sh --only engine.compile`);
+    e.code = 'ERR_CLODE_ENGINE_FLOOR';
+    floorLog(e.message);
+    throw e;
   }
   let fd = FSS.open(p, (base === 'r' ? 'w' : base) + 'x' + nb);
   try {

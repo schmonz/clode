@@ -453,7 +453,10 @@ Windows (2026-11-22) does not take that route: once txiki-sync-links.patch made 
 succeeded and the rename over it failed (the CRT rename refuses an existing link and an open file: "EACCES ...
 rename '...\\.clode-create-...\\f'", CI 44977529851), and the claim link was left dangling at the path. Windows now
 creates with the engine's O_EXCL (txiki-sync-open-excl.patch, CREATE_NEW, node's own call); its mode is only the
-read-only attribute, set as node sets it. A claim left by any failed rename is removed. Row:
+read-only attribute, set as node sets it. An engine without it is refused by name (ERR_CLODE_ENGINE_FLOOR), except
+on the bootstrap engine (CLODE_ENGINE_FLOOR_LOG set), which creates check-then-open and logs it (ruling 2026-11-22:
+exclusive create is a security property, so a shipped quaude never falls back). A claim left by any failed rename
+is removed. Row:
 test/node-shim-fs-exclusive-win32.test.cjs, off Windows (a vm load of fs.cjs as win32 over a CRT-like stand-in).
 
 Unmeasured. What is still not node's: where a POSIX filesystem refuses a symlink (FAT) the create falls back to

@@ -75,7 +75,7 @@ function crtFSS({ openFlags }) {
 // What node-shim's engine-floor-log would append to CLODE_ENGINE_FLOOR_LOG (it writes through the real engine, which
 // this sandbox has none of), recorded instead.
 const floorLines = [];
-function loadShim({ platform, fss }) {
+function loadShim({ platform, fss, env = {} }) {
   let sandboxRequire = null;
   const sandbox = {
     module: { exports: {} }, exports: {},
@@ -84,7 +84,7 @@ function loadShim({ platform, fss }) {
     __tjs_fs_sync: fss,
     navigator: { platform: platform === 'win32' ? 'Win32' : 'MacIntel' },
     process: { platform, pid: 4242, env: {} },
-    tjs: {},
+    tjs: { env },
   };
   sandbox.globalThis = sandbox;
   vm.createContext(sandbox);
@@ -126,17 +126,30 @@ test('win32: a mode without owner-write sets the read-only attribute, as node do
   assert.deepStrictEqual(fss.calls.filter((c) => c[0] === 'chmod'), [['chmod', '/w/ro.txt', 0o444]]);
 });
 
-// A released engine (no 'x'), which a Windows build may bootstrap on: the route released engines always took there,
-// check-then-open, and CLODE_ENGINE_FLOOR_LOG says so. Never the symlink claim, which leaves a dangling link.
-test('win32: an engine without the exclusive open creates check-then-open, logs it, and never claims with a link', () => {
+// An engine without 'x' (every released one), two ways. Neither ever takes the symlink claim.
+// SHIPPED RUNTIME (no CLODE_ENGINE_FLOOR_LOG; a quaude never has it): refused by name, as the utime and rusage floors
+// refuse. An exclusive create is a security property, so a non-exclusive one is never handed out in its place.
+test('win32, shipped runtime: an engine without the exclusive open is REFUSED by name; nothing is created', () => {
   floorLines.length = 0;
   const fss = crtFSS({ openFlags: null });
   const shim = loadShim({ platform: 'win32', fss });
+  assert.throws(() => shim.openSync('/w/f.txt', 'w'),
+    (e) => e.code === 'ERR_CLODE_ENGINE_FLOOR' && /txiki-sync-open-excl\.patch/.test(e.message) && !/check-then-open/.test(e.message));
+  assert.ok(!fss.files.has('/w/f.txt'), 'nothing created');
+  assert.ok(!fss.calls.some((c) => c[0] === 'open' || c[0] === 'symlink'), JSON.stringify(fss.calls));
+});
+
+// BOOTSTRAP (CLODE_ENGINE_FLOOR_LOG set: build-leg sets it on exactly the steps that run on the bootstrap engine, and
+// fails the leg on any line): check-then-open, the route released engines always took there, and the line logged.
+test('win32, bootstrap engine: without the exclusive open it creates check-then-open and logs it', () => {
+  floorLines.length = 0;
+  const fss = crtFSS({ openFlags: null });
+  const shim = loadShim({ platform: 'win32', fss, env: { CLODE_ENGINE_FLOOR_LOG: '/w/floor.log' } });
   shim.closeSync(shim.openSync('/w/f.txt', 'w'));
   assert.strictEqual((fss.files.get('/w/f.txt') || {}).kind, 'file', 'a file, not a link');
   assert.ok(!fss.calls.some((c) => c[0] === 'symlink' || c[0] === 'rename'), JSON.stringify(fss.calls));
   assert.strictEqual(floorLines.length, 1);
-  assert.match(floorLines[0], /no exclusive open .*txiki-sync-open-excl\.patch.*NOT exclusively/);
+  assert.match(floorLines[0], /no exclusive open .*txiki-sync-open-excl\.patch.*bootstrap engine.*check-then-open/);
 });
 
 test('posix: a claim whose rename fails is removed, not left dangling at the path', () => {
