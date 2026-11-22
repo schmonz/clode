@@ -212,6 +212,11 @@ const TEST_VERDICT_EXTRA = [
   // answered; the FLOOR test said the classifier could not see it, as it said of
   // text-differential. Narrow on purpose: `compareRuns(` names the three-run comparison.
   /\bcompareRuns\s*\(/,
+  // A LOCKFILE VERDICT: the field npm itself writes into a committed package-lock.json for a
+  // package that runs an install script, judged against the manifest's allowScripts. Added
+  // 2026-11-22 for deps-allow-scripts (deps-install-scripts-approved), a registered guard the
+  // FLOOR test said the classifier could not see. Narrow on purpose: it names npm's own flag.
+  /\bhasInstallScript\b/,
 ];
 
 function classifyTestFile(src) {
