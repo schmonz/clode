@@ -1,4 +1,5 @@
 'use strict';
+// forced-win32: spawn-injected: no test here spawns; it reads the committed header and calls the pure chooseIntl/rulesThrough, never nativeIntl or a native run
 // unicode-intl-gates: the build gate over the TABLE-VERSION CHECK (scripts/gen-unicode-data.cjs chooseIntl,
 // scripts/lib/native-intl.cjs). libexec/unicode-text.cjs's uax29 profile clusters with tables generated at the
 // Unicode version linux native's Intl.Segmenter reports (header.intl, INTL-FOLLOWS-BUNDLED-ICU), and with the

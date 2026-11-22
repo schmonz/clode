@@ -1,4 +1,5 @@
 'use strict';
+// forced-win32: spawn-injected: no test here spawns; gen-unicode-data and native-intl are required only for their pure chooseIntl/rulesThrough/intlVerdict, never nativeIntl or a native run
 // UAX #29 conformance against Unicode's OWN GraphemeBreakTest.txt, at the version the
 // generated data was built from. Pure: no native, no tjs. The native differential
 // (test/fidelity/text-differential.test.cjs) is the other half.
