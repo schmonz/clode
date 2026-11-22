@@ -30,19 +30,27 @@ function createHash(alg) {
   return sha256Hash([]);
 }
 
+// Node's answer to using a Hash or Hmac after digest(): "Digest already called", ERR_CRYPTO_HASH_FINALIZED.
+const finalizedError = () => Object.assign(new Error('Digest already called'), { code: 'ERR_CRYPTO_HASH_FINALIZED' });
+
 // hash.copy(): a new Hash with this one's state so far, which then goes its own way. 2.1.330's request
 // digest (requestDigest) hashes a shared message prefix once and copy()s it for each continuation; without
 // copy() every request logged "TypeError: not a function" and recorded no digest. Like node, copying a hash
-// that has already been digested throws ERR_CRYPTO_HASH_FINALIZED.
+// that has already been digested throws ERR_CRYPTO_HASH_FINALIZED, as update() and a second digest() do.
 function sha256Hash(chunks) {
   let finalized = false;
   return {
-    update(data, enc) { chunks.push(toBytes(data, enc).slice()); return this; },
+    update(data, enc) {
+      if (finalized) throw finalizedError();
+      chunks.push(toBytes(data, enc).slice());
+      return this;
+    },
     copy() {
-      if (finalized) throw Object.assign(new Error('Digest already called'), { code: 'ERR_CRYPTO_HASH_FINALIZED' });
+      if (finalized) throw finalizedError();
       return sha256Hash(chunks.slice());
     },
     digest(enc) {
+      if (finalized) throw finalizedError();
       finalized = true;
       const total = chunks.reduce((n, c) => n + c.length, 0);
       const all = new Uint8Array(total);
@@ -63,9 +71,19 @@ function createHmac(alg, key) {
   const ipad = new Uint8Array(BLOCK), opad = new Uint8Array(BLOCK);
   for (let i = 0; i < BLOCK; i++) { ipad[i] = kpad[i] ^ 0x36; opad[i] = kpad[i] ^ 0x5c; }
   const chunks = [];
+  let finalized = false;
+  // As node's Hmac: update() copies what it is given (a buffer changed afterwards does not change the digest),
+  // update() after digest() throws ERR_CRYPTO_HASH_FINALIZED, and a second digest() answers an EMPTY digest
+  // (node's Hmac.prototype.digest), unlike a Hash, which throws.
   return {
-    update(data, enc) { chunks.push(toBytes(data, enc)); return this; },
+    update(data, enc) {
+      if (finalized) throw finalizedError();
+      chunks.push(toBytes(data, enc).slice());
+      return this;
+    },
     digest(enc) {
+      if (finalized) return encodeDigest(new Uint8Array(0), enc);
+      finalized = true;
       const total = chunks.reduce((n, c) => n + c.length, 0);
       const inner = new Uint8Array(BLOCK + total);
       inner.set(ipad); let o = BLOCK; for (const c of chunks) { inner.set(c, o); o += c.length; }

@@ -117,6 +117,37 @@ try { h.copy(); out.push('no throw'); } catch (e) { out.push(e.code); }
 console.log(JSON.stringify(out));
 `;
 
+// After digest(), as node: a Hash throws ERR_CRYPTO_HASH_FINALIZED on update(), copy() and a second digest(); an Hmac
+// throws on update() but answers an EMPTY second digest(). And an Hmac, like a Hash, hashes what update() was given,
+// not what the caller's buffer holds by digest() time.
+const FINAL_PROG = `
+const crypto = require('node:crypto');
+const t = (f) => { try { const v = f(); return Buffer.isBuffer(v) ? 'buf:' + v.toString('hex') : 'ok:' + v; } catch (e) { return e.constructor.name + ' ' + e.code + ' ' + e.message; } };
+const out = [];
+const h = crypto.createHash('sha256').update('x'); h.digest('hex');
+out.push(t(() => h.update('y')), t(() => h.digest('hex')), t(() => h.copy()));
+const m = crypto.createHmac('sha256', 'key').update('x'); m.digest('hex');
+out.push(t(() => m.update('y')), t(() => m.digest('hex')), t(() => m.digest()));
+const buf = Buffer.from('abc');
+const mm = crypto.createHmac('sha256', 'key').update(buf);
+buf[0] = 0x7a;
+out.push(mm.digest('hex'));
+console.log(JSON.stringify(out));
+`;
+
+test('crypto Hash and Hmac after digest(), and the copy Hmac keeps of its input, exactly as node', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-crypto-final-'));
+  const f = path.join(dir, 'prog.cjs');
+  fs.writeFileSync(f, FINAL_PROG);
+  const nodeOut = require('node:child_process')
+    .execFileSync(process.execPath, [f], { encoding: 'utf8' }).trim();
+  assert.match(nodeOut, /Error ERR_CRYPTO_HASH_FINALIZED Digest already called/, 'the host node oracle answered as expected');
+  const r = runLoader(f);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.strictEqual(r.stdout.trim(), nodeOut);
+});
+
 test('crypto Hash.copy() forks the running state exactly as node does', (t) => {
   if (skipUnlessTjs(t)) return;
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-crypto-copy-'));
