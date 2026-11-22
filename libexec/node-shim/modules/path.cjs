@@ -256,7 +256,8 @@ function win32Parse(p) {
 }
 
 // path.toNamespacedPath, as node's: on win32 an absolute drive path gets \\?\ and a UNC path \\?\UNC\ (a device or
-// already-namespaced path, or anything shorter than a root, is returned as given); on posix the identity. fs.cjs's
+// already-namespaced path is returned resolved, as node 24 and 26 do; one no longer than two characters once resolved
+// is returned as given); on posix the identity. fs.cjs's
 // symlinkSync uses it for a junction's target, as node's preprocessSymlinkDestination does.
 function win32ToNamespacedPath(p) {
   if (typeof p !== 'string' || p.length === 0) return p;
@@ -267,7 +268,7 @@ function win32ToNamespacedPath(p) {
   } else if (/^[A-Za-z]$/.test(r[0]) && r[1] === ':' && r[2] === '\\') {
     return `\\\\?\\${r}`;
   }
-  return p;
+  return r;
 }
 
 const win32 = {

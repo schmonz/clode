@@ -64,6 +64,10 @@ const cases = [
   w.join('a', 'b\\c'), w.join('C:\\x\\y', 'z'), w.join('\\\\srv\\s', 'a', 'b'),
   w.normalize('C:\\a\\.\\b\\..\\c'), w.normalize('a/b\\c'),
   w.dirname('C:\\a\\b'), w.dirname('C:\\a'), w.dirname('a\\b\\c'), w.dirname('\\\\srv\\s\\x'),
+  // toNamespacedPath, which fs.symlinkSync uses on Windows: node 24+ returns a namespaced path RESOLVED
+  w.toNamespacedPath('\\\\?\\C:\\a\\..\\b'), w.toNamespacedPath('C:\\a\\..\\b'), w.toNamespacedPath('C:\\'),
+  w.toNamespacedPath('\\\\srv\\sh\\x'), w.toNamespacedPath('\\\\.\\pipe\\x'), w.toNamespacedPath(''),
+  w.posix.toNamespacedPath('/a/../b'),
 ];
 console.log(JSON.stringify(cases));
 `);

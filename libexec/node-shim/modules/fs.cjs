@@ -309,7 +309,8 @@ function symlinkAs(target, p, type) {
     else if (path.isAbsolute(t)) t = path.toNamespacedPath(t);
     else t = t.replace(/\//g, '\\');
   }
-  return FSS.symlink(t, p, SYMLINK_TYPES[type] || 0);
+  // node passes the link path through toNamespacedPath too (the identity on posix)
+  return FSS.symlink(t, path.toNamespacedPath(String(p)), SYMLINK_TYPES[type] || 0);
 }
 
 function createExclusive(p, base, mode) {
