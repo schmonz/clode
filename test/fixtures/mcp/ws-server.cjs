@@ -93,6 +93,7 @@ srv.on('upgrade', (req, sock) => {
   });
   sock.on('error', () => {});
 });
+require('./events.cjs').attachEvents(srv);
 srv.listen(0, '127.0.0.1', () => {
   fs.writeFileSync(process.argv[2], String(srv.address().port));
   process.stderr.write(`listening ${srv.address().port}\n`);
