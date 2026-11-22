@@ -49,7 +49,8 @@ function scanMergeStepWiring({ src, buildReportSrc }) {
   }
 
   examined++;
-  if (!/doc\.sccMerge/.test(src)) findings.push('must recognise an already-merged staged graph (doc.sccMerge)');
+  // head.sccMerge: read off the graph's head, not a whole-doc parse (GRAPH-HEAD-NOT-WHOLE, below).
+  if (!/head\.sccMerge/.test(src)) findings.push('must recognise an already-merged staged graph (head.sccMerge)');
 
   examined++;
   if (!/does not report moduleMeta/.test(src)) findings.push('must refuse an engine without moduleMeta (the binding is required, not guessed)');
@@ -149,4 +150,41 @@ test('merge-step declares its own steps through the protocol (behavioral)', (t) 
     `no started(merge) record in stdout:\n${r.stdout}`);
   assert.ok(records.some((rec) => rec.type === 'finished' && rec.name === 'merge'),
     `no finished(merge) record in stdout:\n${r.stdout}`);
+});
+
+// GRAPH-HEAD-NOT-WHOLE (netbsd-sparc, run 44991586139: "template-tjs killed: out of swap" in
+// the merge). The already-merged graph is the case every build takes, and parsing the whole
+// 80MB doc there to read two fields peaked at 476MB RSS under tjs (177MB after). The proof
+// that the doc is NOT parsed whole: `sources` here is not JSON at all (a bare word inside an
+// object), so a whole-doc JSON.parse throws, while a scan that steps over it reads the head.
+// Brackets, quotes and escapes inside the strings it steps over must not move it; sccMerge
+// comes AFTER sources on purpose.
+test('merge-step reads an already-merged graph\'s head without parsing the whole doc (behavioral)', (t) => {
+  const tjs = tjsPath();
+  if (!tjs) { t.skip('no tjs binary (CLODE_TJS or build/tjs/tjs)'); return; }
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'merge-step-head-'));
+  try {
+    const graphPath = path.join(tmp, 'graph.json');
+    const tricky = JSON.stringify('a "}" ] { [ \\" \\\\ ' + String.fromCodePoint(0xe9) + ' end');
+    fs.writeFileSync(graphPath, '{ "format": "clode-bun-graph-v1", "order": ["a", "b"],\n'
+      + ` "note": ${tricky}, "n": -1.5e3, "flag": true, "nil": null,\n`
+      + ` "sources": { "a": ${tricky}, "b": notJson },\n`
+      + ' "cyclicRequires": [["a", "b"]],\n'
+      + ' "sccMerge": { "format": "clode-scc-merge-v1", "mergerVersion": 15, "groups": [2, 49] } }\n');
+    assert.throws(() => JSON.parse(fs.readFileSync(graphPath, 'utf8')), 'the fixture must not be parseable whole');
+    const stageDir = path.join(tmp, 'stage');
+    fs.mkdirSync(stageDir);
+    const argv = ['run', require.resolve('../scripts/merge-step.mjs'), graphPath,
+      path.resolve(__dirname, '..', 'libexec'), stageDir];
+    const [cmd, finalArgv] = wantsTrampoline(process.platform, isApeFile(tjs))
+      ? ['/bin/sh', ['-c', '"$@"', 'sh', tjs, ...argv]]
+      : [tjs, argv];
+    const r = spawnSync(cmd, finalArgv, { encoding: 'utf8', timeout: 30000 });
+    assert.strictEqual(r.status, 0, `merge-step.mjs exited nonzero:\nstdout:\n${r.stdout}\nstderr:\n${r.stderr}`);
+    assert.match(r.stdout, /already merged \(clode-scc-merge-v1, merger 15, groups 2, 49\)/);
+    const finished = r.stdout.split('\n').map(parse).filter(Boolean).find((rec) => rec.type === 'finished');
+    assert.ok(finished && finished.name === 'merge', `no finished(merge):\n${r.stdout}`);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
 });

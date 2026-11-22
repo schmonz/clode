@@ -83,23 +83,87 @@ const report = new Reporter({ emit: (line) => { console.log(line); } });
 const MERGED_CACHE_FILE = 'graph-merged.json';
 const MERGED_CACHE_FORMAT = 'clode-scc-merge-v1';
 
-const doc = JSON.parse(dec.decode(await mustRead(graphPath, 'the staged graph')));
+// GRAPH-HEAD-NOT-WHOLE. Two of the doc's top-level fields decide whether there is any work:
+// cyclicRequires and sccMerge. They are read straight off the BYTES — every other value,
+// above all `sources` (the whole bundle), is stepped over without being decoded — and the
+// doc is parsed whole only when a merge is really computed. Measured 2026-11-22 under tjs on
+// 2.1.330's staged graph (80MB, already merged at staging, the case every build takes):
+// parsing it whole to read those two fields peaked at 476MB RSS, and the blobulate worker
+// holds its own parse while this runs, which is what netbsd-sparc's guest died of
+// ("template-tjs killed: out of swap", run 44991586139).
+// The scan: strings skip their escapes; objects and arrays nest by depth, ignoring brackets
+// inside strings; a scalar runs to the next `,` or `}`. A value is decoded only for a key in
+// `keys`. A shape it cannot walk (not an object at the top) is refused, not guessed.
+function topLevelValues(bytes, keys) {
+  const QUOTE = 0x22, BSL = 0x5c, LB = 0x7b, RB = 0x7d, LS = 0x5b, RS = 0x5d, COMMA = 0x2c, COLON = 0x3a;
+  const ws = (c) => c === 0x20 || c === 0x0a || c === 0x0d || c === 0x09;
+  const want = new Set(keys);
+  const out = {};
+  let i = 0;
+  const skipWs = () => { while (i < bytes.length && ws(bytes[i])) i++; };
+  const endOfString = (at) => { let j = at + 1; while (j < bytes.length && bytes[j] !== QUOTE) j += bytes[j] === BSL ? 2 : 1; return j + 1; };
+  const endOfValue = (at) => {
+    const c = bytes[at];
+    if (c === QUOTE) return endOfString(at);
+    if (c === LB || c === LS) {
+      let depth = 0, j = at;
+      while (j < bytes.length) {
+        const d = bytes[j];
+        if (d === QUOTE) { j = endOfString(j); continue; }
+        if (d === LB || d === LS) depth++;
+        else if (d === RB || d === RS) { depth--; if (depth === 0) return j + 1; }
+        j++;
+      }
+      throw new Error('merge-step: the staged graph ends inside a value');
+    }
+    let j = at;
+    while (j < bytes.length && bytes[j] !== COMMA && bytes[j] !== RB && !ws(bytes[j])) j++;
+    return j;
+  };
+  skipWs();
+  if (bytes[i] !== LB) throw new Error('merge-step: the staged graph is not a JSON object');
+  i++;
+  for (;;) {
+    skipWs();
+    if (bytes[i] === RB) return out;
+    if (bytes[i] !== QUOTE) throw new Error(`merge-step: the staged graph has no key at byte ${i}`);
+    const ke = endOfString(i);
+    const key = JSON.parse(dec.decode(bytes.subarray(i, ke)));
+    i = ke; skipWs();
+    if (bytes[i] !== COLON) throw new Error(`merge-step: the staged graph has no ':' after ${key}`);
+    i++; skipWs();
+    const ve = endOfValue(i);
+    if (want.has(key)) out[key] = JSON.parse(dec.decode(bytes.subarray(i, ve)));
+    i = ve; skipWs();
+    if (bytes[i] === COMMA) i++;
+  }
+}
+
+let graphBytes = await mustRead(graphPath, 'the staged graph');
+const head = topLevelValues(graphBytes, ['cyclicRequires', 'sccMerge']);
 // `|| []` on purpose: absent and empty are the same thing, and both are an exact no-op.
-const cyclicRequires = doc.cyclicRequires || [];
+const cyclicRequires = head.cyclicRequires || [];
+// The whole doc, parsed only on the path that merges (below); the bytes go as soon as it is.
+let doc = null;
+const wholeDoc = () => {
+  if (!doc) { doc = JSON.parse(dec.decode(graphBytes)); graphBytes = null; }
+  return doc;
+};
+if (!cyclicRequires.length || head.sccMerge) graphBytes = null;
 
 report.plan([{ name: 'merge', total: cyclicRequires.length }]);
 report.start('merge');
 
 if (!cyclicRequires.length) {
   // 2.1.247 and earlier have no cyclic requires at all — nothing to do, nothing to cache.
-} else if (doc.sccMerge) {
+} else if (head.sccMerge) {
   // ALREADY MERGED, AT STAGING (libexec/clode-extract.cjs) — the staged graph is the
   // input to BOTH targets, and doing the merge there means a graph-runner naude embeds —
   // and every node-shim oracle stages — from an already-merged doc instead of dying on
   // the first residual require. This is the fallback for a doc staged before that moved;
   // both paths run the SAME libexec/graph-scc-merge.cjs.
-  console.log(`merge-step: the staged graph is already merged (${doc.sccMerge.format}, `
-    + `merger ${doc.sccMerge.mergerVersion}, groups ${doc.sccMerge.groups.join(', ')}) `
+  console.log(`merge-step: the staged graph is already merged (${head.sccMerge.format}, `
+    + `merger ${head.sccMerge.mergerVersion}, groups ${head.sccMerge.groups.join(', ')}) `
     + '— nothing to do');
 } else {
   // The named escape hatch: refuse to build rather than merge. Kept from the warn-only
@@ -160,6 +224,7 @@ if (!cyclicRequires.length) {
       + `(merger ${merger.MERGER_VERSION}, ${Object.keys(cached.sources).length} rewritten modules) `
       + `from ${cacheFile} — the caller reads it back`);
   } else {
+    wholeDoc();
     const t0 = performance.now();
     // PRE-PASS. moduleMeta answers about a COMPILED module, and compiling one in
     // isolation fails ("could not load") because compile() resolves a module's imports
