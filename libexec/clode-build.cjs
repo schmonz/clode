@@ -615,15 +615,26 @@ function resolveClaudeNmDir({ libexec, here, verbose, env, ROOT }) {
 // surface), and answers in <request>.result.json. Its stderr is the builder's, so its
 // verbose lines read exactly as an in-process stage's did.
 const STAGE_REQUEST_ENV = 'CLODE_STAGE_REQUEST';
-// EXACTLY how this process was launched: under tjs the node-shim loader records it
-// (globalThis.__clodeRelaunchArgv — process.argv has lost `run loader.cjs` by then, and a
-// blobulated builder is its own entry); under node, the interpreter, its execArgv, the script.
-// Injectable for the test: `g` / `proc` default to the real globals.
+// THE CLODE ENTRY, launched the way this process was. The target is ALWAYS clode's own entry
+// (clode-main.cjs records its path as globalThis.__clodeEntry when it loads; otherwise the
+// clode-main.cjs beside this file), NEVER process.argv[1]: clode-build also runs in-process
+// inside node:test files and the naude path, and relaunching argv[1] there re-ran the TEST
+// FILE, recursively (suite 4,216 -> 111,898 tests, 2026-11-22). The launcher: a blobulated
+// builder is its own entry; under tjs, the loader's record (`tjs run loader.cjs`, which
+// process.argv no longer shows); under node, node and its execArgv minus the test runner's
+// and watcher's own flags. Injectable for the test: `g` / `proc` default to the real globals.
 function stageRelaunchArgv(g = globalThis, proc = process) {
-  if (Array.isArray(g.__clodeRelaunchArgv) && g.__clodeRelaunchArgv.length) return [...g.__clodeRelaunchArgv];
   if (g.__quaudeVFS) return [proc.execPath];
-  return [proc.execPath, ...(proc.execArgv || []), proc.argv[1]];
+  const entry = (typeof g.__clodeEntry === 'string' && g.__clodeEntry) || path.join(__dirname, 'clode-main.cjs');
+  if (Array.isArray(g.__clodeLauncherArgv) && g.__clodeLauncherArgv.length) return [...g.__clodeLauncherArgv, entry];
+  const execArgv = (proc.execArgv || []).filter((a) => !/^--(test|watch)(\b|-|=)/.test(a));
+  return [proc.execPath, ...execArgv, entry];
 }
+// RECURSION FUSE: a staging child is told to stage, never to build, so it must never start a
+// staging child of its own; clode-main.cjs marks the process (globalThis.__clodeStageChild)
+// before it runs the request, and stageInChild refuses by name if it is ever reached there.
+const STAGE_CHILD_REFUSAL = 'a staging child (CLODE_STAGE_REQUEST) was asked to start another staging child — '
+  + 'refused: staging is one level deep by design (libexec/clode-build.cjs stageInChild)';
 // A CLODE_STAGE_REQUEST clode-main.cjs will act on: request.json directly inside a
 // clode-stage-* dir in the temp dir (what stageInChild makes). Anything else is a stray
 // variable, refused by name rather than quietly answered.
@@ -636,6 +647,7 @@ function isStageRequestPath(p) {
   return tmp !== null && real(path.dirname(dir)) === tmp && fs.existsSync(p);
 }
 function stageInChild(request, env) {
+  if (globalThis.__clodeStageChild || (env && env[STAGE_REQUEST_ENV])) return { error: STAGE_CHILD_REFUSAL };
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-stage-'));
   const reqPath = path.join(dir, 'request.json');
   const resPath = `${reqPath}.result.json`;
@@ -2359,5 +2371,5 @@ module.exports = {
   scanBareSpecifiers, scannableTexts, specifierPackageName, isBuiltinSpecifier, shimProvidedModules,
   assertNoUnknownBareSpecifiers, KNOWN_UNREACHABLE, resolveClaudeNmDir,
   resolveManifest, releaseBaseUrl, thisTjsPin, staleLibexecSource,
-  STAGE_REQUEST_ENV, runStageRequest, stageRelaunchArgv, isStageRequestPath,
+  STAGE_REQUEST_ENV, runStageRequest, stageRelaunchArgv, isStageRequestPath, stageInChild, STAGE_CHILD_REFUSAL,
 };

@@ -102,13 +102,41 @@ test('the dep-closure gate judges the staging child\'s scan, not the staged file
 // RELAUNCH EXACTLY AS LAUNCHED. Relaunching [execPath, argv[1]] dropped node's execArgv, and
 // under `tjs run loader.cjs <entry>` dropped `run loader.cjs` (the loader rewrites process.argv
 // to [tjs, entry]), so a checkout run under tjs died "ended without an answer".
-test('stageRelaunchArgv: the loader\'s record wins, a blobulated builder is its own entry, node keeps execArgv', () => {
+// AND ALWAYS THE CLODE ENTRY, never argv[1]: clode-build runs in-process inside node:test files
+// (and the naude path), and relaunching argv[1] re-ran the TEST FILE as the "staging child",
+// recursively — the suite went 4,216 -> 111,898 tests with 68,283 failures (2026-11-22).
+const CLODE_MAIN = path.join(__dirname, '..', 'libexec', 'clode-main.cjs');
+test('stageRelaunchArgv: the target is the clode entry, launched as this process was', () => {
   const { stageRelaunchArgv } = require('../libexec/clode-build.cjs');
-  const proc = { execPath: '/n/node', execArgv: ['--stack-size=4000', '--require', '/p.cjs'], argv: ['/n/node', '/c/stage0.mjs', 'build'] };
-  assert.deepStrictEqual(stageRelaunchArgv({ __clodeRelaunchArgv: ['/t/tjs', 'run', '/c/loader.cjs', '/c/clode-main.cjs'] }, proc),
+  const proc = { execPath: '/n/node', execArgv: ['--stack-size=4000', '--test', '--test-name-pattern=x', '--require', '/p.cjs', '--watch'],
+    argv: ['/n/node', '/c/some.test.cjs'] };
+  assert.deepStrictEqual(stageRelaunchArgv({ __clodeLauncherArgv: ['/t/tjs', 'run', '/c/loader.cjs'], __clodeEntry: '/c/clode-main.cjs' }, proc),
     ['/t/tjs', 'run', '/c/loader.cjs', '/c/clode-main.cjs']);
   assert.deepStrictEqual(stageRelaunchArgv({ __quaudeVFS: {} }, proc), ['/n/node']);
-  assert.deepStrictEqual(stageRelaunchArgv({}, proc), ['/n/node', '--stack-size=4000', '--require', '/p.cjs', '/c/stage0.mjs']);
+  assert.deepStrictEqual(stageRelaunchArgv({}, proc), ['/n/node', '--stack-size=4000', '--require', '/p.cjs', CLODE_MAIN],
+    'node keeps its own execArgv but not the test runner\'s or watcher\'s, and runs clode-main.cjs, not argv[1]');
+});
+
+// THE RATCHET, in-process from THIS node:test file, whose argv[1] is this file: the real globals
+// must still relaunch clode's entry.
+test('in-process from a node:test file, the staging child is clode-main.cjs, not the test file', () => {
+  const { stageRelaunchArgv } = require('../libexec/clode-build.cjs');
+  const argv = stageRelaunchArgv();
+  assert.strictEqual(argv[argv.length - 1], CLODE_MAIN, JSON.stringify(argv));
+  assert.ok(!argv.includes(__filename) && !argv.includes(process.argv[1]),
+    `the relaunch names the running test file: ${JSON.stringify(argv)}`);
+});
+
+test('recursion fuse: a staging child refuses to start another, by name', () => {
+  const { stageInChild, STAGE_CHILD_REFUSAL } = require('../libexec/clode-build.cjs');
+  globalThis.__clodeStageChild = true;
+  try {
+    assert.deepStrictEqual(stageInChild({}, {}), { error: STAGE_CHILD_REFUSAL });
+  } finally {
+    delete globalThis.__clodeStageChild;
+  }
+  assert.deepStrictEqual(stageInChild({}, { CLODE_STAGE_REQUEST: '/x/request.json' }), { error: STAGE_CHILD_REFUSAL });
+  assert.match(STAGE_CHILD_REFUSAL, /staging child .*refused/);
 });
 
 test('clode build under `tjs run loader.cjs` stages in a child the same way (the child\'s answer arrives)', (t) => {

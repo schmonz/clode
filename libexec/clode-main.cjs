@@ -64,6 +64,10 @@ function clodeHelp(version, kind) {
 // passes) or 'checkout' (scripts/stage0.mjs, which has `bootstrap` besides). It is an
 // argument rather than a sniff (no __dirname heuristic, no env var) because the entry
 // point is the one thing that genuinely knows.
+// The path clode-build.cjs's stageRelaunchArgv relaunches as a staging child: THIS entry,
+// never whatever script happens to be process.argv[1] (a test file, in-process).
+globalThis.__clodeEntry = __filename;
+
 async function main(argv, opts = {}) {
   const env = process.env;
   const args = Array.isArray(argv) ? argv : [];
@@ -75,6 +79,7 @@ async function main(argv, opts = {}) {
   if (env.CLODE_STAGE_REQUEST) {
     const reqPath = env.CLODE_STAGE_REQUEST;
     delete env.CLODE_STAGE_REQUEST;
+    globalThis.__clodeStageChild = true; // the recursion fuse stageInChild checks
     return process.exit(require('./clode-build.cjs').runStageRequest(reqPath));
   }
 
