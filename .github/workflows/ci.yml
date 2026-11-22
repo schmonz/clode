@@ -1715,6 +1715,10 @@ jobs:
             echo "retry $i…"; sleep 3
           done
           echo "live-connect smoke: the engine could not establish a TLS connection" >&2; exit 1
+      # test/node_modules carries axios, which test/zlib-axios-oracle.test.cjs drives in the oracle step
+      # below (and node-pty + @xterm/headless, which the end-to-end steps later in this job use).
+      - name: Install the test harness (axios for the oracle step; node-pty + @xterm/headless)
+        run: npm install --prefix test
       - name: node-shim oracle suite (every module diffed vs host node, under a darwin tjs)
         env:
           CLODE_TJS: ${{ runner.temp }}/tjs/tjs
@@ -1750,6 +1754,10 @@ jobs:
           # git, a staged provider — so it needs nothing further, the same placement fix
           # Task 8 made for shim-surface/guard-subcommands-gate.
           FILES="$FILES test/credential-store-attempted.test.cjs"
+          # test/zlib-axios-oracle.test.cjs: axios (test/node_modules, installed by the step
+          # before this one) through node-shim's http client against a token-endpoint-shaped
+          # server, judged against host node. It needs an engine and axios; this job has both.
+          FILES="$FILES test/zlib-axios-oracle.test.cjs"
           mkdir -p "$RUNNER_TEMP/cells"
           node --require ./test/file-watchdog-preload.cjs --test --test-concurrency=1 --test-reporter=spec --test-reporter-destination=stdout \
             --test-reporter=./test/cell-reporter.mjs --test-reporter-destination="$RUNNER_TEMP/cells/node-shim-oracle-darwin.jsonl" \

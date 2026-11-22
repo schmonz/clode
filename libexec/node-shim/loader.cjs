@@ -281,6 +281,12 @@ function resolveRequest(request, fromDir) {
       const entry = P.normalize(P.join(pkgDir, main));
       for (const c of [entry, entry + '.js', entry + '.cjs', P.join(entry, 'index.js')]) if (existsFileSync(c)) return { file: c };
     }
+    // A deep request (`es-errors/eval`, `pkg/lib/x`) names a FILE inside the package, as node resolves it:
+    // the path itself, then with .js/.cjs/.json. This resolver used to try only directory entries, so
+    // `require('es-errors/eval')` (get-intrinsic, under form-data, under axios) failed to resolve.
+    if (request.includes('/')) {
+      for (const c of [pkgDir, pkgDir + '.js', pkgDir + '.cjs', pkgDir + '.json']) if (existsFileSync(c)) return { file: c };
+    }
     for (const c of [P.join(pkgDir, 'index.js'), P.join(pkgDir, 'index.cjs')]) if (existsFileSync(c)) return { file: c };
   }
   throw new Error(`node-shim: cannot resolve package '${request}' from ${fromDir}`);

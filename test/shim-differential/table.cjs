@@ -278,7 +278,7 @@ const UNCOVERED = {
   'util.deprecate': 'its warning is process-global; a scenario driver is not written yet',
   'util.inherits': 'a class wiring helper; a scenario driver is not written yet',
   'util.promisify': 'wraps a callback API; a scenario driver is not written yet',
-  'zlib.createBrotliDecompress': 'a stream; a scenario driver is not written yet',
+  'zlib.createBrotliDecompress': 'absent from the shim (test/shim-surface/golden.json layer 2)',
   'zlib.createGunzip': 'a stream; a scenario driver is not written yet',
   'zlib.createGzip': 'a stream; a scenario driver is not written yet',
   'zlib.createInflate': 'a stream; a scenario driver is not written yet',

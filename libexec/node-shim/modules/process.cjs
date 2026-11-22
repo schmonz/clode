@@ -579,3 +579,9 @@ module.exports = {
 if (module.exports.platform !== 'win32') {
   module.exports.getuid = unixGetuid;
 }
+
+// Object.prototype.toString.call(process) is "[object process]" under node (the tag sits on process's
+// prototype). axios decides whether its http adapter can run from exactly that (`kindOf(process) ===
+// 'process'`), and under the shim it read "[object Object]", so npm's axios refused adapter:'http'
+// with ERR_NOT_SUPPORT. Non-enumerable, as node's, so no key listing of process changes.
+Object.defineProperty(module.exports, Symbol.toStringTag, { value: 'process', writable: false, enumerable: false, configurable: true });

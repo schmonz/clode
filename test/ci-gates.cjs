@@ -183,6 +183,9 @@ const FILES = {
   'test/zlib-zstd-stream-gap.test.cjs': { jobs: ['node-shim-oracle'] },
   'test/fidelity/regexp-capture-census.test.cjs': { jobs: ['node-shim-oracle'] },
   'test/credential-store-attempted.test.cjs': { jobs: ['node-shim-oracle-darwin'] },
+  // axios through node-shim's http client vs host node (the 2026-11-22 /login failure); needs an engine and the
+  // test harness's axios, which node-shim-oracle-darwin installs before its oracle step.
+  'test/zlib-axios-oracle.test.cjs': { jobs: ['node-shim-oracle-darwin'] },
   // The node-shim oracles' two accepted skips, by name (each job's "skipped 2").
   'test/node-shim-agentic.test.cjs': { jobs: ['node-shim-oracle', 'node-shim-oracle-darwin', 'windows-amd64-tests',
     'windows-arm64-tests'], skips: {

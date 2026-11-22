@@ -446,13 +446,20 @@ class Duplex extends Readable {
 }
 
 function pipeline(...args) {
-  const cb = typeof args[args.length - 1] === 'function' ? args.pop() : null;
+  const done = typeof args[args.length - 1] === 'function' ? args.pop() : null;
+  // node takes the streams either spread or as ONE array (`pipeline([src, ...transforms], cb)`). The
+  // bundle's axios uses the array form to chain a response through its decoder (`vr([e,...a],()=>{})`),
+  // and this used to read the array itself as the stream, so `last.on` threw "not a function".
+  if (args.length === 1 && Array.isArray(args[0])) args = args[0];
+  // node calls the callback once; 'finish' and 'end' can both fire on a duplex.
+  let called = false;
+  const cb = (e) => { if (called || !done) return; called = true; done(e); };
   let cur = args[0];
   for (let i = 1; i < args.length; i++) cur = cur.pipe(args[i]);
   const last = args[args.length - 1];
-  last.on('finish', () => cb && cb(null));
-  last.on('end', () => cb && cb(null));
-  last.on('error', (e) => cb && cb(e));
+  last.on('finish', () => cb(null));
+  last.on('end', () => cb(null));
+  last.on('error', (e) => cb(e));
   return last;
 }
 
