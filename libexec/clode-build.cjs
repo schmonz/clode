@@ -545,7 +545,11 @@ function assertNoUnknownBareSpecifiers(files, closure, libexecDir, opts = {}) {
   const unknown = new Map(); // name -> first file it was seen in
   for (const file of files) {
     if (!fs.existsSync(file)) continue;
-    for (const name of scanBareSpecifiers(file)) {
+    // opts.scanned: what the staging child already scanned ({ [file]: { names } | { error } }),
+    // so the builder judges names without parsing the staged graph itself (runStageRequest).
+    const pre = opts.scanned && opts.scanned[file];
+    if (pre && pre.error) throw new Error(pre.error);
+    for (const name of (pre ? pre.names : scanBareSpecifiers(file))) {
       if (known.has(name) || shimProvided.has(name) || KNOWN_UNREACHABLE[name]) continue;
       if (!unknown.has(name)) unknown.set(name, file);
     }
@@ -593,6 +597,77 @@ function resolveClaudeNmDir({ libexec, here, verbose, env, ROOT }) {
 // its VFS to a temp dir and rebinds it), while naude always passes the on-disk
 // one. Errors come back as { error } for the caller to route through its own
 // fail() — this helper never writes to stderr or picks an exit code.
+// STAGING RUNS IN A CHILD PROCESS (STAGE-IN-CHILD), and the builder waits for it. Measured
+// 2026-11-22 under tjs on darwin, real 2.1.330 provider, cold cache: an in-process stage took
+// the builder from 58MB to a 1.58GB peak and it still held 889MB RSS through the whole
+// blobulate step that follows, beside the worker and the merge — on netbsd-sparc's
+// 480MB+1114MB-swap guest that held memory is what ran it out of swap (runs 44991586139,
+// 45005386065). Dropping the references does not give it back: a tjs probe that parses the
+// 80MB staged graph and drops it, then runs the GC (MIMALLOC_PURGE_DELAY=0 too), stays at
+// 475MB, and parse-drop three times climbs 471 -> 660 -> 734MB. The allocator keeps what
+// a process once held; only the process ending returns it. So the stage is a process.
+// Same run after (this plus the scan below): builder peak 1538MB -> 56MB, builder during
+// blobulate 869MB -> 28MB; family peak 1607MB -> 1354MB (the stage child alone, 1298MB).
+//
+// The child is THIS clode, relaunched: the blobulated builder is its own executable; under
+// node it is the same script. It is told what to do by CLODE_STAGE_REQUEST (a request file,
+// read by clode-main.cjs before argv is parsed — an internal channel, not a verb on the
+// surface), and answers in <request>.result.json. Its stderr is the builder's, so its
+// verbose lines read exactly as an in-process stage's did.
+const STAGE_REQUEST_ENV = 'CLODE_STAGE_REQUEST';
+function stageRelaunchArgv() {
+  return globalThis.__quaudeVFS ? [process.execPath] : [process.execPath, process.argv[1]];
+}
+function stageInChild(request, env) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-stage-'));
+  const reqPath = path.join(dir, 'request.json');
+  const resPath = `${reqPath}.result.json`;
+  try {
+    fs.writeFileSync(reqPath, JSON.stringify(request));
+    const [cmd, ...args] = stageRelaunchArgv();
+    const r = require('node:child_process').spawnSync(cmd, args, {
+      env: { ...env, [STAGE_REQUEST_ENV]: reqPath },
+      stdio: ['ignore', 'inherit', 'inherit'],
+    });
+    let res = null;
+    try { res = JSON.parse(fs.readFileSync(resPath, 'utf8')); } catch { res = null; }
+    if (res && res.error) return { error: res.error };
+    if (res && res.ok && r.status === 0) return { scanned: res.scanned || null };
+    return { error: `the staging child (${cmd}) ended without an answer (${describeExit(r)})` };
+  } finally {
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ }
+  }
+}
+// The child's side, called by clode-main.cjs when CLODE_STAGE_REQUEST is set: one extraction,
+// its outcome written where the parent reads it, then the process ends.
+//
+// It also runs the dep-closure gate's SCAN (scanBareSpecifiers) over what it staged and hands
+// back only the package names, per file. That scan parses the whole staged graph, and in the
+// builder it was the second holder: with staging moved out, the same darwin run still took the
+// builder from 3MB to 460MB at the verify step, just before blobulate. The JUDGEMENT stays in
+// the builder (assertNoUnknownBareSpecifiers, opts.scanned); a scan failure travels back as
+// that file's error and is thrown there, so it names the gate exactly as before.
+function runStageRequest(reqPath) {
+  const resPath = `${reqPath}.result.json`;
+  let res;
+  try {
+    const request = JSON.parse(fs.readFileSync(reqPath, 'utf8'));
+    extract.extractIfNeeded(request);
+    const scanned = {};
+    for (const name of ['cli.cjs', 'bun-shim.cjs']) {
+      const file = path.join(request.cacheDir, name);
+      if (!fs.existsSync(file)) continue;
+      try { scanned[file] = { names: [...scanBareSpecifiers(file)] }; }
+      catch (e) { scanned[file] = { error: String((e && e.message) || e) }; }
+    }
+    res = { ok: true, scanned };
+  } catch (e) {
+    res = { error: String((e && e.message) || e) };
+  }
+  fs.writeFileSync(resPath, JSON.stringify(res));
+  return res.ok ? 0 : 1;
+}
+
 function stageUpstreamCli({ env, libexec, verbose, prefix, log }) {
   let bin = resolve.resolveClaudeBin({ env });
   if (bin == null || !resolve.pathExists(bin)) {
@@ -606,11 +681,8 @@ function stageUpstreamCli({ env, libexec, verbose, prefix, log }) {
   const key = resolve.cacheKey(bin);
   const stageDir = path.join(clodeCacheDir(env), key);
   if (log) log(`clode: ${prefix}: staging bundle ${key} ...`);
-  try {
-    extract.extractIfNeeded({ bin, cacheDir: stageDir, libexec, verbose, key });
-  } catch (e) {
-    return { error: `${prefix}: extraction failed: ${(e && e.message) || e}` };
-  }
+  const staged = stageInChild({ bin, cacheDir: stageDir, libexec, verbose, key }, env);
+  if (staged.error) return { error: `${prefix}: extraction failed: ${staged.error}` };
   // WHICH PLATFORM THIS CARVE IS FOR, read from the provider's container bytes. Bun folds
   // process.platform at carve time, so a graph is per-platform: a darwin target blobulated from a
   // linux carve is missing upstream's whole macOS credential store, which is how the
@@ -621,7 +693,7 @@ function stageUpstreamCli({ env, libexec, verbose, prefix, log }) {
   // stores its bundle as bytecode, so `strings` answers nothing, and a cross-built target
   // cannot be run to ask it.
   return { stageDir, key, providerPlatform: extract.providerPlatformOf(bin),
-           cliPath: path.join(stageDir, 'cli.cjs') };
+           cliPath: path.join(stageDir, 'cli.cjs'), scanned: staged.scanned };
 }
 
 // A minimal in-process stand-in for the Anthropic Messages API, answering every
@@ -1475,7 +1547,7 @@ async function clodeBuildIn(args, opts) {
         const closureVersions = new Map();
         const extDeps = computeDepClosure(nmDir, readDirectDeps(pkgJsonPath), { versions: closureVersions });
         assertNoUnknownBareSpecifiers(
-          [cliPath, path.join(stageDir, 'bun-shim.cjs')], extDeps, effLibexec, { env });
+          [cliPath, path.join(stageDir, 'bun-shim.cjs')], extDeps, effLibexec, { env, scanned: staged.scanned });
         naudeBom = extDeps.map((name) => `${name}@${closureVersions.get(name)}`);
       } catch (e) {
         return fail(`build naude: ${(e && e.message) || e}`);
@@ -1817,7 +1889,7 @@ async function clodeBuildIn(args, opts) {
     spin.phase('Extracting bundle');
     report.plan([{ name: 'extract' }]);
     report.start('extract');
-    let stageDir, key, providerPlatform;
+    let stageDir, key, providerPlatform, scanned = null;
     if (self) {
       let bundle = env.CLODE_MAIN_BUNDLE;
       if (bundle) {
@@ -1883,6 +1955,7 @@ async function clodeBuildIn(args, opts) {
       bundleVersion = key;
       stageDir = staged.stageDir;
       providerPlatform = staged.providerPlatform;
+      scanned = staged.scanned;
     }
 
     // Resolve the FINAL output path now, not at the top of this function: a
@@ -1975,7 +2048,7 @@ async function clodeBuildIn(args, opts) {
       try {
         assertNoUnknownBareSpecifiers(
           [path.join(stageDir, 'cli.cjs'), path.join(stageDir, 'bun-shim.cjs')],
-          extDeps, libexec, { env });
+          extDeps, libexec, { env, scanned });
       } catch (e) {
         return fail(`build: ${(e && e.message) || e}`);
       }
@@ -2263,4 +2336,5 @@ module.exports = {
   scanBareSpecifiers, scannableTexts, specifierPackageName, isBuiltinSpecifier, shimProvidedModules,
   assertNoUnknownBareSpecifiers, KNOWN_UNREACHABLE, resolveClaudeNmDir,
   resolveManifest, releaseBaseUrl, thisTjsPin, staleLibexecSource,
+  STAGE_REQUEST_ENV, runStageRequest, stageRelaunchArgv,
 };

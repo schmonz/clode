@@ -68,6 +68,16 @@ async function main(argv, opts = {}) {
   const env = process.env;
   const args = Array.isArray(argv) ? argv : [];
 
+  // 0. A STAGING CHILD (clode-build.cjs's stageInChild): this process exists to run one
+  //    extraction and end, so the memory it takes goes back to the OS with it. Read before
+  //    argv — the parent relaunches this same entry with no arguments — and removed from
+  //    the env first, so nothing this child spawns can mistake itself for one.
+  if (env.CLODE_STAGE_REQUEST) {
+    const reqPath = env.CLODE_STAGE_REQUEST;
+    delete env.CLODE_STAGE_REQUEST;
+    return process.exit(require('./clode-build.cjs').runStageRequest(reqPath));
+  }
+
   // 1. Match argv against the surface THIS entry point has. Everything below reads
   //    `cmd` — no branch here compares args[0] to a string, which is the whole point
   //    of the table.

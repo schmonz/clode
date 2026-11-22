@@ -256,6 +256,13 @@ function discoverTestFiles(dir) {
 // convention for `skip` reasons, which this mirrors).
 const GUARD_EXCLUSIONS = [
   {
+    file: 'stage-in-child.test.cjs',
+    because: 'a live run, not a scan: it runs `clode build` (libexec/clode-main.cjs, the subject it executes) '
+      + 'against a mkdtemp stand-in provider with a --require preload it writes, and asserts on the pid log and '
+      + 'stderr THAT RUN produced. READS_ARTIFACT fires on the entry path it spawns and PATTERN_MATCHES on the '
+      + 'preload\'s own module-name regex and an assert.match over the run\'s stderr; no repo bytes are searched.',
+  },
+  {
     file: 'tjs-tls-trust.test.cjs',
     because: 'live engine runs, not a scan: it drives the BUILT engine against local TLS servers (a tamper proxy, '
       + 'tjs.connect) and a built quaude, asserting on what each run printed. READS_ARTIFACT fires on '

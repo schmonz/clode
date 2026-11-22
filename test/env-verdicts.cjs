@@ -339,6 +339,11 @@ const VERDICTS = [
       + '(refuse-vs-proceed past a cyclic require the SCC merge could not convert). Read '
       + 'directly by `node scripts/merge-step.mjs`, never through clode dispatch — it '
       + 'changes how a regen diagnostic behaves, not what a `clode build` produces.' },
+  { name: 'CLODE_STAGE_REQUEST', verdict: 'env-only',
+    because: 'the PLUMBING between a builder and the staging child it relaunches '
+      + '(libexec/clode-build.cjs stageInChild, read first thing by libexec/clode-main.cjs): '
+      + 'a request-file path the builder sets on its own child so staging runs in a process '
+      + 'that ends. Never set by a person; it changes where the stage runs, not what it makes.' },
   { name: 'CLODE_ASSET_NAME', verdict: 'env-only',
     because: 'overrides the WHOLE artifact directory name scripts/platform-tag.cjs derives '
       + "(so a CI release leg's dir can carry its deliberate floor/arch spelling). An "
