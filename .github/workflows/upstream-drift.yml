@@ -130,7 +130,7 @@ jobs:
         run: |
           set -euo pipefail
           CLODE_PROVIDER_BIN="$PROV" node --require ./test/file-watchdog-preload.cjs --test --test-concurrency=1 \
-            test/build-gates/rg-probe-gates.test.cjs
+            test/build-gates/rg-probe-gates.test.cjs test/build-gates/rg-held-fd-gates.test.cjs
 
       # THE CAPTURE-GROUP HEADROOM, against the same `next` bundle. The bundle BUILDS RegExps with
       # one capture group per letter of a word list: the artifact-lead scrub pattern had 559 at
