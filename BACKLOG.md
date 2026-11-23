@@ -8,6 +8,27 @@ Concrete clode-under-Node divergences from native Claude Code, to triage and fix
 That page is GENERATED from `scripts/build-graph.cjs` — the one declaration of the build — so it
 cannot drift from it; it is also where the honest answer to "does this need node?" lives.
 
+## TLS options: what the honour-or-refuse work (2026-11-23) left open
+
+Every TLS option a client is given is now honoured or refused by name (test/node-shim-tls-options.test.cjs, whose
+two censuses are the ratchet). What remains differs from node or native without being silent:
+
+- **A fetch/WebSocket client certificate is REFUSED, so quaude cannot do mTLS** (CLAUDE_CODE_CLIENT_CERT/KEY): native
+  presents it; quaude fails the request closed with ERR_CLODE_UNSUPPORTED_TLS_OPTION naming `cert`. Honouring it is an
+  engine patch: a per-request client identity on lws's client vhost (as txiki-default-ca.patch did for the CA set).
+- **A fetch `tls.ca` other than the default trust is refused.** The bundle passes its default list on every request we
+  have run; a per-host list (its customer CA path) that differs would be refused, not ignored.
+- **A server that requires a client certificate, contacted without one:** node fails
+  ERR_SSL_TLSV13_ALERT_CERTIFICATE_REQUIRED; the node-shim's https fails ECONNRESET "socket hang up".
+- **Verification messages** are node's OpenSSL reason without node 24's trailing `--use-system-ca` hint or, for a name
+  mismatch, the certificate's altnames list (the codes are node's exactly).
+- **The engine's fetch errors** (lws's "server's cert didn't look good") carry no node/Bun code.
+
+Measured: test/node-shim-tls-options.test.cjs, and scratch probes of host node 24.21.0 and native 2.1.330 (2026-11-23)
+
+Unmeasured. Whether the bundle's per-host CA list ever differs from its default list (an MCP server over https with a
+custom CA would show it); an mTLS turn against a real gateway.
+
 ## The engine's sync open on Windows shares no DELETE access, unlike libuv's (2026-11-22)
 
 libuv's uv_fs_open (what node's fs.openSync is) opens with FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
