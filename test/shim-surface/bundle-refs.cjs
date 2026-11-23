@@ -241,9 +241,26 @@ function specSet(moduleNames) {
   return out;
 }
 
+// THE FIFTH SHAPE: a builtin upstream never imports because it is a GLOBAL. `process` is node:process, and the
+// bundle reaches it as the free identifier `process` (never minified: it is not upstream's to rename). None of the
+// four import shapes above can see `process.execve(...)`, so the map was blind to every process.* member. On
+// 2026-11-22 that blindness was a P0: 2.1.330 relaunches itself through process.execve (`/tui classic`), node-shim
+// had none, and the fallback left the terminal dead, while this map, built to catch exactly "upstream reaches for
+// an API the shim lacks", stayed silent. Every module is taken to bind the global, so `process.<prop>` counts.
+const GLOBAL_BINDINGS = { process: 'process' };
+
 function buildScope(modules, moduleNames) {
   const specs = specSet(moduleNames);
-  return modules.map(({ id, src }) => ({ id, index: buildIndex(src), bindings: bindingsFor(src, specs) }));
+  return modules.map(({ id, src }) => {
+    const bindings = bindingsFor(src, specs);
+    for (const [ident, mod] of Object.entries(GLOBAL_BINDINGS)) {
+      if (!specs.has(mod) || !src.includes(`${ident}.`)) continue;
+      let e = bindings.get(mod);
+      if (!e) { e = { objects: new Set(), named: new Map() }; bindings.set(mod, e); }
+      e.objects.add(ident);
+    }
+    return { id, index: buildIndex(src), bindings };
+  });
 }
 
 // Does any module in the graph bind `moduleName` at all?

@@ -334,6 +334,10 @@ module.exports = {
   // exits and this process is reparented to init/launchd).
   get ppid() { return tjs.ppid; },
   execPath: tjs.exePath ?? '/tjs',
+  // process.title: the executable's path until assigned, as native answers it (Bun 1.4.4 under 2.1.330: title ===
+  // execPath; node the same). 2.1.330 assigns it ("claude", "claude daemon") and its OpenTelemetry detector reads it.
+  // An assignment is stored, not passed to uv_set_process_title: what `ps` shows does not change (cosmetic).
+  title: tjs.exePath ?? '/tjs',
   cwd: () => tjs.cwd,
   // process.chdir(directory) (Task 5 wall): a REAL chdir — tjs.chdir wraps
   // uv_chdir, empirically verified against build/tjs/tjs (changes tjs.cwd,

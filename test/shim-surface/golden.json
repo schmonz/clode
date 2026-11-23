@@ -51,7 +51,15 @@
     "http.maxHeaderSize",
     "perf_hooks.monitorEventLoopDelay",
     "v8.getHeapSpaceStatistics",
-    "v8.getHeapStatistics"
+    "v8.getHeapStatistics",
+    "process.getgid",
+    "process.geteuid",
+    "process.getegid",
+    "process.getgroups",
+    "process._getActiveHandles",
+    "process._getActiveRequests",
+    "process.dlopen",
+    "process.threadCpuUsage"
   ],
   "unenumerable_allowed": [
     "intl"
@@ -98,6 +106,12 @@
     "crypto.subtle / tls.setDefaultCACertificates / http.maxHeaderSize": "The `claude gateway` subcommand, read 2026-11-21 (chunk-xnzxknv5.js: `import{subtle as Un}from\"crypto\"`, `I_.maxHeaderSize=262144` on http before its Bun.serve, and its config load calling tls.setDefaultCACertificates). The same enterprise server Bun.SQL serves (see Bun.SQL above): not on the -p or interactive routes. The OTHER setDefaultCACertificates site (chunk-3jjr3wje.js, the CA-list loader every connection uses) FEATURE-DETECTS it (`typeof Xt.setDefaultCACertificates!==\"function\"` returns early), so it degrades to no extra CA list, as on a node without it.",
     "dns.ADDRCONFIG": "BENIGN, read 2026-11-21 (chunk-j2ybpxmz.js): the telemetry logs exporter's egress look-ahead passes it as a lookup hint (`dns.promises.lookup(host,{hints:ADDRCONFIG})`); absent, the hint is undefined and the lookup is a plain one.",
     "fs.fchown": "BENIGN, read 2026-11-21: imported (`fchown as ln`) by one atomic-write module (chunk-n1eez895.js) and never called there.",
-    "fs.exists": "A SCANNER FALSE POSITIVE, read 2026-11-21: the three reads are `s.exists=...` on a TypeScript project-service object in the vendored TypeScript language service (chunk-mk44m07h.js), where a binding of fs shares the minified name. Nothing calls fs.exists."
+    "fs.exists": "A SCANNER FALSE POSITIVE, read 2026-11-21: the three reads are `s.exists=...` on a TypeScript project-service object in the vendored TypeScript language service (chunk-mk44m07h.js), where a binding of fs shares the minified name. Nothing calls fs.exists.",
+    "GLOBAL process NOW SCANNED (2026-11-22)": "shim-surface/bundle-refs.cjs's scan never saw a GLOBAL builtin: `process` is never imported, so no process.* member was ever on this map. 2.1.330 relaunches itself through process.execve (`/tui classic`), node-shim had none, and the spawnSync fallback left the terminal dead (P0, NetBSD/arm64, 2026-11-22) while this map stayed silent. Every module now binds the global `process`. process.execve is implemented (node-shim process.cjs, engine __tjs_execve) and, proven by hand, this gate names it as a NEW gap when the shim drops it. Of the nine other members the scan newly saw, process.title is now implemented (the executable path, as native answers); the remaining eight are listed in the entries below, each read on the 2.1.330 carve.",
+    "process.getgid / geteuid / getegid / getgroups": "FEATURE-DETECTED at every 2.1.330 site read 2026-11-22 (`process.getgid?.()`, `typeof process.geteuid===\"function\"?process.geteuid():process.getuid?.()`, `process.getgroups?.()??[]`, `process.getegid?[process.getegid()]:[]`): the permission/ownership checks (sockets dir, consent-store canonicalization, managed-settings and setgid-folder tests) fall back to getuid or to no group, as on a platform without them. Not a silent wrong answer, but a narrower one than node's (no gid/egid/groups): implementing them wants the engine's uv_os_get_passwd/getgid, BACKLOG candidate.",
+    "process._getActiveHandles / _getActiveRequests": "The heap-dump diagnostics (chunk-g0392cxd.js, beside v8.getHeapStatistics above): called UNGUARDED, so that diagnostic throws here, the same path v8.getHeapStatistics already marks as unsupported. Not on the -p or interactive turn routes.",
+    "process.dlopen": "A native-addon loader via /proc/self/fd (chunk-vw137skj.js), inside try/catch: a node addon cannot load into quaude at all, so its throw is the honest answer and is caught.",
+    "process.title": "IMPLEMENTED 2026-11-22 (kept as history): newly seen by the global-process scan; node-shim now answers the executable's path, as Bun 1.4.4 does under 2.1.330, and stores assignments (no OS process rename).",
+    "process.threadCpuUsage": "FEATURE-DETECTED (`process.threadCpuUsage?.()??process.cpuUsage()`): falls back to cpuUsage, which node-shim answers from the engine's rusage."
   }
 }

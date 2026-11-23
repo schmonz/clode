@@ -301,6 +301,10 @@ const VALUE_POST = {
   'process.stdin': 'typeof',
   'process.versions': 'typeof',
   'process.exitCode': 'show',
+  // Seen since the scan binds the GLOBAL process (2026-11-22). title is the executable's path (as execPath);
+  // version is the host's own node version on the reference side, so only its type is comparable.
+  'process.title': 'typeof',
+  'process.version': 'typeof',
   'fs.promises': 'keys',
   'path.win32': 'keys',
   'path.posix': 'keys',

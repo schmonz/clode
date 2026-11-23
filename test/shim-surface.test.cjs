@@ -241,6 +241,27 @@ test('shim surface: a provider other than golden\'s is named as a version mismat
   assert.strictEqual(bundleVersionOf('a,{ENGINE_VERSION:"9.9.9",VERSION:"2.1.283"},{VERSION:\\"2.1.283\\"},VERSION:"2.0.0"'), '2.1.283');
 });
 
+// THE GLOBAL `process`, which no import names. The map was blind to every process.* member until 2026-11-22, when
+// 2.1.330's relaunch through process.execve (absent from node-shim) left `/tui classic` with a dead terminal. This
+// runs without a provider: a module that calls the global process.execve, a shim surface without it, and a node
+// surface with it MUST produce the gap; one the shim provides MUST NOT; and a module that never touches the global
+// contributes nothing.
+test('shim surface: a GLOBAL process.<member> the shim lacks is a layer-2 gap (process.execve, 2026-11-22)', () => {
+  const modules = [
+    { id: 'relaunch.js', src: 'function w(e,r,a){try{process.execve(e,r,a)}catch(f){}return process.pid}' },
+    { id: 'other.js', src: 'import*as n from"fs";n.readFileSync("x")' },
+  ];
+  const scope = refs.buildScope(modules, ['process', 'fs']);
+  const surface = (props) => ({ ok: true, rootType: 'object', surface: Object.fromEntries(props.map((p) => [p, 'function'])) });
+  const nodeSurface = { process: surface(['execve', 'pid', 'kill']), fs: surface(['readFileSync']) };
+  const without = collect.layer2Gaps({ nodeSurface, shimSurface: { process: surface(['pid', 'kill']), fs: surface(['readFileSync']) }, scope });
+  assert.deepStrictEqual(without.gaps.map((g) => g.api), ['process.execve'],
+    'the scanner cannot see a global process member again: the blindness that hid the /tui relaunch P0');
+  const withIt = collect.layer2Gaps({ nodeSurface, shimSurface: { process: surface(['execve', 'pid', 'kill']), fs: surface(['readFileSync']) }, scope });
+  assert.deepStrictEqual(withIt.gaps, []);
+  assert.deepStrictEqual(refs.referencesIn(scope, 'process', 'kill'), { calls: 0, reads: 0, imports: 0 });
+});
+
 // UPDATE_GOLDEN regenerates instead of asserting. Declared only when asked for, so a normal run
 // carries no skipped placeholder for it.
 if (process.env.UPDATE_GOLDEN === '1') {

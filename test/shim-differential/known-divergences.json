@@ -10160,6 +10160,15 @@
    ]
   }
  },
+ "process.stdout (value)": {
+  "r.ctor": {
+   "cause": "DIFF-STDIO-CLASS",
+   "on": [
+    "darwin",
+    "linux"
+   ]
+  }
+ },
  "tty.isatty(0)": {
   "r": {
    "cause": "DIFF-ISATTY-DEVNULL",
