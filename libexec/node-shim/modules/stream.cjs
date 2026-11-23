@@ -238,14 +238,27 @@ Readable.from = function from(iterable) {
   return r;
 };
 
+// _final AND _destroy ARE HONOURED, as node's Writable does (test/node-shim-writable-final.test.cjs). The 2.1.330
+// bundle's axios adapter sends every redirect-following request through `class Dt extends Writable` whose only
+// call to the real ClientRequest's end() is in _final, and whose abort is in _destroy. Without them every such
+// request (bootstrap, settings, fast-mode status, /login's follow-ups) sat unsent until axios's timeout fired.
 class Writable extends EventEmitter {
-  constructor(opts = {}) { super(); this._ended = false; this.destroyed = false; this.writableEnded = false; if (typeof opts.write === 'function') this._write = opts.write; }
+  constructor(opts = {}) {
+    super(); this._ended = false; this.destroyed = false; this.writableEnded = false;
+    if (typeof opts.write === 'function') this._write = opts.write;
+    if (typeof opts.final === 'function') this._final = opts.final;
+    if (typeof opts.destroy === 'function') this._destroy = opts.destroy;
+  }
   _write(chunk, enc, cb) { cb(); }
-  // See Readable.destroy — same observable destroyed/'close' contract.
+  // Node: destroy(err) runs _destroy(err, cb); cb's error (if any) is emitted, then 'close'.
   destroy(err) {
     if (this.destroyed) return this;
     this.destroyed = true;
-    queueMicrotask(() => { if (err) this.emit('error', err); this.emit('close'); });
+    const done = (e) => queueMicrotask(() => { if (e) this.emit('error', e); this.emit('close'); });
+    if (typeof this._destroy === 'function') {
+      let called = false;
+      try { this._destroy(err ?? null, (e) => { if (!called) { called = true; done(e); } }); } catch (e) { if (!called) { called = true; done(e); } }
+    } else done(err);
     return this;
   }
   write(chunk, enc, cb) {
@@ -280,8 +293,16 @@ class Writable extends EventEmitter {
     if (chunk != null) this.write(chunk, enc);
     this._ended = true;
     this.writableEnded = true;
-    // Host node order: the end-callback runs BEFORE the 'finish' event.
-    queueMicrotask(() => { if (cb) cb(); this.emit('finish'); });
+    // Host node order: _final (synchronously, once every write has run — _write here is synchronous), then the
+    // end-callback, then 'finish'. A _final error is emitted as 'error' and 'finish' never fires.
+    const finish = (err) => {
+      if (err) { queueMicrotask(() => { this.emit('error', err); if (cb) cb(err); }); return; }
+      queueMicrotask(() => { if (cb) cb(); this.emit('finish'); });
+    };
+    if (typeof this._final === 'function') {
+      let called = false;
+      try { this._final((err) => { if (!called) { called = true; finish(err); } }); } catch (e) { if (!called) { called = true; finish(e); } }
+    } else finish();
     return this;
   }
 }
@@ -363,8 +384,8 @@ class Transform extends Readable {
 // contract (`_final` runs once, right before 'finish', letting async cleanup
 // — here, checksum verification — run before completion is observable).
 // Modeled over Readable (push/'data'/'end', inherited) + a writable face
-// mirroring Writable.write/end above, plus _final support Writable itself
-// doesn't have (no bundle path needed it there). Behavioral subset, same
+// mirroring Writable.write/end above, with the same _final contract Writable
+// now has too (test/node-shim-writable-final.test.cjs). Behavioral subset, same
 // caveats as Transform (no object-mode/highWaterMark backpressure);
 // characterized by test/node-shim-stream-duplex.test.cjs.
 class Duplex extends Readable {
