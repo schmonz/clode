@@ -773,27 +773,44 @@ export { extraCaBundle };
 // Apply it, once, before any request: the engine reads the bundle when it first builds a client context. The file is
 // written into quaude's private (0700, owner-checked) directory, never a shared temp dir, where another user could swap
 // in a CA of their own. Each failure warns in node's words and leaves the compiled-in roots alone.
+// -> { extra, unreadable }: the extra file's certificates the engine now trusts, and those its parser refused (PEM
+// blocks), for the record the node-shim reads (recordEngineTrust).
 async function applyExtraCaCerts(tjs, files, sep, platform) {
+  const none = { extra: [], unreadable: [] };
   const extra = tjs.env.NODE_EXTRA_CA_CERTS;
-  if (!extra) return;
+  if (!extra) return none;
   const warn = (why) => console.error(`Warning: Ignoring extra certs from \`${extra}\`, load failed: ${why}`);
-  if (!ENGINE_CA.setBundlePath || !ENGINE_CA.parseError) { warn('this engine cannot set its CA bundle'); return; }
+  if (!ENGINE_CA.setBundlePath || !ENGINE_CA.parseError) { warn('this engine cannot set its CA bundle'); return none; }
   let text;
-  try { text = new TextDecoder().decode(await tjs.readFile(extra)); } catch (e) { warn((e && e.message) || String(e)); return; }
+  try { text = new TextDecoder().decode(await tjs.readFile(extra)); } catch (e) { warn((e && e.message) || String(e)); return none; }
   const roots = files.get('node-shim/modules/tls-cacert.pem');
   const { bundle, dropped } = extraCaBundle(roots ? new TextDecoder().decode(roots) : '', text, ENGINE_CA.parseError);
   for (const why of dropped) warn(why);
+  const blocks = text.match(CERT_BLOCK_RE) || [];
+  const readable = (b) => { try { return ENGINE_CA.parseError(b) === undefined; } catch (_) { return false; } };
+  const unreadable = blocks.filter((b) => !readable(b));
   if (!bundle) {
     if (!dropped.length) warn(roots ? 'no PEM certificate in it' : 'this build carries no root certificates to add them to');
-    return;
+    return { extra: [], unreadable };
   }
   const got = await privateGuardDir(tjs, tjs.env, sep, platform);
-  if (got.refusal) { warn(`quaude's private directory is unsafe: ${got.refusal}`); return; }
+  if (got.refusal) { warn(`quaude's private directory is unsafe: ${got.refusal}`); return { extra: [], unreadable }; }
   const file = got.dir + sep + 'ca-' + (await sha256hex(new TextEncoder().encode(bundle))).slice(0, 16) + '.pem';
   try {
     await writeFileOnce(tjs, file, bundle);
     ENGINE_CA.setBundlePath(file);
-  } catch (e) { warn((e && e.message) || String(e)); }
+  } catch (e) { warn((e && e.message) || String(e)); return { extra: [], unreadable }; }
+  return { extra: blocks.filter(readable), unreadable };
+}
+
+// What the engine's clients trust by default, for the node-shim (tls.cjs engineTrust: getCACertificates('extra' and
+// 'default'), and bun-shim's check that a fetch's tls.ca is the set in force). Read-only and non-configurable, defined
+// before the loader or the bundle runs: the node-shim believes no other shape.
+function recordEngineTrust(t) {
+  Object.defineProperty(globalThis, '__quaude_engine_trust', {
+    value: Object.freeze({ extra: Object.freeze([...t.extra]), unreadable: Object.freeze([...t.unreadable]) }),
+    writable: false, configurable: false, enumerable: false,
+  });
 }
 
 // Write `text` to `file` unless it already holds exactly that: to a temporary name, then renamed over it, so a session
@@ -1089,7 +1106,7 @@ async function main() {
 
   // 8) mount + boot: the archived loader resolves everything under /quaude/;
   // the manifest rides along so the loader picks the role's entry member.
-  await applyExtraCaCerts(tjs, files, sep, platform);
+  recordEngineTrust(await applyExtraCaCerts(tjs, files, sep, platform));
   globalThis.__quaudeVFS = { files, index, manifest };
   globalThis.__quaudeArgs = rest;
   // Pre-load tjs:sqlite for the node-shim's node:sqlite provider (which bun:sqlite

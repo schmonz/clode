@@ -18,12 +18,14 @@
 // scripts/update-ca-bundle.sh; test/tls-cacert-pem.test.cjs fails loudly if
 // the shipped .pem drifts from cacert.c's current content.
 //
-// getCACertificates('system'|'extra'): honestly EMPTY — no real OS trust-store
-// (macOS Keychain / Linux system bundle) or NODE_EXTRA_CA_CERTS integration
-// exists here. The bundle's own CA-loading code (cli.cjs's `TQ`) already
-// tolerates an empty/unavailable system store and falls back to the bundled
-// set, so this does not regress the -p path; it only means a caller that
-// SPECIFICALLY wants OS-trust-store certs gets none, same as before.
+// getCACertificates('system'): honestly EMPTY — no real OS trust-store
+// (macOS Keychain / Linux system bundle) integration exists here. The bundle's
+// own CA-loading code already tolerates an empty/unavailable system store and
+// falls back to the bundled set; a caller that SPECIFICALLY wants OS-trust-store
+// certs gets none. 'extra' and 'default' are node's: NODE_EXTRA_CA_CERTS's
+// certificates as the engine took them, and bundled + extra until
+// setDefaultCACertificates replaces it (see "the CA set the engine's clients
+// trust by default" below).
 //
 // Socket surface (connect/createServer/TLSSocket/createSecureContext) is NOT
 // implemented — the transport is native fetch — and throws a branded wall if
@@ -73,6 +75,83 @@ function loadBundled() {
   return _bundled;
 }
 
+// ---- the CA set the engine's clients trust by default ------------------------------------------------------------
+// node's 'default' is the bundled roots plus NODE_EXTRA_CA_CERTS's certificates ('extra', each with a trailing newline,
+// appended in file order), until tls.setDefaultCACertificates replaces it (measured, node v24.21.0). In a built quaude
+// the engine trusts exactly that: the bootstrap appends the extra certificates the engine's parser accepts to the
+// compiled-in roots (quaude-bootstrap.mjs applyExtraCaCerts) and records which it kept and which it could not read
+// in the read-only global __quaude_engine_trust. Under a bare `tjs run`, TJS_CA_BUNDLE / SSL_CERT_FILE can name a
+// bundle the engine uses INSTEAD, which this module cannot see: the set is then unknown (null), never guessed.
+const ENGINE_TRUST = Symbol.for('clode.tls.engineTrust');
+let _defaultSet = null;      // the certificates setDefaultCACertificates installed (node's re-serialised PEM), or null
+const _unreadable = new Set(); // certificate bodies the engine's parser refused, from either source
+const pemBody = (block) => block.replace(/-----(?:BEGIN|END) [^-]+-----/g, '').replace(/\s+/g, '');
+const canonicalPem = (block) => `-----BEGIN CERTIFICATE-----\n${pemBody(block).match(/.{1,64}/g).join('\n')}\n-----END CERTIFICATE-----\n`;
+function bootstrapTrust() {
+  const d = Object.getOwnPropertyDescriptor(globalThis, '__quaude_engine_trust');
+  // Only the bootstrap's own record: defined first thing, read-only and non-configurable, so nothing later forged it.
+  return d && !d.writable && !d.configurable && d.value && Array.isArray(d.value.extra) ? d.value : null;
+}
+function extraCerts() {
+  const t = bootstrapTrust();
+  return t ? t.extra.map(canonicalPem) : [];
+}
+// -> { certs: [PEM...], unreadable: Set<body> } the engine's default trust right now, or null when it is unknown.
+function engineTrust() {
+  const t = bootstrapTrust();
+  if (t) for (const b of t.unreadable || []) _unreadable.add(pemBody(b));
+  if (_defaultSet) return { certs: _defaultSet, unreadable: _unreadable };
+  if (!t) {
+    const env = (globalThis.process && globalThis.process.env) || {};
+    if (env.TJS_CA_BUNDLE || env.SSL_CERT_FILE) return null;
+  }
+  return { certs: [...loadBundled(), ...extraCerts()], unreadable: _unreadable };
+}
+
+// tls.setDefaultCACertificates(certs), on node's terms (measured, v24.21.0): an Array of strings or ArrayBufferViews,
+// each holding PEM; text that is no certificate is skipped, a set with no certificate at all is refused
+// (ERR_CRYPTO_OPERATION_FAILED), and the certificates REPLACE the default trust of every client made afterwards:
+// https/tls without a `ca`, and fetch/WebSocket, which node routes through the same default. Here that is the
+// engine's __tjs_set_default_ca (txiki-default-ca.patch), which refuses a set with any certificate its parser cannot
+// read: that refusal is thrown, and nothing changes. Two divergences, both refusals: an empty array (node: trust
+// nothing) and a certificate the engine cannot parse but OpenSSL can (an Ed25519 root) are refused by name.
+function setDefaultCACertificates(certs) {
+  const NE = require('../internal/node-errors.cjs');
+  if (!Array.isArray(certs)) throw NE.invalidArgType('The "certs" argument must be an instance of Array', certs);
+  const blocks = [];
+  for (let i = 0; i < certs.length; i++) {
+    const v = certs[i];
+    if (typeof v !== 'string' && !ArrayBuffer.isView(v)) {
+      throw NE.invalidArgType(`The "certs[${i}]" argument must be of type string or an instance of ArrayBufferView`, v);
+    }
+    const text = typeof v === 'string' ? v : Buffer.from(v.buffer, v.byteOffset, v.byteLength).toString('latin1');
+    blocks.push(...(text.match(CERT_BLOCK_RE) || []));
+  }
+  if (certs.length === 0) {
+    throw Object.assign(new Error('node-shim: tls.setDefaultCACertificates([]) would trust no certificate at all, which '
+      + "this engine's clients cannot be set to; refusing rather than leaving the old set in force"), { code: 'ERR_SHIM_TLS_EMPTY_DEFAULT_CA' });
+  }
+  if (blocks.length === 0) {
+    throw Object.assign(new Error('No valid certificates found in the provided array'), { code: 'ERR_CRYPTO_OPERATION_FAILED' });
+  }
+  const set = globalThis.__tjs_set_default_ca;
+  if (typeof set !== 'function') {
+    const e = new Error('node-shim: this engine has no __tjs_set_default_ca (it predates txiki-default-ca.patch), so '
+      + 'tls.setDefaultCACertificates cannot change what its clients trust; rebuild it: ./build.sh --only engine.compile');
+    e.code = 'ERR_CLODE_ENGINE_FLOOR';
+    require('../internal/engine-floor-log.cjs').engineFloorLog(e.message);
+    throw e;
+  }
+  try {
+    set(blocks.join('\n') + '\n');
+  } catch (err) {
+    if (blocks.length === 1) _unreadable.add(pemBody(blocks[0]));
+    throw Object.assign(new Error(`node-shim: tls.setDefaultCACertificates refused: ${err && err.message}`),
+      { code: 'ERR_SHIM_TLS_DEFAULT_CA_UNREADABLE' });
+  }
+  _defaultSet = Object.freeze(blocks.map(canonicalPem));
+}
+
 const CA_TYPES = new Set(['default', 'bundled', 'system', 'extra']);
 function getCACertificates(type) {
   const t = type === undefined ? 'default' : type;
@@ -81,8 +160,14 @@ function getCACertificates(type) {
       new TypeError(`The argument 'type' is invalid. Received '${type}'`),
       { code: 'ERR_INVALID_ARG_VALUE' });
   }
-  if (t === 'default' || t === 'bundled') return loadBundled();
-  return []; // 'system' / 'extra': honestly unimplemented, see header
+  if (t === 'bundled') return loadBundled();
+  if (t === 'extra') return Object.freeze(extraCerts());
+  if (t === 'default') {
+    if (_defaultSet) return _defaultSet;
+    const extra = extraCerts();
+    return extra.length ? Object.freeze([...loadBundled(), ...extra]) : loadBundled();
+  }
+  return []; // 'system': honestly unimplemented, see header
 }
 
 function unimplemented(name) {
@@ -193,6 +278,7 @@ function createSecureContext(options) {
 
 const tls = {
   getCACertificates,
+  setDefaultCACertificates,
   createSecureContext,
   SecureContext,
   DEFAULT_MIN_VERSION: 'TLSv1.2',
@@ -202,5 +288,7 @@ const tls = {
 // rootCertificates never pays for the sibling-file read + PEM split.
 Object.defineProperty(tls, 'rootCertificates', { get: loadBundled, enumerable: true, configurable: false });
 for (const n of SOCKET_API) tls[n] = unimplemented(n);
+// bun-shim's fetch/WebSocket check reads the engine's default trust through this (a symbol: no node surface).
+Object.defineProperty(tls, ENGINE_TRUST, { value: engineTrust, enumerable: false });
 tls.default = tls;
 module.exports = tls;

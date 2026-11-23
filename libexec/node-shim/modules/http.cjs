@@ -520,9 +520,9 @@ function createServer(options, handler) {
  *     ask for. (npm `ws` always sets createConnection — see the note in
  *     libexec/bun-shim.cjs — so ws still does not connect through this client,
  *     by design, and says so by name.)
- *   - TLS options that change trust or the handshake and have no tjs.connect
- *     equivalent (pfx, passphrase, secureContext, ciphers, minVersion,
- *     maxVersion, checkServerIdentity, secureProtocol):
+ *   - every TLS option node reads that tjs.connect cannot apply per connection
+ *     (pfx, passphrase, secureContext, ciphers, min/maxVersion,
+ *     checkServerIdentity, crl, session, ...: UNSUPPORTED_TLS_OPTIONS below):
  *     ERR_SHIM_HTTPS_UNSUPPORTED_TLS_OPTION.
  *   - a Transfer-Encoding other than `chunked`: ERR_SHIM_HTTP_UNSUPPORTED_TE.
  *   - an https ORIGIN through a proxy: ERR_SHIM_HTTPS_PROXY_UNSUPPORTED. The
@@ -558,8 +558,11 @@ function shimError(message, code) {
 }
 
 // tjs's connect errors already carry a POSIX-ish `code`; the one that differs
-// from node's spelling is DNS failure (EAI_NONAME vs node's ENOTFOUND).
-function mapConnectError(e, host, port) {
+// from node's spelling is DNS failure (EAI_NONAME vs node's ENOTFOUND). A TLS
+// verification failure is node's own error (tlsVerifyError), not a connect one.
+function mapConnectError(e, host, port, servername) {
+  const tlsErr = tlsVerifyError(e, servername || host);
+  if (tlsErr) return tlsErr;
   const code = e && e.code === 'EAI_NONAME' ? 'ENOTFOUND' : (e && e.code);
   const err = new Error(`${code || 'ECONNFAILED'}: ${(e && e.message) || e} (${host}:${port})`);
   err.code = code || 'ECONNFAILED';
@@ -568,6 +571,100 @@ function mapConnectError(e, host, port) {
   err.address = host;
   err.port = port;
   return err;
+}
+
+/* ---- TLS options and verification errors ------------------------------------
+ * EVERY TLS option node reads is either HONOURED (handed to tjs.connect('tls'), which applies it per connection) or
+ * REFUSED by name before a byte is sent. None is ignored: an ignored `crl` trusts a revoked certificate, an ignored
+ * `checkServerIdentity` skips the caller's own pinning, an ignored `minVersion` negotiates what the caller forbade.
+ * The list of what node reads is node's, not ours: test/node-shim-tls-options.test.cjs derives it from the host
+ * node's own source (tls.connect, tls.createSecureContext, configSecureContext) and goes red on any name that is in
+ * neither list below. Measured 2026-11-23 (node v24.21.0): 33 names.
+ *
+ * Honoured: ca (REPLACES the default roots for this connection, as node's does), cert + key (the mTLS client
+ * identity; a certificate or key the engine cannot read is an error, txiki-tls-verify-detail.patch, never a handshake
+ * without it), servername (SNI and the name the certificate is checked against), ALPNProtocols, rejectUnauthorized.
+ * A key given as { pem, passphrase } or an encrypted PEM needs a passphrase, which the engine cannot take: refused.
+ * The boolean flags node defaults to false are refused only when set true (false asks for nothing). */
+const TLS_OPTIONS_HONOURED = ['ca', 'cert', 'key', 'servername', 'ALPNProtocols', 'rejectUnauthorized'];
+const UNSUPPORTED_TLS_OPTIONS = [
+  'allowPartialTrustChain', 'certificateCompression', 'checkServerIdentity', 'ciphers', 'clientCertEngine', 'crl',
+  'dhparam', 'ecdhCurve', 'enableTrace', 'honorCipherOrder', 'maxVersion', 'minDHSize', 'minVersion', 'passphrase',
+  'pfx', 'privateKeyEngine', 'privateKeyIdentifier', 'pskCallback', 'requestOCSP', 'secureContext', 'secureOptions',
+  'secureProtocol', 'session', 'sessionIdContext', 'sessionTimeout', 'sigalgs', 'ticketKeys'];
+const TLS_FALSE_IS_UNSET = new Set(['allowPartialTrustChain', 'enableTrace', 'honorCipherOrder', 'requestOCSP']);
+
+function tlsOptionSet(name, v) {
+  return v !== undefined && v !== null && !(v === false && TLS_FALSE_IS_UNSET.has(name));
+}
+function refuseTlsOption(name, why) {
+  return shimError(`node-shim: TLS option '${name}' is not supported by this client (${why || 'tjs.connect takes only '
+    + 'ca/cert/key/servername/ALPNProtocols/rejectUnauthorized'}); refusing the request rather than ignoring it`,
+  'ERR_SHIM_HTTPS_UNSUPPORTED_TLS_OPTION');
+}
+
+// node's ca/cert/key value: a string, a Buffer/TypedArray/DataView, or an array of them (key also { pem, passphrase }),
+// as PEM text for the engine. Each array element is its own PEM, so they are joined by a newline: String() of an array
+// joined them with ',' and corrupted every certificate after the first.
+function tlsPemText(v, name) {
+  if (typeof v === 'string') return v;
+  if (ArrayBuffer.isView(v)) return Buffer.from(v.buffer, v.byteOffset, v.byteLength).toString('latin1');
+  if (Array.isArray(v)) return v.map((x) => tlsPemText(x, name)).join('\n');
+  if (name === 'key' && v && typeof v === 'object' && 'pem' in v) {
+    if (v.passphrase !== undefined && v.passphrase !== null) throw refuseTlsOption('passphrase', 'the engine cannot decrypt a key');
+    return tlsPemText(v.pem, name);
+  }
+  throw require('../internal/node-errors.cjs').invalidArgType(
+    `The "options.${name}" property must be of type string or an instance of Buffer, TypedArray, or DataView`, v);
+}
+// The checks node's createSecureContext makes before a byte is sent, in node's words, so a certificate or key that
+// cannot be used never becomes a handshake without it. (The engine refuses what IT cannot read too: see the patch.)
+function checkClientIdentity(cert, key) {
+  if (cert !== undefined && !/-----BEGIN (?:X509 |TRUSTED )?CERTIFICATE-----/.test(cert)) {
+    throw shimError('error:0480006C:PEM routines::no start line', 'ERR_OSSL_PEM_NO_START_LINE');
+  }
+  if (key !== undefined) {
+    if (/-----BEGIN ENCRYPTED PRIVATE KEY-----|Proc-Type:\s*4,\s*ENCRYPTED/.test(key)) {
+      throw refuseTlsOption('passphrase', 'the key is encrypted and the engine cannot decrypt it');
+    }
+    if (!/-----BEGIN (?:[A-Z0-9]+ )?PRIVATE KEY-----/.test(key)) {
+      throw shimError('error:1E08010C:DECODER routines::unsupported', 'ERR_OSSL_UNSUPPORTED');
+    }
+  }
+}
+
+// A failed verification as node reports it. The engine's handshake error carries mbedtls's verify flags and the chain
+// it verified, depth 0 (the server's own certificate) first (txiki-tls-verify-detail.patch); node's code follows
+// OpenSSL's choice: a chain fault before a name fault, and among chain faults the shape of what the server sent.
+// Measured against host node with a local server per shape (test/node-shim-tls-options.test.cjs). null: not a
+// verification failure (or an engine that does not say), which the caller reports as before.
+const X509 = { EXPIRED: 0x01, REVOKED: 0x02, CN_MISMATCH: 0x04, NOT_TRUSTED: 0x08, MISSING: 0x40, FUTURE: 0x0200,
+  KEY_USAGE: 0x0800, EXT_KEY_USAGE: 0x1000, NS_CERT_TYPE: 0x2000 };
+function tlsVerifyError(e, host) {
+  if (!e || typeof e.verifyFlags !== 'number' || !e.verifyFlags) return null;
+  const f = e.verifyFlags;
+  const chain = Array.isArray(e.verifyChain) ? e.verifyChain : [];
+  const top = chain[chain.length - 1];
+  let code; let message;
+  if (f & (X509.NOT_TRUSTED | X509.MISSING)) {
+    if (chain.length <= 1 && top && top.selfIssued) [code, message] = ['DEPTH_ZERO_SELF_SIGNED_CERT', 'self-signed certificate'];
+    else if (top && top.selfIssued) [code, message] = ['SELF_SIGNED_CERT_IN_CHAIN', 'self-signed certificate in certificate chain'];
+    else if (chain.length <= 1) [code, message] = ['UNABLE_TO_VERIFY_LEAF_SIGNATURE', 'unable to verify the first certificate'];
+    else [code, message] = ['UNABLE_TO_GET_ISSUER_CERT_LOCALLY', 'unable to get local issuer certificate'];
+  } else if (f & X509.EXPIRED) [code, message] = ['CERT_HAS_EXPIRED', 'certificate has expired'];
+  else if (f & X509.FUTURE) [code, message] = ['CERT_NOT_YET_VALID', 'certificate is not yet valid'];
+  else if (f & X509.REVOKED) [code, message] = ['CERT_REVOKED', 'certificate revoked'];
+  else if (f & (X509.KEY_USAGE | X509.EXT_KEY_USAGE | X509.NS_CERT_TYPE)) [code, message] = ['INVALID_PURPOSE', 'unsupported certificate purpose'];
+  else if (f & X509.CN_MISMATCH) {
+    // node also lists the certificate's altnames, which the engine does not hand back: the reason ends at the host.
+    const { ipFamily } = require('../internal/connect-multiple.cjs');
+    const reason = ipFamily(host) ? `IP: ${host} is not in the cert's list` : `Host: ${host}. is not in the cert's altnames`;
+    const err = shimError(`Hostname/IP does not match certificate's altnames: ${reason}`, 'ERR_TLS_CERT_ALTNAME_INVALID');
+    err.reason = reason;
+    err.host = host;
+    return err;
+  } else return null;
+  return shimError(message, code);
 }
 
 /* ---- proxy (HTTP(S)_PROXY / NO_PROXY) --------------------------------------
@@ -948,7 +1045,13 @@ class ClientSocket extends EventEmitter {
 
 // `family` is honoured (connect-multiple.cjs), as are autoSelectFamily and autoSelectFamilyAttemptTimeout.
 const UNSUPPORTED_REQUEST_OPTIONS = ['socketPath', 'createConnection', 'lookup', 'localAddress'];
-const UNSUPPORTED_TLS_OPTIONS = ['pfx', 'passphrase', 'secureContext', 'ciphers', 'minVersion', 'maxVersion', 'checkServerIdentity', 'secureProtocol'];
+
+// A connection option as node's Agent sees it: addRequest builds `{ ...requestOptions, ...agent.options }`, so an
+// option the AGENT was constructed with wins over the request's (measured: request `ca` X + `agent: new Agent({ ca: Y })`
+// verifies against Y under node). The request's own value counts only where the agent has none.
+function fromAgentOrRequest(opts, ag, k) {
+  return Object.prototype.hasOwnProperty.call(ag, k) ? ag[k] : opts[k];
+}
 
 // request(url[, options][, cb]) | request(options[, cb]) — node's signatures.
 function normalizeArgs(url, options, cb, defaults) {
@@ -987,11 +1090,7 @@ class ClientRequest extends EventEmitter {
     }
     const agentOpts = (options.agent && typeof options.agent === 'object' && options.agent.options) || {};
     for (const k of UNSUPPORTED_TLS_OPTIONS) {
-      if (options[k] !== undefined || agentOpts[k] !== undefined) {
-        throw shimError(
-          `node-shim: TLS option '${k}' is not supported by this client (tjs.connect exposes only ca/cert/key/sni/alpn/verifyPeer)`,
-          'ERR_SHIM_HTTPS_UNSUPPORTED_TLS_OPTION');
-      }
+      if (tlsOptionSet(k, options[k]) || tlsOptionSet(k, agentOpts[k])) throw refuseTlsOption(k);
     }
 
     this._opts = options;
@@ -1068,6 +1167,9 @@ class ClientRequest extends EventEmitter {
     this._closed = false;
 
     if (cb) this.once('response', cb);
+    // The connection's TLS options, read and checked NOW: a certificate node would refuse is refused synchronously
+    // from request(), as node's createSecureContext throws there, never after the socket exists.
+    this._connOpts = this._connectOptions();
     this._connect();
     if (options.timeout !== undefined) this.setTimeout(options.timeout);
     // Expect: 100-continue means the caller will WAIT for the interim response
@@ -1109,7 +1211,7 @@ class ClientRequest extends EventEmitter {
         const target = this._proxy
           ? { transport: this._proxy.protocol === 'https:' ? 'tls' : 'tcp', host: this._proxy.host, port: this._proxy.port }
           : { transport: this._tls ? 'tls' : 'tcp', host: this.host, port: this.port };
-        await sock._open(target.transport, target.host, target.port, this._connectOptions(), this._familyPolicy());
+        await sock._open(target.transport, target.host, target.port, this._connOpts, this._familyPolicy());
         if (this.destroyed) { sock.destroy(); return; }
         this._readResponse(sock);
         this._drain();
@@ -1118,8 +1220,8 @@ class ClientRequest extends EventEmitter {
         // read as a dead origin (and must not fall back to a direct connection
         // — there is no such fallback here, on purpose).
         const err = this._proxy
-          ? mapConnectError(e, this._proxy.host, this._proxy.port)
-          : mapConnectError(e, this.host, this.port);
+          ? mapConnectError(e, this._proxy.host, this._proxy.port, this._connOpts.sni)
+          : mapConnectError(e, this.host, this.port, this._connOpts.sni);
         if (this._proxy) {
           err.message += ` — connecting to the proxy ${this._proxy.href} for ${this.protocol}//${this._authority}`;
           err.proxy = this._proxy.href;
@@ -1132,7 +1234,7 @@ class ClientRequest extends EventEmitter {
   _familyPolicy() {
     const agent = this._opts.agent;
     const ag = (agent && typeof agent === 'object' && agent.options) || {};
-    const pick = (k) => (this._opts[k] !== undefined ? this._opts[k] : ag[k]);
+    const pick = (k) => fromAgentOrRequest(this._opts, ag, k);
     return { family: pick('family'), autoSelectFamily: pick('autoSelectFamily'),
              autoSelectFamilyAttemptTimeout: pick('autoSelectFamilyAttemptTimeout') };
   }
@@ -1147,11 +1249,12 @@ class ClientRequest extends EventEmitter {
     // proxy still needs a certificate checked — the caller's `ca` is the only
     // way to trust a private one here; see the proxy section's CA note).
     if (!this._tls && !(this._proxy && this._proxy.protocol === 'https:')) return o;
-    const pick = (k) => (this._opts[k] !== undefined ? this._opts[k] : ag[k]);
+    const pick = (k) => fromAgentOrRequest(this._opts, ag, k);
     const ca = pick('ca');
-    if (ca !== undefined) o.ca = Array.isArray(ca) ? ca.map(String).join('\n') : String(ca);
-    const cert = pick('cert'); if (cert !== undefined) o.cert = String(cert);
-    const key = pick('key'); if (key !== undefined) o.key = String(key);
+    if (ca !== undefined && ca !== null) o.ca = tlsPemText(ca, 'ca');
+    const cert = pick('cert'); if (cert !== undefined && cert !== null) o.cert = tlsPemText(cert, 'cert');
+    const key = pick('key'); if (key !== undefined && key !== null) o.key = tlsPemText(key, 'key');
+    checkClientIdentity(o.cert, o.key);
     const servername = pick('servername'); if (servername) o.sni = String(servername);
     const alpn = pick('ALPNProtocols'); if (alpn) o.alpn = [].concat(alpn).map(String);
     const ru = pick('rejectUnauthorized');
@@ -1385,6 +1488,8 @@ Object.defineProperty(module.exports, '_internals', {
     // proxy decision helpers, exposed so they can be tested as pure functions
     // against node's own ProxyConfig (test/node-shim-http-proxy.test.cjs).
     proxy: { envProxyEnabled, proxyUrlFromEnv, makeProxyConfig, shouldUseProxy, resolveProxy },
+    // the TLS option census's subject (test/node-shim-tls-options.test.cjs)
+    tls: { TLS_OPTIONS_HONOURED, UNSUPPORTED_TLS_OPTIONS, tlsVerifyError },
   },
   enumerable: false,
 });

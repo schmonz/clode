@@ -92,6 +92,12 @@ function makeConnectMultiple(deps) {
     // route, 2026-11-23, caught by test/fidelity/debug-log-errors.test.cjs). Racing keeps node's ORDER and its
     // fallback (a dead first address still costs one attempt timeout) and never loses a connection node keeps.
     const errors = new Array(targets.length);
+    // A FAILED HANDSHAKE ENDS IT, as in node. An error carrying mbedtlsCode means the TCP connection WAS made and the
+    // handshake (certificate verification, say) failed; node's attempt is the TCP connect, so node has already chosen
+    // that address and fails with that error. Trying (or waiting for) another address would hide a verification
+    // failure behind an AggregateError of unrelated attempts, or worse, let a different address answer instead.
+    // A refusal or a timeout is a reason to try the next address; a handshake failure is not.
+    let fatal = null;
     const live = new Map();   // index -> AbortController (or null), attempts not yet settled
     let won = null;
     const loseAll = (except) => {
@@ -124,6 +130,7 @@ function makeConnectMultiple(deps) {
         }, (e) => {
           live.delete(i);
           if (won !== null) return;
+          if (e && e.mbedtlsCode !== undefined) { fatal = e; won = -1; loseAll(-1); finish(null); return; }
           if (!errors[i] || errors[i].code === 'ETIMEDOUT') errors[i] = e;
           settled++;
           if (settled === targets.length) finish(null);
@@ -132,6 +139,7 @@ function makeConnectMultiple(deps) {
       };
       start();
     });
+    if (fatal) throw fatal;
     if (won !== null) return winner;
     const agg = new AggregateError(errors, errors.map((e) => (e && e.message) || String(e)).join('; '));
     agg.code = errors[0] && errors[0].code;
