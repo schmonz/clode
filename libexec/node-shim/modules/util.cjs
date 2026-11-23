@@ -49,7 +49,21 @@ function format(fmt, ...args) {
 // What it DOES guarantee: it never throws, it never returns '{}' for a value that has
 // content, and Errors/Map/Set/Date/RegExp/BigInt/Symbol/functions/circular refs all print
 // something a human can act on. Widen it when a caller needs more, not speculatively.
-const _quote = (s) => "'" + String(s).replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, '\\n') + "'";
+// node's strEscape (lib/internal/util/inspect.js): single quotes unless the string holds one (then double, then a
+// backtick), and every C0 control and DEL escaped the way node's meta table spells it ('\b' '\t' '\n' '\f' '\r' by
+// name, the rest '\x0B'). Control escaping found by process.execve's args validation, whose message inspects
+// 'a\0b' (node: "Received 'a\\x00b'"; this printed a raw NUL), 2026-11-22.
+const _META = { '\b': '\\b', '\t': '\\t', '\n': '\\n', '\f': '\\f', '\r': '\\r' };
+const _quote = (v) => {
+  const s = String(v);
+  let q = "'";
+  if (s.includes("'")) { if (!s.includes('"')) q = '"'; else if (!s.includes('`') && !s.includes('${')) q = '`'; }
+  return q + s.replace(new RegExp(`[\\\\\\x00-\\x1f\\x7f${q}]`, 'g'), (c) => {
+    if (c === '\\') return '\\\\';
+    if (c === q) return '\\' + q;
+    return _META[c] || '\\x' + c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0');
+  }) + q;
+};
 
 // util.inspect(value, options): the public entry. It used to BE inspect1, so an options object landed in `seen`
 // and every call with options threw "not a function" (the 2.1.283 carve's device-code response inspects itself with

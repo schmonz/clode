@@ -89,3 +89,21 @@ test('util.isDeepStrictEqual sees INTERNAL SLOTS (Map/Set/Date/RegExp/typed arra
   assert.strictEqual(r.status, 0, r.stderr);
   assert.strictEqual(r.stdout.trim(), nodeOut);
 });
+
+// util.inspect quotes a string as node's strEscape does: the quote character chosen by content, every C0 control and
+// DEL escaped. It always single-quoted and escaped only '\\', "'" and '\n', so process.execve's own validation message
+// (which inspects the offending argument) printed a raw NUL where node prints 'a\x00b' (2026-11-22).
+test('util.inspect quotes and escapes strings as node does', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-util-quote-'));
+  try {
+    const f = path.join(dir, 'prog.cjs');
+    fs.writeFileSync(f, `const u = require('node:util');
+console.log(JSON.stringify(["a\\0b", "it's", \`it's "x"\`, "it's \\"x\\" \\\`y\\\`", "a\\\\b\\tc\\nd\\x7f\\x0b\\x1b\\r\\f\\b", { k: "x'y" }, ['\\r']].map((v) => u.inspect(v))));`);
+    const nodeOut = require('node:child_process').execFileSync(process.execPath, [f], { encoding: 'utf8' }).trim();
+    assert.match(nodeOut, /'a\\\\x00b'/, 'the node reference must show the escape');
+    const r = runLoader(f);
+    assert.strictEqual(r.status, 0, r.stderr);
+    assert.strictEqual(r.stdout.trim(), nodeOut);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
