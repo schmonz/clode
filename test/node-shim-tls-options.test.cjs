@@ -26,6 +26,7 @@ const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
 const { testPki } = require('./self-signed-cert.cjs');
 const { runLoader, skipUnlessTjs, REPO } = require('./node-shim-helper.cjs');
+const { defineGuard, guardTests } = require('./guard.cjs');
 
 const FIXTURES = path.join(__dirname, 'fixtures');
 const HTTP = path.join(REPO, 'libexec/node-shim/modules/http.cjs');
@@ -107,19 +108,34 @@ function nodeTlsOptions() {
   return JSON.parse(r.stdout).filter((k) => !NOT_TLS.includes(k));
 }
 
-test('census: every TLS option node reads is honoured or refused by name by the https client', () => {
-  const names = nodeTlsOptions();
-  // a floor on the derivation itself, so a node whose source moved cannot pass this vacuously
-  for (const k of ['ca', 'cert', 'key', 'servername', 'rejectUnauthorized', 'checkServerIdentity', 'crl', 'minVersion', 'pfx']) {
-    assert.ok(names.includes(k), `the derivation from node's source lost '${k}' (got ${names.join(', ')})`);
-  }
+// The censuses are guards (test/guard.cjs): read() is the runtime's option names and the shim's tables, scan() names
+// every option in neither, and each control is the real tables with one name dropped, which must go red.
+function readNodeCensus() {
   const { TLS_OPTIONS_HONOURED, UNSUPPORTED_TLS_OPTIONS } = require(HTTP)._internals.tls;
-  const both = TLS_OPTIONS_HONOURED.filter((k) => UNSUPPORTED_TLS_OPTIONS.includes(k));
-  assert.deepStrictEqual(both, [], 'an option cannot be both honoured and refused');
-  const unnamed = names.filter((k) => !TLS_OPTIONS_HONOURED.includes(k) && !UNSUPPORTED_TLS_OPTIONS.includes(k));
-  assert.deepStrictEqual(unnamed, [], `node reads these TLS options and node-shim's https client neither honours nor `
-    + `refuses them, so it IGNORES them (libexec/node-shim/modules/http.cjs TLS_OPTIONS_HONOURED / UNSUPPORTED_TLS_OPTIONS)`);
-});
+  return { names: nodeTlsOptions(), honoured: TLS_OPTIONS_HONOURED, refused: UNSUPPORTED_TLS_OPTIONS };
+}
+guardTests(defineGuard({
+  name: 'tls-option-census-node',
+  floor: 30,
+  read: readNodeCensus,
+  scan({ names, honoured, refused }) {
+    const findings = [];
+    // a floor on the derivation itself, so a node whose source moved cannot pass this vacuously
+    for (const k of ['ca', 'cert', 'key', 'servername', 'rejectUnauthorized', 'checkServerIdentity', 'crl', 'minVersion', 'pfx']) {
+      if (!names.includes(k)) findings.push(`the derivation from node's source lost '${k}' (got ${names.join(', ')})`);
+    }
+    for (const k of honoured.filter((x) => refused.includes(x))) findings.push(`'${k}' is both honoured and refused`);
+    for (const k of names.filter((x) => !honoured.includes(x) && !refused.includes(x))) {
+      findings.push(`node reads TLS option '${k}' and node-shim's https client neither honours nor refuses it, so it `
+        + 'IGNORES it (libexec/node-shim/modules/http.cjs TLS_OPTIONS_HONOURED / UNSUPPORTED_TLS_OPTIONS)');
+    }
+    return { findings, examined: names.length };
+  },
+  control() {
+    const r = readNodeCensus();
+    return { ...r, refused: r.refused.filter((k) => k !== 'crl') };
+  },
+}));
 
 test('census: each refused TLS option throws ERR_SHIM_HTTPS_UNSUPPORTED_TLS_OPTION before any connection', (t) => {
   if (skipUnlessTjs(t)) return;
@@ -152,20 +168,33 @@ console.log(JSON.stringify(out));
 });
 
 // ---- Bun's tls option (fetch, WebSocket) --------------------------------------------------------------------------
-test("census: every key native Bun's fetch/WebSocket read from `tls` is honoured or refused by name", () => {
+function readBunCensus() {
   const native = JSON.parse(fs.readFileSync(path.join(FIXTURES, 'bun-tls-option-reads-native.json'), 'utf8'));
   const { honoured, falseIsUnset, refused } = require(BUN_SHIM)._bunTlsKeys;
-  const named = [...honoured, ...falseIsUnset, ...refused];
-  assert.strictEqual(new Set(named).size, named.length, 'a key is in more than one of bun-shim\'s lists');
-  for (const surface of ['fetch', 'WebSocket']) {
-    assert.ok(native[surface].length >= 20, `the recording for ${surface} is implausibly short`);
-    const unnamed = native[surface].filter((k) => !named.includes(k));
-    assert.deepStrictEqual(unnamed, [], `native Bun's ${surface} reads these tls keys and bun-shim neither honours nor `
-      + 'refuses them, so they are IGNORED (libexec/bun-shim.cjs BUN_TLS_*)');
-  }
-  // and nothing named that Bun does not read: a stale name would hide a renamed one
-  assert.deepStrictEqual(named.filter((k) => !native.fetch.includes(k)), []);
-});
+  return { native, named: [...honoured, ...falseIsUnset, ...refused] };
+}
+guardTests(defineGuard({
+  name: 'tls-option-census-bun',
+  floor: 20,
+  read: readBunCensus,
+  scan({ native, named }) {
+    const findings = [];
+    if (new Set(named).size !== named.length) findings.push("a key is in more than one of bun-shim's lists");
+    for (const surface of ['fetch', 'WebSocket']) {
+      for (const k of native[surface].filter((x) => !named.includes(x))) {
+        findings.push(`native Bun's ${surface} reads tls key '${k}' and bun-shim neither honours nor refuses it, so it `
+          + 'is IGNORED (libexec/bun-shim.cjs BUN_TLS_*)');
+      }
+    }
+    // and nothing named that Bun does not read: a stale name would hide a renamed one
+    for (const k of named.filter((x) => !native.fetch.includes(x))) findings.push(`bun-shim names '${k}', which Bun does not read`);
+    return { findings, examined: Math.min(native.fetch.length, native.WebSocket.length) };
+  },
+  control() {
+    const r = readBunCensus();
+    return { ...r, named: r.named.filter((k) => k !== 'cert') };
+  },
+}));
 
 test('bun-shim tls check: the default trust is honoured; anything it cannot apply is refused by name', () => {
   const { _checkBunTls } = require(BUN_SHIM);

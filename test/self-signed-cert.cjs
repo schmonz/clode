@@ -51,12 +51,14 @@ function testPki(dir) {
   const env = { ...process.env, OPENSSL_CONF: config };
   const ossl = (...a) => execFileSync('openssl', a, { env, stdio: 'pipe' });
   const p = (n) => path.join(dir, n);
+  // one fixed serial per certificate name: unique within this PKI, which is all a verifier asks of an issuer
+  const serial = (n) => 1000 + ['inter', 'leaf', 'leafInter', 'client', 'expired'].indexOf(n);
   const made = (n) => ({ cert: p(`${n}.pem`), key: p(`${n}-key.pem`) });
   const root = (n, cn) => ossl('req', '-config', config, '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', p(`${n}-key.pem`),
     '-out', p(`${n}.pem`), '-days', '2', '-subj', `/CN=${cn}`, '-extensions', 'v3_ca');
   const csr = (n, cn) => ossl('req', '-config', config, '-newkey', 'rsa:2048', '-nodes', '-keyout', p(`${n}-key.pem`), '-out', p(`${n}.csr`), '-subj', `/CN=${cn}`);
   const sign = (n, issuer, ext, ...when) => ossl('x509', '-req', '-in', p(`${n}.csr`), '-CA', p(`${issuer}.pem`), '-CAkey', p(`${issuer}-key.pem`),
-    '-set_serial', String(Math.floor(Math.random() * 1e9)), '-out', p(`${n}.pem`), ...(when.length ? when : ['-days', '2']), '-extfile', config, '-extensions', ext);
+    '-set_serial', String(serial(n)), '-out', p(`${n}.pem`), ...(when.length ? when : ['-days', '2']), '-extfile', config, '-extensions', ext);
   root('ca', 'Test CA'); root('ca2', 'Test CA2');
   csr('inter', 'Test Intermediate'); sign('inter', 'ca', 'v3_ca');
   csr('leaf', 'localhost'); sign('leaf', 'ca', 'leaf');
