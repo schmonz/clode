@@ -150,6 +150,22 @@ const ENGINE_API_FLOOR = [
       + 'it to CLODE_ENGINE_FLOOR_LOG, so the gates listed above refuse a build path that ever reaches it',
   },
   {
+    // Without it the engine's fetch/XHR/WebSocket trust their compiled-in roots whatever the caller asks: 2.1.330 blocks
+    // four of them (emSign) and passes its own list as setDefaultCACertificates + every fetch's tls.ca, so quaude
+    // trusted servers native does not. node-shim refuses tls.setDefaultCACertificates (and so every such fetch) on an
+    // engine without it.
+    name: '__tjs_set_default_ca',
+    expr: 'globalThis.__tjs_set_default_ca',
+    kind: 'function',
+    from: 'txiki-default-ca.patch',
+    why: 'node-shim tls.setDefaultCACertificates: REPLACE the CA set every engine client trusts by default, so fetch\'s tls.ca can be honoured',
+    buildHost: false,
+    notForBuildHost: 'nothing the build runs calls tls.setDefaultCACertificates or passes a fetch tls option: no caller '
+      + 'in scripts/, libexec/ (outside node-shim\'s tls.cjs and bun-shim\'s fetch check, which only the bundle reaches) '
+      + 'or build.sh. On an engine without it node-shim REFUSES the call (ERR_CLODE_ENGINE_FLOOR) and appends it to '
+      + 'CLODE_ENGINE_FLOOR_LOG, so the gates listed above refuse a build path that ever reaches it',
+  },
+  {
     // Without it node-shim has no process.resourceUsage(): 2.1.330's event-loop-stall sampler logs "not a function".
     name: '__tjs_getrusage',
     expr: 'globalThis.__tjs_getrusage',

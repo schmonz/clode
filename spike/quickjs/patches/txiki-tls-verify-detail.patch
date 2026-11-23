@@ -1,0 +1,146 @@
+# TLS-VERIFY-DETAIL: a failed tjs.connect('tls') handshake says WHY verification failed (mbedtlsCode, verifyFlags,
+# verifyChain on the error).
+#
+# WHY. mod_tls reported every verification failure as mbedtls's one sentence, "X509 - Certificate verification failed,
+# e.g. CRL, CA or signature check failed", so node-shim's https client answered ECONNFAILED for an untrusted issuer, a
+# hostname mismatch and an expired certificate alike. node answers UNABLE_TO_VERIFY_LEAF_SIGNATURE /
+# ERR_TLS_CERT_ALTNAME_INVALID / CERT_HAS_EXPIRED (native Claude Code answers the same from Bun), and the bundle branches
+# on exactly those codes to tell the user what to fix (NODE_EXTRA_CA_CERTS, a proxy re-signing traffic...). Measured
+# 2026-11-23 against a local server with a self-minted CA (test/node-shim-tls-options.test.cjs).
+# The client config records, per chain depth, the verify flags and whether the certificate is self-issued
+# (mbedtls_ssl_conf_verify, record-only: the verdict stays mbedtls's), and the handshake error carries them with
+# mbedtls_ssl_get_verify_result. node-shim maps them to node's codes (http.cjs tlsVerifyError). mod_tls.c only: the
+# struct, the handshake error and the client authmode line, none of which ca-bundle-global touches; order-independent.
+#
+# AND a client certificate or key mbedtls cannot read is an error (TLSTcp throws "TLS configuration failed: ..."), as
+# node's createSecureContext makes it. Both parse results were ignored, so an unreadable mTLS certificate or key (an
+# encrypted key, an algorithm mbedtls lacks, a truncated PEM) meant a handshake WITHOUT the identity the caller asked
+# for, silently. Same function, the own-cert block.
+#
+diff --git a/src/mod_tls.c b/src/mod_tls.c
+--- a/src/mod_tls.c
++++ b/src/mod_tls.c
+@@ -124,6 +124,8 @@
+     TLS_CB_MAX,
+ };
+ 
++#define TJS_TLS_VFY_MAX_DEPTH 16
++
+ typedef struct TJSTlsStream {
+     JSContext *ctx;
+     int closed;
+@@ -159,6 +161,13 @@
+ 
+     /* Fixed read buffer — encrypted data is always copied into bio_in */
+     uint8_t read_buf[65536];
++
++    /* CLODE: what certificate verification saw, per chain depth (0 = the peer's own certificate), recorded by
++     * tjs_tls_verify_record as mbedtls walks the chain, so a failed handshake can say WHY (see
++     * tjs_tls_handshake_error). */
++    int vfy_depths; /* entries recorded: deepest depth + 1 */
++    uint32_t vfy_flags[TJS_TLS_VFY_MAX_DEPTH];
++    bool vfy_self_issued[TJS_TLS_VFY_MAX_DEPTH];
+ } TJSTlsStream;
+ 
+ static JSClassID tjs_tls_class_id;
+@@ -432,13 +441,50 @@
+ 
+     maybe_invoke_tls_callback(server, TLS_CB_CONNECTION, 2, args);
+     JS_FreeValue(ctx, server_ref);
++}
++
++/* CLODE: the handshake error says WHY, as node's does. It was mbedtls's one-line text ("X509 - Certificate verification
++ * failed, e.g. CRL, CA or signature check failed") for every cause, so the node-shim could not tell an untrusted
++ * issuer from a name mismatch from an expired certificate, and every one reached the caller as ECONNFAILED where node
++ * (and native Claude Code, which branches on these codes to explain the failure) answer UNABLE_TO_VERIFY_LEAF_SIGNATURE,
++ * ERR_TLS_CERT_ALTNAME_INVALID, CERT_HAS_EXPIRED... Added, all read-only facts from mbedtls:
++ *   mbedtlsCode   the mbedtls return code (negative);
++ *   verifyFlags   mbedtls_ssl_get_verify_result's MBEDTLS_X509_BADCERT_* bits (0 when verification passed or never ran);
++ *   verifyChain   one { flags, selfIssued } per certificate mbedtls put in the chain it verified, depth 0 (the peer's own
++ *                 certificate) first: what node needs to choose between "unable to verify the first certificate",
++ *                 "self-signed certificate", "self-signed certificate in certificate chain" and "unable to get local
++ *                 issuer certificate". selfIssued: subject and issuer names are the same bytes.
++ * The mapping to node's codes is the node-shim's (libexec/node-shim/modules/http.cjs tlsVerifyError). */
++static int tjs_tls_verify_record(void *opaque, mbedtls_x509_crt *crt, int depth, uint32_t *flags) {
++    TJSTlsStream *s = opaque;
++    if (depth >= 0 && depth < TJS_TLS_VFY_MAX_DEPTH) {
++        s->vfy_flags[depth] = *flags;
++        s->vfy_self_issued[depth] = crt->subject_raw.len == crt->issuer_raw.len &&
++                                    memcmp(crt->subject_raw.p, crt->issuer_raw.p, crt->issuer_raw.len) == 0;
++        if (depth + 1 > s->vfy_depths) {
++            s->vfy_depths = depth + 1;
++        }
++    }
++    return 0; /* record only: the verdict stays mbedtls's */
+ }
+ 
+ static JSValue tjs_tls_handshake_error(TJSTlsStream *s, int ret) {
+     char errbuf[128];
+     mbedtls_strerror(ret, errbuf, sizeof(errbuf));
+-    JSValue err = JS_NewError(s->ctx);
+-    JS_DefinePropertyValueStr(s->ctx, err, "message", JS_NewString(s->ctx, errbuf), JS_PROP_C_W_E);
++    JSContext *ctx = s->ctx;
++    JSValue err = JS_NewError(ctx);
++    JS_DefinePropertyValueStr(ctx, err, "message", JS_NewString(ctx, errbuf), JS_PROP_C_W_E);
++    JS_DefinePropertyValueStr(ctx, err, "mbedtlsCode", JS_NewInt32(ctx, ret), JS_PROP_C_W_E);
++    JS_DefinePropertyValueStr(ctx, err, "verifyFlags", JS_NewUint32(ctx, mbedtls_ssl_get_verify_result(&s->ssl)),
++                              JS_PROP_C_W_E);
++    JSValue chain = JS_NewArray(ctx);
++    for (int i = 0; i < s->vfy_depths; i++) {
++        JSValue link = JS_NewObject(ctx);
++        JS_DefinePropertyValueStr(ctx, link, "flags", JS_NewUint32(ctx, s->vfy_flags[i]), JS_PROP_C_W_E);
++        JS_DefinePropertyValueStr(ctx, link, "selfIssued", JS_NewBool(ctx, s->vfy_self_issued[i]), JS_PROP_C_W_E);
++        JS_DefinePropertyValueUint32(ctx, chain, i, link, JS_PROP_C_W_E);
++    }
++    JS_DefinePropertyValueStr(ctx, err, "verifyChain", chain, JS_PROP_C_W_E);
+     return err;
+ }
+ 
+@@ -1040,14 +1086,29 @@
+         const char *key_pem = JS_ToCStringLen(ctx, &key_len, key_val);
+ 
+         if (cert_pem && key_pem) {
+-            mbedtls_x509_crt_parse(&s->own_cert, (const unsigned char *) cert_pem, cert_len + 1);
+-            mbedtls_pk_parse_key(&s->own_key,
+-                                 (const unsigned char *) key_pem,
+-                                 key_len + 1,
+-                                 NULL,
+-                                 0,
+-                                 tjs__entropy_uv,
+-                                 NULL);
++            /* CLODE: a certificate or key mbedtls cannot read is an ERROR, as node's createSecureContext makes it. Both
++             * results were ignored, so an unreadable client certificate (an encrypted or Ed25519 key, a truncated PEM)
++             * meant the handshake went ahead WITHOUT one: the mTLS identity the caller asked for was silently not
++             * presented. A positive return is "this many certificates failed to parse": also an error. */
++            int pret = mbedtls_x509_crt_parse(&s->own_cert, (const unsigned char *) cert_pem, cert_len + 1);
++            if (pret == 0) {
++                pret = mbedtls_pk_parse_key(&s->own_key,
++                                            (const unsigned char *) key_pem,
++                                            key_len + 1,
++                                            NULL,
++                                            0,
++                                            tjs__entropy_uv,
++                                            NULL);
++            } else if (pret > 0) {
++                pret = MBEDTLS_ERR_X509_CERT_UNKNOWN_FORMAT;
++            }
++            if (pret != 0) {
++                JS_FreeCString(ctx, cert_pem);
++                JS_FreeCString(ctx, key_pem);
++                JS_FreeValue(ctx, cert_val);
++                JS_FreeValue(ctx, key_val);
++                return pret;
++            }
+             mbedtls_ssl_conf_own_cert(&s->conf, &s->own_cert, &s->own_key);
+ 
+             /* Cache PEM for server so accepted connections can re-parse directly. */
+@@ -1071,6 +1132,9 @@
+     bool verify = JS_IsBool(verify_val) ? JS_ToBool(ctx, verify_val) : verify_default;
+     JS_FreeValue(ctx, verify_val);
+     mbedtls_ssl_conf_authmode(&s->conf, verify ? MBEDTLS_SSL_VERIFY_REQUIRED : MBEDTLS_SSL_VERIFY_NONE);
++    if (!s->is_server) {
++        mbedtls_ssl_conf_verify(&s->conf, tjs_tls_verify_record, s); /* CLODE: see tjs_tls_handshake_error */
++    }
+ 
+     /* ALPN */
+     JSValue alpn_val = JS_GetPropertyStr(ctx, options, "alpn");

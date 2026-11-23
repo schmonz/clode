@@ -1,0 +1,304 @@
+# DEFAULT-CA: globalThis.__tjs_set_default_ca(pem) REPLACES the CA set every engine client trusts by default, for the
+# connections made from now on (node's tls.setDefaultCACertificates).
+#
+# WHY. Native Claude Code builds its own CA list (its bundled roots MINUS nineteen it blocks by certificate hash, plus
+# NODE_EXTRA_CA_CERTS and the OS store), hands it to tls.setDefaultCACertificates, and passes the same list to every
+# fetch as Bun's `tls: { ca }`. The engine took neither: fetch, XMLHttpRequest and WebSocket (lws) trusted the
+# compiled-in roots whatever the caller asked, and four of the roots native refuses (emSign / eMudhra) are among them.
+# So quaude trusted servers native Claude Code does not (measured 2026-11-23, 2.1.330, darwin-arm64; the probe and the
+# Bun oracle are in test/node-shim-tls-options.test.cjs and test/fixtures/bun-tls-option-reads-native.json).
+#
+# WHAT. The whole set is parsed first (one certificate that fails, or none: TypeError, nothing changed, since lws
+# refuses a set with any bad block). mod_tls: a new chain, used by every tjs.connect('tls') without a `ca` of its own;
+# earlier chains are kept until the runtime ends (a configured connection points at its own). lws: the set replaces
+# ca_bundle_data and bumps a generation; tjs__lws_select_vhost makes new client vhosts (same proxy settings, kept from
+# init) at the next connection, and leaves the old ones to the requests already on them. Callable any number of times.
+# libexec/node-shim/modules/tls.cjs answers setDefaultCACertificates with it; scripts/engine-api-floor.cjs holds it.
+# private.h, mod_tls.c, lws-utils.c, vm.c; generated against the fully patched tree, so LAST.
+#
+diff --git a/src/private.h b/src/private.h
+--- a/src/private.h
++++ b/src/private.h
+@@ -101,6 +101,12 @@
+         unsigned int ca_bundle_len;
+         uv_async_t keepalive;
+         int active_conns;
++        /* CLODE (default-ca): ca_gen counts __tjs_set_default_ca calls, vh_gen the CA set the client vhosts were made
++         * with; tjs__lws_select_vhost makes new ones when they differ. proxy_cfgs: the proxy settings parsed at init,
++         * kept so the new vhosts get the same ones. */
++        unsigned int ca_gen;
++        unsigned int vh_gen;
++        void *proxy_cfgs;
+     } lws;
+     struct {
+         TJSTimer *timers;
+@@ -110,6 +116,7 @@
+         bool initialized;
+         mbedtls_x509_crt cacert;
+         char *ca_bundle_path;
++        struct TJSDefaultCa *default_ca; /* CLODE (default-ca): the replacement set, newest first; NULL: cacert */
+     } tls;
+     struct {
+         JSValue promise_event_ctor;
+@@ -146,6 +153,8 @@
+ void tjs__mod_streams_init(JSContext *ctx, JSValue ns);
+ void tjs__mod_tls_init(JSContext *ctx, JSValue ns);
+ void tjs__mod_tls_cleanup(TJSRuntime *qrt);
++int tjs__tls_set_default_ca(TJSRuntime *qrt, const char *pem, size_t len, char *why, size_t why_len);
++void tjs__lws_set_default_ca(TJSRuntime *qrt, uint8_t *pem, unsigned int len);
+ void tjs__mod_sys_init(JSContext *ctx, JSValue ns);
+ void tjs__mod_text_coding_init(JSContext *ctx, JSValue ns);
+ void tjs__mod_timers_init(JSContext *ctx, JSValue ns);
+diff --git a/src/mod_tls.c b/src/mod_tls.c
+--- a/src/mod_tls.c
++++ b/src/mod_tls.c
+@@ -185,6 +185,42 @@
+ static void maybe_invoke_tls_callback(TJSTlsStream *s, int callback, int argc, JSValue *argv);
+ 
+ /* ---- Shared TLS context init ---- */
++
++/* CLODE (default-ca): a CA set that REPLACES the default trust of every tjs.connect('tls') made from now on without a
++ * `ca` of its own (node's tls.setDefaultCACertificates). Each set is its own chain, kept until the runtime ends: a
++ * connection configured with an earlier one still points at it. */
++struct TJSDefaultCa {
++    mbedtls_x509_crt crt;
++    struct TJSDefaultCa *next;
++};
++
++int tjs__tls_set_default_ca(TJSRuntime *qrt, const char *pem, size_t len, char *why, size_t why_len) {
++    struct TJSDefaultCa *d = tjs__mallocz(sizeof(*d));
++    if (!d) {
++        snprintf(why, why_len, "out of memory");
++        return -1;
++    }
++    mbedtls_x509_crt_init(&d->crt);
++    /* len + 1: mbedtls reads PEM only when the NUL is counted (the caller's string is NUL-terminated). */
++    int r = mbedtls_x509_crt_parse(&d->crt, (const unsigned char *) pem, len + 1);
++    if (r != 0 || d->crt.raw.len == 0) {
++        if (r < 0) {
++            char err[120];
++            mbedtls_strerror(r, err, sizeof(err));
++            snprintf(why, why_len, "mbedtls -0x%04x: %s", (unsigned int) -r, err);
++        } else if (r > 0) {
++            snprintf(why, why_len, "%d certificate(s) failed to parse", r);
++        } else {
++            snprintf(why, why_len, "no certificate in it");
++        }
++        mbedtls_x509_crt_free(&d->crt);
++        tjs__free(d);
++        return -1;
++    }
++    d->next = qrt->tls.default_ca;
++    qrt->tls.default_ca = d;
++    return 0;
++}
+ 
+ static int tjs_tls_ctx_init(JSContext *ctx) {
+     TJSRuntime *qrt = TJS_GetRuntime(ctx);
+@@ -1072,8 +1108,8 @@
+             mbedtls_ssl_conf_ca_chain(&s->conf, &s->cacert, NULL);
+         }
+     } else {
+-        /* Use shared default CA */
+-        mbedtls_ssl_conf_ca_chain(&s->conf, &qrt->tls.cacert, NULL);
++        /* Use shared default CA (CLODE default-ca: the replacement set, when one was given) */
++        mbedtls_ssl_conf_ca_chain(&s->conf, qrt->tls.default_ca ? &qrt->tls.default_ca->crt : &qrt->tls.cacert, NULL);
+     }
+     JS_FreeValue(ctx, ca_val);
+ 
+@@ -1390,4 +1426,10 @@
+     }
+     tjs__free(qrt->tls.ca_bundle_path);
+     qrt->tls.ca_bundle_path = NULL;
++    while (qrt->tls.default_ca) {
++        struct TJSDefaultCa *next = qrt->tls.default_ca->next;
++        mbedtls_x509_crt_free(&qrt->tls.default_ca->crt);
++        tjs__free(qrt->tls.default_ca);
++        qrt->tls.default_ca = next;
++    }
+ }
+diff --git a/src/lws-utils.c b/src/lws-utils.c
+--- a/src/lws-utils.c
++++ b/src/lws-utils.c
+@@ -403,6 +403,50 @@
+     }
+ 
+     return lws_create_vhost(qrt->lws.ctx, &vinfo);
++}
++
++/* CLODE (default-ca): the proxy settings the client vhosts are made with, parsed once at init. */
++typedef struct {
++    TJSProxyConfig http, https;
++    bool have_http, have_https;
++} TJSProxyCfgs;
++
++static void tjs__lws_create_vhosts(TJSRuntime *qrt) {
++    TJSProxyCfgs *p = qrt->lws.proxy_cfgs;
++    char name[48];
++
++    snprintf(name, sizeof(name), "tjs-direct-%u", qrt->lws.ca_gen);
++    qrt->lws.vh_direct = tjs__create_client_vhost(qrt, name, NULL);
++    qrt->lws.vh_http_proxy = NULL;
++    qrt->lws.vh_https_proxy = NULL;
++
++    if (p->have_http) {
++        snprintf(name, sizeof(name), "tjs-http-proxy-%u", qrt->lws.ca_gen);
++        qrt->lws.vh_http_proxy = tjs__create_client_vhost(qrt, name, &p->http);
++    }
++
++    if (p->have_https) {
++        /* Reuse the http-proxy vhost if configs are identical. */
++        if (p->have_http && tjs__proxy_configs_equal(&p->http, &p->https)) {
++            qrt->lws.vh_https_proxy = qrt->lws.vh_http_proxy;
++        } else {
++            snprintf(name, sizeof(name), "tjs-https-proxy-%u", qrt->lws.ca_gen);
++            qrt->lws.vh_https_proxy = tjs__create_client_vhost(qrt, name, &p->https);
++        }
++    }
++
++    qrt->lws.vh_gen = qrt->lws.ca_gen;
++}
++
++/* CLODE (default-ca): replace the CA set fetch, XMLHttpRequest and WebSocket trust, for connections made from now on.
++ * Takes ownership of `pem` (js_malloc'd). The vhosts in use keep the set they were made with, and are kept: a request
++ * in flight on one is not cut off. New ones are made at the next connection (tjs__lws_select_vhost), so a run of
++ * calls costs one set of vhosts, not one per call. */
++void tjs__lws_set_default_ca(TJSRuntime *qrt, uint8_t *pem, unsigned int len) {
++    js_free(qrt->ctx, qrt->lws.ca_bundle_data);
++    qrt->lws.ca_bundle_data = pem;
++    qrt->lws.ca_bundle_len = len;
++    qrt->lws.ca_gen++;
+ }
+ 
+ static void tjs__lws_init(TJSRuntime *qrt) {
+@@ -426,38 +470,27 @@
+ 
+     qrt->lws.ctx = lws_create_context(&info);
+ 
+-    /* Parse per-scheme proxy settings. */
+-    TJSProxyConfig http_proxy, https_proxy;
+-    bool have_http = tjs__parse_proxy_url("http_proxy", "HTTP_PROXY", &http_proxy);
+-    bool have_https = tjs__parse_proxy_url("https_proxy", "HTTPS_PROXY", &https_proxy);
++    /* Parse per-scheme proxy settings (CLODE default-ca: kept, for the vhosts a new CA set makes). */
++    TJSProxyCfgs *p = tjs__mallocz(sizeof(*p));
++    CHECK_NOT_NULL(p);
++    qrt->lws.proxy_cfgs = p;
++    p->have_http = tjs__parse_proxy_url("http_proxy", "HTTP_PROXY", &p->http);
++    p->have_https = tjs__parse_proxy_url("https_proxy", "HTTPS_PROXY", &p->https);
+ 
+     /* Fall back to all_proxy / ALL_PROXY. */
+-    if (!have_http) {
+-        have_http = tjs__parse_proxy_url("all_proxy", "ALL_PROXY", &http_proxy);
++    if (!p->have_http) {
++        p->have_http = tjs__parse_proxy_url("all_proxy", "ALL_PROXY", &p->http);
+     }
+ 
+-    if (!have_https) {
+-        have_https = tjs__parse_proxy_url("all_proxy", "ALL_PROXY", &https_proxy);
++    if (!p->have_https) {
++        p->have_https = tjs__parse_proxy_url("all_proxy", "ALL_PROXY", &p->https);
+     }
+ 
+     /* Parse no_proxy. */
+     tjs__parse_no_proxy(qrt);
+ 
+     /* Create client vhosts. */
+-    qrt->lws.vh_direct = tjs__create_client_vhost(qrt, "tjs-direct", NULL);
+-
+-    if (have_http) {
+-        qrt->lws.vh_http_proxy = tjs__create_client_vhost(qrt, "tjs-http-proxy", &http_proxy);
+-    }
+-
+-    if (have_https) {
+-        /* Reuse the http-proxy vhost if configs are identical. */
+-        if (have_http && tjs__proxy_configs_equal(&http_proxy, &https_proxy)) {
+-            qrt->lws.vh_https_proxy = qrt->lws.vh_http_proxy;
+-        } else {
+-            qrt->lws.vh_https_proxy = tjs__create_client_vhost(qrt, "tjs-https-proxy", &https_proxy);
+-        }
+-    }
++    tjs__lws_create_vhosts(qrt);
+ 
+     /* Keepalive handle: stays unrefed when idle so the loop can exit,
+      * gets refed while client connections are in flight to prevent
+@@ -536,6 +569,11 @@
+     TJSRuntime *qrt = TJS_GetRuntime(ctx);
+     CHECK_NOT_NULL(qrt);
+ 
++    /* CLODE (default-ca): the default CA set changed since these vhosts were made. */
++    if (qrt->lws.vh_gen != qrt->lws.ca_gen) {
++        tjs__lws_create_vhosts(qrt);
++    }
++
+     /* Check no_proxy list. */
+     if (qrt->lws.no_proxy_wildcard) {
+         return qrt->lws.vh_direct;
+diff --git a/src/vm.c b/src/vm.c
+--- a/src/vm.c
++++ b/src/vm.c
+@@ -216,6 +216,44 @@
+     return JS_UNDEFINED;
+ }
+ 
++/* CLODE (default-ca): __tjs_set_default_ca(pem) REPLACES the CA set every engine client trusts by default, for the
++ * connections made from now on: fetch, XMLHttpRequest and WebSocket (lws), and tjs.connect('tls') without a `ca` of its
++ * own (mod_tls). node's tls.setDefaultCACertificates(certs) does exactly that, and native Claude Code calls it with
++ * the CA list it builds (its bundled roots minus the ones it blocks, plus NODE_EXTRA_CA_CERTS and the OS store) and
++ * passes the same list to every fetch as `tls.ca`. The engine took neither: its fetch trusted its own compiled-in roots
++ * whatever the caller asked, including four roots (emSign) native Claude Code refuses to trust (measured 2026-11-23,
++ * 2.1.330). The node-shim's tls module answers setDefaultCACertificates with this, and refuses a fetch whose `tls.ca`
++ * is not the set in force (libexec/bun-shim.cjs).
++ * The whole set is parsed first; one certificate that fails, or none at all, throws a TypeError naming why and
++ * changes nothing (lws would refuse the whole set, ending every HTTPS request). Callable again: each call replaces. */
++static JSValue tjs__set_default_ca_global(JSContext *ctx, JSValue this_val, int argc, JSValue *argv) {
++    TJSRuntime *qrt = TJS_GetRuntime(ctx);
++    CHECK_NOT_NULL(qrt);
++
++    size_t len;
++    const char *pem = JS_ToCStringLen(ctx, &len, argv[0]);
++    if (!pem) {
++        return JS_EXCEPTION;
++    }
++
++    char why[200];
++    if (tjs__tls_set_default_ca(qrt, pem, len, why, sizeof(why)) != 0) {
++        JS_FreeCString(ctx, pem);
++        return JS_ThrowTypeError(ctx, "default CA set refused: %s", why);
++    }
++
++    uint8_t *copy = js_malloc(ctx, len + 1);
++    if (!copy) {
++        JS_FreeCString(ctx, pem);
++        return JS_EXCEPTION;
++    }
++    memcpy(copy, pem, len + 1);
++    JS_FreeCString(ctx, pem);
++    tjs__lws_set_default_ca(qrt, copy, (unsigned int) len);
++
++    return JS_UNDEFINED;
++}
++
+ static JSValue tjs__x509_parse_error_global(JSContext *ctx, JSValue this_val, int argc, JSValue *argv) {
+     size_t len;
+     const char *pem = JS_ToCStringLen(ctx, &len, argv[0]);
+@@ -452,6 +490,11 @@
+                                   global,
+                                   "__tjs_x509_parse_error",
+                                   JS_NewCFunction(ctx, tjs__x509_parse_error_global, "__tjs_x509_parse_error", 1),
++                                  JS_PROP_C_W_E);
++        JS_DefinePropertyValueStr(ctx,
++                                  global,
++                                  "__tjs_set_default_ca",
++                                  JS_NewCFunction(ctx, tjs__set_default_ca_global, "__tjs_set_default_ca", 1),
+                                   JS_PROP_C_W_E);
+         JS_DefinePropertyValueStr(ctx,
+                                   global,
+@@ -728,6 +771,8 @@
+     qrt->lws.ca_bundle_path = NULL;
+     js_free(qrt->ctx, qrt->lws.ca_bundle_data);
+     qrt->lws.ca_bundle_data = NULL;
++    tjs__free(qrt->lws.proxy_cfgs); /* CLODE (default-ca) */
++    qrt->lws.proxy_cfgs = NULL;
+ 
+     /* Destroy shared TLS context. */
+     tjs__mod_tls_cleanup(qrt);
