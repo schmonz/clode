@@ -850,6 +850,10 @@ jobs:
           FILES="$FILES test/build-gates/dep-closure-gates.test.cjs test/build-gates/lexical-code-mask.test.cjs"
           FILES="$FILES test/build-gates/renameable-positions.test.cjs test/zlib-zstd-stream-gap.test.cjs"
           FILES="$FILES test/fidelity/regexp-capture-census.test.cjs"
+          # test/fidelity/debug-log-errors.test.cjs READS quaude's --debug log of a -p turn beside naude's (shim faults,
+          # request timeouts, new [ERROR] shapes): the gaps it holds shut were all printed in logs no gate read. It needs
+          # the engine and the staged provider, which this job has and the suite rows do not.
+          FILES="$FILES test/fidelity/debug-log-errors.test.cjs"
           mkdir -p "$RUNNER_TEMP/cells"
           node --require ./test/file-watchdog-preload.cjs --test --test-concurrency=1 --test-reporter=spec --test-reporter-destination=stdout \
             --test-reporter=./test/cell-reporter.mjs --test-reporter-destination="$RUNNER_TEMP/cells/node-shim-oracle.jsonl" \

@@ -263,7 +263,14 @@ const GUARD_EXCLUSIONS = [
       + 'printed. READS_ARTIFACT fires on reading node-shim/tls-cacert.pem, which is an INPUT handed to both runs, '
       + 'never searched; PATTERN_MATCHES fires on assert.match over the wall messages its own child printed.',
   },
-
+  {
+    file: 'debug-log-errors.test.cjs',
+    because: 'a live behavioural differential, not a scan of a fixed artifact: it runs the same -p turn under naude '
+      + 'and under quaude against a mock it starts, and compares the two --debug logs THOSE RUNS wrote '
+      + '(test/debug-log-scan.cjs). READS_ARTIFACT fires on REPO (the NODE_PATH it hands both runs) and on the '
+      + 'staged provider cli it executes; PATTERN_MATCHES on assert.match over its own children\'s output. Its '
+      + 'positive control is the first test in the file: the verbatim red lines, each of which must be a finding.',
+  },
   {
     file: 'node-shim-execve.test.cjs',
     because: 'a behavioural differential, not a scan: every row writes its own program into a mkdtemp, runs it '

@@ -311,8 +311,8 @@ Bun.SHA256/gzipSync. STILL RED, beyond 1 and 2 above, by gate:
    embedded rg is ripgrep 14.1.1 rev 6634fc3b5b, the tables were generated from rev 7c1d0ed28a; regenerate from it.
    rg-differential also red on this.
 8. **API surface** (node-shim-api-surface-gate): Bun.Archive (live: `new Bun.Archive(G,{compress:"gzip"}).bytes()`
-   builds a .tgz to push files) needs a tar writer. Under tjs node-shim has no gzip at all, so Bun.gzipSync refuses
-   there by name (test/bun-shim-gzip-sha256.test.cjs pins that).
+   builds a .tgz to push files) needs a tar writer. The gzip half exists now: node-shim's zlib.gzipSync is real under
+   tjs, so Bun.gzipSync answers there too (test/bun-shim-gzip-sha256.test.cjs pins that).
 9. **node-shim-wall-tripwires**: net.connect/createConnection reach rose 11 -> 16 modules; review the five new
    sites before the baseline moves.
 10. FIXED: **shim-surface** re-measured on 2.1.330, each new gap read at its site and noted in golden.json (db2405a).
@@ -322,10 +322,11 @@ Bun.SHA256/gzipSync. STILL RED, beyond 1 and 2 above, by gate:
     3b2100f), /status in -p (a load timeout read as an empty answer, ac28804). Sandboxed Bash: RULED (accept the
     startup refusal, 2026-11-21), the entry above.
 14. **quaude -p is slow and two node APIs it reaches are missing** (seen in /status's --debug log, 2026-11-21):
-    `-p /status` takes 23-48 s wall, ~12 s user CPU, where naude takes ~10 s; 1P telemetry export fails every session
-    on zlib.gzipSync (node-shim has no gzip; Bun.gzipSync refuses with it); the event-loop-stall detector logs
-    "process.resourceUsage() failed: not a function". crypto.X509Certificate is absent too (2.1.330 reads it in 11
-    modules, its CA-trust builder inside try/catch). Bun.Archive (new in 2.1.330: the hosted project folder's .tgz)
+    `-p /status` takes 23-48 s wall, ~12 s user CPU, where naude takes ~10 s; the event-loop-stall detector logs
+    "process.resourceUsage() failed: not a function". FIXED since (2026-11-23): zlib.gzipSync and its siblings
+    (miniz, txiki-zlib-sync.patch) and crypto.X509Certificate (constructor, raw, validity, serial, fingerprint256,
+    ca, toString; the rest walls by name), both oracle-tested against node, and test/fidelity/debug-log-errors now
+    goes red on any shim-fault or timeout line in quaude's --debug log. Bun.Archive (new in 2.1.330: the hosted project folder's .tgz)
     waits on the same gzip compressor; accepted-missing for now with its review (inspect-claude-bundle.cjs).
 15. FIXED: **the interactive TUI never painted** at 2.1.330: the REPL chunk builds `new Intl.ListFormat(...)` at
     module load and the polyfill had none, so the REPL import threw and quaude sat idle with 13 bytes written. -p
@@ -349,10 +350,11 @@ Bun.SHA256/gzipSync. STILL RED, beyond 1 and 2 above, by gate:
     So a file with a corrupt block before a good root was refused whole by native and trusted whole by quaude. Now
     quaude refuses it too, and the bundle's CA-trust builder takes its fallback ("cannot load ... as one CA list
     entry; kept only the N certificate(s) in it that the runtime loads one by one"). That fallback keeps a block only
-    when `new crypto.X509Certificate(block)` succeeds, and node-shim has no X509Certificate, so it keeps zero blocks
-    and drops the file, where native keeps the good root. This fails closed (LESS trust than native, not more). The
-    rest is open: a minimal X509Certificate (constructor validating, `raw`, `toString`, a wall for the rest). 2.1.330
-    reads it in 11 modules, so each read site needs reviewing first.
+    when `new crypto.X509Certificate(block)` succeeds. FIXED (2026-11-23): node-shim/internal/x509.cjs parses the
+    certificate the way node does (PEM, then DER; OpenSSL's error codes for what does not parse), so the fallback
+    keeps the good root as native does; test/node-shim-x509.test.cjs holds it to node over every node root and
+    malformed inputs. Still walls (named, thrown): subject, issuer, subjectAltName, publicKey, checkIssued, verify
+    and the rest of the class; the bundle's CA builder reads only the constructor and `raw`.
 19. **Without zoneinfo, quaude's local time is UTC; native's is not** (found 2026-11-21 running node-shim-oracle's
     files in node:24.22.0-alpine). The engine reads local time through libc. musl with no /usr/share/zoneinfo (a bare
     alpine) answers UTC for TZ=America/New_York, where native (and node) carry ICU's zone data and answer New York:
@@ -536,8 +538,9 @@ shapes cut to the driver's argument count.
   _makeLong; `util.types` has 2 of node's predicates.
 - DIFF-STDIO-CLASS: `process.stdout`/`stderr` are EventEmitters, node's (a pipe here) Sockets; `process.env` is a
   plain object, node's has no prototype.
-- DIFF-ZLIB: gzipSync, deflateSync, deflateRawSync (2.1.330 calls it), inflateSync and inflateRawSync throw `not implemented` (the gzipSync entry
-  under "Grep, Glob and the Bash tool's rg" below has its consequence); `zlib.constants.ZLIB_VERNUM` is not node's.
+- DIFF-ZLIB: the one-shot helpers are real now (miniz in the engine, txiki-zlib-sync.patch); what is left is the
+  message for a corrupt deflate block (`inflateRawSync("data\n")`): miniz reports no reason, so node-shim says
+  "invalid compressed data" where node names zlib's (code and errno agree). `zlib.constants.ZLIB_VERNUM` is not node's.
 - DIFF-OS-MEMORY-RELEASE: `os.totalmem()` and `os.freemem()` answer 0, `os.release()` and `os.version()` "".
 - DIFF-NET-SERVER: `net.createServer` throws (the named stub; the sandbox entries below).
 - DIFF-PATH-DOTDOT: `path.parse` answers dir "." where node answers "" for a bare name, and `path.parse("..")`,
@@ -1923,7 +1926,9 @@ new pin had 26 failures, from three upstream changes a carve cannot see, and the
   test/shim-surface/golden.json's Bun.Image note; callers not verified). Standing since before
   the pin moved (2.1.251 loaded a native processor, then sharp, neither of which loads under
   tjs); now the constructor is what is missing.
-- **Every quaude turn's 1P event export fails: the node-shim has no `zlib.gzipSync`** (found by
+- FIXED (2026-11-23; zlib.gzipSync is real, test/node-shim-zlib-sync.test.cjs): the export now gets past gzip and
+  stops where naude's does, at "this runtime has no Bun.FetchSession"; native sends. That residual is the
+  Bun.FetchSession gap, not zlib. Was: **Every quaude turn's 1P event export fails: the node-shim has no `zlib.gzipSync`** (found by
   observability Task 2, 2026-11-18). `zlib.gzipSync` exists as a function and throws `node-shim:
   zlib.gzipSync not implemented (tjs has no native zlib; the -p mock path sends no compressed
   bodies)`. The bundle gzips its first-party event batches with it, so every batch fails before
@@ -1931,6 +1936,10 @@ new pin had 26 failures, from three upstream changes a carve cannot see, and the
   in one one-tool turn. The turn completes and nothing outside `--debug` says so: a silent
   divergence from native, whose export runs. A gzip encoder (deflate plus the gzip frame) closes
   it; the shim's zlib is where it belongs.
+- **1P event export never sends under quaude or naude: neither runtime has `Bun.FetchSession`** (2026-11-23).
+  2.1.330's exporter posts through `Bun.FetchSession` and logs `[ERROR] 1P event logging: N events failed to export
+  (this runtime has no Bun.FetchSession)` under both; native Bun sends, so the batches pile up on disk under the
+  two Node-shaped runtimes. Same shape for both, so test/fidelity/debug-log-errors does not flag it.
 - **`os.totalmem()` and `os.freemem()` answer 0 under the node-shim** (observability Task 2,
   2026-11-18; node 24 on the same Mac: 17179869184 and a live figure). Any bundle code that sizes
   a cache or a heap limit from them, or divides by them, sees a machine with no memory. Which
@@ -1961,6 +1970,10 @@ Measured: `$CLAUDE_CONFIG_DIR/debug/*.txt` after a `--debug` Bash-tool turn of a
 failed to export (node-shim: zlib.gzipSync not implemented ...)` and `116 events failed to export` at exit; the
 probe's `zlib.gzipSync(Buffer.from("hello"))` under `tjs run libexec/node-shim/loader.cjs` throws the same, under
 node returns 25 bytes (2026-11-18).
+
+Measured: `--debug --debug-to-stderr -p hi` against a canned mock, naude (node 24.21.0) and quaude (tjs from
+txiki-zlib-sync.patch, this tree) on darwin-arm64: both log `1P event logging: N events failed to export (this runtime
+has no Bun.FetchSession)`; quaude no longer logs the gzipSync or "A bundled root does not parse" lines (2026-11-23).
 
 Measured: `os.totalmem()` and `os.freemem()` under `tjs run libexec/node-shim/loader.cjs`: 0 and 0; under node
 24.21.0 on the same Mac 17179869184 and 169115648 (2026-11-18).

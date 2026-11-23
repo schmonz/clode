@@ -182,6 +182,8 @@ const FILES = {
   'test/build-gates/renameable-positions.test.cjs': { jobs: ['node-shim-oracle'] },
   'test/zlib-zstd-stream-gap.test.cjs': { jobs: ['node-shim-oracle'] },
   'test/fidelity/regexp-capture-census.test.cjs': { jobs: ['node-shim-oracle'] },
+  // quaude's --debug log read beside naude's (2026-11-23): needs the engine and the staged provider.
+  'test/fidelity/debug-log-errors.test.cjs': { jobs: ['node-shim-oracle'] },
   'test/credential-store-attempted.test.cjs': { jobs: ['node-shim-oracle-darwin'] },
   // axios through node-shim's http client vs host node (the 2026-11-22 /login failure); needs an engine and the
   // test harness's axios, which node-shim-oracle-darwin installs before its oracle step.
