@@ -14,8 +14,8 @@
 //   - an IP literal is connected to directly;
 //   - family 4 or 6, or autoSelectFamily false: one lookup answer (of that family), one attempt, no attempt timeout;
 //   - otherwise every address (deduplicated), families ALTERNATED starting with the first answer's family;
-//   - each attempt but the last gets autoSelectFamilyAttemptTimeout ms (default 250, at least 10) before it is
-//     abandoned and the next begins; a failure moves on at once;
+//   - each attempt but the last gets autoSelectFamilyAttemptTimeout ms (default 250, at least 10) before the next
+//     begins; a failure moves on at once (node ABANDONS the attempt at its timeout; this keeps it racing, see below);
 //   - all failed: an AggregateError of every attempt's error, its `code` the first one's (node's NodeAggregateError).
 // The hostname stays the TLS name (sni) whatever address is dialled, so the certificate is checked against the name.
 //
@@ -82,37 +82,63 @@ function makeConnectMultiple(deps) {
     }
     if (targets.length === 1) return connect(transport, targets[0].address, port, engineOpts);
 
-    const errors = [];
-    for (let i = 0; i < targets.length; i++) {
-      const last = i === targets.length - 1;
-      const ac = typeof AbortController === 'function' ? new AbortController() : null;
-      const attempt = connect(transport, targets[i].address, port, ac ? { ...engineOpts, signal: ac.signal } : engineOpts);
-      if (last) {
-        try { return await attempt; } catch (e) { errors.push(e); break; }
-      }
-      let timer = null;
-      const timedOut = new Promise((resolve) => { timer = setT(() => resolve(TIMED_OUT), timeout); });
-      try {
-        const r = await Promise.race([attempt, timedOut]);
-        if (r !== TIMED_OUT) return r;
-        const e = new Error(`connect ETIMEDOUT ${targets[i].address}:${port}`);
-        e.code = 'ETIMEDOUT'; e.address = targets[i].address; e.port = port;
-        errors.push(e);
-        if (ac) ac.abort();
-        attempt.then((s) => { try { s && s.close && s.close(); } catch { /* abandoned */ } }, () => {});
-      } catch (e) {
-        errors.push(e);
-      } finally {
+    // Attempts start in node's order, each after the previous one failed or outlived the attempt timeout; one that
+    // outlived it is NOT abandoned but keeps going beside the next (RFC 8305's racing), and the first to connect wins.
+    // DIVERGENCE FROM NODE, on purpose: node abandons it. node's attempt is the TCP connect alone, and the TLS
+    // handshake runs after it, untimed; tjs.connect('tls') is the connect AND the handshake, done in JavaScript over
+    // mbedtls, so on a loop as busy as the bundle's startup a handshake to api.anthropic.com outlived 250 ms and was
+    // thrown away where node would have kept it: every first-party request at quaude's startup failed
+    // "ETIMEDOUT ...; EHOSTUNREACH" (the bootstrap, the fast-mode probe, the MCP registry; darwin-arm64 with no IPv6
+    // route, 2026-11-23, caught by test/fidelity/debug-log-errors.test.cjs). Racing keeps node's ORDER and its
+    // fallback (a dead first address still costs one attempt timeout) and never loses a connection node keeps.
+    const errors = new Array(targets.length);
+    const live = new Map();   // index -> AbortController (or null), attempts not yet settled
+    let won = null;
+    const loseAll = (except) => {
+      for (const [j, ac] of live) if (j !== except && ac) ac.abort();
+    };
+    const winner = await new Promise((resolve) => {
+      let next = 0, settled = 0, timer = null;
+      const finish = (v) => { clearT(timer); resolve(v); };
+      const start = () => {
+        if (won !== null || next >= targets.length) return;
+        const i = next++;
+        const ac = typeof AbortController === 'function' ? new AbortController() : null;
+        live.set(i, ac);
         clearT(timer);
-      }
-    }
+        timer = next < targets.length ? setT(() => {
+          // outlived the attempt timeout: the next starts beside it (node would have recorded ETIMEDOUT here)
+          if (live.has(i) && !errors[i]) {
+            const e = new Error(`connect ETIMEDOUT ${targets[i].address}:${port}`);
+            e.code = 'ETIMEDOUT'; e.address = targets[i].address; e.port = port;
+            errors[i] = e;
+          }
+          start();
+        }, timeout) : null;
+        Promise.resolve().then(() => connect(transport, targets[i].address, port, ac ? { ...engineOpts, signal: ac.signal } : engineOpts)).then((sock) => {
+          live.delete(i);
+          if (won !== null) { try { sock && sock.close && sock.close(); } catch { /* lost the race */ } return; }
+          won = i;
+          loseAll(i);
+          finish(sock);
+        }, (e) => {
+          live.delete(i);
+          if (won !== null) return;
+          if (!errors[i] || errors[i].code === 'ETIMEDOUT') errors[i] = e;
+          settled++;
+          if (settled === targets.length) finish(null);
+          else if (live.size === 0 || next === i + 1) start();
+        });
+      };
+      start();
+    });
+    if (won !== null) return winner;
     const agg = new AggregateError(errors, errors.map((e) => (e && e.message) || String(e)).join('; '));
     agg.code = errors[0] && errors[0].code;
     throw agg;
   }
   return { connectHost };
 }
-const TIMED_OUT = Symbol('attempt timed out');
 
 // net.setDefaultAutoSelectFamily & co., validated as node does (a boolean; an integer timeout, at least 10).
 function setDefaultAutoSelectFamily(v) {

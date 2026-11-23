@@ -51,7 +51,7 @@ test('connect-multiple: node\'s order alternates families from the first answer,
   assert.deepStrictEqual(cm.attemptOrder([a('1.1.1.1', 4), a('::1', 6)]).map((x) => x.address), ['1.1.1.1', '::1']);
 });
 
-test('connect-multiple: an attempt that hangs past the attempt timeout is abandoned and the next begins', async () => {
+test('connect-multiple: an attempt that hangs past the attempt timeout lets the next begin, and loses to it', async () => {
   let v6Signal = null;
   const h = harness({ answers: [V6, V4], behave: (ip, o) => {
     if (ip === V6.ip) { v6Signal = o.signal; return new Promise(() => {}); }
@@ -62,7 +62,29 @@ test('connect-multiple: an attempt that hangs past the attempt timeout is abando
   const sock = await connectHost('tcp', 'dual.example', 80, {}, { autoSelectFamilyAttemptTimeout: 30 });
   assert.deepStrictEqual(sock, { ip: V4.ip });
   assert.ok(Date.now() - t0 >= 25, 'the next attempt waits for the attempt timeout');
-  assert.ok(v6Signal && v6Signal.aborted, 'the abandoned attempt is aborted');
+  assert.ok(v6Signal && v6Signal.aborted, 'the attempt that lost the race is aborted');
+});
+
+// tjs.connect('tls') is the TCP connect AND the TLS handshake, so a slow handshake outlives the attempt timeout where
+// node's attempt (TCP alone) would not. On 2026-11-23 that threw away every first-party connection at quaude's startup
+// ("ETIMEDOUT 160.79.104.10:443; EHOSTUNREACH": the A record's handshake outlived 250 ms, the AAAA had no route).
+test('connect-multiple: an attempt that connects AFTER its timeout still wins when the next one fails', async () => {
+  const h = harness({ answers: [V4, V6], behave: (ip) => (ip === V4.ip
+    ? new Promise((r) => setTimeout(() => r({ ip }), 80)) : refuse('EHOSTUNREACH')) });
+  const { connectHost } = cm.makeConnectMultiple(h.deps);
+  const sock = await connectHost('tls', 'api.example', 443, {}, { autoSelectFamilyAttemptTimeout: 20 });
+  assert.deepStrictEqual(sock, { ip: V4.ip });
+  assert.deepStrictEqual(h.calls.map((c) => c.ip), [V4.ip, V6.ip], 'the next attempt still began at the timeout');
+});
+
+test('connect-multiple: a laggard that fails after every other attempt failed reports its own error', async () => {
+  const h = harness({ answers: [V4, V6], behave: (ip) => (ip === V4.ip
+    ? new Promise((_, j) => setTimeout(() => j(Object.assign(new Error('connect ECONNRESET'), { code: 'ECONNRESET' })), 60))
+    : refuse('EHOSTUNREACH')) });
+  const { connectHost } = cm.makeConnectMultiple(h.deps);
+  const e = await connectHost('tcp', 'api.example', 80, {}, { autoSelectFamilyAttemptTimeout: 20 }).then(() => null, (x) => x);
+  assert.ok(e instanceof AggregateError);
+  assert.deepStrictEqual(e.errors.map((x) => x.code), ['ECONNRESET', 'EHOSTUNREACH']);
 });
 
 test('connect-multiple: family 4/6 and autoSelectFamily:false make ONE attempt, as node does', async () => {
