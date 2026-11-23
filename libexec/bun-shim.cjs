@@ -1784,12 +1784,114 @@ const WS_MISSING =
 // the process at the first point ws is needed. This is the shape we want for
 // host-provided deps generally: install it, or get a clear message and a clean exit.
 function _wsFatal(){ _extFatal(WS_MISSING); }
+// --- Bun's `tls` option (fetch, WebSocket): honoured, or refused by name -------------------------------------------
+// Native Claude Code hands Bun's fetch `tls: { ca, cert, key, passphrase }` on EVERY request (its CA list: its bundled
+// roots minus the ones it blocks, plus NODE_EXTRA_CA_CERTS and the OS store; and the mTLS identity from
+// CLAUDE_CODE_CLIENT_CERT/KEY), and WebSocket the same. Neither engine here reads it: tjs's fetch is lws, and node's
+// is undici, and both ignore the key. So the list was silently not applied: quaude trusted four roots native blocks
+// (emSign), and a client certificate was silently never presented (measured 2026-11-23, 2.1.330).
+//
+// What CAN be honoured: the engine's DEFAULT trust is settable, and the bundle sets it to the same list it passes
+// (tls.setDefaultCACertificates; node-shim answers it through txiki-default-ca.patch). So a `tls.ca` that IS the
+// default in force is applied exactly; anything else is refused by name before a byte is sent. The rows:
+//   ca                  the same certificates as the default trust (order and PEM formatting aside): honoured. Extra
+//                       certificates the engine's parser refused are allowed (they cannot be trusted, which only
+//                       ever fails closed); any other difference: refused.
+//   rejectUnauthorized  true (or unset): honoured (verification is the default). false: refused.
+//   serverName/servername  the URL's own host: honoured (it is what is checked). Any other name: refused.
+//   requestCert, lowMemoryMode, allowPartialTrustChain  false: nothing asked. true: refused.
+//   every other key Bun reads (cert, key, passphrase, checkServerIdentity, ciphers, crl, min/maxVersion, caFile,
+//   certFile, keyFile, ...): refused when set. The list of keys is BUN's, recorded from native's own fetch
+//   (test/fixtures/bun-tls-option-reads-native.json); test/node-shim-tls-options.test.cjs goes red on any key in it
+//   that this table does not name.
+const BUN_TLS_HONOURED = ['ca', 'rejectUnauthorized', 'serverName', 'servername'];
+const BUN_TLS_FALSE_IS_UNSET = ['requestCert', 'lowMemoryMode', 'allowPartialTrustChain'];
+const BUN_TLS_REFUSED = ['ALPNProtocols', 'caFile', 'cert', 'certFile', 'checkServerIdentity', 'ciphers',
+  'clientRenegotiationLimit', 'clientRenegotiationWindow', 'crl', 'dhParamsFile', 'ecdhCurve', 'key', 'keyFile',
+  'maxVersion', 'minVersion', 'passphrase', 'secureOptions', 'sessionTimeout', 'sigalgs'];
+const _pemBodies = (v) => {
+  const out = [];
+  const one = (x) => {
+    const text = typeof x === 'string' ? x : (ArrayBuffer.isView(x) ? Buffer.from(x.buffer, x.byteOffset, x.byteLength).toString('latin1') : null);
+    if (text === null) throw _tlsRefusal('ca', 'an entry is neither a string nor bytes');
+    for (const b of text.match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g) || []) {
+      out.push(b.replace(/-----(?:BEGIN|END) [^-]+-----/g, '').replace(/\s+/g, ''));
+    }
+  };
+  for (const x of Array.isArray(v) ? v : [v]) one(x);
+  return out;
+};
+function _tlsRefusal(key, why, where = 'fetch') {
+  return Object.assign(new Error(`clode: ${where}'s tls.${key} cannot be applied by this engine (${why}); refusing to `
+    + 'connect rather than connecting without it'), { code: 'ERR_CLODE_UNSUPPORTED_TLS_OPTION', option: key });
+}
+// The CA set the engine's clients trust by default: node-shim's record (tjs), or node's own default (naude).
+function _defaultTrust() {
+  const tls = require('tls');
+  const engine = tls[Symbol.for('clode.tls.engineTrust')];
+  if (typeof engine === 'function') return engine();
+  if (typeof tls.getCACertificates === 'function') return { certs: tls.getCACertificates('default'), unreadable: new Set() };
+  return null;
+}
+// Throws the refusal for a Bun `tls` object this engine cannot honour; returns quietly when it can.
+function _checkBunTls(tlsOpts, url, where = 'fetch') {
+  if (tlsOpts === undefined || tlsOpts === null || tlsOpts === false) return;
+  // Bun applies `tls` to an https:/wss: connection only (the bundle passes it for its http:// mock too).
+  let scheme = null;
+  try { scheme = new URL(String(url && url.url !== undefined ? url.url : url)).protocol; } catch (_) { /* unparsed: checked */ }
+  if (scheme !== null && scheme !== 'https:' && scheme !== 'wss:') return;
+  if (typeof tlsOpts !== 'object') throw _tlsRefusal('(object)', 'tls is not an object', where);
+  for (const k of BUN_TLS_REFUSED) {
+    if (tlsOpts[k] !== undefined && tlsOpts[k] !== null) throw _tlsRefusal(k, 'no per-connection setting for it', where);
+  }
+  for (const k of BUN_TLS_FALSE_IS_UNSET) {
+    if (tlsOpts[k] !== undefined && tlsOpts[k] !== null && tlsOpts[k] !== false) throw _tlsRefusal(k, 'no per-connection setting for it', where);
+  }
+  if (tlsOpts.rejectUnauthorized === false) throw _tlsRefusal('rejectUnauthorized', 'verification cannot be turned off per connection', where);
+  for (const k of ['serverName', 'servername']) {
+    const name = tlsOpts[k];
+    if (name === undefined || name === null || name === '') continue;
+    let host = null;
+    try { host = new URL(String(url && url.url !== undefined ? url.url : url)).hostname.replace(/^\[|\]$/g, ''); } catch (_) { /* below */ }
+    if (String(name).toLowerCase() !== String(host).toLowerCase()) throw _tlsRefusal(k, `the certificate is checked against the URL's host, not '${name}'`, where);
+  }
+  const ca = tlsOpts.ca;
+  if (ca === undefined || ca === null || ca === false || ca === '') return;
+  const trust = _defaultTrust();
+  if (!trust) throw _tlsRefusal('ca', "the engine's default trust is not known here (TJS_CA_BUNDLE/SSL_CERT_FILE)", where);
+  const want = new Set(_pemBodies(ca));
+  const have = new Set(_pemBodies(trust.certs));
+  const missing = [...have].filter((b) => !want.has(b)).length;
+  const extra = [...want].filter((b) => !have.has(b) && !trust.unreadable.has(b)).length;
+  if (missing || extra) {
+    throw _tlsRefusal('ca', `it differs from the CA set the engine trusts (${missing} certificate(s) it trusts are not in `
+      + `tls.ca, ${extra} in tls.ca it does not trust); only that set can be applied, through tls.setDefaultCACertificates`, where);
+  }
+}
+// node's tls.connect options for the npm `ws` path, from Bun's `tls` object: the keys node reads pass through (node
+// honours them); Bun's own spellings are translated (serverName) or refused (the *File keys, which node does not read).
+const BUN_TLS_NODE_SPELLING = { serverName: 'servername' };
+const BUN_TLS_BUN_ONLY = ['caFile', 'certFile', 'keyFile', 'dhParamsFile', 'lowMemoryMode', 'clientRenegotiationLimit',
+  'clientRenegotiationWindow', 'requestCert'];
+function _bunTlsForNode(tlsOpts) {
+  const out = {};
+  for (const [k, v] of Object.entries(tlsOpts)) {
+    if (v === undefined || v === null) continue;
+    if (BUN_TLS_BUN_ONLY.includes(k)) {
+      if (v === false) continue;
+      throw _tlsRefusal(k, "node's tls.connect has no such option", 'WebSocket');
+    }
+    out[BUN_TLS_NODE_SPELLING[k] || k] = v;
+  }
+  return out;
+}
+
 // Translate a Bun-style WebSocket constructor call into ws's (url, protocols, options).
 function _wsArgs(url, opts){
   if (opts && typeof opts === 'object' && !Array.isArray(opts)){
     const options = {};
     if (opts.headers) options.headers = opts.headers;
-    if (opts.tls && typeof opts.tls === 'object') Object.assign(options, opts.tls);  // ca/cert/key/rejectUnauthorized
+    if (opts.tls && typeof opts.tls === 'object') Object.assign(options, _bunTlsForNode(opts.tls));  // node's tls.connect keys
     return [url, opts.protocols, options];
   }
   return [url, opts, undefined];                 // WHATWG form: 2nd arg is protocols
@@ -1887,6 +1989,7 @@ function BunWebSocket(url, opts){
   const WS = _realWS();
   if (WS) { const [u, p, o] = _wsArgs(url, opts); return new WS(u, p, o); }   // npm ws (Node hosts)
   if (UNDER_TJS && typeof _nativeWS === 'function') {                          // native tjs WS (header-capable)
+    if (opts && typeof opts === 'object' && !Array.isArray(opts)) _checkBunTls(opts.tls, url, 'WebSocket');  // lws: default trust only
     return _wsShape(new _nativeWS(url, _nativeWsOptions(opts)));               // + the ws surface the bundle uses
   }
   _wsFatal();                                                                  // Node without ws, or no native WS
@@ -1905,6 +2008,25 @@ globalThis.WebSocket = BunWebSocket;
 // to gate WebSocket features off with an honest notice instead of a
 // swallowed async crash.
 globalThis.__clodeWsUnavailable = !_wsTransportAvailable();
+
+// fetch(input, { tls }) — Bun's option, checked by _checkBunTls above on every engine (tjs's fetch and node's both
+// ignore the key, so this is the only place it can be honoured or refused). A refusal REJECTS, before any request is
+// made, as a failed fetch does; everything else is the engine's own fetch, untouched.
+if (typeof globalThis.fetch === 'function' && !globalThis.fetch.__clodeTlsChecked) {
+  const _engineFetch = globalThis.fetch;
+  const checked = function fetch(input, init) {
+    if (init && typeof init === 'object' && init.tls !== undefined) {
+      try { _checkBunTls(init.tls, input && typeof input === 'object' && 'url' in input ? input.url : input, 'fetch'); }
+      catch (e) { return Promise.reject(e); }
+    }
+    return _engineFetch.apply(this, arguments);
+  };
+  for (const k of Object.getOwnPropertyNames(_engineFetch)) {
+    if (!(k in checked)) { try { Object.defineProperty(checked, k, Object.getOwnPropertyDescriptor(_engineFetch, k)); } catch (_) { /* fixed */ } }
+  }
+  Object.defineProperty(checked, '__clodeTlsChecked', { value: true });
+  globalThis.fetch = checked;
+}
 
 // The second half of the eager-skew bridge (see _markSnapshotProbed above, and
 // _skewContribution in extract-claude-js.cjs). __clodeEnsureSnapshot — patched
@@ -1992,6 +2114,8 @@ module.exports.collectShadows = collectShadows;
 module.exports.parseShadow = parseShadow;               // for test/build-gates/shadow-writer-gates.test.cjs
 module.exports.SHADOW_ARG_SPELLINGS = SHADOW_ARG_SPELLINGS; //   (0b: the gate must use this, not restate it)
 module.exports._wsArgs = _wsArgs;
+module.exports._checkBunTls = _checkBunTls;     // for test/node-shim-tls-options.test.cjs (the fetch/WebSocket tls table)
+module.exports._bunTlsKeys = { honoured: BUN_TLS_HONOURED, falseIsUnset: BUN_TLS_FALSE_IS_UNSET, refused: BUN_TLS_REFUSED };
 module.exports.warnAppletSkew = warnAppletSkew;
 module.exports.awaitSkewProbe = awaitSkewProbe;
 module.exports._markSnapshotProbed = _markSnapshotProbed;   // for test/extract-hooks.test.cjs

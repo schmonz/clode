@@ -660,6 +660,14 @@ function evalBytecodeGraph(idxFile, blobFile) {
 installProbe = evalModule(P.join(INTERNAL_DIR, 'probe.cjs')).installProbe;
 
 /* ---- globals, then entry */
+// No XMLHttpRequest: node has none, and neither has native Claude Code's Bun (measured 2.1.330, Bun 1.4.4). The
+// engine's is a browser transport that takes no agent, so anything that prefers it when present goes around the
+// node:https client and every TLS option the caller gave that client. axios does exactly that (adapter order
+// ['xhr','http','fetch']): `httpsAgent: new https.Agent({ ca })` was ignored and a server the ca does not cover
+// answered 200 where node fails with UNABLE_TO_GET_ISSUER_CERT_LOCALLY (measured 2026-11-23, axios 1.15.2). The
+// bundle's own reduced axios has only the http adapter; an npm one (a plugin, a probe) has all three.
+// test/node-shim-tls-options.test.cjs holds it absent.
+delete globalThis.XMLHttpRequest;
 globalThis.process = loadBuiltin('process');
 Object.defineProperty(globalThis, 'Buffer', {
   configurable: true,
