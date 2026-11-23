@@ -23,7 +23,6 @@
     "bun:sqlite"
   ],
   "layer2_node_apis_missing": [
-    "crypto.X509Certificate",
     "fs.statfsSync",
     "crypto.createSign",
     "crypto.createVerify",
@@ -69,6 +68,7 @@
     "Bun.zstdDecompressSync"
   ],
   "_notes": {
+    "crypto.X509Certificate": "LEFT layer2_node_apis_missing 2026-11-23: libexec/node-shim/internal/x509.cjs implements the constructor (PEM then DER, OpenSSL error codes), raw, serialNumber, fingerprint256, validFrom/validTo(+Date), ca, toString and toJSON, held to host node by test/node-shim-x509.test.cjs over every node root. Every other member exists and THROWS by name (subject, issuer, subjectAltName, publicKey, checkIssued, verify, ...). Why it mattered: 2.1.330's CA-trust builder does `new X509Certificate(pem).raw` per bundled root and logged `CA certs: A bundled root does not parse: TypeError: not a function` 16x per session; its two other read sites (validTo + checkIssued, subject) sit inside try/catch, so a wall there degrades as the absent class did.",
     "layer1_bun_props_missing_deferred": "NEW drift (2026-09-02), seen for the first time only once this suite could stage a real provider — see BACKLOG.md's 'Bun.zstdDecompress / Bun.zstdDecompressSync are new golden-map drift, unreviewed'. Upstream's own embedded-text-asset reader (43 OTHER modules reference the chunk that defines it), so this is NOT a narrow one-off like Bun.ant or zlib.createZstdDecompress above, and per that entry it MUST NOT be added to the main golden list or stubbed without the same reachability work those got first. Listed HERE, separately, so `layer1_bun_props_missing` keeps asserting on any OTHER new drift while these two specific, already-triaged entries do not block the suite. Move to the main list (with a note) once reviewed, or implement a real stub and remove.",
     "intl": "NOT a node builtin — libexec/node-shim/modules/intl.cjs backs the Intl GLOBAL, not a require()able module, so neither side can enumerate it by name. Allowed, not a gap.",
     "Bun.SQL": "FIXED (no longer a layer1 gap, kept as history). Was an ACTIVE DIVERGENCE: upstream guards it with `if (typeof Bun > \"u\") throw Error(\"claude gateway requires the native binary\")`, TRUE under real node (\"undefined\" > \"u\") but FALSE under quaude because bun-shim defines a Bun global at all — so the guard was defeated and `new Bun.SQL(...)` produced a bare `Bun.SQL is not a constructor` instead. bun-shim.cjs now gives Bun.SQL a throwing constructor that hands back upstream's own message verbatim. Reachability: confirmed NOT on the -p/interactive routes — Bun.SQL is used only inside the `claude gateway --config <path>` subcommand (a separate commander-registered enterprise auth/telemetry server), the sole call site in the bundle. See test/bun-shim-sql-guard.test.cjs.",

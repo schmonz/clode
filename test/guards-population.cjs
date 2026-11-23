@@ -256,6 +256,15 @@ function discoverTestFiles(dir) {
 // convention for `skip` reasons, which this mirrors).
 const GUARD_EXCLUSIONS = [
   {
+    file: 'node-shim-x509.test.cjs',
+    because: 'a behavioural differential, not a scan: one program it writes constructs X509Certificate from each '
+      + 'certificate (host node\'s tls.rootCertificates, node-shim\'s own roots, certificates openssl mints in a '
+      + 'mkdtemp, malformed inputs it builds) under node and under the tjs loader, and compares what THOSE RUNS '
+      + 'printed. READS_ARTIFACT fires on reading node-shim/tls-cacert.pem, which is an INPUT handed to both runs, '
+      + 'never searched; PATTERN_MATCHES fires on assert.match over the wall messages its own child printed.',
+  },
+
+  {
     file: 'node-shim-execve.test.cjs',
     because: 'a behavioural differential, not a scan: every row writes its own program into a mkdtemp, runs it '
       + 'under host node and under the tjs loader (some under a pty, one exec-ing a perl probe it also wrote), and '

@@ -3,7 +3,7 @@
 // randomBytes, randomFillSync, randomInt, timingSafeEqual, getHashes, constants, webcrypto
 // passthrough. Hash/HMAC are KAT-locked against host node. Algorithms beyond
 // sha256 (md5/sha1/sha512) and the asymmetric/KDF surface (createSign/Verify,
-// createPrivateKey/PublicKey, pbkdf2, X509Certificate) are NOT implemented here —
+// createPrivateKey/PublicKey, pbkdf2, and X509Certificate's key and name members) are NOT implemented here —
 // this build has no native OpenSSL and a wrong stub would violate fail-loud, so
 // they remain walls (see phase3-api-coverage.md "needs-investigation").
 const { sha256 } = require('./../internal/sha256.cjs');
@@ -205,4 +205,6 @@ module.exports = {
   // name get the web cap. Only node's own randomBytes/randomFillSync are uncapped.
   getRandomValues: (a) => crypto.getRandomValues(a),
   webcrypto: crypto,
+  // The members a certificate's own bytes answer (internal/x509.cjs); the rest are walls by name.
+  X509Certificate: require('./../internal/x509.cjs').X509Certificate,
 };
