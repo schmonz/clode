@@ -163,6 +163,36 @@ const ENGINE_API_FLOOR = [
       + 'path that ever reaches it',
   },
   {
+    // Without it node-shim has no process.execve: 2.1.330's relaunch (`/tui classic`, `/tui fullscreen`) falls back
+    // to spawnSync, and on such an engine that child renders into a pipe -- the dead terminal of 2026-11-22.
+    name: '__tjs_execve',
+    expr: 'globalThis.__tjs_execve',
+    kind: 'function',
+    from: 'txiki-sync-spawn.patch',
+    why: 'node-shim process.execve(): replace the process image with sane stdio, as node and Bun do (the bundle\'s relaunch)',
+    buildHost: false,
+    notForBuildHost: 'nothing the build runs calls process.execve(): no caller in scripts/, libexec/ (outside '
+      + 'node-shim\'s process.cjs) or build.sh. On an engine without it node-shim REFUSES the call '
+      + '(ERR_CLODE_ENGINE_FLOOR) and appends it to CLODE_ENGINE_FLOOR_LOG, so the gates listed above refuse a build '
+      + 'path that ever reaches it',
+  },
+  {
+    // Without it every spawnSync slot is a pipe: an 'inherit' child writes into a buffer replayed after it exits.
+    name: '__tjs_spawn_sync.stdio',
+    expr: 'globalThis.__tjs_spawn_sync.stdio',
+    kind: 'boolean',
+    from: 'txiki-sync-spawn.patch',
+    why: 'node-shim spawnSync stdio \'inherit\'/\'ignore\'/fd: the child gets the parent\'s own fd (a relaunched TUI owns the terminal; no maxBuffer on output it never captures)',
+    buildHost: false,
+    notForBuildHost: 'the build DOES reach spawnSync with stdio \'inherit\' (scripts/build-tjs.cjs runs every child '
+      + 'through execFileSync(cmd, args, {stdio: \'inherit\'})), and on an engine without this node-shim keeps the '
+      + 'route every build host ran on from 2026-09-20 to 2026-11-22: capture, then replay the bytes to the parent\'s '
+      + 'fd after the child exits. Same bytes, not live; a child printing more than maxBuffer (1 MiB) would be '
+      + 'killed there. Measured 2026-11-22 (darwin-arm64): a whole scripts/build-tjs.cjs run, every inherited child '
+      + 'included, prints 77 KB. '
+      + 'Not logged: it is a working route, not a refusal; test/node-shim-execve.test.cjs pins it on the stand-in',
+  },
+  {
     // Without it node-shim's Timeout#unref STOPS the timer (the old route), so an unref'd timer never fires while
     // the loop stays alive: the TUI's nonblocking stdout then holds a turn's answer until the next keystroke.
     name: '__tjs_timer_setref',

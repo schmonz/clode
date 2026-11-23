@@ -580,6 +580,56 @@ if (module.exports.platform !== 'win32') {
   module.exports.getuid = unixGetuid;
 }
 
+// process.execve(file, args = [], env = process.env): replace this process image, node's (>= 23.11) and Bun's.
+// 2.1.330 calls it to RELAUNCH ITSELF (`/tui classic`, `/tui fullscreen`, the session-switch paths:
+// execReplaceProcess) and falls back to spawnSync(..., {stdio:'inherit'}) + process.exit only when it throws. It
+// was absent here, so every relaunch took the fallback, and the fallback's child rendered into a pipe nobody read
+// (measured on NetBSD/arm64, 2026-11-22: the relaunched child's fd0 /dev/null, fd1/fd2 pipes, the parent parked in
+// poll(), the terminal dead). Native replaces the process (`typeof process.execve` is 'function' under Bun 1.4.4).
+// Validation and messages are node's (lib/internal/process/per_thread.js), the syscall is the engine's
+// __tjs_execve (txiki-sync-spawn.patch), which makes the inherited stdio sane for the new image and, on failure,
+// throws node 26's ErrnoException shape. Node 24 aborts the whole process on a failed execve; node 26 throws, and
+// the bundle catches, so the throw is the contract worth matching. A 4th argument (Bun's
+// {macDisclaimResponsibility}) is ignored, as node ignores it.
+function execve(execPath, args = [], env = module.exports.env) {
+  if (module.exports.platform === 'win32') {
+    throw Object.assign(new TypeError('The feature process.execve is unavailable on the current platform, which is being used to run Node.js'),
+      { code: 'ERR_FEATURE_UNAVAILABLE_ON_PLATFORM' });
+  }
+  const { invalidArgType } = require('../internal/node-errors.cjs');
+  const invalidArgValue = (name, value, reason) => {
+    let shown = require('node:util').inspect(value);
+    if (shown.length > 128) shown = `${shown.slice(0, 128)}...`;
+    return Object.assign(new TypeError(`The argument '${name}' ${reason}. Received ${shown}`), { code: 'ERR_INVALID_ARG_VALUE' });
+  };
+  if (typeof execPath !== 'string') throw invalidArgType('The "execPath" argument must be of type string', execPath);
+  if (!Array.isArray(args)) throw invalidArgType('The "args" argument must be an instance of Array', args);
+  for (let i = 0; i < args.length; i++) {
+    if (typeof args[i] !== 'string' || args[i].includes('\u0000')) {
+      throw invalidArgValue(`args[${i}]`, args[i], 'must be a string without null bytes');
+    }
+  }
+  if (env === null || typeof env !== 'object' || Array.isArray(env)) {
+    throw invalidArgType('The "env" argument must be of type object', env);
+  }
+  const envArray = [];
+  for (const [key, value] of Object.entries(env)) {
+    if (typeof key !== 'string' || typeof value !== 'string' || key.includes('\u0000') || value.includes('\u0000')) {
+      throw invalidArgValue('env', env, 'must be an object with string keys and values without null bytes');
+    }
+    envArray.push(`${key}=${value}`);
+  }
+  if (typeof globalThis.__tjs_execve !== 'function') {
+    const e = new Error('node-shim: this engine has no __tjs_execve (it predates process.execve in txiki-sync-spawn.patch), '
+      + 'so process.execve cannot replace the process; rebuild it: ./build.sh --only engine.compile');
+    e.code = 'ERR_CLODE_ENGINE_FLOOR';
+    require('../internal/engine-floor-log.cjs').engineFloorLog(e.message);
+    throw e;
+  }
+  globalThis.__tjs_execve(execPath, args, envArray);
+}
+module.exports.execve = execve;
+
 // Object.prototype.toString.call(process) is "[object process]" under node (the tag sits on process's
 // prototype). axios decides whether its http adapter can run from exactly that (`kindOf(process) ===
 // 'process'`), and under the shim it read "[object Object]", so npm's axios refused adapter:'http'

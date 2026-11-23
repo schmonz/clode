@@ -929,11 +929,10 @@ test('spawn: an explicitly-ended pipe stdin still fires finish/close normally (c
 // that fails without saying why is its own defect — it is the reason the netbsd cause took
 // a CI round-trip to find while cosmo's was legible on sight.
 //
-// THE C PRIMITIVE CANNOT INHERIT (it creates its pipes unconditionally; see
-// spike/quickjs/patches/txiki-sync-spawn.patch), so the shim REPLAYS instead: the captured
-// bytes go to the parent's own fd once the child exits. Not live — a 56-second compile
-// prints at the end rather than as it goes — but nothing is lost, and it needs no engine
-// rebuild. That divergence is characterized in the tjs-only row below.
+// The shim first REPLAYED (captured bytes written to the parent's fd after exit). Since
+// 2026-11-22 the engine's spawner inherits for real (txiki-sync-spawn.patch, opts.stdio), and
+// replay is only the route for an engine that predates it; the fd identity, the pty and the
+// maxBuffer rows live in test/node-shim-execve.test.cjs. These rows hold on either route.
 test('spawnSync: stdio inherit reaches the PARENT\'s stdout/stderr, like node', (t) => {
   if (skipUnlessTjs(t)) return;
   const body = `

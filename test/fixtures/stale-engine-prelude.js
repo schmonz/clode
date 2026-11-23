@@ -43,4 +43,10 @@
   delete globalThis.__tjs_uname;
   // And txiki-rusage-global.patch: node-shim's process.resourceUsage() refuses it, and says so in CLODE_ENGINE_FLOOR_LOG.
   delete globalThis.__tjs_getrusage;
+  // And process.execve + the stdio-honoring spawner (txiki-sync-spawn.patch, 2026-11-22): its __tjs_spawn_sync has no
+  // .stdio and pipes every slot whatever opts.stdio says, so node-shim replays an inherited child's bytes; its
+  // missing __tjs_execve makes process.execve refuse, and say so in CLODE_ENGINE_FLOOR_LOG.
+  delete globalThis.__tjs_execve;
+  const spawnSync = globalThis.__tjs_spawn_sync;
+  globalThis.__tjs_spawn_sync = (file, args, opts) => spawnSync(file, args, { ...opts, stdio: undefined });
 })();

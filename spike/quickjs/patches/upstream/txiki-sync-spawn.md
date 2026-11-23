@@ -413,11 +413,30 @@ as `__tjs_fs_sync`'s errors) on a launch failure (ENOENT/EACCES).
     expiry). Non-positive → no timeout.
   - `maxBuffer` — number; a cap on total captured stdout+stderr bytes
     (child killed on exceed). Non-positive → a 16 MiB default.
-- returns `{ pid, status:number|null, signal:number|null, stdout:ArrayBuffer,
-  stderr:ArrayBuffer, timedOut:boolean }`. `status` is the exit code (null if
+  - `stdio` — optional `[stdin, stdout, stderr]`, each `"pipe"` (the default,
+    as above), `"ignore"` (`/dev/null`, `NUL`) or a parent fd NUMBER the child
+    inherits as that slot (no pipe, no capture, not counted against
+    `maxBuffer`: Node's `'inherit'` is `[0, 1, 2]`). Added 2026-11-22: a
+    program that relaunches itself through `spawnSync(..., {stdio:'inherit'})`
+    must hand its terminal to the child, not a pipe drained after exit. The
+    function carries `.stdio === true` so a caller can tell this from a build
+    that predates it.
+- returns `{ pid, status:number|null, signal:number|null, stdout:ArrayBuffer|null,
+  stderr:ArrayBuffer|null, timedOut:boolean }` (null for a slot that was not a pipe). `status` is the exit code (null if
   the child was signalled or timed out); `signal` is the raw termination signal
   *number* (the shim maps it to Node's string name). `stdout`/`stderr` are the
   drained output. `timedOut` is set on either a timeout or a maxBuffer overrun.
+
+`__tjs_execve(file, argv, envp)` — Node's `process.execve` (src/node_process_methods.cc
+`Execve`): `argv` is the full argv (argv[0] included), `envp` an array of
+`"KEY=VALUE"`. Never returns on success. Before `execve(2)` it clears
+close-on-exec AND `O_NONBLOCK` on fds 0-2 (libuv sets the latter on a tty it
+drives, and it lives on the shared open file description), marks every other fd
+close-on-exec, restores the tty mode (`uv_tty_reset_mode`) and empties the
+signal mask; on failure it restores what it changed and throws Node 26's
+ErrnoException shape (`"ENOENT, No such file or directory '/x'"`, with
+`errno`/`code`/`path`/`syscall:'execve'`). On Windows it throws `ENOSYS` (Node
+refuses `process.execve` there before reaching its binding).
 
 The two output pipes are drained concurrently with a single `poll()` loop, which
 avoids the classic deadlock where a child filling its stderr pipe blocks while

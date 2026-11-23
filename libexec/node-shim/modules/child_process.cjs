@@ -505,10 +505,17 @@ function spawnSync(file, args = [], opts = {}) {
     input = b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength);
   }
   const exe = resolveExe(file, (opts.env && opts.env.PATH) ? opts.env : process.env);
+  const slots = normStdio(opts);
+  // The engine's spawner takes the slots (txiki-sync-spawn.patch: `__tjs_spawn_sync.stdio`): an inherited slot is
+  // the parent's own fd in the child, an ignored one /dev/null (NUL), and only a 'pipe' is captured. An engine that
+  // predates that (the build host's last-release engine) pipes every slot, and the bytes are replayed below.
+  const engineStdio = globalThis.__tjs_spawn_sync.stdio === true;
+  const cSlot = (v, i) => (v === 'inherit' ? i : v);
   let r;
   try {
     r = globalThis.__tjs_spawn_sync(exe, args, {
       cwd: opts.cwd, env, input,
+      stdio: engineStdio ? [cSlot(slots.stdin, 0), cSlot(slots.stdout, 1), cSlot(slots.stderr, 2)] : undefined,
       timeoutMs: typeof opts.timeout === 'number' ? opts.timeout : 0,
       // Match node's real spawnSync default (1 MiB) exactly — no divergence.
       maxBuffer: typeof opts.maxBuffer === 'number' ? opts.maxBuffer : (1024 * 1024),
@@ -529,30 +536,25 @@ function spawnSync(file, args = [], opts = {}) {
     const buf = Buffer.from(ab);
     return (enc && enc !== 'buffer') ? buf.toString(enc) : buf;
   };
-  // STDIO WAS IGNORED HERE UNTIL 2026-09-20, and a cross leg died of it in silence.
+  // STDIO WAS IGNORED HERE UNTIL 2026-09-20, and a cross leg died of it in silence: `tjs-slow / leg
+  // (netbsd-mips64eb)` (CI run 35530707866) printed nothing for a minute and then a bare stack trace, because
+  // scripts/build-tjs.cjs runs every child as `execFileSync(cmd, args, { stdio: 'inherit' })` under tjs and this
+  // function never looked at opts.stdio: every child's output was captured into a Buffer and dropped.
   //
-  // MEASURED: `tjs-slow / leg (netbsd-mips64eb)` of CI run 35530707866 printed NOTHING
-  // between 19:04:52 and 19:05:48 — no cmake output, no compiler output, just a bare stack
-  // trace. scripts/build-tjs.cjs runs every child as
-  // `execFileSync(cmd, args, { stdio: 'inherit' })`, and that leg runs build-tjs under tjs.
-  // The cosmo leg, which runs it under node, printed the fatal error on sight. This
-  // function never looked at opts.stdio: the C primitive always pipes, so every child's
-  // output was captured into a Buffer and dropped.
+  // The engine now INHERITS (txiki-sync-spawn.patch, 2026-11-22): the child writes to the caller's own fd while it
+  // runs, with no pipe, no maxBuffer and nothing to replay, as under node; and a relaunched TUI gets the terminal
+  // it takes over (2.1.330's Windows relaunch is exactly `spawnSync(cmd, args, {stdio:'inherit'})`; on POSIX the
+  // same fallback ran whenever process.execve was missing, and rendered into a pipe nobody read).
   //
-  // THE PRIMITIVE CANNOT INHERIT (mod_spawn_sync.c creates its pipes unconditionally —
-  // spike/quickjs/patches/txiki-sync-spawn.patch), so REPLAY: write the captured bytes to
-  // the parent's own fd after the child exits. DIVERGENCE, stated rather than hidden: node
-  // inherits the fd, so the child's output interleaves live; here a 56-second compile
-  // prints in one burst at the end. Nothing is lost, and it needs no engine rebuild — an
-  // inherit that reaches the C side is the wall-walk item, not this.
+  // REPLAY remains only for an engine that predates that, which pipes every slot: the captured bytes are written
+  // to the parent's own fd after the child exits. Same bytes, not live, and a child writing more than maxBuffer to
+  // an "inherited" slot is killed there. scripts/engine-api-floor.cjs says why the build host may still be such an
+  // engine; nothing shipped is (`__tjs_spawn_sync.stdio` is on the runtime floor).
   //
-  // The RETURN shape then matches node exactly: a slot that was not a pipe reads back
-  // null, so `execFileSync(..., { stdio: 'inherit' })` returns null and the error it throws
-  // carries a null .stderr — which is safe precisely BECAUSE the bytes were replayed.
-  const slots = normStdio(opts);
+  // The RETURN shape matches node either way: a slot that was not a pipe reads back null.
   const replay = (slot, fd, buf) => {
     if (slot === 'pipe') return conv(buf);
-    if (slot === 'inherit' && buf && buf.byteLength) {
+    if (!engineStdio && slot === 'inherit' && buf && buf.byteLength) {
       try { writeSyncFdBytes(fd, new Uint8Array(buf)); } catch { /* a closed fd is not this call's failure */ }
     }
     return null;

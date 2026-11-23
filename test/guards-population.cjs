@@ -256,6 +256,14 @@ function discoverTestFiles(dir) {
 // convention for `skip` reasons, which this mirrors).
 const GUARD_EXCLUSIONS = [
   {
+    file: 'node-shim-execve.test.cjs',
+    because: 'a behavioural differential, not a scan: every row writes its own program into a mkdtemp, runs it '
+      + 'under host node and under the tjs loader (some under a pty, one exec-ing a perl probe it also wrote), and '
+      + 'compares what THOSE RUNS printed. READS_ARTIFACT fires on CLODE_TJS/REPO (the engine and loader it '
+      + 'executes) and on reading test/fixtures/stale-engine-prelude.js, which is prepended as code, not scanned; '
+      + 'PATTERN_MATCHES fires on assert.match over its own children\'s output. No bytes it did not create are searched.',
+  },
+  {
     file: 'stage-in-child.test.cjs',
     because: 'a live run, not a scan: it runs `clode build` (libexec/clode-main.cjs, the subject it executes) '
       + 'against a mkdtemp stand-in provider with a --require preload it writes, and asserts on the pid log and '
