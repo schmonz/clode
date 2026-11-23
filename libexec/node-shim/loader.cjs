@@ -1065,6 +1065,11 @@ if (__QVFS) {
   // rg-entry.cjs, grep-native Task 10c); otherwise the manifest's.
   entryAbs = '/quaude/' + (globalThis.__quaudeEntry || (__QVFS.manifest && __QVFS.manifest.entry) || 'cli.qbc');
   extraArgv = globalThis.__quaudeArgs ?? tjs.args.slice(1);
+  // RELAUNCH-AS-PRESENTED: process.argv (below) presents [exePath, <entry>, ...args], and upstream
+  // relaunches itself as exactly that (non-standalone branch: prefixArgs [process.argv[1]]). So a
+  // FIRST argument naming the presented entry is the script, as `node script.cjs` would take it —
+  // not user input (it became a TUI turn after /tui; test/node-shim-vfs.test.cjs pins it).
+  if (extraArgv[0] === entryAbs.replace(/\.qbc$/, '.cjs')) extraArgv = extraArgv.slice(1);
 } else {
   const entry = tjs.args[3];
   if (!entry) { console.error('usage: tjs run loader.cjs <entry.cjs> [args...]'); tjs.exit(64); }

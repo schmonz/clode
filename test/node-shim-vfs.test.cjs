@@ -52,6 +52,25 @@ test('VFS mount: empty entry args yield argv [entry] alone', (t) => {
   assert.deepStrictEqual(out.argv, ['/quaude/cli.cjs']);
 });
 
+// RELAUNCH-AS-PRESENTED. process.argv says this process was started as [exePath, /quaude/<entry>,
+// ...args], and upstream relaunches itself EXACTLY that way when it is not a Bun standalone
+// executable (2.1.330 relaunch: `{cmd: process.execPath, prefixArgs: [process.argv[1]]}`; /tui,
+// fast mode, resume). A blobulated binary must therefore treat a leading argument equal to its
+// own presented entry the way node treats `node script.cjs args`: as the script, not as user
+// input. MEASURED 2026-11-23 on NetBSD/arm64: `/tui fullscreen` relaunched
+// `quaude /quaude/graph.cjs --resume <id> ...`, and the TUI sent "/quaude/graph.cjs" as a turn.
+test('VFS mount: a leading argument naming the presented entry is the script, not user input (relaunch)', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const r = runHarness(['/quaude/cli.cjs', '--resume', 'abc', '-p', 'hi']);
+  assert.strictEqual(r.status, 0, r.stderr);
+  const out = JSON.parse(r.stdout.trim());
+  assert.deepStrictEqual(out.argv, ['/quaude/cli.cjs', '--resume', 'abc', '-p', 'hi']);
+  // ...and only in FIRST position: the same string later is an ordinary argument.
+  const r2 = runHarness(['-p', '/quaude/cli.cjs']);
+  assert.strictEqual(r2.status, 0, r2.stderr);
+  assert.deepStrictEqual(JSON.parse(r2.stdout.trim()).argv, ['/quaude/cli.cjs', '-p', '/quaude/cli.cjs']);
+});
+
 test('VFS mount: manifest.entry selects a SOURCE entry member (builder role, Q1c)', (t) => {
   if (skipUnlessTjs(t)) return;
   const r = spawnSync(tjsPath(), ['run', HARNESS, LOADER, SHIM_ROOT, 'build', '--out', 'x'], {
