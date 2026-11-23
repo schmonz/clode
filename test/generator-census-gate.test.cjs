@@ -61,6 +61,7 @@ const EXEMPT = [
   { file: 'test/guard.test.cjs', because: 'Math.random makes a throwaway guard name unique in the registry; it draws no input' },
   { file: 'test/import-meta-graph.test.cjs', because: 'Math.random makes a scratch file name unique; the file\'s content is fixed' },
   { file: 'test/node-shim-crypto.test.cjs', because: 'the random API is the subject: bounds, call shapes and error classes compared with node, not a generator of inputs' },
+  { file: 'test/node-shim-zlib-sync.test.cjs', because: 'an LCG fills an incompressible payload so a compressor has something it cannot shrink; any bytes are the shape' },
   { file: 'test/clode-net.test.cjs', because: 'randomBytes is an incompressible payload for a byte-exact round trip; any bytes are the shape' },
   { file: 'test/generator-census-gate.test.cjs', because: 'this gate\'s own fixtures spell the random sources it detects; it draws nothing' },
 ];

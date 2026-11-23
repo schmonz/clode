@@ -1,0 +1,184 @@
+# ZLIB-SYNC: __tjs_zlib_sync(op, data, ...) -- miniz's deflate/inflate/crc32, one-shot and synchronous, as a global.
+#
+# WHY. node's zlib.gzipSync/deflateSync/deflateRawSync (and inflateSync/inflateRawSync/gunzipSync/unzipSync) return
+# their answer before the call returns. The engine's only door to miniz was CompressionStream/DecompressionStream,
+# whose answers are promises, so node-shim's *Sync functions threw "not implemented" -- and 2.1.330 gzips every
+# first-party event batch with zlib.gzipSync (and Bun.gzipSync), so every batch failed to export and piled up on disk
+# as <config>/telemetry/1p_failed_events.*.json (a live NetBSD/arm64 --debug log, 2026-11-23: "181 events failed to
+# export", 1.9 MB in one session). Native sends them. miniz is already in the engine (CompressionStream's own
+# compressor), so this is the honest route: a few lines over it, no new code to trust, C speed on every leg.
+# Raw deflate (windowBits -15) and zlib (15) only, the two windows miniz accepts; node-shim writes and reads the gzip
+# frame itself, with op 'crc32'. mod_miniz.c only (no other patch touches it); order-independent.
+#
+diff --git a/src/mod_miniz.c b/src/mod_miniz.c
+--- a/src/mod_miniz.c
++++ b/src/mod_miniz.c
+@@ -737,11 +737,168 @@
+ 
+     return result;
+ }
++
++/* CLODE: __tjs_zlib_sync(op, data, a, b) -- miniz, one-shot and SYNCHRONOUS, where node-shim can reach it. node's
++ * zlib.gzipSync/deflateSync/deflateRawSync and their inflating siblings return before the call does; the engine's
++ * only door to miniz was CompressionStream, whose answer is a promise, so node-shim's *Sync functions threw "not
++ * implemented" and 2.1.330's first-party event export failed every batch (a live NetBSD/arm64 --debug log,
++ * 2026-11-23: "181 events failed to export"). Framing is the caller's: this speaks raw deflate (a = -15) or zlib
++ * (a = 15), the only two windows miniz accepts; node-shim writes and reads the gzip frame, with op 'crc32'.
++ *   'deflate', data, windowBits, level  -> Uint8Array (MZ_FINISH: one complete stream)
++ *   'inflate', data, windowBits         -> { output: Uint8Array, consumed: input bytes read, ended: saw the end }
++ *                                          (ended false: the input stopped mid-stream; a data error throws)
++ *   'crc32',   data, crc                -> the CRC-32 of data continued from crc, as a number */
++static JSValue tjs__zlib_sync_global(JSContext *ctx, JSValue this_val, int argc, JSValue *argv) {
++    if (argc < 2) {
++        return JS_ThrowTypeError(ctx, "__tjs_zlib_sync: expected (op, data, ...)");
++    }
++    const char *op = JS_ToCString(ctx, argv[0]);
++    if (!op) {
++        return JS_EXCEPTION;
++    }
++    int which = !strcmp(op, "deflate") ? 0 : !strcmp(op, "inflate") ? 1 : !strcmp(op, "crc32") ? 2 : -1;
++    JS_FreeCString(ctx, op);
++    if (which < 0) {
++        return JS_ThrowTypeError(ctx, "__tjs_zlib_sync: unknown op");
++    }
++
++    size_t in_size;
++    uint8_t *in_data = JS_GetUint8Array(ctx, &in_size, argv[1]);
++    if (!in_data) {
++        /* NULL is also how an EMPTY Uint8Array (no backing store) answers; only a pending exception is a failure. */
++        if (JS_HasException(ctx)) {
++            return JS_EXCEPTION;
++        }
++        static uint8_t empty[1];
++        in_data = empty;
++        in_size = 0;
++    }
++
++    if (which == 2) {
++        uint32_t crc = 0;
++        if (argc > 2 && JS_ToUint32(ctx, &crc, argv[2])) {
++            return JS_EXCEPTION;
++        }
++        return JS_NewUint32(ctx, (uint32_t) mz_crc32((mz_ulong) crc, in_data, in_size));
++    }
+ 
++    int32_t window_bits = MZ_DEFAULT_WINDOW_BITS;
++    if (argc > 2 && JS_ToInt32(ctx, &window_bits, argv[2])) {
++        return JS_EXCEPTION;
++    }
++    if (window_bits != MZ_DEFAULT_WINDOW_BITS && window_bits != -MZ_DEFAULT_WINDOW_BITS) {
++        return JS_ThrowRangeError(ctx, "__tjs_zlib_sync: windowBits must be 15 (zlib) or -15 (raw)");
++    }
++
++    int32_t level = MZ_DEFAULT_COMPRESSION;
++    if (which == 0) {
++        if (argc > 3 && JS_ToInt32(ctx, &level, argv[3])) {
++            return JS_EXCEPTION;
++        }
++        if (level < -1 || level > 9) {
++            return JS_ThrowRangeError(ctx, "__tjs_zlib_sync: level must be -1..9");
++        }
++    }
++
++    mz_stream s;
++    memset(&s, 0, sizeof(s));
++    TBuf out;
++    tbuf_init(ctx, &out);
++    uint8_t tmp[16384];
++    int ret;
++
++    if (which == 0) {
++        if (mz_deflateInit2(&s, level, MZ_DEFLATED, window_bits, 9, MZ_DEFAULT_STRATEGY) != MZ_OK) {
++            tbuf_free(&out);
++            return JS_ThrowInternalError(ctx, "__tjs_zlib_sync: failed to initialize compressor");
++        }
++        s.next_in = in_data;
++        s.avail_in = (mz_uint32) in_size;
++        do {
++            s.next_out = tmp;
++            s.avail_out = sizeof(tmp);
++            ret = mz_deflate(&s, MZ_FINISH);
++            if (ret != MZ_OK && ret != MZ_STREAM_END && ret != MZ_BUF_ERROR) {
++                mz_deflateEnd(&s);
++                tbuf_free(&out);
++                return JS_ThrowInternalError(ctx, "__tjs_zlib_sync: compression error %d", ret);
++            }
++            if (sizeof(tmp) - s.avail_out > 0) {
++                tbuf_put(&out, tmp, sizeof(tmp) - s.avail_out);
++            }
++        } while (ret != MZ_STREAM_END);
++        mz_deflateEnd(&s);
++        if (out.size == 0) {
++            tbuf_free(&out);
++            return TJS_NewUint8Array(ctx, NULL, 0);
++        }
++        JSValue result = TJS_NewUint8Array(ctx, out.buf, out.size);
++        if (JS_IsException(result)) {
++            tbuf_free(&out);
++        }
++        return result;
++    }
++
++    if (mz_inflateInit2(&s, window_bits) != MZ_OK) {
++        tbuf_free(&out);
++        return JS_ThrowInternalError(ctx, "__tjs_zlib_sync: failed to initialize decompressor");
++    }
++    s.next_in = in_data;
++    s.avail_in = (mz_uint32) in_size;
++    for (;;) {
++        s.next_out = tmp;
++        s.avail_out = sizeof(tmp);
++        ret = mz_inflate(&s, MZ_SYNC_FLUSH);
++        if (ret != MZ_OK && ret != MZ_STREAM_END && ret != MZ_BUF_ERROR) {
++            mz_inflateEnd(&s);
++            tbuf_free(&out);
++            return JS_ThrowSyntaxError(ctx, "%s", ret == MZ_DATA_ERROR ? "invalid compressed data" : "decompression error");
++        }
++        if (sizeof(tmp) - s.avail_out > 0) {
++            tbuf_put(&out, tmp, sizeof(tmp) - s.avail_out);
++        }
++        if (ret == MZ_STREAM_END) {
++            break;
++        }
++        /* No progress possible: the input is spent and the output was not filled. */
++        if (s.avail_in == 0 && s.avail_out != 0) {
++            break;
++        }
++    }
++    size_t consumed = in_size - s.avail_in;
++    mz_inflateEnd(&s);
++
++    JSValue output;
++    if (out.size == 0) {
++        tbuf_free(&out);
++        output = TJS_NewUint8Array(ctx, NULL, 0);
++    } else {
++        output = TJS_NewUint8Array(ctx, out.buf, out.size);
++        if (JS_IsException(output)) {
++            tbuf_free(&out);
++            return output;
++        }
++    }
++    JSValue obj = JS_NewObject(ctx);
++    JS_DefinePropertyValueStr(ctx, obj, "output", output, JS_PROP_C_W_E);
++    JS_DefinePropertyValueStr(ctx, obj, "consumed", JS_NewFloat64(ctx, (double) consumed), JS_PROP_C_W_E);
++    JS_DefinePropertyValueStr(ctx, obj, "ended", JS_NewBool(ctx, ret == MZ_STREAM_END), JS_PROP_C_W_E);
++    return obj;
++}
++
+ void tjs__mod_miniz_init(JSContext *ctx, JSValue ns) {
+     JSRuntime *rt = JS_GetRuntime(ctx);
+     JSValue proto, obj;
+ 
++    /* CLODE: the synchronous one-shot, on the global object (see tjs__zlib_sync_global). */
++    JSValue global = JS_GetGlobalObject(ctx);
++    JS_DefinePropertyValueStr(ctx,
++                              global,
++                              "__tjs_zlib_sync",
++                              JS_NewCFunction(ctx, tjs__zlib_sync_global, "__tjs_zlib_sync", 4),
++                              JS_PROP_C_W_E);
++    JS_FreeValue(ctx, global);
++
+     /* Compressor class. */
+     JS_NewClassID(rt, &tjs_compressor_class_id);
+     JS_NewClass(rt, tjs_compressor_class_id, &tjs_compressor_class);

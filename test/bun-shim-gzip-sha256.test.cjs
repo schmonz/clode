@@ -30,9 +30,8 @@ console.log(JSON.stringify(out));
 // FIPS 180-2's "abc" vector
 const ABC_HEX = 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad';
 const GZIP = { type: '[object Uint8Array]', magic: [0x1f, 0x8b], roundTrip: true, smaller: true };
-// UNDER tjs node-shim has no gzip (its zlib.gzipSync refuses by name; BACKLOG "2.1.330 is the pin and the suite is RED on it",
-// with deflateRawSync), so Bun.gzipSync there refuses the same way instead of failing as "not a function".
-const GZIP_TJS = { threw: 'node-shim: zlib.gzipSync not implemented' };
+// Under tjs too, since node-shim's zlib.gzipSync is real (txiki-zlib-sync.patch, 2026-11-23): until then it refused by
+// name and this row pinned the refusal, so every 1P event batch failed to export.
 const EXPECTED = {
   gzip: GZIP,
   b64: Buffer.from(ABC_HEX, 'hex').toString('base64'), hex: ABC_HEX, bytes: [0xba, 0x78, 0x16, 0xbf], incremental: ABC_HEX,
@@ -53,6 +52,6 @@ test('Bun.gzipSync and Bun.SHA256 under quaude\'s engine', (t) => {
     fs.writeFileSync(entry, PROGRAM);
     const r = runLoader(entry);
     assert.strictEqual(r.status, 0, String(r.stderr));
-    assert.deepStrictEqual(JSON.parse(String(r.stdout).trim().split('\n').pop()), { ...EXPECTED, gzip: GZIP_TJS });
+    assert.deepStrictEqual(JSON.parse(String(r.stdout).trim().split('\n').pop()), EXPECTED);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
