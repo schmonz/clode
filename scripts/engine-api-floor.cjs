@@ -327,6 +327,22 @@ const ENGINE_API_FLOOR = [
       + 'test/node-shim-env-read-cost.test.cjs pins both routes\' answers',
   },
   {
+    // Without it fetch goes on to a name's next address only when lws cannot START a connection, not when a connection
+    // is refused, and WebSocket asks lws's own resolver, which asks for A records only: a fetch to localhost (::1 first)
+    // of a server on 127.0.0.1 only fails ECONNREFUSED, and a WebSocket to localhost never reaches a server on ::1,
+    // where native Bun connects (test/connect-family.test.cjs).
+    name: '__tjs_connect_next_address',
+    expr: 'globalThis.__tjs_connect_next_address',
+    kind: 'boolean',
+    from: 'txiki-connect-next-address.patch',
+    why: 'bun-shim fetch/WebSocket: a name\'s addresses are tried in the resolver\'s order while connect() fails, as native Bun tries them',
+    buildHost: false,
+    notForBuildHost: 'the build opens no WebSocket, and its own fetches (libexec/clode-net.cjs, clode-build.cjs, '
+      + 'clode-templates.cjs) go to public hosts; on an engine without it they still go on to the next address when lws '
+      + 'cannot start a connection (a family with no route), and fail loudly (ECONNREFUSED) when an address refuses one. '
+      + 'A working route or a loud failure, never a wrong answer; not measured on a build path',
+  },
+  {
     name: '__tjs_spawn_sync',
     expr: 'globalThis.__tjs_spawn_sync',
     kind: 'function',

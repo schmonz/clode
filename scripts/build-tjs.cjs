@@ -522,6 +522,7 @@ const TXIKI_PATCH_ORDER = [
   'txiki-fetch-proxy.patch',                  // fetch's init and WebSocket's options take `proxy`: a function of each hop's URL answering null (no proxy, whatever the environment says) or { host, port, headers } (an absolute-form request for http, a CONNECT carrying exactly `headers` for https/ws/wss), through vhosts lws-proxy-connect.patch lets carry that header block; httpclient.setProxy, tjs__lws_direct_vhost/tjs__lws_proxy_vhost, globalThis.__tjs_proxy_routes; and ws.js's error event carries lws's reason (its ErrorEvent took ('error', {message}), so every message was 'error'). bun-shim decides the route in Bun's terms. private.h/lws-utils.c/vm.c/httpclient.c/ws.c + four polyfills; fixupHttpclientAsyncDns anchors on the connect fn it edits. Generated against the fully patched tree, so LAST
   'txiki-tls-write-all.patch',                // a TLS stream's write() loops mbedtls_ssl_write until every byte is taken (one call took one ~16 KiB record and dropped the rest, so an https POST of 16 KiB or more never finished: 2.1.330's Datadog flush timed out), + globalThis.__tjs_tls_write_all = true for node-shim. mod_tls.c/vm.c; generated against the fully patched tree (after fetch-proxy), so LAST
   'txiki-getenv-global.patch',                // globalThis.__tjs_getenv(name): the value, or undefined when unset, WITHOUT the throw tjs.env's get makes and catches per unset name (~18 us a read vs node's 0.35 us; 2.1.330 reads unset knobs everywhere, and under load the loop was held past axios's timers). node-shim's process.env reads through it. vm.c, beside tls-write-all's global: after it, so LAST
+  'txiki-connect-next-address.patch',         // a WebSocket to a name resolves it with uv_getaddrinfo (lws's own DNS asked for A records only) and tries each address, in the resolver's order, while connect() fails, as native Bun does; TJSLwsAddrs + tjs__lws_connect_failed (private.h/lws-utils.c), which fixupHttpclientAsyncDns's fetch dialer uses too, and globalThis.__tjs_connect_next_address. private.h/lws-utils.c/vm.c/ws.c; generated against the fully patched tree (after getenv-global, beside whose global it sits), so LAST
 ];
 
 function orderedPatches(prefix) {
@@ -2031,8 +2032,10 @@ function fixupHttpclientAsyncDns(dir) {
   // hangs, 2 UDP sockets, main thread idle in kevent). We resolve to an IP with
   // uv_getaddrinfo, then hand lws the IP (lws does no DNS). Reuses the patterns
   // already in-tree: lws-utils.c (IP -> cci.address) and mod_dns.c (async cb).
-  // ws.c has the same lws-DNS pattern; left as a follow-up (not the login path),
-  // so LWS_WITH_SYS_ASYNC_DNS stays enabled for it. Runs AFTER the txiki patches
+  // ws.c resolves the same way since txiki-connect-next-address.patch (LWS_WITH_SYS_ASYNC_DNS stays enabled
+  // for the one name lws still resolves: an environment proxy's). Every address the resolver gives is tried, in its
+  // order, while connect() fails (connect-next-address: the struct/finalizer/CONNECTION_ERROR edits below, and that
+  // patch's TJSLwsAddrs + tjs__lws_connect_failed). Runs AFTER the txiki patches
   // (anchors on the post-no-origin-header, post-fetch-proxy connect fn). libuv/lws candidate.
   // Through a caller's proxy (txiki-fetch-proxy.patch) the name resolved is the PROXY's
   // (tjs_httpclient_dial_host): a proxy-only network may not resolve the URL's host at all,
@@ -2125,14 +2128,34 @@ static int tjs_httpclient_connect(TJSHttpClient *h) {
  * Routing every fetch through the OS resolver via uv_getaddrinfo fixes this
  * uniformly.  Mirrors the proven patterns already in-tree: lws-utils.c (IP ->
  * cci.address, keep the name in cci.host for the Host header + SNI) and
- * mod_dns.c (the async uv_getaddrinfo callback form). */
+ * mod_dns.c (the async uv_getaddrinfo callback form).
+ *
+ * CLODE (connect-next-address): every address the resolver gave is tried, in its
+ * order, while connect() fails (tjs__lws_connect_failed: lws's reason names a
+ * connect that was refused, unreachable or timed out, so nothing was sent), as
+ * native Bun's fetch does. lws, handed one IP, gave up on it, so a fetch to
+ * localhost (::1 first) of a server on 127.0.0.1 only failed ECONNREFUSED. The
+ * request (h->dial) lives as long as the client does (tjs_httpclient_dial_free in
+ * the finalizer); the next attempt starts from a job, outside the lws callback. */
 typedef struct {
     uv_getaddrinfo_t req;
     TJSHttpClient *h;
-    lws_parse_uri_t *uri; /* kept alive until the resolve callback runs */
+    lws_parse_uri_t *uri; /* kept alive for every attempt */
     char full_path[TJS_PATH_MAX];
     bool use_ssl;
+    TJSLwsAddrs addrs;
+    char why[128]; /* the last attempt's connect failure */
 } TJSHttpConnectReq;
+
+static void tjs_httpclient_dial_free(JSRuntime *rt, TJSHttpClient *h) {
+    TJSHttpConnectReq *cr = h->dial;
+    if (!cr) {
+        return;
+    }
+    h->dial = NULL;
+    lws_parse_uri_destroy(&cr->uri);
+    js_free_rt(rt, cr);
+}
 
 /* Deliver a pre-connection failure to JS.  Used when we fail before lws ever
  * produces a wsi (DNS error, or lws_client_connect_via_info() returns NULL), so
@@ -2158,50 +2181,31 @@ static void tjs_httpclient_conn_fail(TJSHttpClient *h, const char *msg) {
     }
 }
 
-static void tjs_httpclient_resolve_cb(uv_getaddrinfo_t *req, int status, struct addrinfo *res) {
-    TJSHttpConnectReq *cr = req->data;
-    TJSHttpClient *h = cr->h;
-    JSContext *ctx = h->ctx; /* the runtime context, valid independent of h */
-
-    if (status != 0) {
-        tjs_httpclient_conn_fail(h, uv_strerror(status));
-        lws_parse_uri_destroy(&cr->uri);
-        js_free(ctx, cr);
-        return;
-    }
+/* Try the addresses left, in order, until lws takes one. lws_client_connect_via_info()
+ * returns NULL when it cannot start a connection at all (a v4-only box has no route
+ * to an IPv6 address): that moves on at once. A connection lws took and whose
+ * connect() then fails comes back through CLIENT_CONNECTION_ERROR, which calls
+ * tjs_httpclient_redial_later. AI_ADDRCONFIG is not enough to skip unreachable
+ * families (NetBSD counts loopback/link-local IPv6 as "configured" and returns AAAA). */
+static void tjs_httpclient_dial(TJSHttpClient *h) {
+    TJSHttpConnectReq *cr = h->dial;
+    JSContext *ctx = h->ctx;
 
     struct lws_context *lws_ctx = tjs__lws_get_context(ctx);
     if (!lws_ctx) {
         tjs_httpclient_conn_fail(h, "no lws context");
-        uv_freeaddrinfo(res);
-        lws_parse_uri_destroy(&cr->uri);
-        js_free(ctx, cr);
         return;
     }
 
-    /* Try each resolved address in turn. getaddrinfo returns IPv6 first for a
-     * dual-stack host, but a v4-only box has no route to it and
-     * lws_client_connect_via_info() returns NULL — so fall through to the next
-     * address (the IPv4 one) instead of failing the whole fetch. This is the
-     * resolver-order fallback every DNS client does; AI_ADDRCONFIG is not enough
-     * (NetBSD counts loopback/link-local IPv6 as "configured" and returns AAAA). */
     struct lws *wsi = NULL;
-    for (struct addrinfo *ai = res; ai && !wsi; ai = ai->ai_next) {
-        char ip_str[INET6_ADDRSTRLEN];
-        if (ai->ai_family == AF_INET6) {
-            uv_inet_ntop(AF_INET6, &((struct sockaddr_in6 *) ai->ai_addr)->sin6_addr, ip_str, sizeof(ip_str));
-        } else if (ai->ai_family == AF_INET) {
-            uv_inet_ntop(AF_INET, &((struct sockaddr_in *) ai->ai_addr)->sin_addr, ip_str, sizeof(ip_str));
-        } else {
-            continue;
-        }
+    while (!wsi && cr->addrs.next < cr->addrs.count) {
+        const char *ip_str = cr->addrs.addr[cr->addrs.next++];
 
         struct lws_client_connect_info cci;
         memset(&cci, 0, sizeof(cci));
         cci.context = lws_ctx;
         cci.address = ip_str;      /* resolved IP — lws does no DNS.  lws copies the
-                                    * connect strings into the wsi, so a stack
-                                    * ip_str is safe. */
+                                    * connect strings into the wsi. */
         cci.port = cr->uri->port;
         cci.path = cr->full_path;
         cci.host = cr->uri->host;  /* Host header + SNI keep the hostname */
@@ -2227,19 +2231,68 @@ static void tjs_httpclient_resolve_cb(uv_getaddrinfo_t *req, int status, struct 
 
         wsi = lws_client_connect_via_info(&cci);
     }
-    uv_freeaddrinfo(res);
 
     if (!wsi) {
-        tjs_httpclient_conn_fail(h, "Connection failed");
+        tjs_httpclient_conn_fail(h, cr->why[0] ? cr->why : "Connection failed");
     } else {
         lws_cancel_service(lws_ctx);
         if (h->timeout > 0) {
             lws_set_timer_usecs(wsi, (lws_usec_t) h->timeout * LWS_USEC_PER_SEC / 1000);
         }
     }
+}
 
-    lws_parse_uri_destroy(&cr->uri);
-    js_free(ctx, cr);
+static JSValue tjs_httpclient_dial_job(JSContext *ctx, int argc, JSValue *argv) {
+    TJSHttpClient *h = JS_GetOpaque(argv[0], tjs_httpclient_class_id);
+    if (h && h->dial && !JS_IsUndefined(h->this_val)) {
+        if (h->completed) {
+            /* aborted between attempts (tjs_httpclient_abort said so already): only the references to drop */
+            tjs_httpclient_conn_fail(h, NULL);
+        } else {
+            tjs_httpclient_dial(h);
+        }
+    }
+    return JS_UNDEFINED;
+}
+
+/* From CLIENT_CONNECTION_ERROR: a connect() that failed, with an address left to try,
+ * goes on to it (from a job, not inside lws's callback) instead of failing the fetch.
+ * The connection reference and the client's self-reference carry over to the next attempt. */
+static bool tjs_httpclient_redial_later(TJSHttpClient *h, const char *why) {
+    TJSHttpConnectReq *cr = h->dial;
+    if (!cr || h->completed || !tjs__lws_connect_failed(why) || cr->addrs.next >= cr->addrs.count) {
+        return false;
+    }
+    lws_strncpy(cr->why, why, sizeof(cr->why));
+    lws_set_wsi_user(h->wsi, NULL);
+    h->wsi = NULL;
+    JSValue arg = JS_DupValue(h->ctx, h->this_val);
+    CHECK_EQ(JS_EnqueueJob(h->ctx, tjs_httpclient_dial_job, 1, &arg), 0);
+    JS_FreeValue(h->ctx, arg);
+    return true;
+}
+
+static void tjs_httpclient_resolve_cb(uv_getaddrinfo_t *req, int status, struct addrinfo *res) {
+    TJSHttpConnectReq *cr = req->data;
+    TJSHttpClient *h = cr->h;
+
+    if (h->completed) {
+        /* aborted while resolving (tjs_httpclient_abort said so already): only the references to drop */
+        if (status == 0) {
+            uv_freeaddrinfo(res);
+        }
+        tjs_httpclient_conn_fail(h, NULL);
+        return;
+    }
+
+    if (status != 0) {
+        tjs_httpclient_conn_fail(h, uv_strerror(status));
+        return;
+    }
+
+    tjs__lws_addrs_fill(&cr->addrs, res);
+    uv_freeaddrinfo(res);
+    tjs_httpclient_dial(h);
 }
 
 /* Parse the URL and kick off an async DNS resolve; the callback connects lws.
@@ -2259,7 +2312,7 @@ static int tjs_httpclient_connect(TJSHttpClient *h) {
         return -1;
     }
 
-    TJSHttpConnectReq *cr = js_malloc(ctx, sizeof(*cr));
+    TJSHttpConnectReq *cr = js_mallocz(ctx, sizeof(*cr));
     if (!cr) {
         lws_parse_uri_destroy(&uri);
         return -1;
@@ -2287,10 +2340,49 @@ static int tjs_httpclient_connect(TJSHttpClient *h) {
         js_free(ctx, cr);
         return -1;
     }
+    h->dial = cr;
 
     return 0;
 }`;
-  fs.writeFileSync(f, src.replace(anchor, replacement));
+  // The client's own hooks for the above (connect-next-address): the request it keeps, freed with it, and
+  // CLIENT_CONNECTION_ERROR's move to the next address. Anchored on txiki-fetch-proxy.patch's struct and finalizer.
+  const edits = [
+    ['    bool proxy_absolute;\n} TJSHttpClient;\n',
+      '    bool proxy_absolute;\n'
+      + '    /* CLODE (connect-next-address): the TJSHttpConnectReq of fixupHttpclientAsyncDns: the addresses left to try */\n'
+      + '    void *dial;\n'
+      + '} TJSHttpClient;\n\n'
+      + 'static void tjs_httpclient_dial_free(JSRuntime *rt, TJSHttpClient *h);\n'
+      + 'static bool tjs_httpclient_redial_later(TJSHttpClient *h, const char *why);\n'],
+    ['        js_free_rt(rt, h->proxy_headers);\n        js_free_rt(rt, h);\n',
+      '        js_free_rt(rt, h->proxy_headers);\n        tjs_httpclient_dial_free(rt, h);\n        js_free_rt(rt, h);\n'],
+    ['        case LWS_CALLBACK_CLOSED_CLIENT_HTTP:\n        case LWS_CALLBACK_CLIENT_CONNECTION_ERROR: {\n            tjs__lws_conn_unref(h->ctx);\n',
+      '        case LWS_CALLBACK_CLOSED_CLIENT_HTTP:\n        case LWS_CALLBACK_CLIENT_CONNECTION_ERROR: {\n'
+      + '            /* CLODE (connect-next-address): a connect() that failed goes on to the next address, if one is left */\n'
+      + '            if (reason == LWS_CALLBACK_CLIENT_CONNECTION_ERROR && tjs_httpclient_redial_later(h, (const char *) in)) {\n'
+      + '                break;\n'
+      + '            }\n'
+      + '            tjs__lws_conn_unref(h->ctx);\n'],
+    // abort() with no connection yet (resolving, or between two addresses) is an abort too: before, it did nothing,
+    // and the request went on to answer as if never aborted
+    ['        lws_set_timeout(wsi, PENDING_TIMEOUT_USER_OK, LWS_TO_KILL_SYNC);\n    }\n\n    return JS_UNDEFINED;\n}\n',
+      '        lws_set_timeout(wsi, PENDING_TIMEOUT_USER_OK, LWS_TO_KILL_SYNC);\n'
+      + '    } else if (!h->wsi && !h->completed && h->dial) {\n'
+      + '        /* CLODE (connect-next-address): no connection yet (resolving, or between two addresses); the resolve\n'
+      + '         * callback or the next attempt\'s job sees completed and only drops the references */\n'
+      + '        h->completed = true;\n'
+      + '        JSValue error = JS_NewString(ctx, "ABORTED");\n'
+      + '        maybe_invoke_callback(h, HC_CALLBACK_COMPLETE, 1, &error);\n'
+      + '    }\n\n    return JS_UNDEFINED;\n}\n'],
+  ];
+  let out = src.replace(anchor, replacement);
+  for (const [from, to] of edits) {
+    if (out.split(from).length !== 2) {
+      throw new Error(`fixup httpclient-async-dns: anchor not found once: ${JSON.stringify(from.slice(0, 60))} (re-derive)`);
+    }
+    out = out.replace(from, to);
+  }
+  fs.writeFileSync(f, out);
   console.log('fixup httpclient-async-dns: applied');
 }
 

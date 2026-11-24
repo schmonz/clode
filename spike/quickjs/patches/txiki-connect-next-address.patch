@@ -1,0 +1,462 @@
+# CONNECT-NEXT-ADDRESS: a WebSocket to a name resolves it with the system resolver (uv_getaddrinfo, as fetch does) and
+# tries every address it gives, in its order, while connect() fails, as native Bun's WebSocket and node's clients do.
+#
+# WHY. ws.c handed lws the name, and lws's own async DNS asked for A records only (connect2.c: LWS_ADNS_RECORD_A;
+# "localhost" is synthesized as 127.0.0.1), so a WebSocket to localhost never reached a server on ::1, and reached a
+# server on both families by its IPv4 address where native reaches ::1 first. fetch already resolved with uv_getaddrinfo
+# (build-tjs.cjs fixupHttpclientAsyncDns), but tried the next address only when lws refused to START a connection, not
+# when a connection was refused, so a fetch to localhost (::1 first) of a server on 127.0.0.1 only failed ECONNREFUSED
+# where native connects (measured 2026-11-24 with the native Bun preload oracle: test/connect-family.test.cjs).
+#
+# WHAT. private.h/lws-utils.c: TJSLwsAddrs (the resolver's addresses, deduplicated, in order) and
+# tjs__lws_connect_failed(reason): lws's CLIENT_CONNECTION_ERROR reason names a connect() that failed or timed out
+# (connect3.c's "conn fail: ...", "Unable to connect", "incompatible v6 scopes"), so nothing was sent and the next
+# address may be tried; a TLS or protocol failure is not retried. ws.c: the constructor keeps what an attempt needs
+# (TJSWsDial), resolves the name connected to (the proxy's, through a caller's proxy), and dials address by address;
+# CLIENT_CONNECTION_ERROR of a failed connect() goes on to the next address from a job; close() before the connection
+# is made stops further attempts. An environment proxy's name is still resolved by lws, as before. fetch's half is in
+# fixupHttpclientAsyncDns, which owns the resolve. vm.c: globalThis.__tjs_connect_next_address = true, floored by
+# scripts/engine-api-floor.cjs. Last in TXIKI_PATCH_ORDER, diffed against the fully patched tree.
+#
+# NOT DONE. node's clients give each address but the last 250 ms (autoSelectFamilyAttemptTimeout) before the next
+# begins; here an address that never answers holds the attempt for lws's connect timeout (the context's timeout_secs)
+# before the next is tried. Native Bun's timing for that case was not measured (no name resolving to a blackhole and a
+# live address could be made without editing the system resolver).
+#
+diff --git a/src/private.h b/src/private.h
+--- a/src/private.h
++++ b/src/private.h
+@@ -210,6 +210,20 @@
+ struct lws_vhost *tjs__lws_direct_vhost(JSContext *ctx);
+ struct lws_vhost *tjs__lws_proxy_vhost(JSContext *ctx, const char *host, int port, const char *connect_headers);
+ void tjs__lws_free_proxy_vhosts(TJSRuntime *qrt);
++/* CLODE (connect-next-address): the addresses a client connection tries, in the resolver's order, one after another
++ * while each connect() fails, as native Bun's and node's clients do. lws, handed one address, gives up on it; a name
++ * resolving to ::1 and 127.0.0.1 (localhost) failed outright against a server on 127.0.0.1 only.
++ * tjs__lws_addrs_fill: every IPv6/IPv4 answer of `res`, duplicates dropped, at most TJS_LWS_MAX_ADDRS.
++ * tjs__lws_connect_failed: lws's CLIENT_CONNECTION_ERROR reason names a connect() that failed or timed out (connect3.c's
++ * reasons), so nothing was sent and the next address may be tried; any later failure (TLS, the server's answer) not. */
++#define TJS_LWS_MAX_ADDRS 16
++typedef struct {
++    int count;
++    int next;
++    char addr[TJS_LWS_MAX_ADDRS][64];
++} TJSLwsAddrs;
++void tjs__lws_addrs_fill(TJSLwsAddrs *a, const struct addrinfo *res);
++bool tjs__lws_connect_failed(const char *why);
+ int tjs__lws_load_http(TJSRuntime *qrt, TBuf *dbuf, const char *url);
+ 
+ uv_loop_t *TJS_GetLoop(TJSRuntime *qrt);
+diff --git a/src/lws-utils.c b/src/lws-utils.c
+--- a/src/lws-utils.c
++++ b/src/lws-utils.c
+@@ -666,8 +666,36 @@
+     qrt->lws.proxy_vhosts = p;
+ 
+     return vh;
++}
++
++/* CLODE (connect-next-address): see private.h. */
++void tjs__lws_addrs_fill(TJSLwsAddrs *a, const struct addrinfo *res) {
++    a->count = 0;
++    a->next = 0;
++    for (const struct addrinfo *ai = res; ai && a->count < TJS_LWS_MAX_ADDRS; ai = ai->ai_next) {
++        char ip[64];
++        if (ai->ai_family == AF_INET6) {
++            uv_inet_ntop(AF_INET6, &((const struct sockaddr_in6 *) ai->ai_addr)->sin6_addr, ip, sizeof(ip));
++        } else if (ai->ai_family == AF_INET) {
++            uv_inet_ntop(AF_INET, &((const struct sockaddr_in *) ai->ai_addr)->sin_addr, ip, sizeof(ip));
++        } else {
++            continue;
++        }
++        bool seen = false;
++        for (int i = 0; i < a->count && !seen; i++) {
++            seen = !strcmp(a->addr[i], ip);
++        }
++        if (!seen) {
++            lws_strncpy(a->addr[a->count++], ip, sizeof(a->addr[0]));
++        }
++    }
+ }
+ 
++bool tjs__lws_connect_failed(const char *why) {
++    return why && (!strcmp(why, "Unable to connect") || !strncmp(why, "conn fail:", 10) ||
++                   !strcmp(why, "incompatible v6 scopes"));
++}
++
+ /* CLODE (fetch-proxy): the bookkeeping only; lws_context_destroy has already destroyed the vhosts. */
+ void tjs__lws_free_proxy_vhosts(TJSRuntime *qrt) {
+     TJSProxyVhost *p = qrt->lws.proxy_vhosts;
+diff --git a/src/vm.c b/src/vm.c
+--- a/src/vm.c
++++ b/src/vm.c
+@@ -581,6 +581,10 @@
+                                   "__tjs_getenv",
+                                   JS_NewCFunction(ctx, tjs__getenv_global, "__tjs_getenv", 1),
+                                   JS_PROP_C_W_E);
++        /* CLODE (connect-next-address): fetch and WebSocket connect to a name's next address when connect() to one
++         * fails, in the resolver's order, as native Bun does (txiki-connect-next-address.patch, and build-tjs.cjs's
++         * fixupHttpclientAsyncDns for fetch). */
++        JS_DefinePropertyValueStr(ctx, global, "__tjs_connect_next_address", JS_TRUE, JS_PROP_C_W_E);
+         JS_FreeValue(ctx, global);
+     }
+     JS_DefinePropertyValueStr(ctx,
+diff --git a/src/ws.c b/src/ws.c
+--- a/src/ws.c
++++ b/src/ws.c
+@@ -60,8 +60,46 @@
+     /* the HTTP upgrade completed, so the wsi carries the ws role (wsi->ws is
+      * live and CLIENT_WRITEABLE will fire). Gates the handshake in close(). */
+     bool established;
++    /* CLODE (connect-next-address): what each attempt needs to connect to the next address (NULL once none can be
++     * made), and close() before the connection was made, so no further attempt starts. */
++    struct TJSWsDial *dial;
++    bool abandoned;
+ } TJSWs;
+ 
++/* CLODE (connect-next-address): the connection's target, resolved with uv_getaddrinfo (the resolver fetch uses; lws's
++ * own asked for A records only, so a WebSocket to a name never reached an IPv6 address), and tried address by address
++ * while connect() fails. route 0: the environment's vhost for the URL (lws resolves the name itself when that is a
++ * proxy's, as before); 1: no proxy; 2: through proxy_host:proxy_port (its addresses are the ones tried). */
++typedef struct TJSWsDial {
++    lws_parse_uri_t *uri;
++    char *full_path;
++    char *protocols;
++    int route;
++    char *proxy_host;
++    int proxy_port;
++    char *proxy_headers;
++    bool use_ssl;
++    bool lws_resolves;
++    TJSLwsAddrs addrs;
++    char why[128];
++    uv_getaddrinfo_t gai;
++    TJSWs *w;
++} TJSWsDial;
++
++static void tjs_ws_dial_free(JSRuntime *rt, TJSWs *w) {
++    TJSWsDial *d = w->dial;
++    if (!d) {
++        return;
++    }
++    w->dial = NULL;
++    lws_parse_uri_destroy(&d->uri);
++    js_free_rt(rt, d->full_path);
++    js_free_rt(rt, d->protocols);
++    js_free_rt(rt, d->proxy_host);
++    js_free_rt(rt, d->proxy_headers);
++    js_free_rt(rt, d);
++}
++
+ static JSClassID tjs_ws_class_id;
+ 
+ static void tjs_ws_finalizer(JSRuntime *rt, JSValue val) {
+@@ -80,6 +118,7 @@
+         tbuf_free(&w->recv_buf);
+         JS_FreeValueRT(rt, w->header_names);
+         JS_FreeValueRT(rt, w->header_values);
++        tjs_ws_dial_free(rt, w);
+         js_free_rt(rt, w);
+     }
+ }
+@@ -123,6 +162,8 @@
+         JS_FreeValue(ctx, argv[i]);
+     }
+ }
++
++static bool tjs_ws_redial_later(TJSWs *w, struct lws *wsi, const char *why);
+ 
+ static int tjs_lws_callback(struct lws *wsi, enum lws_callback_reasons reason, void *user, void *in, size_t len) {
+     TJSWs *w = (TJSWs *) user;
+@@ -304,6 +345,10 @@
+         }
+ 
+         case LWS_CALLBACK_CLIENT_CONNECTION_ERROR: {
++            /* CLODE (connect-next-address): a connect() that failed moves on to the next address, if there is one. */
++            if (tjs_ws_redial_later(w, wsi, (const char *) in)) {
++                break;
++            }
+             w->wsi = NULL;
+ 
+             JSContext *ctx = w->ctx;
+@@ -344,25 +389,121 @@
+ };
+ 
+ 
+-static JSValue emit_abnormal_close(JSContext *ctx, int argc, JSValue *argv) {
+-    CHECK_EQ(argc, 1);
+-
+-    TJSWs *w = JS_GetOpaque(argv[0], tjs_ws_class_id);
+-    if (w) {
+-        JSContext *ctx = w->ctx;
++/* CLODE (connect-next-address): the connection could not be made (every address failed, or there was none): the
++ * error and abnormal close events, then the references the constructor took are released, as CONNECTION_ERROR does. */
++static void tjs_ws_fail(TJSWs *w, const char *why) {
++    JSContext *ctx = w->ctx;
++    w->wsi = NULL;
++    JSValue err_reason = JS_NewString(ctx, why ? why : "");
++    maybe_call_callback(w, WS_CALLBACK_ERROR, 1, &err_reason);
++    JSValue args[2] = {
++        JS_NewInt32(ctx, 1006),
++        JS_NewString(ctx, ""),
++    };
++    maybe_call_callback(w, WS_CALLBACK_CLOSE, 2, args);
++    tjs__lws_conn_unref(ctx);
++    JSValue val = w->this_val;
++    w->this_val = JS_UNDEFINED;
++    JS_FreeValue(ctx, val);
++}
+ 
+-        JSValue err_reason = JS_NewString(ctx, "");
+-        maybe_call_callback(w, WS_CALLBACK_ERROR, 1, &err_reason);
++/* One attempt per address, in order, until lws takes one; a connect() that then fails comes back through
++ * CONNECTION_ERROR (tjs_ws_redial_later). lws refusing to start one (NULL) moves on at once. */
++static void tjs_ws_dial(TJSWs *w) {
++    JSContext *ctx = w->ctx;
++    TJSWsDial *d = w->dial;
++    if (w->abandoned) {
++        tjs_ws_fail(w, "Closed before conn");
++        return;
++    }
++    struct lws_context *lws_ctx = tjs__lws_get_context(ctx);
++    while (lws_ctx && d->addrs.next < d->addrs.count) {
++        const char *addr = d->lws_resolves ? d->uri->host : d->addrs.addr[d->addrs.next];
++        d->addrs.next++;
++        struct lws_client_connect_info cci;
++        memset(&cci, 0, sizeof(cci));
++        cci.context = lws_ctx;
++        cci.address = addr;
++        cci.port = d->uri->port;
++        cci.path = d->full_path;
++        cci.host = d->uri->host; /* Host header and SNI keep the name */
++        cci.origin = d->uri->host;
++        cci.ssl_connection = d->use_ssl ? LCCSCF_USE_SSL : 0;
++        cci.protocol = d->protocols;
++        cci.local_protocol_name = TJS_LWS_PROTOCOL_NAME;
++        cci.userdata = w;
++        cci.pwsi = &w->wsi;
++        if (d->route == 1) {
++            cci.vhost = tjs__lws_direct_vhost(ctx);
++        } else if (d->route == 2) {
++            /* the CONNECT names the URL's host; the proxy's vhost connects to this address of the proxy */
++            cci.address = d->uri->host;
++            cci.vhost = tjs__lws_proxy_vhost(ctx, addr, d->proxy_port, d->proxy_headers);
++        } else {
++            cci.vhost = tjs__lws_select_vhost(ctx, d->uri->scheme, d->uri->host, d->uri->port);
++        }
++        if (!cci.vhost) {
++            continue;
++        }
++        if (lws_client_connect_via_info(&cci)) {
++            /* Kick the lws service loop. With a persistent context, the internal idle/sultimer handles may have
++             * stopped. On Windows, lws uses SUL callbacks for async connect checking, so the service loop must be
++             * running. lws_cancel_service writes to the event_pipe, which triggers lws_io_cb, restarting the idle
++             * and processing pending SUL entries. */
++            lws_cancel_service(lws_ctx);
++            return;
++        }
++    }
++    tjs_ws_fail(w, d->why);
++}
+ 
+-        JSValue args[2] = {
+-            JS_NewInt32(ctx, 1006),
+-            JS_NewString(ctx, ""),
+-        };
+-        maybe_call_callback(w, WS_CALLBACK_CLOSE, 2, args);
++static JSValue tjs_ws_dial_job(JSContext *ctx, int argc, JSValue *argv) {
++    CHECK_EQ(argc, 1);
++    TJSWs *w = JS_GetOpaque(argv[0], tjs_ws_class_id);
++    if (w && !JS_IsUndefined(w->this_val)) {
++        tjs_ws_dial(w);
++    }
++    return JS_UNDEFINED;
++}
++
++/* Outside the lws callback (and the constructor), from a job: the next attempt, or the failure when none is left. */
++static void tjs_ws_dial_later(TJSWs *w) {
++    JSValue arg = JS_DupValue(w->ctx, w->this_val);
++    CHECK_EQ(JS_EnqueueJob(w->ctx, tjs_ws_dial_job, 1, &arg), 0);
++    JS_FreeValue(w->ctx, arg);
++}
++
++static void tjs_ws_fail_later(TJSWs *w) {
++    w->dial->addrs.next = w->dial->addrs.count;
++    tjs_ws_dial_later(w);
++}
++
++static bool tjs_ws_redial_later(TJSWs *w, struct lws *wsi, const char *why) {
++    TJSWsDial *d = w->dial;
++    if (!d || w->abandoned || w->established || !tjs__lws_connect_failed(why) || d->addrs.next >= d->addrs.count) {
++        return false;
+     }
+-    return JS_UNDEFINED;
++    lws_strncpy(d->why, why, sizeof(d->why));
++    w->wsi = NULL;
++    lws_set_wsi_user(wsi, NULL);
++    tjs_ws_dial_later(w);
++    return true;
+ }
+ 
++static void tjs_ws_resolve_cb(uv_getaddrinfo_t *req, int status, struct addrinfo *res) {
++    TJSWsDial *d = req->data;
++    TJSWs *w = d->w;
++    if (status == 0) {
++        tjs__lws_addrs_fill(&d->addrs, res);
++        uv_freeaddrinfo(res);
++    } else {
++        lws_strncpy(d->why, uv_strerror(status), sizeof(d->why));
++    }
++    if (!JS_IsUndefined(w->this_val)) {
++        tjs_ws_dial(w);
++    }
++}
++
+ static JSValue tjs_ws_constructor(JSContext *ctx, JSValue new_target, int argc, JSValue *argv) {
+     JSValue obj = JS_NewObjectClass(ctx, tjs_ws_class_id);
+     if (JS_IsException(obj)) {
+@@ -451,29 +592,34 @@
+         return JS_ThrowInternalError(ctx, "failed to create lws context");
+     }
+ 
+-    struct lws_client_connect_info cci;
+-    memset(&cci, 0, sizeof(cci));
++    /* CLODE (connect-next-address): everything an attempt needs, kept for the next address's attempt. */
++    TJSWsDial *d = js_mallocz(ctx, sizeof(*d));
++    if (!d) {
++        JS_FreeCString(ctx, protocols);
++        lws_parse_uri_destroy(&uri);
++        js_free(ctx, full_path);
++        js_free(ctx, w);
++        JS_FreeValue(ctx, obj);
++        return JS_EXCEPTION;
++    }
++    d->w = w;
++    d->uri = uri;
++    d->full_path = full_path;
++    d->protocols = protocols ? js_strdup(ctx, protocols) : NULL;
++    JS_FreeCString(ctx, protocols);
++    d->use_ssl = use_ssl;
++    w->dial = d;
++    JS_SetOpaque(obj, w);
+ 
+-    cci.context = lws_ctx;
+-    cci.address = uri->host;
+-    cci.port = uri->port;
+-    cci.path = full_path;
+-    cci.host = uri->host;
+-    cci.origin = uri->host;
+-    cci.ssl_connection = use_ssl ? LCCSCF_USE_SSL : 0;
+-    cci.protocol = protocols;
+-    cci.local_protocol_name = TJS_LWS_PROTOCOL_NAME;
+-    cci.userdata = w;
+-    cci.pwsi = &w->wsi;
+     /* CLODE (fetch-proxy): an optional fifth argument routes this connection as fetch's setProxy does: null for no
+      * proxy whatever the environment says, { host, port, headers } for a CONNECT tunnel through that proxy (ws and wss
+-     * alike) carrying `headers`. Absent: the environment's proxy settings, as before. A vhost that cannot be made fails
+-     * the connection rather than leaving lws to pick one. */
++     * alike) carrying `headers`. Absent: the environment's proxy settings, as before. A route that cannot be made fails
++     * the connection rather than leaving lws to pick a vhost. */
+     bool route_ok = true;
+     if (argc > 4 && JS_IsNull(argv[4])) {
+-        cci.vhost = tjs__lws_direct_vhost(ctx);
+-        route_ok = cci.vhost != NULL;
++        d->route = 1;
+     } else if (argc > 4 && JS_IsObject(argv[4])) {
++        d->route = 2;
+         JSValue phost = JS_GetPropertyStr(ctx, argv[4], "host");
+         JSValue pport = JS_GetPropertyStr(ctx, argv[4], "port");
+         JSValue phdrs = JS_GetPropertyStr(ctx, argv[4], "headers");
+@@ -481,8 +627,12 @@
+         const char *s_hdrs = JS_IsUndefined(phdrs) ? "" : JS_ToCString(ctx, phdrs);
+         int32_t n_port = 0;
+         route_ok = s_host && s_hdrs && !JS_ToInt32(ctx, &n_port, pport) && n_port > 0 && n_port <= 65535;
+-        cci.vhost = route_ok ? tjs__lws_proxy_vhost(ctx, s_host, n_port, s_hdrs) : NULL;
+-        route_ok = route_ok && cci.vhost != NULL;
++        if (route_ok) {
++            d->proxy_host = js_strdup(ctx, s_host);
++            d->proxy_headers = js_strdup(ctx, s_hdrs);
++            d->proxy_port = n_port;
++            route_ok = d->proxy_host && d->proxy_headers;
++        }
+         JS_FreeCString(ctx, s_host);
+         if (!JS_IsUndefined(phdrs)) {
+             JS_FreeCString(ctx, s_hdrs);
+@@ -491,41 +641,37 @@
+         JS_FreeValue(ctx, pport);
+         JS_FreeValue(ctx, phdrs);
+     } else {
+-        cci.vhost = tjs__lws_select_vhost(ctx, uri->scheme, uri->host, uri->port);
++        d->route = 0;
++        /* the environment's proxy: lws resolves the proxy's name and connects to it, as before */
++        d->lws_resolves = tjs__lws_select_vhost(ctx, uri->scheme, uri->host, uri->port) != tjs__lws_direct_vhost(ctx);
+     }
+ 
+-    struct lws *wsi = route_ok ? lws_client_connect_via_info(&cci) : NULL;
++    /* Prevent GC while connecting or connected; released by the final CLOSED/CONNECTION_ERROR, or tjs_ws_fail. */
++    w->this_val = JS_DupValue(ctx, obj);
++    tjs__lws_conn_ref(ctx);
+ 
+-    JS_FreeCString(ctx, protocols);
+-    lws_parse_uri_destroy(&uri);
+-    js_free(ctx, full_path);
++    if (!route_ok) {
++        tjs_ws_fail_later(w);
++        return obj;
++    }
+ 
+-    JS_SetOpaque(obj, w);
+-
+-    /* lws_client_connect_via_info can return NULL if no route to IP address is found,
+-     * or even assert if no DNS server is found.
+-     * In the future lws should be patched, but for now we work around the bug */
+-    if (!wsi) {
+-        /* Connection failed immediately — fire error and close events asynchronously. */
+-        JSValue argv[1];
+-        argv[0] = JS_DupValue(ctx, obj);
+-        CHECK_EQ(JS_EnqueueJob(ctx, emit_abnormal_close, 1, argv), 0);
+-        JS_FreeValue(ctx, argv[0]);
++    if (d->lws_resolves) {
++        d->addrs.count = 1;
++        tjs_ws_dial(w);
+         return obj;
+     }
+ 
+-    /* Prevent GC while connected. */
+-    w->this_val = JS_DupValue(ctx, obj);
++    /* Resolve the name connected to (the proxy's, through one) with the system resolver, every address of it. */
++    struct addrinfo hints;
++    memset(&hints, 0, sizeof(hints));
++    hints.ai_family = AF_UNSPEC;
++    hints.ai_socktype = SOCK_STREAM;
++    d->gai.data = d;
++    const char *name = d->route == 2 ? d->proxy_host : uri->host;
++    if (uv_getaddrinfo(TJS_GetLoop(TJS_GetRuntime(ctx)), &d->gai, tjs_ws_resolve_cb, name, NULL, &hints) != 0) {
++        tjs_ws_fail_later(w);
++    }
+ 
+-    tjs__lws_conn_ref(ctx);
+-
+-    /* Kick the lws service loop. With a persistent context, the internal
+-     * idle/sultimer handles may have stopped. On Windows, lws uses SUL
+-     * callbacks for async connect checking, so the service loop must be
+-     * running. lws_cancel_service writes to the event_pipe, which triggers
+-     * lws_io_cb, restarting the idle and processing pending SUL entries. */
+-    lws_cancel_service(lws_ctx);
+-
+     return obj;
+ }
+ 
+@@ -617,8 +763,12 @@
+         w->close_requested = true;
+         lws_callback_on_writable(w->wsi);
+     } else if (w->wsi) {
++        w->abandoned = true;
+         lws_set_timeout(w->wsi, PENDING_TIMEOUT_USER_OK, 1);
+         lws_callback_on_writable(w->wsi);
++    } else if (!w->established) {
++        /* CLODE (connect-next-address): between attempts, or still resolving: no further attempt starts */
++        w->abandoned = true;
+     }
+ 
+     JS_FreeCString(ctx, reason);

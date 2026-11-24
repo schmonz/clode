@@ -179,15 +179,44 @@ What is still not native:
   names. The bundle passes a plain object, whose case is kept.
 - **A non-407 refusal of a WebSocket CONNECT** is reported as "Proxy refused to open a tunnel: <status line>"; native's
   wording for anything but 407 was not measured.
-- **Not proxy-specific, found on the way:** the engine's fetch tries a host name's next address only when lws refuses
-  to start a connection, not when a connection to the first address is refused, so a direct fetch to `localhost`
-  (resolving `::1` first) of a server listening on 127.0.0.1 only fails ECONNREFUSED where native connects. The rows
-  therefore address loopback by IP where the request is direct.
+- **Not proxy-specific, found on the way:** a fetch to `localhost` of a server on 127.0.0.1 only failed where native
+  connects. FIXED 2026-11-24, see "A name's addresses" below; the rows still address loopback by IP where the request is
+  direct, which is not wrong.
 
 Measured: test/fetch-proxy.test.cjs (43 rows recorded under native 2.1.330 / Bun 1.4.4 in test/fixtures/fetch-proxy-native.json, darwin-arm64), red against the previous libexec/bun-shim.cjs on the same engine (2026-11-23)
 
 Unmeasured. A real `-p` or TUI turn behind an authenticating proxy (and with proxyAuthHelper), linux and win32 rows,
 and a proxy reached by a name with several addresses.
+
+## A name's addresses: what connecting as native Bun and node do (2026-11-24) left open
+
+Every client quaude provides now reaches a name with an address of each family as its reference does (measured:
+test/connect-family.test.cjs, `localhost` = ::1 then 127.0.0.1 on darwin-arm64, against a server on the first family
+only, the second only, and both at one port; recorded in test/fixtures/connect-family-native.json, the bun rows under
+native 2.1.330, the node rows under host node 24.21.0). Native Bun's fetch (http and https) and WebSocket, and node's
+http/https, go to the resolver's first address and on to the next when a connection is refused. Before: quaude's fetch
+went on only when lws could not START a connection, so the second-family-only rows failed ECONNREFUSED; its WebSocket
+asked lws's own resolver, which asks for A records only, so it never reached ::1 and reached a dual-stack server by IPv4
+(4 of 18 rows red on daf39c8's engine). node-shim's http/https already connected as node does
+(internal/connect-multiple.cjs). Engine: spike/quickjs/patches/txiki-connect-next-address.patch (WebSocket, and the
+shared address list) and scripts/build-tjs.cjs fixupHttpclientAsyncDns (fetch); floor entry
+`__tjs_connect_next_address`. On the way: fetch's `abort()` before a connection existed (still resolving) did nothing,
+so the request answered as if never aborted (measured: `ok` where native rejects AbortError); it now aborts.
+
+Still open:
+- **An address that never answers** (a blackhole before a live address): node gives each address but the last 250 ms
+  (autoSelectFamilyAttemptTimeout); the engine waits out lws's connect timeout (the context's `timeout_secs`, lws's
+  default when tjs sets none) before the next. Native Bun's behaviour is UNMEASURED: no name resolving to such a pair
+  can be made without editing the system resolver (/etc/hosts), which the oracle must not touch.
+- **WebSocket through an ENVIRONMENT proxy** (no `proxy` option, HTTPS_PROXY & co set) still lets lws resolve the
+  proxy's name, A records only. bun-shim's own WebSocket passes no route when given no options, so this is reachable.
+- **WebSocket `close()` before the connection is made** now answers an error event and close 1006 (the WHATWG "fail the
+  connection"); before, close() armed a 1 s lws timeout that a local upgrade beat, and the socket opened anyway.
+  Native's answer was not measured. A DNS failure's error message is now the resolver's (`unknown node or service`), as
+  fetch's is, where it was lws's `closed before established`; native's wording not measured.
+- **node-shim net.connect / tls.connect** are throwing stubs (no rows); wss is not among the rows.
+- **Linux and Windows rows** are unrecorded: the test skips win32 and skips wherever localhost does not resolve to both
+  ::1 and 127.0.0.1; families are named by the host resolver's order so the darwin recording holds elsewhere.
 
 ## TLS options: what the honour-or-refuse work (2026-11-23) left open
 

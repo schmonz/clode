@@ -1,0 +1,57 @@
+{
+ "_recorded": "2026-11-24, bun rows under native 2.1.330 (Claude Code), node rows under host node v24.21.0, darwin-arm64, localhost resolving v6 then v4",
+ "bun.fetchHttp.first": {
+  "fam": "first"
+ },
+ "bun.fetchHttp.second": {
+  "fam": "second"
+ },
+ "bun.fetchHttp.both": {
+  "fam": "first"
+ },
+ "bun.fetchHttps.first": {
+  "fam": "first"
+ },
+ "bun.fetchHttps.second": {
+  "fam": "second"
+ },
+ "bun.fetchHttps.both": {
+  "fam": "first"
+ },
+ "bun.webSocket.first": {
+  "fam": "first"
+ },
+ "bun.webSocket.second": {
+  "fam": "second"
+ },
+ "bun.webSocket.both": {
+  "fam": "first"
+ },
+ "node.httpGet.first": {
+  "fam": "first"
+ },
+ "node.httpGet.second": {
+  "fam": "second"
+ },
+ "node.httpGet.both": {
+  "fam": "first"
+ },
+ "node.httpsGet.first": {
+  "fam": "first"
+ },
+ "node.httpsGet.second": {
+  "fam": "second"
+ },
+ "node.httpsGet.both": {
+  "fam": "first"
+ },
+ "node.httpGetNoAutoSelect.first": {
+  "fam": "first"
+ },
+ "node.httpGetNoAutoSelect.second": {
+  "error": "ECONNREFUSED"
+ },
+ "node.httpGetNoAutoSelect.both": {
+  "fam": "first"
+ }
+}
