@@ -5,7 +5,7 @@
 // NetBSD/arm64 evidence lanes that run those drivers in the guest), test/frame-oracle.cjs (the interactive frame and
 // session diffs); every other caller wraps its run in runScanned (the quaude-model runners of test/oracle-models.cjs
 // included) or calls assertDebugLogClean itself; and test/fidelity/debug-log-errors.test.cjs (a -p turn) and
-// debug-log-interactive.test.cjs (a pty session) exist for it. test/build-gates/debug-log-gate-coverage.test.cjs fails
+// debug-log-interactive.test.cjs (a pty session) exist for it. test/debug-log-gate-coverage.test.cjs fails
 // on a file that spawns a quaude any other way without naming why.
 //
 // WHY. quaude's --debug log said, for weeks, `zlib.gzipSync not implemented`, `A bundled root does not parse: TypeError:

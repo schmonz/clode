@@ -149,8 +149,9 @@ test('agentic Edit round-trip under tjs: overwriting an existing file works (Fil
           : cannedToolUseSSE(READ.name, READ.input, READ.id),
   });
   try {
-    // --debug-to-stderr surfaces the bundle's atomic-write breadcrumbs (and any
-    // exception it caught) so a failure on disk has a named cause, not silence.
+    // The debug log (bootP's --debug-file, r.debugLog) carries the bundle's atomic-write breadcrumbs (and any
+    // exception it caught) so a failure on disk has a named cause, not silence. (It was --debug --debug-to-stderr,
+    // which sends the log to stderr INSTEAD of the file: the gate then read no log.)
     //
     // Tool permission comes from --allowedTools, exactly like the Bash row
     // above, and NOT from --dangerously-skip-permissions. That flag was an
@@ -166,7 +167,7 @@ test('agentic Edit round-trip under tjs: overwriting an existing file works (Fil
     // same permission with no uid opinion, so the row now runs identically as
     // root and as a normal user.
     const r = await bootP(cli, dir,
-      ['-p', 'edit the file', '--allowedTools', 'Read,Edit', '--debug', '--debug-to-stderr'],
+      ['-p', 'edit the file', '--allowedTools', 'Read,Edit'],
       {
         ...process.env,
         ...throwawayHome(`${dir}-home`),
@@ -174,7 +175,7 @@ test('agentic Edit round-trip under tjs: overwriting an existing file works (Fil
         ANTHROPIC_API_KEY: 'sk-ant-mock',
         NODE_PATH: path.join(REPO, 'deps', 'claude', 'node_modules'),
       }, 120000);
-    assert.strictEqual(r.status, 0, `stderr:\n${r.stderr}`);
+    assert.strictEqual(r.status, 0, `stderr:\n${r.stderr}\ndebug log tail:\n${(r.debugLog || '').slice(-3000)}`);
     // Ground-truth oracle: the edit actually landed on disk. On failure, surface
     // what the Edit tool actually REPORTED — the tool_result CONTENT carries any
     // exception the atomic write threw (e.g. a chmod/rename error code, or the
@@ -186,7 +187,7 @@ test('agentic Edit round-trip under tjs: overwriting an existing file works (Fil
     assert.strictEqual(onDisk, 'hello universe\nsecond line\n',
       `Edit did not apply on disk.\n on-disk: ${JSON.stringify(onDisk)}\n`
       + ` Edit tool_result content: ${editContent}\n`
-      + ` stderr tail:\n${(r.stderr || '').slice(-3000)}`);
+      + ` debug log tail:\n${(r.debugLog || '').slice(-3000)}`);
     // And the Edit tool_result is the tool's success report, which the FileHandle-shim-gap
     // error ("not a function", is_error) is not.
     assert.ok(editReported(mock), `Edit tool_result is not the success report: ${editContent.slice(0, 800)}`);
@@ -220,10 +221,11 @@ test('a darwin-carved quaude takes the macOS branch (managed-settings under /Lib
   const { cli, dir } = stageBundle(bin);
   const mock = await startMockAnthropic({ respond: () => cannedSSE('hi') });
   try {
-    const r = await bootP(cli, dir, ['-p', 'hi', '--debug', '--debug-to-stderr'],
+    const r = await bootP(cli, dir, ['-p', 'hi'],
       { ...process.env, ...throwawayHome(`${dir}-home`), ANTHROPIC_BASE_URL: mock.url, ANTHROPIC_API_KEY: 'sk-ant-mock', NODE_PATH: path.join(REPO, 'deps', 'claude', 'node_modules') }, 120000);
     assert.strictEqual(r.status, 0, `stderr:\n${r.stderr}`);
-    assert.match(r.stderr, /\/Library\/Application Support\/ClaudeCode/, 'darwin carve must use the macOS managed-settings path');
-    assert.doesNotMatch(r.stderr, /\/etc\/claude-code/, 'darwin carve must NOT use the linux managed-settings path');
+    // the managed-settings path is in the debug log (bootP's --debug-file)
+    assert.match(r.debugLog, /\/Library\/Application Support\/ClaudeCode/, 'darwin carve must use the macOS managed-settings path');
+    assert.doesNotMatch(r.debugLog, /\/etc\/claude-code/, 'darwin carve must NOT use the linux managed-settings path');
   } finally { await mock.close(); }
 });

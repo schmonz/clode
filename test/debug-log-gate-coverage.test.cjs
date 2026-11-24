@@ -21,9 +21,10 @@ const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
-const { stripComments } = require('../strip-comments.cjs');
+const { stripComments } = require('./strip-comments.cjs');
+const { defineGuard, guardTests } = require('./guard.cjs');
 
-const REPO = path.resolve(__dirname, '..', '..');
+const REPO = path.resolve(__dirname, '..');
 const SPAWNS = [
   /(?<!function )\bbuiltQuaude\(\)/,
   /\brunQuaudeModel(?:Async)?\b/,   // a call, or the runner taken by name (apicheck's `models.runQuaudeModel`)
@@ -34,7 +35,7 @@ const READS = /\b(?:driveTool|captureSessions|captureFrames|assertDebugLogClean|
 const CHOKE_POINTS = ['test/tool-driver.cjs', 'test/frame-oracle.cjs'];
 // The gate's own files, and the definitions the patterns name (built-binary defines builtQuaude, oracle-models the
 // quaude-model runners, live-frame-gate quaudeBesideNative): a definition is not a run.
-const NOT_HARNESS = new Set(['test/debug-log-gate.cjs', 'test/build-gates/debug-log-gate-coverage.test.cjs',
+const NOT_HARNESS = new Set(['test/debug-log-gate.cjs', 'test/debug-log-gate-coverage.test.cjs',
   'test/built-binary.cjs', 'test/oracle-models.cjs', 'test/live-frame-gate.cjs']);
 
 // { file: why its quaude run has no debug log to read }. Each is a decision; keep it to runs that are not a Claude
@@ -97,16 +98,35 @@ function coverageFindings(files, exempt = EXEMPT, chokePoints = CHOKE_POINTS) {
   return out;
 }
 
-test('every harness file that runs a quaude reads its --debug log, or names why not', () => {
-  const files = {};
-  for (const rel of [...walk('test', []), ...walk('scripts', [])]) files[rel] = source(rel);
-  for (const rel of Object.keys(EXEMPT)) assert.ok(rel in files, `EXEMPT names ${rel}, which is not in the tree`);
-  assert.deepStrictEqual(coverageFindings(files), []);
-});
+// The guard (test/guard.cjs): examined is the number of files that run a quaude, floor 10 (2026-11-23: 21 of them), so
+// a SPAWNS pattern that silently stopped matching reads BROKEN, not clean.
+const CHOKE_STUB = 'debugFileArgs(f); assertDebugLogClean(x);';
+guardTests(defineGuard({
+  name: 'debug-log-gate-coverage',
+  floor: 10,
+  read() {
+    const files = {};
+    for (const rel of [...walk('test', []), ...walk('scripts', [])]) files[rel] = source(rel);
+    return { files, exempt: EXEMPT };
+  },
+  scan({ files, exempt }) {
+    const findings = Object.keys(exempt).filter((rel) => !(rel in files)).map((rel) => `EXEMPT names ${rel}, which is not in the tree`);
+    findings.push(...coverageFindings(files, exempt));
+    const examined = Object.entries(files).filter(([rel, src]) => !NOT_HARNESS.has(rel) && spawns(src)).length;
+    return { findings, examined };
+  },
+  // a harness that runs a built quaude its own way and reads nothing, among ten that read
+  control() {
+    const files = { 'test/tool-driver.cjs': CHOKE_STUB, 'test/frame-oracle.cjs': CHOKE_STUB,
+      'test/planted.test.cjs': 'const q = builtQuaude(); spawn(q.path, ["-p", "hi"]);' };
+    for (let i = 0; i < 10; i++) files[`test/ok-${i}.test.cjs`] = 'const q = builtQuaude(); driveTool({ quaude: q.path });';
+    return { files, exempt: {} };
+  },
+}));
 
 // The control: each way round the rule is a finding (planted sources, the tree untouched).
 test('the coverage rule fails a planted spawn that reads nothing, a stale exemption, and a choke point that stopped reading', () => {
-  const choke = { 'test/tool-driver.cjs': 'debugFileArgs(f); assertDebugLogClean(x);', 'test/frame-oracle.cjs': 'debugFileArgs(f); assertDebugLogClean(x);' };
+  const choke = { 'test/tool-driver.cjs': CHOKE_STUB, 'test/frame-oracle.cjs': CHOKE_STUB };
   const plant = (src, extra = {}) => coverageFindings({ ...choke, 'test/x.test.cjs': src, ...extra }, { 'test/old.test.cjs': 'reason' });
   const stale = { 'test/old.test.cjs': 'const q = builtQuaude(); driveTool({ quaude: q.path });' };
   assert.deepStrictEqual(plant('const q = builtQuaude(); spawn(q.path, ["-p", "hi"]);', { 'test/old.test.cjs': 'builtQuaude()' }).length, 1);

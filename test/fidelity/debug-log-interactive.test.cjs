@@ -14,7 +14,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { driveTool, ptyHarnessMissing } = require('../tool-driver.cjs');
-const { toolResultText } = require('../../scripts/lib/tool-result.cjs');
+const { toolResultText, assertFailsOnMissingOutput } = require('../../scripts/lib/tool-result.cjs');
 
 const IREAD = { name: 'Read', input: { file_path: '' }, id: 'toolu_dbglog_read_1' };
 test('quaude\'s --debug log of an interactive session (boot, a turn, /tui, /quit) says nothing native\'s does not', async (t) => {
@@ -25,13 +25,15 @@ test('quaude\'s --debug log of an interactive session (boot, a turn, /tui, /quit
   try {
     const file = path.join(base, 'work', 'note.txt');
     const use = { ...IREAD, input: { file_path: file } };
+    const answered = (m) => toolResultText(m, use.id).includes('DEBUGLOG-NOTE-7');
+    assertFailsOnMissingOutput(answered, use, 'interactive');
     const r = await driveTool({ tool: use, base, interactive: true, prompt: 'read the note',
       setup: (work) => fs.writeFileSync(path.join(work, 'note.txt'), 'DEBUGLOG-NOTE-7\n'),
       after: [{ label: 'tui', send: '/tui fullscreen' }, { label: 'tui-enter', send: '\r' },
         { label: 'quit', send: '/quit' }, { label: 'quit-enter', send: '\r', exits: true }] });
     if (r.quaude.absent) { t.skip(r.quaude.absent); return; }
     assert.strictEqual(r.quaude.status, 0, `the session did not run to /quit: ${r.quaude.stderr}\n${r.quaude.stdout.slice(-800)}`);
-    assert.match(toolResultText(r.quaude.raw, use.id), /DEBUGLOG-NOTE-7/, 'the turn\'s Read did not answer');
+    assert.ok(answered(r.quaude.raw), `the turn's Read did not answer: ${JSON.stringify(toolResultText(r.quaude.raw, use.id))}`);
     // driveTool already rejected on a finding; this says which judgement it was, and that one happened
     assert.ok(r.debugLog && ['differential', 'absolute'].includes(r.debugLog.mode), `no debug-log judgement: ${JSON.stringify(r.debugLog)}`);
     for (const n of r.debugLog.notes) t.diagnostic(n);
