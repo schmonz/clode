@@ -61,10 +61,18 @@ const OVERLAP_LOG = path.join(RUN_TMP, 'overlapping-runs');
 const overlapWatch = runTmpRuns.startOverlapWatch(OVERLAP_LOG, ROOT_PARENTS);
 
 // Offline gate: the runner is the single source of truth; an ambient CLODE_OFFLINE never leaks in.
-const arg = process.argv[2] || '--offline';
+// After the mode, test files to run INSTEAD of the whole discovered suite (`node test/run.mjs test/x.test.cjs`): the
+// same per-run temp root, provider, engine and postflight gates, for one file. Anything else is a usage error.
+const USAGE = 'usage: node test/run.mjs [--online|--offline] [test/<file>.test.cjs ...]';
+const argv = process.argv.slice(2);
+const arg = /^--/.test(argv[0] || '') ? argv.shift() : '--offline';
 if (arg === '--online') delete process.env.CLODE_OFFLINE;
 else if (arg === '--offline') process.env.CLODE_OFFLINE = '1';
-else { console.error('usage: node test/run.mjs [--online|--offline]'); process.exit(2); }
+else { console.error(USAGE); process.exit(2); }
+const ONLY = argv.map((f) => path.relative(ROOT, path.resolve(f)));
+for (const f of ONLY) {
+  if (!f.endsWith('.test.cjs') || !fs.existsSync(f)) { console.error(`${USAGE}\nrun: ${f} is not a test file here`); process.exit(2); }
+}
 
 // CLODE_NODE = the concrete node running this runner (already the real binary; no shim canonicalization).
 process.env.CLODE_NODE = process.execPath;
@@ -650,7 +658,7 @@ function discoverTests(dir) {
   }
   return out;
 }
-const files = discoverTests('test').sort();
+const files = ONLY.length ? ONLY : discoverTests('test').sort();
 
 // Discovery floor: zero files means the glob/path logic itself regressed (e.g. a
 // `discoverTests` bug, or test/ moved) — spawning bare `node --test` with no file
@@ -773,7 +781,9 @@ if (tapText) {
 {
   const { forcedWin32Files, PRELOAD } = require('./forced-win32.cjs');
   const forcedFiles = forcedWin32Files(files);
-  if (forcedFiles.length === 0) {
+  if (forcedFiles.length === 0 && ONLY.length) {
+    console.error('run: forced-win32 pass: none of the named file(s) is platform-sensitive and fixture-only; not run');
+  } else if (forcedFiles.length === 0) {
     console.error('run: the forced-win32 pass derived ZERO files from '
       + `${files.length} discovered test file(s) — that is a derivation regression in `
       + 'test/forced-win32.cjs, not "nothing to check". A pass over no files is a gate '
