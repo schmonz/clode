@@ -118,7 +118,7 @@ test('updater-off tripwire: what it refuses and what it passes over', () => {
   // The path a native-resolving variable names is native whatever it is called (a staged provider-min, say).
   const cp = { spawnSync: () => ({ status: 0 }) };
   U.installSpawnTripwire(cp, { CLODE_PROVIDER_BIN: '/s/provider-min' });
-  assert.throws(() => cp.spawnSync('/s/provider-min', [], { env: {} }), /refusing to spawn/);
+  assert.throws(() => cp.spawnSync('/s/provider-min', [], { env: { HOME: '/h' } }), /refusing to spawn/);
   // No options: the child inherits the parent's env, which is what is judged.
   const cp2 = { execFileSync: () => '' };
   U.installSpawnTripwire(cp2, { PATH: '/usr/bin' });

@@ -38,10 +38,10 @@ process.chdir(ROOT);
 const ORIGINAL_TMP = os.tmpdir();
 const ORIGINAL_BEFORE = new Set(fs.readdirSync(ORIGINAL_TMP));
 process.env.CLODE_TEST_RUN_TMP_REQUEST = '1';
+const { realHome } = require('./suite-home.cjs');
 // No Claude Code this suite drives updates its own install (test/updater-off.cjs): DISABLE_AUTOUPDATER for this runner
 // and every child that inherits its environment; the per-file preload sets it too, for CI's `node --test` steps.
 require('./updater-off.cjs').ambient(process.env);
-const { realHome } = require('./suite-home.cjs');
 const runTmp = require('./run-tmp.cjs');
 const runTmpRuns = require('./run-tmp-runs.cjs');
 const RUN_TMP = process.env[runTmp.ROOT_ENV];
