@@ -311,4 +311,16 @@ const VALUE_POST = {
   'util.types': 'keys',
 };
 
-module.exports = { READ_PATHS, STAT_PATHS, SAMPLES, KEY_SAMPLES, DRIVERS, UNCOVERED, VALUE_POST };
+// /proc/self/<entry> describes the process that READS it, and the two sides are different processes. Every entry
+// a carve literal names is classified here, by its first component ('' is /proc/self itself):
+//   'own'  the reader's own state (its fds, counters, memory, executable, argv): judged by type only, as process.pid is
+//   'same' the same answer for both children of one runner (mounts, cgroup, namespace): judged exactly
+// CI 45381323279: /proc/self/io (rchar, syscr: this process's I/O so far) was judged exactly and differed, as it must,
+// on the first linux run that planned it. An entry not listed is a plan finding, so the next one is decided, not met.
+const PROC_SELF = {
+  '': 'same', fd: 'own', fdinfo: 'own', io: 'own', stat: 'own', statm: 'own', status: 'own', smaps: 'own',
+  smaps_rollup: 'own', sched: 'own', schedstat: 'own', task: 'own', auxv: 'own', exe: 'own', cmdline: 'own',
+  environ: 'own', limits: 'same', cgroup: 'same', mountinfo: 'same', mounts: 'same', ns: 'same', timerslack_ns: 'same',
+};
+
+module.exports = { READ_PATHS, STAT_PATHS, SAMPLES, KEY_SAMPLES, DRIVERS, UNCOVERED, VALUE_POST, PROC_SELF };

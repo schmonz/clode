@@ -119,8 +119,15 @@ function makePlan({ inventory, values, table = T, platform = process.platform })
     }
     const plan1 = (args) => {
       const id = `${api}(${args.map(describe).join(', ')})`;
-      // a process's own descriptors are its own: judged by what kind of answer, not which fds
-      const own = args.some((a) => a && typeof a.abs === 'string' && /^\/proc\/self\/fd(info)?(\/|$)/.test(a.abs));
+      // /proc/self/<entry> is the READER's: its own state is judged by what kind of answer (table.cjs PROC_SELF)
+      let own = false;
+      for (const a of args) {
+        const m = a && typeof a.abs === 'string' && /^\/proc\/self(?:\/([^/]*))?/.exec(a.abs);
+        if (!m) continue;
+        const cls = table.PROC_SELF[m[1] || ''];
+        if (cls === 'own') own = true;
+        else if (cls !== 'same') findings.push(`${api}: the carve reads ${a.abs}, and /proc/self/${m[1]} is not classified (table.cjs PROC_SELF): is it the reader's own state, or the same for both sides?`);
+      }
       return push({ id, api, style, args, post: own ? 'typeof' : driver.post, mutates: !!driver.mutates });
     };
     let left = 0;
