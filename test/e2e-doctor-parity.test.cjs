@@ -6,7 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { sandbox, REPO, NODE } = require('./e2e.cjs');
-const { capture, seedClaudeProfile } = require('./e2e-pty.cjs');
+const { captureSession, frameText, seedClaudeProfile } = require('./e2e-pty.cjs');
 const { tjsPath } = require('./node-shim-helper.cjs');
 const { stateRoot } = require('./state-root-helper.cjs');
 const { liveRenderSkipReason } = require('./live-render-helper.cjs');
@@ -14,8 +14,18 @@ const { liveRenderSkipReason } = require('./live-render-helper.cjs');
 const ENTRY = path.join(REPO, 'scripts', 'stage0.mjs');
 const DOCTOR_PARITY = path.join(REPO, 'test', 'doctor-parity.cjs');
 
-// Hex the bats sent: type "/doctor" then Enter, at 4s and 6s.
-const THEN_HEX = ['2f646f63746f72@4', '0d@6'];   // "/doctor", CR
+// Type "/doctor" (held until it is in the prompt), then Enter (held until the report's footer
+// is on screen, or until the step's cap: without a login the report never opens, and the
+// first test below says so). Each step waits for its answer, not for a clock: the bats sent
+// these at 4 s and 6 s and read the screen at 16 s, a guess a loaded box outruns.
+const SCRIPT = [
+  { label: 'type', send: '2f646f63746f72', until: '/doctor' },   // "/doctor"
+  { label: 'enter', send: '0d', until: 'Enter to close' },       // CR
+];
+async function doctorScreen(cmd) {
+  const s = await captureSession(SBX, { script: SCRIPT, rows: 120, cols: 100, cmd, env: { DISABLE_AUTOUPDATER: '1' } });
+  return s.frames.length ? frameText(s.frames[s.frames.length - 1].frame) : '';
+}
 
 function nativeClaude() {
   const r = spawnSync('command', ['-v', 'claude'], { shell: true, encoding: 'utf8' });
@@ -36,7 +46,7 @@ function cleanEnv(extra) {
 
 let SKIP = null, NATIVE = '', CLODE = '', SBX = null, DIR = null;
 
-before(() => {
+before(async () => {
   // This spawns the REAL Claude Code bundle. On darwin that probes the macOS
   // login Keychain (auth/Remote-Control status) and can pop system dialogs, so
   // it stays OPT-IN there (a dev sets CLODE_LIVE_RENDER=1 explicitly). Off
@@ -50,8 +60,8 @@ before(() => {
   const nver = version([native], cleanEnv({ ...freshHome('doctor-parity-ver-'), DISABLE_AUTOUPDATER: '1' }));
   if (!nver) { SKIP = 'native claude did not run here'; return; }
   SBX = sandbox();
-  // Past-onboarding + trusted profile keyed by the capture cwd (REPO), so the fixed-
-  // duration no-keystroke capture reaches the interactive prompt where /doctor works.
+  // Past-onboarding + trusted profile keyed by the capture cwd (REPO), so the
+  // capture reaches the interactive prompt where /doctor works.
   seedClaudeProfile(SBX.home, { cwd: REPO });
   DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'e2e-doctor-parity-'));
   const quaude = path.join(DIR, 'quaude');
@@ -76,9 +86,8 @@ before(() => {
   if (build.status !== 0) { SKIP = `clode build failed:\n${build.stdout}\n${build.stderr}`; return; }
   const cver = version([quaude], cleanEnv(freshHome('doctor-parity-ver-')));
   if (nver !== cver) { SKIP = `version mismatch: native='${nver}' clode='${cver}'`; return; }
-  const capOpts = { seconds: 16, thenHex: THEN_HEX, rows: 120, cols: 100 };
-  NATIVE = capture(SBX, { ...capOpts, cmd: [native], env: { DISABLE_AUTOUPDATER: '1' } });
-  CLODE  = capture(SBX, { ...capOpts, cmd: [quaude], env: { DISABLE_AUTOUPDATER: '1' } });
+  NATIVE = await doctorScreen([native]);
+  CLODE  = await doctorScreen([quaude]);
 });
 
 after(() => {

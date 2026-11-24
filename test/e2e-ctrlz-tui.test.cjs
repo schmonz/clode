@@ -22,15 +22,15 @@ const { test, before, after } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const { sandbox, REPO } = require('./e2e.cjs');
-const { seedClaudeProfile, capture } = require('./e2e-pty.cjs');
+const { seedClaudeProfile, captureSession, frameText } = require('./e2e-pty.cjs');
 const { tjsPath } = require('./node-shim-helper.cjs');
 const { liveRenderSkipReason } = require('./live-render-helper.cjs');
 const { builtQuaude } = require('./built-binary.cjs');
 
 const MARKER = 'ctrlz-survivor-73';
 
-let SKIP = null, SCREEN = '', SBX = null;
-before(() => {
+let SKIP = null, SCREEN = '', FRAMES = [], SBX = null;
+before(async () => {
   if (process.platform === 'win32') { SKIP = 'POSIX only (Ctrl-Z/SIGTSTP is a POSIX terminal concept)'; return; }
   if (!tjsPath()) { SKIP = 'no tjs binary (CLODE_TJS or build/tjs/tjs)'; return; }
   const liveRenderSkip = liveRenderSkipReason();
@@ -56,12 +56,23 @@ before(() => {
   // ("ctrlz-surviClaude Code...") and never in the prompt. Native 2.1.283 and quaude paint
   // the same under both the old flow and this one (darwin, measured): suspended, "Run `fg`",
   // then, on SIGCONT, the repainted TUI with the marker in the prompt.
-  SCREEN = capture(SBX, {
-    seconds: 14,
+  //
+  // EACH STEP WAITS FOR ITS ANSWER, NOT FOR A CLOCK (2026-11-24). The flow above ran at fixed
+  // times (Ctrl-Z at 6 s, SIGCONT at 7.5 s, marker at 9 s, screen at 14 s), a guess a loaded
+  // box outruns: frame-diff.test.cjs took a BLANK frame that way in a full-suite run at 91e96b5.
+  // Now a session: Ctrl-Z once boot has settled, its frame held until the suspend message is on
+  // screen; SIGCONT, its frame taken once the repaint it causes has settled; the marker, held
+  // until it is on screen. The screen judged is the last frame, as before.
+  const s = await captureSession(SBX, {
     cmd: [quaude],
-    thenHex: ['1a@6', `${Buffer.from(MARKER).toString('hex')}@9`],
-    signal: ['SIGCONT@7.5'],
+    script: [
+      { label: 'ctrl-z', send: '1a', until: 'is suspended' },
+      { label: 'fg', signal: 'SIGCONT' },
+      { label: 'marker', send: Buffer.from(MARKER).toString('hex'), until: MARKER },
+    ],
   });
+  FRAMES = s.frames;
+  SCREEN = s.frames.length ? frameText(s.frames[s.frames.length - 1].frame) : '';
 });
 after(() => {
   if (SBX) { try { fs.rmSync(SBX.dir, { recursive: true, force: true }); } catch { /* */ } }
@@ -69,6 +80,10 @@ after(() => {
 
 test('quaude survives Ctrl-Z: the TUI stays alive and responsive after suspend', (t) => {
   if (SKIP) { t.skip(SKIP); return; }
+  // Every step happened and was answered: a frame per step, each settled (an unsettled one is a
+  // step the TUI never answered, or one it died during).
+  assert.deepStrictEqual(FRAMES.map((f) => [f.label, f.settled]),
+    [['boot', true], ['ctrl-z', true], ['fg', true], ['marker', true]], `a step went unanswered:\n${SCREEN}`);
   // Did NOT crash on Ctrl-Z: the welcome box is still (re)painted...
   assert.match(SCREEN, /Claude Code/, `TUI did not survive Ctrl-Z (no welcome box):\n${SCREEN}`);
   // ...it did suspend, the way upstream says it does (2.1.330's words: "Claude Code is suspended. Run `fg` to bring it

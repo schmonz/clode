@@ -128,12 +128,26 @@ Use this when the row is about what actually *renders* under a real
 pseudo-terminal: TUI paint, slash-command output, repaint-on-close, resize,
 trust-prompt keystrokes. These build a real quaude (`clode build`) and drive
 it under `test/tui-screen.cjs` (a real `node-pty` + `@xterm/headless` VT100
-emulator) via `test/e2e-pty.cjs`'s `capture()`, asserting a **rendered-frame
-marker** in the returned screen string — never model prose. Real exports:
-`seedClaudeProfile(home, opts)`, `capture(sbx, opts)`, `TUI_SCREEN`, where
-`sbx` is a `sandbox()` from `test/e2e.cjs` (`{dir, home, stateRoot, env}`).
-Live examples: `test/e2e-tui-tjs.test.cjs`, `test/e2e-doctor-parity.test.cjs`,
-and this task's `test/fidelity/stale-frames.pty.test.cjs`.
+emulator) via `test/e2e-pty.cjs`'s `captureSession()` (or `captureBoot()` for
+the boot screen alone), asserting a **rendered-frame marker** in the frame's
+text (`frameText(frame)`) — never model prose. Real exports:
+`seedClaudeProfile(home, opts)`, `captureSession(sbx, opts)`,
+`captureBoot(sbx, opts)`, `frameText(frame)`, where `sbx` is a `sandbox()` from
+`test/e2e.cjs` (`{dir, home, stateRoot, env}`). Live examples:
+`test/e2e-tui-tjs.test.cjs`, `test/e2e-doctor-parity.test.cjs`, and this task's
+`test/fidelity/stale-frames.pty.test.cjs`.
+
+**Never a fixed window.** A session is a script of steps (`send` a hex
+keystroke, optionally held `until` some text is on screen; `resize`;
+`signal`; `wait`), and each step's frame is taken once the TUI's output for
+that step has been heard and has then gone quiet (see `test/tui-screen.cjs`'s
+`SCRIPT_DEFAULTS` for the measured windows). The old form, "read the screen
+`seconds` after spawn, keys at `@<delay>`", is a guess about the box's speed
+that a loaded box outruns: `test/frame-diff.test.cjs` took a BLANK frame that
+way in a full-suite run. `test/e2e-pty.cjs` refuses a `seconds` window without
+a written `fixedWindowBecause`, and `test/fixed-window-captures.test.cjs` holds
+every such reason in `test/**` to an allowlist. Assert the frame `settled`: a
+frame taken at its step's cap is a step the TUI never answered.
 
 Gate on `CLODE_LIVE_RENDER=1` — these spawn a real bundle (Keychain probes,
 possible network) — matching the existing hermeticity boundary. Without the
@@ -150,7 +164,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { sandbox, REPO } = require('../e2e.cjs');           // or './e2e.cjs' outside fidelity/
-const { seedClaudeProfile, capture } = require('../e2e-pty.cjs');
+const { seedClaudeProfile, captureSession, frameText } = require('../e2e-pty.cjs');
 const { resolveClaudeBin } = require('../../libexec/clode-resolve.cjs');
 const { tjsPath } = require('../node-shim-helper.cjs');
 const { liveRenderSkipReason } = require('../live-render-helper.cjs');   // or './live-render-helper.cjs' outside fidelity/
@@ -161,8 +175,8 @@ function realProvider() {
   return null;
 }
 
-let SKIP = null, SCREEN = '', SBX = null, DIR = null;
-before(() => {
+let SKIP = null, SCREEN = '', SETTLED = false, SBX = null, DIR = null;
+before(async () => {
   // Spawning the real bundle probes the macOS Keychain, so this stays opt-in
   // on darwin only (CLODE_LIVE_RENDER=1); it runs by default elsewhere.
   const liveRenderSkip = liveRenderSkipReason();
@@ -179,7 +193,13 @@ before(() => {
     env: { ...process.env, CLODE_CLAUDE_BIN: provider, CLODE_CACHE: path.join(DIR, 'cache'), CLODE_TJS: tjsPath(), DYLD_INSERT_LIBRARIES: '' },
   });
   if (build.status !== 0) { SKIP = `clode build failed:\n${build.stdout}\n${build.stderr}`; return; }
-  SCREEN = capture(SBX, { seconds: 12, thenHex: ['<hex>@<delay>', ...], rows: 120, cols: 100, cmd: [quaude] });
+  const s = await captureSession(SBX, { rows: 120, cols: 100, cmd: [quaude], script: [
+    { label: 'type', send: '<hex>', until: '<text the keystrokes put on screen>' },
+    { label: 'enter', send: '0d', until: '<text the answer paints>' },
+  ] });
+  const last = s.frames[s.frames.length - 1];
+  SCREEN = frameText(last.frame);
+  SETTLED = last.label === 'enter' && last.settled;
 });
 after(() => {
   if (SBX) { try { fs.rmSync(SBX.dir, { recursive: true, force: true }); } catch { /* */ } }
@@ -188,6 +208,7 @@ after(() => {
 
 test('<row: a rendered-frame marker appears/disappears as expected>', (t) => {
   if (SKIP) { t.skip(SKIP); return; }
+  assert.ok(SETTLED, `the last step never settled:\n${SCREEN}`);
   assert.match(SCREEN, /<marker>/);      // or assert.doesNotMatch for an "erased" claim
 });
 ```

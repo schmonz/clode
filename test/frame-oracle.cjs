@@ -17,36 +17,54 @@
 // scripted turn costs nothing and reaches no network.
 //
 //   node test/frame-oracle.cjs --ref /path/to/claude --sub /path/to/quaude \
-//       [--seconds 12] [--rows 40] [--cols 100] \
-//       [--send-hex 68690d] [--then-hex 0d@6] [--out DIR]
+//       [--rows 40] [--cols 100] [--send HEX [--until TEXT]]... [--resize COLSxROWS]... \
+//       [--wait MS]... [--out DIR]
+//
+// The steps run in order once boot has settled, and the frames compared are each side's LAST
+// step's, taken once that step's output has settled (tui-screen.cjs --script); --until holds the
+// --send before it until TEXT is on screen. With no step the frames are the settled boot screen.
+// There is no fixed window: a frame taken at a clock time is a guess a loaded box outruns
+// (test/fixed-window-captures.test.cjs).
 //
 // Exit 0 when the frames match, 1 when they differ, 2 on a harness failure.
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { sandbox } = require('./e2e.cjs');
-const { captureFrameAsync, captureSession, seedClaudeProfile } = require('./e2e-pty.cjs');
+const { captureSession, seedClaudeProfile } = require('./e2e-pty.cjs');
 const { debugFileArgs, readLog, assertDebugLogClean } = require('./debug-log-gate.cjs');
 const { diff, describe } = require('./frame-diff.cjs');
 const { startMockAnthropic } = require('./mock-anthropic-helper.cjs');
 
 function parse(argv) {
-  const o = { seconds: 12, rows: 40, cols: 100, thenHex: [], out: null };
+  const o = { rows: 40, cols: 100, script: [], out: null };
+  const step = (k, v) => { o.script.push({ label: `step ${o.script.length + 1}`, [k]: v }); };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]; const v = argv[i + 1];
-    if (a === '--ref') { o.ref = v; i++; } else if (a === '--sub') { o.sub = v; i++; } else if (a === '--seconds') { o.seconds = parseFloat(v); i++; } else if (a === '--rows') { o.rows = parseInt(v, 10); i++; } else if (a === '--cols') { o.cols = parseInt(v, 10); i++; } else if (a === '--send-hex') { o.sendHex = v; i++; } else if (a === '--then-hex') { o.thenHex.push(v); i++; } else if (a === '--out') { o.out = v; i++; } else {
+    if (a === '--ref') { o.ref = v; i++; } else if (a === '--sub') { o.sub = v; i++; } else if (a === '--rows') { o.rows = parseInt(v, 10); i++; } else if (a === '--cols') { o.cols = parseInt(v, 10); i++; } else if (a === '--send') { step('send', v); i++; } else if (a === '--resize') { step('resize', v); i++; } else if (a === '--wait') { step('wait', parseInt(v, 10)); i++; } else if (a === '--until') {
+      const last = o.script[o.script.length - 1];
+      if (!last || last.send === undefined) { process.stderr.write('frame-oracle: --until follows a --send\n'); process.exit(2); }
+      last.until = v; i++;
+    } else if (a === '--out') { o.out = v; i++; } else {
       process.stderr.write(`frame-oracle: unknown argument ${a}\n`); process.exit(2);
     }
   }
-  if (!o.ref || !o.sub) { process.stderr.write('usage: frame-oracle.cjs --ref BIN --sub BIN [--seconds N] [--rows R] [--cols C] [--send-hex HEX] [--then-hex HEX@DELAY] [--out DIR]\n'); process.exit(2); }
+  if (!o.ref || !o.sub) { process.stderr.write('usage: frame-oracle.cjs --ref BIN --sub BIN [--rows R] [--cols C] [--send HEX [--until TEXT]]... [--resize COLSxROWS]... [--wait MS]... [--out DIR]\n'); process.exit(2); }
+  if (o.script.length === 0) o.script = undefined;
   return o;
 }
 
 // Capture a REFERENCE and a SUBJECT frame through the same scripted pty session
-// against the canned mock. Returns { ref, sub } (either may be null, with the
-// reason written to stderr). Shared by the CLI below and by
+// against the canned mock. Returns { ref, sub, settled: { ref, sub }, debugLog } (a frame
+// may be null, with the reason written to stderr). Shared by the CLI below and by
 // test/fidelity/interactive-frame-diff.test.cjs, so the gate measures exactly
 // what an operator measures by hand.
+//
+// The frame is each side's LAST step's (o.script, tui-screen.cjs --script steps), taken once
+// that step's output has settled; with no script, the settled boot screen. `settled` says
+// whether it did: a frame taken at its step's cap is a finding for the caller, never a frame
+// to compare as if it were the answer. This used to be a fixed window (`seconds`, keys at
+// fixed delays), which a loaded box outruns (test/fixed-window-captures.test.cjs).
 //
 // Both sides get the same scene: `mockText` is what the canned mock answers a turn
 // with (default PONG), `env` is extra environment for the child, and `settings` is
@@ -54,8 +72,20 @@ function parse(argv) {
 // in this process, and a synchronous capture froze it for the whole run, so a typed
 // turn spun forever without the mock ever seeing a request (measured 2026-09-25).
 async function captureFrames(o) {
-  const opts = { seconds: o.seconds, rows: o.rows, cols: o.cols, sendHex: o.sendHex, thenHex: o.thenHex || [] };
-  return inScene(o, (sbx, env, cmd) => captureFrameAsync(sbx, { ...opts, env, cmd }));
+  const script = o.script || [{ label: 'boot settled', wait: 1 }];
+  const opts = { script, settleMs: o.settleMs, maxSettleMs: o.maxSettleMs, bootSettleMs: o.bootSettleMs,
+    bootMaxMs: o.bootMaxMs, rows: o.rows, cols: o.cols };
+  const meta = new WeakMap();   // frame -> whether its session reached and settled its last step
+  const r = await inScene(o, async (sbx, env, cmd) => {
+    const s = await captureSession(sbx, { ...opts, env, cmd });
+    const last = s.frames[s.frames.length - 1];
+    if (!last) throw new Error('the session produced no frame');
+    // a side that died before its last step has fewer frames than steps + boot: not settled
+    meta.set(last.frame, last.settled && s.frames.length === script.length + 1);
+    return last.frame;
+  });
+  const settled = { ref: !!(r.ref && meta.get(r.ref)), sub: !!(r.sub && meta.get(r.sub)) };
+  return { ref: r.ref, sub: r.sub, settled, debugLog: r.debugLog };
 }
 
 // The same two-sided capture for a SCRIPTED SESSION (tui-screen.cjs --script): a frame
@@ -137,9 +167,13 @@ async function main() {
   const o = parse(process.argv.slice(2));
   for (const p of [o.ref, o.sub]) if (!fs.existsSync(p)) { process.stderr.write(`frame-oracle: no such binary: ${p}\n`); process.exit(2); }
   const out = o.out || fs.mkdtempSync(path.join(os.tmpdir(), 'frame-oracle-'));
-  const { ref, sub } = await captureFrames({ ...o, out });
+  const { ref, sub, settled } = await captureFrames({ ...o, out });
   process.stdout.write(`frames written to ${out}\n`);
   if (!ref || !sub) process.exit(2);
+  for (const side of ['ref', 'sub']) {
+    if (!settled[side]) process.stderr.write(`frame-oracle: the ${side} frame was taken at its step's cap, not settled\n`);
+  }
+  if (!settled.ref || !settled.sub) process.exit(2);
 
   const d = diff(ref, sub, { maxDetail: 20 });
   process.stdout.write(describe(ref, sub, d) + '\n');

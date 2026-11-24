@@ -41,7 +41,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { REPO } = require('../e2e.cjs');
-const { capture, apeCmd } = require('../e2e-pty.cjs');
+const { captureSession, frameText, apeCmd } = require('../e2e-pty.cjs');
 const { tjsPath } = require('../node-shim-helper.cjs');
 const { liveRenderSkipReason } = require('../live-render-helper.cjs');
 
@@ -72,17 +72,25 @@ function renderedAnswer(screen) { return lines(screen).some((l) => ANSWER.test(l
 // THE ONE RUN THAT READS THE REAL HOME on purpose (test/suite-home.cjs; exempt by name in
 // test/suite-home-hermetic.test.cjs): the suite runs under a throwaway HOME, and this opt-in turn needs the
 // developer's own credentials and config.
-function liveTurn(cmd) {
+//
+// EACH STEP WAITS FOR ITS ANSWER, NOT A CLOCK (test/fixed-window-captures.test.cjs). This typed at
+// 5 s, sent at 8 s and read the screen at 40 s, a guess a loaded box (or a slow API) outruns. Now:
+// the prompt once boot has settled, held until it is in the input; Enter, held until "42" is on
+// screen and output has then settled, for up to 40 s (a logged-out or offline side never paints
+// it, and renderedAnswer then says so on the frame taken at the cap).
+async function liveTurn(cmd) {
   const real = realHome() || { HOME: os.homedir() };
   const env = { ...process.env, HOME: real.HOME, USERPROFILE: real.USERPROFILE || real.HOME };
   if (real.CLAUDE_CONFIG_DIR) env.CLAUDE_CONFIG_DIR = real.CLAUDE_CONFIG_DIR; else delete env.CLAUDE_CONFIG_DIR;
   delete env.CLAUDE_CODE_CHILD_SESSION;   // else the child disables transcript saving
   const hex = Buffer.from(PROMPT, 'utf8').toString('hex');
-  return capture({ env, home: real.HOME }, {
-    seconds: 40, rows: 40, cols: 100,
-    thenHex: [`${hex}@5`, '0d@8'],
+  const s = await captureSession({ env, home: real.HOME }, {
+    rows: 40, cols: 100, maxSettleMs: 40000,
+    script: [{ label: 'type', send: hex, until: '6 times 7' }, { label: 'turn', send: '0d', until: '42' }],
     env: { DISABLE_AUTOUPDATER: '1' }, cmd,
   });
+  const last = s.frames[s.frames.length - 1];
+  return last ? frameText(last.frame) : '';
 }
 
 // SKIP gates BOTH tests (no creds/tjs/build). NATIVE_SKIP gates only the native
@@ -96,7 +104,7 @@ function liveTurn(cmd) {
 // couldn't complete a live turn) — that subset gates the quaude test too, so a
 // missing login reads as a skip everywhere, never as a hard failure.
 let SKIP = null, NATIVE_SKIP = null, NO_REFERENCE_SKIP = null, NATIVE = '', QUAUDE = '', DIR = null;
-before(() => {
+before(async () => {
   if (process.env.CLODE_LIVE_ONLINE !== '1') { SKIP = 'live ONLINE opt-in only (set CLODE_LIVE_ONLINE=1; uses your real credentials and spends real tokens)'; return; }
   const liveRenderSkip = liveRenderSkipReason();
   if (liveRenderSkip) { SKIP = liveRenderSkip; return; }
@@ -128,7 +136,7 @@ before(() => {
   if (native && nver && !NATIVE_SKIP) {
     if (nver !== version([quaude], cleanEnv())) { NATIVE_SKIP = 'version mismatch native vs quaude'; NO_REFERENCE_SKIP = NATIVE_SKIP; }
     else {
-      NATIVE = liveTurn([native]);
+      NATIVE = await liveTurn([native]);
       // Native is the comparison probe; logged out/offline means only the
       // comparison is unjudgeable — the quaude turn still stands on its own.
       // But it is ALSO a NO_REFERENCE_SKIP: without a confirmed logged-in
@@ -139,7 +147,7 @@ before(() => {
       if (!renderedAnswer(NATIVE)) { NATIVE_SKIP = `native could not complete a live turn (logged out/offline/model non-compliant):\n${lines(NATIVE).filter((l) => l.trim()).slice(-6).join('\n')}`; NO_REFERENCE_SKIP = NATIVE_SKIP; }
     }
   }
-  QUAUDE = liveTurn([quaude]);
+  QUAUDE = await liveTurn([quaude]);
 });
 after(() => { if (DIR) { try { fs.rmSync(DIR, { recursive: true, force: true }); } catch { /* */ } } });
 

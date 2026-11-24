@@ -34,10 +34,25 @@ QUAUDE="$WORK/quaude"
 CLODE_CLAUDE_BIN="$NATIVE" CLODE_CACHE="$WORK/cache" CLODE_TJS="$CLODE_TJS" \
   "$CLODE_NODE" scripts/stage0.mjs build --out "$QUAUDE"
 
+# Each side's screen once "/doctor" is in the prompt and Enter's report (its footer "Enter to
+# close") has painted and settled: a scripted session (test/e2e-pty.cjs captureSession), not a
+# screen read at a fixed 16 s with the keys at 4 s and 6 s, a guess a loaded box outruns
+# (test/fixed-window-captures.test.cjs). Your own environment, as before: a login is what opens
+# the report. The text is the same rows-joined screen the fixed capture printed.
 CAP() { # $1=out, $2...=cmd
   out=$1; shift
-  DISABLE_AUTOUPDATER=1 TERM=xterm-256color "$CLODE_NODE" test/tui-screen.cjs 16 \
-    --then-hex 2f646f63746f72@4 --then-hex 0d@6 --rows 120 --cols 100 -- "$@" > "$out"
+  DISABLE_AUTOUPDATER=1 "$CLODE_NODE" -e '
+    const { captureSession, frameText } = require("./test/e2e-pty.cjs");
+    const [out, ...cmd] = process.argv.slice(1);
+    captureSession({ env: process.env }, { rows: 120, cols: 100, cmd, script: [
+      { label: "type", send: "2f646f63746f72", until: "/doctor" },
+      { label: "enter", send: "0d", until: "Enter to close" },
+    ] }).then((s) => {
+      const last = s.frames[s.frames.length - 1];
+      if (!last || last.label !== "enter" || !last.settled) { console.error("no settled /doctor report from " + cmd[0]); process.exit(1); }
+      require("node:fs").writeFileSync(out, frameText(last.frame));
+    }).catch((e) => { console.error(e.message); process.exit(1); });
+  ' "$out" "$@"
 }
 CAP test/fixtures/doctor/native-sample.txt "$NATIVE"
 CAP test/fixtures/doctor/clode-sample.txt  "$QUAUDE"

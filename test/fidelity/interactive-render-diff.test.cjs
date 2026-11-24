@@ -15,7 +15,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { sandbox, REPO } = require('../e2e.cjs');
-const { capture, seedClaudeProfile, apeCmd } = require('../e2e-pty.cjs');
+const { captureBoot, seedClaudeProfile, apeCmd } = require('../e2e-pty.cjs');
 const { tjsPath } = require('../node-shim-helper.cjs');
 const { liveRenderSkipReason } = require('../live-render-helper.cjs');
 
@@ -43,7 +43,7 @@ function textLines(screen) {
 }
 
 let SKIP = null, NATIVE = '', QUAUDE = '', SBX = null, SBX2 = null, DIR = null;
-before(() => {
+before(async () => {
   const liveRenderSkip = liveRenderSkipReason();
   if (liveRenderSkip) { SKIP = liveRenderSkip; return; }
   if (!tjsPath()) { SKIP = 'no tjs binary'; return; }
@@ -68,9 +68,18 @@ before(() => {
   // linux-x64-pty mirror, 2026-09-26: five "missing" lines, all of that notice).
   SBX2 = sandbox();
   seedClaudeProfile(SBX2.home, { cwd: REPO });
-  const opts = { seconds: 10, rows: 40, cols: 100, env: { DISABLE_AUTOUPDATER: '1' } };
-  NATIVE = capture(SBX, { ...opts, cmd: [native] });
-  QUAUDE = capture(SBX2, { ...opts, cmd: [quaude] });
+  // Each side's BOOT FRAME once its paint has settled (captureBoot: tui-screen's measured boot
+  // window, which waits out the welcome screen's self-timed elements), not its screen at a fixed
+  // 10 s: a window a loaded box outruns (test/fixed-window-captures.test.cjs), and one that could
+  // read the two sides at different points of the same self-timed notification.
+  const opts = { rows: 40, cols: 100, env: { DISABLE_AUTOUPDATER: '1' } };
+  const shoot = async (sbx, cmd, who) => {
+    const boot = await captureBoot(sbx, { ...opts, cmd });
+    if (!boot.settled) throw new Error(`${who}'s boot frame never painted and settled (${boot.ms} ms):\n${boot.text}`);
+    return boot.text;
+  };
+  NATIVE = await shoot(SBX, [native], 'native');
+  QUAUDE = await shoot(SBX2, [quaude], 'quaude');
 });
 after(() => {
   for (const sbx of [SBX, SBX2]) {

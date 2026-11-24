@@ -115,14 +115,18 @@ test('parseScript: send, resize and wait steps normalise; bad scripts are refuse
   refuse([{ send: '0d' }], /step 0 needs a non-empty string label/);
   refuse([{ label: 'boot', send: '0d' }], /"boot" is the boot frame's label/);
   refuse([{ label: 'a', send: '0d' }, { label: 'a', send: '0d' }], /label "a" is used twice/);
-  refuse([{ label: 'a', send: '0d', wait: 5 }], /exactly one of send, resize, wait/);
-  refuse([{ label: 'a' }], /exactly one of send, resize, wait/);
+  refuse([{ label: 'a', send: '0d', wait: 5 }], /exactly one of send, resize, signal, wait/);
+  refuse([{ label: 'a' }], /exactly one of send, resize, signal, wait/);
   refuse([{ label: 'a', send: '0d', note: 'x' }], /unknown key "note"/);
   refuse([{ label: 'a', send: 'xyz' }], /send must be an even-length hex string/);
   refuse([{ label: 'a', send: '' }], /send must be an even-length hex string/);
   refuse([{ label: 'a', resize: '60by30' }], /resize must be "COLSxROWS"/);
   refuse([{ label: 'a', resize: '0x30' }], /resize must be "COLSxROWS"/);
   refuse([{ label: 'a', wait: -1 }], /wait must be a positive integer/);
+  refuse([{ label: 'a', signal: 'CONT' }], /signal must be a name like "SIGCONT"/);
+  refuse([{ label: 'a', signal: 'SIGCONT', send: '0d' }], /exactly one of send, resize, signal, wait/);
+  refuse([{ label: 'a', signal: 'SIGCONT', until: 'x' }], /until belongs to a send step/);
+  assert.deepStrictEqual(parseScript([{ label: 'fg', signal: 'SIGCONT' }]), [{ label: 'fg', signal: 'SIGCONT' }]);
 });
 
 // The step began at t=1000 (the keystroke). Everything is relative to that.
@@ -314,6 +318,28 @@ test('a scripted session: one frame per step, each taken only after that step\'s
   assert.ok(frameShows(shrink, 'size 30x6'), 'the child saw the resize and painted after it');
   assert.deepStrictEqual(pause.cells, shrink.cells, 'a wait with nothing happening repaints nothing');
   assert.strictEqual(s.exit, null, 'the child was alive until the harness killed it');
+});
+
+// A signal step (e2e-ctrlz-tui's SIGCONT, as a shell's `fg` sends it): the child gets the
+// signal, and the frame waits for the output that answers it, as a keystroke's does.
+const SIGNAL_TUI = `
+const ESC = String.fromCharCode(27);
+const out = (s) => process.stdout.write(s);
+out('READY');
+process.on('SIGCONT', () => setTimeout(() => out(ESC + '[2;1H' + 'continued'), 300));
+setInterval(() => {}, 1000);
+`;
+test('a signal step delivers the signal, and its frame waits for the answer', async (t) => {
+  if (SKIP) { t.skip(SKIP); return; }
+  const s = await captureSession(SBX, {
+    cmd: child('signalled', SIGNAL_TUI), env: DRIVER_ENV, rows: 4, cols: 20,
+    settleMs: 500, maxSettleMs: 8000, bootSettleMs: 500, bootMaxMs: 8000,
+    script: [{ label: 'fg', signal: 'SIGCONT' }],
+  });
+  assert.deepStrictEqual(s.frames.map((f) => [f.label, f.settled]), [['boot', true], ['fg', true]]);
+  assert.ok(!frameShows(s.frames[0].frame, 'continued'), 'nothing answered a signal before it was sent');
+  assert.ok(frameShows(s.frames[1].frame, 'continued'), 'the fg frame waited for the 300 ms-late answer');
+  assert.ok(s.frames[1].ms >= 300 + 500, `the fg frame came ${s.frames[1].ms} ms after the signal: before the answer plus a quiet window`);
 });
 
 test('a step that never goes quiet is reported unsettled at its cap, never as settled', async (t) => {

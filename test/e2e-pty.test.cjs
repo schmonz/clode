@@ -78,8 +78,34 @@ test('driveArgs: a script run passes the script file and every settle limit to t
   assert.deepStrictEqual(args, [TUI_SCREEN, '0', '--script', '/tmp/steps.json', '--settle-ms', '300',
     '--max-settle-ms', '5000', '--boot-settle-ms', '2000', '--boot-max-ms', '9000',
     '--rows', '8', '--cols', '40', '--', process.execPath, 'x.cjs']);
-  const plain = driveArgs(sbx, { seconds: 12, cells: true, cmd: [process.execPath] }).args;
-  assert.deepStrictEqual(plain, [TUI_SCREEN, '12', '--cells', '--', process.execPath], 'a single-frame drive is unchanged');
+  const plain = driveArgs(sbx, { seconds: 12, fixedWindowBecause: 'unit test of the argument shape; nothing is spawned',
+    cells: true, cmd: [process.execPath] }).args;
+  assert.deepStrictEqual(plain, [TUI_SCREEN, '12', '--cells', '--', process.execPath], 'a reasoned single-frame drive is unchanged');
+});
+
+// THE MECHANISM under test/fixed-window-captures.test.cjs: every capture goes through driveArgs,
+// so a fixed window with no written reason is refused before anything is spawned. The first
+// refusal is frame-diff.test.cjs's old line, which took a BLANK frame under load at 91e96b5.
+test('driveArgs: a fixed window without fixedWindowBecause is refused, and so is a timed option in a script', (t) => {
+  const sbx = sandbox(t);
+  assert.throws(() => driveArgs(sbx, { seconds: 1.2, rows: 12, cols: 60, cmd: [process.execPath, 'x.cjs'] }),
+    /a fixed 1\.2s capture window needs opts\.fixedWindowBecause/);
+  assert.throws(() => driveArgs(sbx, { seconds: 9, fixedWindowBecause: '  ', cmd: [process.execPath] }),
+    /needs opts\.fixedWindowBecause/, 'a blank reason is no reason');
+  assert.throws(() => driveArgs(sbx, { seconds: 0, scriptFile: '/tmp/s.json', thenHex: ['0d@6'], cmd: [process.execPath] }),
+    /a scripted session takes no fixed window \(thenHex\)/);
+  assert.throws(() => driveArgs(sbx, { seconds: 5, scriptFile: '/tmp/s.json', cmd: [process.execPath] }),
+    /a scripted session takes no fixed window \(seconds: 5\)/);
+  assert.doesNotThrow(() => driveArgs(sbx, { seconds: 0, scriptFile: '/tmp/s.json', thenHex: [], cmd: [process.execPath] }));
+});
+
+test('frameText: a cell frame reads as the text screen, a wide glyph once, trailing space trimmed', () => {
+  const { frameText } = require('./e2e-pty.cjs');
+  const cell = (c, w = 1) => ({ c, w, f: '0:-1', b: '0:-1', a: 0, l: null });
+  const wide = String.fromCodePoint(0x4e2d);
+  const frame = { format: 'clode-frame-v1', cols: 4, rows: 2, links: true,
+    cells: [[cell('a'), cell(''), cell('b'), cell(' ')], [cell(wide, 2), cell('', 0), cell(''), cell('')]] };
+  assert.strictEqual(frameText(frame), `a b\n${wide}\n`);
 });
 
 test('parseSession: anything but a whole frame sequence throws, carrying the driver\'s stderr', () => {

@@ -44,7 +44,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const { sandbox } = require('../e2e.cjs');
-const { seedClaudeProfile, capture } = require('../e2e-pty.cjs');
+const { seedClaudeProfile, captureSession, frameText } = require('../e2e-pty.cjs');
 const { builtQuaude } = require('../built-binary.cjs');
 const { liveRenderSkipReason } = require('../live-render-helper.cjs');
 
@@ -62,16 +62,29 @@ function gate() {
   return RESOLVED;
 }
 
-// Type "/status" + Enter a few seconds in, then let the diagnostics builder (which
+// Type "/status" once boot has settled, then Enter, then let the diagnostics builder (which
 // awaits the update check) render its warnings list. The child inherits the test
 // runner's cwd, so pre-trust THAT dir to clear the per-project trust prompt.
-const STATUS_HEX = ['2f737461747573@6', '0d@8']; // "/status", CR
+//
+// EACH STEP WAITS FOR ITS ANSWER, NOT A CLOCK (test/fixed-window-captures.test.cjs). This read
+// the screen at a fixed 16 s, keys at 6 s and 8 s: a guess a loaded box outruns. Enter's frame is
+// held until `until` is on screen and output has then settled. A state that PAINTS a notice holds
+// for that notice's own words; the "current" state paints none, so it holds for the /status
+// surface (REACHED_STATUS's "Version:") and then for STATUS_QUIET_MS of quiet: the update check's
+// absence of a notice is judged once the diagnostics have stopped painting, not at a clock time.
+const STATUS_TYPED = '2f737461747573'; // "/status"
+const STATUS_QUIET_MS = 3000;
 
-function statusScreen(quaude, env) {
+async function statusScreen(quaude, env, until) {
   const sbx = sandbox();
   seedClaudeProfile(sbx.home, { cwd: process.cwd() });
   try {
-    return capture(sbx, { seconds: 16, cols: 120, rows: 50, cmd: [quaude], env, thenHex: STATUS_HEX });
+    const s = await captureSession(sbx, {
+      cols: 120, rows: 50, cmd: [quaude], env, settleMs: STATUS_QUIET_MS, maxSettleMs: 30000,
+      script: [{ label: 'type', send: STATUS_TYPED, until: '/status' }, { label: 'enter', send: '0d', until }],
+    });
+    const last = s.frames[s.frames.length - 1];
+    return { screen: last ? frameText(last.frame) : '', settled: !!(last && last.label === 'enter' && last.settled) };
   } finally {
     try { fs.rmSync(sbx.dir, { recursive: true, force: true }); } catch { /* */ }
   }
@@ -81,30 +94,33 @@ function statusScreen(quaude, env) {
 // assertion can't pass merely because the screen never rendered).
 const REACHED_STATUS = /Version:\s*\d+\.\d+\.\d+/;
 
-test('newer upstream -> a notice naming the version (clode-managed), never "Auto-update failed"', (t) => {
+test('newer upstream -> a notice naming the version (clode-managed), never "Auto-update failed"', async (t) => {
   const g = gate();
   if (g.skip) { t.skip(g.skip); return; }
-  const screen = statusScreen(g.path, { CLODE_UPDATE_CHANNEL: '9.9.9' });
+  const { screen, settled } = await statusScreen(g.path, { CLODE_UPDATE_CHANNEL: '9.9.9' }, 'is available');
+  assert.ok(settled, `/status never painted the notice and settled:\n${screen}`);
   assert.match(screen, REACHED_STATUS, `/status never rendered:\n${screen}`);
   assert.match(screen, /A newer Claude Code \(9\.9\.9\) is available/,
     `expected the newer-version notice on /status:\n${screen}`);
   assert.doesNotMatch(screen, /Auto-update failed/, `notify-only must never say "Auto-update failed":\n${screen}`);
 });
 
-test('already current -> no update notice at all', (t) => {
+test('already current -> no update notice at all', async (t) => {
   const g = gate();
   if (g.skip) { t.skip(g.skip); return; }
-  const screen = statusScreen(g.path, { CLODE_UPDATE_CHANNEL: '2.1.218' });
+  const { screen, settled } = await statusScreen(g.path, { CLODE_UPDATE_CHANNEL: '2.1.218' }, 'Version:');
+  assert.ok(settled, `/status never painted and settled:\n${screen}`);
   assert.match(screen, REACHED_STATUS, `/status never rendered:\n${screen}`);
   assert.doesNotMatch(screen, /newer Claude Code/i, `current must show no "newer" notice:\n${screen}`);
   assert.doesNotMatch(screen, /couldn.t check for updates/i, `current is not "unknown":\n${screen}`);
   assert.doesNotMatch(screen, /Auto-update failed/, screen);
 });
 
-test("cannot check (bad endpoint) -> a subtle \"couldn't check for updates\" note", (t) => {
+test("cannot check (bad endpoint) -> a subtle \"couldn't check for updates\" note", async (t) => {
   const g = gate();
   if (g.skip) { t.skip(g.skip); return; }
-  const screen = statusScreen(g.path, { CLODE_UPDATE_CHANNEL: 'stable', CLODE_RELEASES_URL: 'file:///nonexistent-xyz-clode' });
+  const { screen, settled } = await statusScreen(g.path, { CLODE_UPDATE_CHANNEL: 'stable', CLODE_RELEASES_URL: 'file:///nonexistent-xyz-clode' }, 'check for updates');
+  assert.ok(settled, `/status never painted the note and settled:\n${screen}`);
   assert.match(screen, REACHED_STATUS, `/status never rendered:\n${screen}`);
   assert.match(screen, /couldn.t check for updates/i, `expected the "couldn't check" note on /status:\n${screen}`);
   assert.doesNotMatch(screen, /A newer Claude Code/, `unknown must not name a version:\n${screen}`);

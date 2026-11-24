@@ -54,7 +54,7 @@ function seedClaudeProfile(home, opts = {}) {
   // answer, i.e. NOT from the process that is blocked in a synchronous capture
   // below: an in-process mock never runs while spawnSync waits, so the turn
   // spins forever without a request ever being seen. Capture with
-  // captureFrameAsync when the mock lives in this process.
+  // captureSession (asynchronous) when the mock lives in this process.
   if (opts.apiKey) {
     profile.customApiKeyResponses = { approved: [String(opts.apiKey).trim().slice(-20)], rejected: [] };
   }
@@ -64,11 +64,38 @@ function seedClaudeProfile(home, opts = {}) {
 
 // Drive opts.cmd under a PTY via tui-screen.cjs; return the rendered screen (stdout).
 // tui-screen self-terminates after opts.seconds, so no external timeout is needed.
-// opts: { seconds, cmd:[...], sendHex?, thenHex?:['HEX@DELAY'], signal?:['NAME@DELAY'], resize?:['COLSxROWS@DELAY'],
-// rows?, cols?, env? }. cmd[0] is
+// opts: { seconds, fixedWindowBecause, cmd:[...], sendHex?, thenHex?:['HEX@DELAY'], signal?:['NAME@DELAY'],
+// resize?:['COLSxROWS@DELAY'], rows?, cols?, env? }. cmd[0] is
 // the absolute program to run under the PTY (e.g. a built quaude, or a native binary).
 // A scripted session (captureSession) passes scriptFile and the settle limits instead.
+//
+// A FIXED WINDOW NEEDS A WRITTEN REASON. A capture taken `seconds` after spawn, with keystrokes
+// at fixed delays, is a guess about how fast the box is, and a loaded box outruns it: the full
+// suite at 91e96b5 took a BLANK frame in test/frame-diff.test.cjs (node had not painted inside its
+// 1.2 s window) and two rows failed on it. A session (captureSession) takes each frame once its
+// output has been heard and has settled, and waits on `until` text for a reply. So a fixed
+// window is refused unless opts.fixedWindowBecause says why the clock itself is what is tested;
+// test/fixed-window-captures.test.cjs holds every such reason in test/** to an allowlist.
+// The timed options belong to the fixed form only: a script run ignores them, so they are
+// refused there rather than silently doing nothing.
+const TIMED = ['sendHex', 'thenHex', 'signal', 'resize'];
+function refuseUnreasonedWindow(opts) {
+  if (opts.scriptFile) {
+    const timed = TIMED.filter((k) => opts[k] != null && !(Array.isArray(opts[k]) && opts[k].length === 0));
+    if (Number(opts.seconds) > 0 || timed.length) {
+      throw new Error(`a scripted session takes no fixed window (${[Number(opts.seconds) > 0 ? `seconds: ${opts.seconds}` : null, ...timed].filter(Boolean).join(', ')}): `
+        + 'every step waits for its own output to settle; spell a timed keystroke as a send step');
+    }
+    return;
+  }
+  if (typeof opts.fixedWindowBecause !== 'string' || opts.fixedWindowBecause.trim() === '') {
+    throw new Error(`a fixed ${opts.seconds}s capture window needs opts.fixedWindowBecause: a fixed window is outrun on a `
+      + 'loaded box (frame-diff took a blank frame at 91e96b5); use captureSession/captureBoot, which take a frame once '
+      + 'its output was heard and settled, unless the clock is the thing under test');
+  }
+}
 function driveArgs(sbx, opts) {
+  refuseUnreasonedWindow(opts);
   const args = [String(opts.seconds)];
   if (opts.cells) args.push('--cells');
   if (opts.scriptFile) args.push('--script', opts.scriptFile);
@@ -162,6 +189,26 @@ async function captureSession(sbx, opts) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 }
+// THE BOOT FRAME, SETTLED: a one-step session's frame 0, taken once the TUI's output has been
+// heard and has then been quiet for bootSettleMs (tui-screen's measured default when unset: long
+// enough to wait out the welcome screen's self-timed elements). Replaces a fixed-window capture of
+// "what is on screen at t=N s". Resolves to { label, settled, ms, frame, text }; the caller asserts
+// `settled`, because a boot that never painted (or never went quiet) by bootMaxMs is a finding.
+async function captureBoot(sbx, opts) {
+  const s = await captureSession(sbx, { ...opts, script: [{ label: 'after', wait: 1 }] });
+  const boot = s.frames[0];
+  return { ...boot, text: frameText(boot.frame) };
+}
+
+// A cell frame as the text screen capture() used to print: each row's glyphs (a wide glyph's
+// spacer dropped, an unwritten cell a space), trailing space trimmed, rows joined by newlines.
+function frameText(frame) {
+  const { rowText } = require('./frame-diff.cjs');
+  const rows = [];
+  for (let y = 0; y < frame.rows; y++) rows.push(rowText(frame, y));
+  return rows.join('\n') + '\n';
+}
+
 // The session form of parseFrame: a driver result that is not a whole frame sequence
 // throws, with the driver's stderr and exit status, rather than reading as a session.
 function parseSession(r) {
@@ -179,5 +226,5 @@ function parseSession(r) {
   return s;
 }
 
-module.exports = { seedClaudeProfile, capture, captureFrame, captureFrameAsync, captureSession, parseSession,
-  drive, driveArgs, apeCmd, refuseLeak, TUI_SCREEN };
+module.exports = { seedClaudeProfile, capture, captureFrame, captureFrameAsync, captureSession, captureBoot, frameText,
+  parseSession, drive, driveArgs, apeCmd, refuseLeak, TUI_SCREEN };

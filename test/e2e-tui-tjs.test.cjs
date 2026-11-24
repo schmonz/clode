@@ -13,7 +13,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { sandbox, REPO } = require('./e2e.cjs');
-const { seedClaudeProfile, drive } = require('./e2e-pty.cjs');
+const { seedClaudeProfile, captureBoot } = require('./e2e-pty.cjs');
 const { resolveClaudeBin } = require('../libexec/clode-resolve.cjs');
 const { tjsPath } = require('./node-shim-helper.cjs');
 const { stateRoot } = require('./state-root-helper.cjs');
@@ -27,8 +27,8 @@ function realProvider() {
   return fs.existsSync(home) ? home : null;
 }
 
-let SKIP = null, SCREEN = '', DRIVER = null, SBX = null, DIR = null;
-before(() => {
+let SKIP = null, SCREEN = '', BOOT = null, CAPTURE_ERROR = null, SBX = null, DIR = null;
+before(async () => {
   if (!tjsPath()) { SKIP = 'no tjs binary (CLODE_TJS or build/tjs/tjs)'; return; }
   const liveRenderSkip = liveRenderSkipReason();
   if (liveRenderSkip) { SKIP = liveRenderSkip; return; }
@@ -61,11 +61,16 @@ before(() => {
     },
   });
   if (build.status !== 0) { SKIP = `clode build failed:\n${build.stdout}\n${build.stderr}`; return; }
-  // drive, not capture: the driver's exit says whether quaude was stopped and GONE before it returned
-  // (tui-screen.cjs stopChild). windows-amd64-tui (CI 44460009323) found quaude.exe still mapped at cleanup, because
-  // the driver's kill never reached it on Windows and nothing waited.
-  DRIVER = drive(SBX, { seconds: 12, cmd: [quaude] });
-  SCREEN = DRIVER.stdout;
+  // The boot frame once its paint has settled (captureBoot), not the screen at a fixed 12 s: a fixed
+  // window is outrun on a loaded box (test/fixed-window-captures.test.cjs). The capture THROWS when the
+  // driver reports quaude outlived its stop (exit 4, tui-screen.cjs stopChild) or produced no frame
+  // sequence; that error is kept for the second test, which is about exactly that. windows-amd64-tui
+  // (CI 44460009323) found quaude.exe still mapped at cleanup, because the driver's kill never reached
+  // it on Windows and nothing waited.
+  try {
+    BOOT = await captureBoot(SBX, { cmd: [quaude] });
+    SCREEN = BOOT.text;
+  } catch (e) { CAPTURE_ERROR = e; }
 });
 // A dir that will not go is a finding, named entry by entry (suite-home.cjs removeNamingRefusals), never swallowed:
 // windows-amd64-tui (CI 44443821699) failed removing the suite home at exit with node's root-only EPERM, and these two
@@ -79,10 +84,14 @@ after(() => {
 
 test('TUI renders the welcome box (Claude Code) under a built quaude', (t) => {
   if (SKIP) { t.skip(SKIP); return; }
+  assert.ifError(CAPTURE_ERROR);
+  assert.ok(BOOT.settled, `the TUI never painted and settled (${BOOT.ms} ms):\n${SCREEN}`);
   assert.match(SCREEN, /Claude Code/);
 });
 
 test('the driver stopped the built quaude and saw it gone before it returned (it outlives nothing)', (t) => {
   if (SKIP) { t.skip(SKIP); return; }
-  assert.strictEqual(DRIVER.status, 0, `tui-screen exit ${DRIVER.status} (signal ${DRIVER.signal}): ${DRIVER.stderr.slice(-800)}`);
+  // captureSession refuses a driver exit 4 (the TUI outlived its stop) and any exit that left no whole
+  // frame sequence, so no error here is the driver's word that quaude was stopped and gone.
+  assert.ifError(CAPTURE_ERROR);
 });

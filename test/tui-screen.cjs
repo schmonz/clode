@@ -95,7 +95,10 @@ function settleVerdict({ now, since, lastOut, quietMs, maxMs, needOutput, shown 
 }
 
 // A script is a JSON array of steps, each { label, send: HEX[, until: TEXT] }
-// | { label, resize: 'COLSxROWS' } | { label, wait: MS }. `until` holds a send step's frame
+// | { label, resize: 'COLSxROWS' } | { label, signal: 'SIGNAME' } | { label, wait: MS }.
+// A signal step sends the child that signal (SIGCONT, as a shell's `fg` does after a Ctrl-Z:
+// the PTY child is its own session leader with no job-control shell, so nothing else continues
+// it) and, like a send, its frame waits for the output that answers it. `until` holds a send step's frame
 // until TEXT is on screen and output has then settled: a turn is judged once its reply is
 // painted, however long the builder waited in silence first. (Found 2026-09-26: in the
 // linux-x64-pty container a quaude's 2.1.283 reply came after more than the 800 ms quiet
@@ -115,10 +118,10 @@ function parseScript(steps) {
     if (seen.has(label)) throw new Error(`step ${i}: label "${label}" is used twice`);
     seen.add(label);
     for (const k of Object.keys(st)) {
-      if (!['label', 'send', 'resize', 'wait', 'until'].includes(k)) throw new Error(`step "${label}": unknown key "${k}"`);
+      if (!['label', 'send', 'resize', 'signal', 'wait', 'until'].includes(k)) throw new Error(`step "${label}": unknown key "${k}"`);
     }
-    const acts = ['send', 'resize', 'wait'].filter((k) => st[k] !== undefined);
-    if (acts.length !== 1) throw new Error(`step "${label}" needs exactly one of send, resize, wait`);
+    const acts = ['send', 'resize', 'signal', 'wait'].filter((k) => st[k] !== undefined);
+    if (acts.length !== 1) throw new Error(`step "${label}" needs exactly one of send, resize, signal, wait`);
     if (acts[0] === 'send') {
       if (typeof st.send !== 'string' || !/^(?:[0-9a-fA-F]{2})+$/.test(st.send)) throw new Error(`step "${label}": send must be an even-length hex string`);
       if (st.until === undefined) return { label, send: st.send };
@@ -127,6 +130,10 @@ function parseScript(steps) {
     }
     if (st.until !== undefined) {
       throw new Error(`step "${label}": until belongs to a send step`);
+    }
+    if (acts[0] === 'signal') {
+      if (typeof st.signal !== 'string' || !/^SIG[A-Z0-9]+$/.test(st.signal)) throw new Error(`step "${label}": signal must be a name like "SIGCONT"`);
+      return { label, signal: st.signal };
     }
     if (acts[0] === 'resize') {
       const m = typeof st.resize === 'string' && /^([1-9][0-9]*)x([1-9][0-9]*)$/.exec(st.resize);
@@ -359,6 +366,8 @@ async function runScript({ steps, child, term, state, spawnedAt, opts }) {
       try { child.write(hexPayload(st.send)); } catch { /* exited; the settle below says so */ }
     } else if (st.resize) {
       try { child.resize(st.resize.cols, st.resize.rows); term.resize(st.resize.cols, st.resize.rows); } catch { /* exited */ }
+    } else if (st.signal) {
+      try { child.kill(st.signal); } catch { /* exited, or a terminal that takes no signal names: the settle below says so */ }
     } else {
       await sleep(st.wait);
       since = Date.now();

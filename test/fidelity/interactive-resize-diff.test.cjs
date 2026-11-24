@@ -16,7 +16,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { sandbox, REPO } = require('../e2e.cjs');
-const { capture, seedClaudeProfile, apeCmd } = require('../e2e-pty.cjs');
+const { captureSession, frameText, seedClaudeProfile, apeCmd } = require('../e2e-pty.cjs');
 const { tjsPath } = require('../node-shim-helper.cjs');
 const { liveRenderSkipReason } = require('../live-render-helper.cjs');
 
@@ -41,7 +41,7 @@ function lineWidths(screen) {
 const NARROW = 60;
 
 let SKIP = null, NATIVE = '', QUAUDE = '', SBX = null, DIR = null;
-before(() => {
+before(async () => {
   const liveRenderSkip = liveRenderSkipReason();
   if (liveRenderSkip) { SKIP = liveRenderSkip; return; }
   if (!tjsPath()) { SKIP = 'no tjs binary'; return; }
@@ -59,10 +59,21 @@ before(() => {
   });
   if (build.status !== 0) { SKIP = `clode build failed:\n${build.stdout}\n${build.stderr}`; return; }
   if (nver !== version([quaude], cleanEnv())) { SKIP = 'version mismatch native vs quaude'; return; }
-  // Start wide (100), resize down to 60 cols at 5s; capture past the reflow.
-  const opts = { seconds: 9, rows: 40, cols: 100, resize: [`${NARROW}x40@5`], env: { DISABLE_AUTOUPDATER: '1' } };
-  NATIVE = capture(SBX, { ...opts, cmd: [native] });
-  QUAUDE = capture(SBX, { ...opts, cmd: [quaude] });
+  // Start wide (100); once boot has settled, resize down to 60 cols; take the frame once the
+  // reflow the resize causes has been painted and has settled. It used to resize at a fixed 5 s
+  // and read the screen at 9 s, a guess a loaded box outruns (test/fixed-window-captures.test.cjs).
+  const opts = { rows: 40, cols: 100, script: [{ label: 'narrow', resize: `${NARROW}x40` }], env: { DISABLE_AUTOUPDATER: '1' } };
+  const shoot = async (cmd, who) => {
+    const s = await captureSession(SBX, { ...opts, cmd });
+    const narrow = s.frames.find((f) => f.label === 'narrow');
+    if (!narrow || !narrow.settled) {
+      const last = s.frames[s.frames.length - 1];
+      throw new Error(`${who} never repainted and settled after the resize (${JSON.stringify(s.frames.map((f) => [f.label, f.settled, f.ms]))}):\n${last ? frameText(last.frame) : ''}`);
+    }
+    return frameText(narrow.frame);
+  };
+  NATIVE = await shoot([native], 'native');
+  QUAUDE = await shoot([quaude], 'quaude');
 });
 after(() => {
   if (SBX) { try { fs.rmSync(SBX.dir, { recursive: true, force: true }); } catch { /* */ } }

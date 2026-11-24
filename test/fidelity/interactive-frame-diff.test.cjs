@@ -85,24 +85,32 @@ const { diff, describe, corrupt, cloneFrame, nonBlank, frameShows } = require('.
 const { defineGuard, guardTests } = require('../guard.cjs');
 
 const ROWS = 40, COLS = 100;
-// Long enough for the late-arriving status line: at 12s the "● high · /effort"
-// row was sometimes still absent from one side (measured 2026-09-22), which
-// read as 16 phantom glyph+sgr differences.
-const SECONDS = 20;
+// EVERY FRAME IS A SETTLED ONE, NOT ONE READ AT A CLOCK TIME (2026-11-24). Each scene is a
+// script (tui-screen.cjs --script, via frame-oracle's captureFrames): boot, waited out by the
+// measured boot window, then the scene's keystrokes, each held until its answer is on screen
+// and output has then settled; the frame compared is the last step's. It used to be the screen
+// at a fixed 20 s, keys at 6 s, a guess a loaded box outruns: frame-diff.test.cjs took a BLANK
+// frame that way in a full-suite run at 91e96b5 (test/fixed-window-captures.test.cjs). The boot
+// window also outlasts the late "● high · /effort" status row, which at a fixed 12 s was
+// sometimes absent from one side (measured 2026-09-22: 16 phantom glyph+sgr differences).
 const FLOOR = 200;
+const hex = (text) => Buffer.from(text, 'utf8').toString('hex');
 // The typed scene, built from CODE POINTS (an editor normalises a typed `e U+0301` into
 // the precomposed U+00E9, which is not a combining mark — that happened to the plan's own
-// literal). Typed at 6 s: native and quaude both paint their prompt within ~2 s here.
+// literal). Typed once boot has settled; its frame is held until the wide pair is on screen.
 const TYPED_CPS = [0x4e2d, 0x6587, 0x20, 0x1f44d, 0x1f3fd, 0x20, 0x1f1fa, 0x1f1f8, 0x20, 0x65, 0x301, 0x20, 0x2764, 0xfe0f];
 const TYPED = String.fromCodePoint(...TYPED_CPS);
-const TYPE_AT = 6;
-// The link scene: a turn (`hi`, then Enter a moment later, as a person types), answered by
-// the mock with one markdown link and one bare URL.
+const TYPED_SHOWN = String.fromCodePoint(0x4e2d, 0x6587);
+const TYPED_SCENE = { script: [{ label: 'typed', send: hex(TYPED), until: TYPED_SHOWN }] };
+// A turn: `hi` (held until it is in the prompt), then Enter, held until the reply's `shown`
+// text is on screen and output has settled.
+const turn = (shown) => [{ label: 'typed', send: hex('hi'), until: 'hi' }, { label: 'reply', send: '0d', until: shown }];
+// The link scene: a turn answered by the mock with one markdown link and one bare URL.
 const LINKS = ['https://example.com/docs', 'https://example.com/bare'];
 const LINK_REPLY = `See [the docs](${LINKS[0]}) and ${LINKS[1]} now.`;
 const LINK_SHOWN = `See the docs and ${LINKS[1]} now.`;
 const LINK_SCENE = { mockText: LINK_REPLY, env: { FORCE_HYPERLINK: '1' }, settings: { showTurnDuration: false },
-  thenHex: [`${Buffer.from('hi', 'utf8').toString('hex')}@${TYPE_AT}`, `0d@${TYPE_AT + 1.2}`] };
+  script: turn(LINK_SHOWN) };
 // WRAP SCENE: a reply the wrap helper breaks across lines, holding what native's
 // Bun.wrapAnsi and npm wrap-ansi disagree on (recon 2026-09-26): literal tabs inside
 // wrapped text, and an italic run holding bold that crosses a wrap point. Both in a table,
@@ -115,8 +123,7 @@ const WRAP_REPLY = [
   '| alpha | plain words that push the bold run toward the wrap: *italic holding **bold words that cross the wrap point of this cell** and more italic* done |',
 ].join('\n');
 const WRAP_SHOWN = 'and more italic done';
-const WRAP_SCENE = { mockText: WRAP_REPLY, settings: { showTurnDuration: false },
-  thenHex: [`${Buffer.from('hi', 'utf8').toString('hex')}@${TYPE_AT}`, `0d@${TYPE_AT + 1.2}`] };
+const WRAP_SCENE = { mockText: WRAP_REPLY, settings: { showTurnDuration: false }, script: turn(WRAP_SHOWN) };
 
 let SKIP = null, FRAMES = null, TYPED_FRAMES = null, LINK_FRAMES = null, WRAP_FRAMES = null;
 let WHAT = '', TYPED_WHAT = '', LINK_WHAT = '', WRAP_WHAT = '';
@@ -128,29 +135,24 @@ before(async () => {
   const q = quaudeBesideNative(ref);
   if (q.skip) { SKIP = q.skip; return; }
   const sub = q.quaude;
-  WHAT = `native ${ref} (${q.version}) vs quaude ${sub}, ${COLS}x${ROWS}, ${SECONDS}s`;
-  FRAMES = await captureFrames({ ref, sub, seconds: SECONDS, rows: ROWS, cols: COLS });
-  // A capture that produced no frame is a harness failure, and it must SAY so
-  // rather than skip quietly: the whole point is that this runs.
-  if (!FRAMES.ref || !FRAMES.sub) {
-    throw new Error(`frame capture failed (${WHAT}): ref=${!!FRAMES.ref} sub=${!!FRAMES.sub}; see stderr`);
-  }
-  TYPED_WHAT = `${WHAT}, prompt typed at ${TYPE_AT}s`;
-  TYPED_FRAMES = await captureFrames({ ref, sub, seconds: SECONDS, rows: ROWS, cols: COLS,
-    thenHex: [`${Buffer.from(TYPED, 'utf8').toString('hex')}@${TYPE_AT}`] });
-  if (!TYPED_FRAMES.ref || !TYPED_FRAMES.sub) {
-    throw new Error(`frame capture failed (${TYPED_WHAT}): ref=${!!TYPED_FRAMES.ref} sub=${!!TYPED_FRAMES.sub}; see stderr`);
-  }
-  LINK_WHAT = `${WHAT}, a turn typed at ${TYPE_AT}s answered with two links, FORCE_HYPERLINK=1`;
-  LINK_FRAMES = await captureFrames({ ref, sub, seconds: SECONDS, rows: ROWS, cols: COLS, ...LINK_SCENE });
-  if (!LINK_FRAMES.ref || !LINK_FRAMES.sub) {
-    throw new Error(`frame capture failed (${LINK_WHAT}): ref=${!!LINK_FRAMES.ref} sub=${!!LINK_FRAMES.sub}; see stderr`);
-  }
-  WRAP_WHAT = `${WHAT}, a turn typed at ${TYPE_AT}s answered with a table the wrap helper breaks`;
-  WRAP_FRAMES = await captureFrames({ ref, sub, seconds: SECONDS, rows: ROWS, cols: COLS, ...WRAP_SCENE });
-  if (!WRAP_FRAMES.ref || !WRAP_FRAMES.sub) {
-    throw new Error(`frame capture failed (${WRAP_WHAT}): ref=${!!WRAP_FRAMES.ref} sub=${!!WRAP_FRAMES.sub}; see stderr`);
-  }
+  WHAT = `native ${ref} (${q.version}) vs quaude ${sub}, ${COLS}x${ROWS}, each frame settled`;
+  // A capture that produced no frame, or a frame taken at its step's cap rather than settled, is
+  // a harness failure, and it must SAY so rather than skip quietly: the whole point is that this runs.
+  const shoot = async (what, scene) => {
+    const f = await captureFrames({ ref, sub, rows: ROWS, cols: COLS, ...scene });
+    if (!f.ref || !f.sub) throw new Error(`frame capture failed (${what}): ref=${!!f.ref} sub=${!!f.sub}; see stderr`);
+    if (!f.settled.ref || !f.settled.sub) {
+      throw new Error(`a frame never settled (${what}): ref=${f.settled.ref} sub=${f.settled.sub}; it was taken at its step's cap`);
+    }
+    return f;
+  };
+  FRAMES = await shoot(WHAT, {});
+  TYPED_WHAT = `${WHAT}, prompt typed once boot settled`;
+  TYPED_FRAMES = await shoot(TYPED_WHAT, TYPED_SCENE);
+  LINK_WHAT = `${WHAT}, a turn answered with two links, FORCE_HYPERLINK=1`;
+  LINK_FRAMES = await shoot(LINK_WHAT, LINK_SCENE);
+  WRAP_WHAT = `${WHAT}, a turn answered with a table the wrap helper breaks`;
+  WRAP_FRAMES = await shoot(WRAP_WHAT, WRAP_SCENE);
 });
 
 // Every guard judges the same way: exact equality, cell for cell, and no claim about
@@ -218,7 +220,7 @@ guardTests(defineGuard({
   floor: FLOOR,
   read() {
     if (SKIP) return { skip: SKIP };
-    return { ref: TYPED_FRAMES.ref, sub: TYPED_FRAMES.sub, what: TYPED_WHAT, mustShow: String.fromCodePoint(0x4e2d, 0x6587) };
+    return { ref: TYPED_FRAMES.ref, sub: TYPED_FRAMES.sub, what: TYPED_WHAT, mustShow: TYPED_SHOWN };
   },
   scan: scanFrames,
   control() {

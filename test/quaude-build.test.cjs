@@ -406,14 +406,17 @@ test('quaude remote-control: the headless subcommand runs, and runs clean', asyn
   assert.doesNotMatch(out, /unhandledRejection/, 'no swallowed crash on the way to the prompt');
 });
 
-test('TUI paint smoke under the blobulated quaude (CLODE_LIVE_RENDER-gated)', (t) => {
+test('TUI paint smoke under the blobulated quaude (CLODE_LIVE_RENDER-gated)', async (t) => {
   if (SKIP) { t.skip(SKIP); return; }
   const liveRenderSkip = liveRenderSkipReason();
   if (liveRenderSkip) { t.skip(liveRenderSkip); return; }
   const { sandbox } = require('./e2e.cjs');
-  const { seedClaudeProfile, capture } = require('./e2e-pty.cjs');
+  const { seedClaudeProfile, captureBoot } = require('./e2e-pty.cjs');
   const sbx = sandbox(t);
   seedClaudeProfile(sbx.home, { cwd: REPO });
-  const screen = capture(sbx, { seconds: 12, cmd: [QUAUDE] });
-  assert.match(screen, /Claude Code/);
+  // The boot frame once its paint has settled, not the screen at a fixed 12 s (a window a loaded
+  // box outruns: test/fixed-window-captures.test.cjs).
+  const boot = await captureBoot(sbx, { cmd: [QUAUDE] });
+  assert.ok(boot.settled, `the TUI never painted and settled (${boot.ms} ms):\n${boot.text}`);
+  assert.match(boot.text, /Claude Code/);
 });
