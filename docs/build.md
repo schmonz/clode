@@ -59,7 +59,7 @@ npm test     # requires node: the suite is node:test, which the shim does not pr
 
 | step | phase | runs on | needs | count |
 | --- | --- | --- | --- | --- |
-| `engine.source` | engine | host | — | 51 |
+| `engine.source` | engine | host | — | 52 |
 | `engine.bytecode` | engine | host | `engine.source` | — |
 | `engine.compile` | engine | host | `engine.bytecode` | — |
 | `bundle.clode-main` | bundle | host | — | 2 |
@@ -127,7 +127,7 @@ flowchart LR
   a1("patches/ — 3 files")
   a2("scripts/ — 19 files")
   a3("spike/quickjs/ — 2 files")
-  a4("spike/quickjs/patches/ — 48 files")
+  a4("spike/quickjs/patches/ — 49 files")
   a5("spike/quickjs/qemu/ci-guest-bake.sh")
   a6("engine-checkout")
   s1[["engine.bytecode"]]

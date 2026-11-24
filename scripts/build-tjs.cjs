@@ -533,6 +533,9 @@ function orderedPatches(prefix) {
   }
   // quickjs-ng-* and lws-*: name order, stated rather than left to readdir. quickjs-ng-regexp-capture-u16.patch's quickjs.c hunk
   // edits the function quickjs-ng-canonical-le-bytecode.patch adds, so the order is load-bearing.
+  // quickjs-ng-module-name-index.patch (after module-meta, before the regexp pair) touches regions
+  // none of the others do (JSContext/JSModuleDef, module def new/free, js_find_loaded_module); the
+  // import-meta-by-identity fixup that runs after all of them anchors on js_import_meta, also untouched.
   return present.sort();
 }
 

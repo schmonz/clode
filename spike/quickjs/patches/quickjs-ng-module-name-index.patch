@@ -1,0 +1,184 @@
+# MODULE-NAME-INDEX: finding a loaded module by name is a hash lookup, not a walk of every
+# loaded module.
+#
+# WHY. js_find_loaded_module walked ctx->loaded_modules comparing atoms, and the engine calls
+# it for EACH import of EACH module it reads (JS_ReadModule -> js_host_resolve_imported_module_atom
+# -> js_host_resolve_imported_module) and compiles, so loading N modules cost O(N^2). Claude
+# Code 2.1.330 is 3,574 ES modules, and the graph runner compiles and then round-trips each
+# (deserialize(serialize(compile(...)))), two module records per name.
+#
+# MEASURED (darwin-arm64, 2026-11-24). `sample` (1 ms) of a plain quaude -p /status turn, no
+# load: 2,699 samples with js_host_resolve_imported_module (js_find_loaded_module, inlined)
+# on top of the main thread's stack, of a 11.8-12.6 s user-CPU run; patched, 7 samples and
+# 8.3-9.3 s. A synthetic graph (N modules each importing the 8 before it, loaded as the graph
+# runner loads the carve, one engine process per size): 4,000 modules took 1,450-1,660 ms
+# before, 45-46 ms after; the 4N/N growth ratio fell from 19.2-21.1 to 4.2-4.4
+# (test/engine-module-index.test.cjs). Under 32 `yes` on 8 cores, the same /status turn's
+# user CPU fell from 13.2-13.6 s to 9.1-11.1 s (3 runs each).
+#
+# THE CHANGE. JSContext gains module_hash (buckets of JSModuleDef, chained through a new
+# JSModuleDef.hash_next), module_hash_size and module_count. js_new_module_def adds the new
+# record at its chain's TAIL right after list_add_tail; js_free_module_def unlinks it before it
+# frees the name atom; JS_FreeContext frees the (by then empty) table after js_free_modules.
+# The table doubles past a load factor of 1 by rebuilding from the list, in list order.
+#
+# WHY IT IS INVISIBLE. Each chain holds its records in registration order, and the index
+# holds exactly the records on the list, so js_find_loaded_module answers the FIRST record
+# registered under a name, as the walk did (js_new_module_def never dedupes; the graph
+# runner's round-trip relies on the first record being the answer). module_name never changes
+# after js_new_module_def. A table allocation that fails is not an error (js_mallocz_rt, no
+# exception left pending): the old table, or none, stays, and with none the lookup walks the
+# list as before. No JS-visible API, no bytecode or serialization byte changes.
+#
+# NOT CHANGED. js_find_loaded_module_by_func_obj (build-tjs.cjs fixupQjsImportMetaByIdentity)
+# still walks the list, once per evaluation of import.meta: 0 samples in the same profile.
+# Present in the pinned quickjs-ng; not yet checked against its master: an upstream candidate.
+diff --git a/quickjs.c b/quickjs.c
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -536,6 +536,13 @@
+     int interrupt_counter;
+ 
+     struct list_head loaded_modules; /* list of JSModuleDef.link */
++    /* clode: index of loaded_modules by module_name (chains through
++       JSModuleDef.hash_next, each chain in registration order), so a lookup
++       by name is not a walk of every loaded module. NULL = not built yet (or
++       its allocation failed): lookups then walk the list. */
++    struct JSModuleDef **module_hash;
++    uint32_t module_hash_size; /* a power of two, or 0 */
++    uint32_t module_count;
+ 
+     /* if NULL, RegExp compilation is not supported */
+     JSValue (*compile_regexp)(JSContext *ctx, JSValueConst pattern,
+@@ -949,6 +956,7 @@
+     JSRefCountHeader header; /* must come first, 32-bit */
+     JSAtom module_name;
+     struct list_head link;
++    struct JSModuleDef *hash_next; /* clode: JSContext.module_hash chain */
+ 
+     JSReqModuleEntry *req_module_entries;
+     int req_module_entries_count;
+@@ -2723,6 +2731,9 @@
+ #endif
+ 
+     js_free_modules(ctx, JS_FREE_MODULE_ALL);
++    js_free_rt(ctx->rt, ctx->module_hash); /* clode: every chain is empty now */
++    ctx->module_hash = NULL;
++    ctx->module_hash_size = 0;
+ 
+     JS_FreeValue(ctx, ctx->global_obj);
+     JS_FreeValue(ctx, ctx->global_var_obj);
+@@ -29680,7 +29691,80 @@
+ }
+ 
+ #endif // QJS_DISABLE_PARSER
++
++/* clode: the module-name index (JSContext.module_hash). Every JSModuleDef is in
++   it exactly while it is on ctx->loaded_modules, and each chain keeps
++   registration order, so js_find_loaded_module still answers the FIRST module
++   registered under a name (js_new_module_def never dedupes), exactly as the
++   list walk it replaces did. */
++static inline uint32_t js_module_hash(JSAtom name, uint32_t size)
++{
++    uint32_t h = (uint32_t)name * 0x9E3779B1u;
++    return (h ^ (h >> 16)) & (size - 1);
++}
++
++static void js_module_hash_append(JSModuleDef **tab, uint32_t size,
++                                  JSModuleDef *m)
++{
++    JSModuleDef **pp = &tab[js_module_hash(m->module_name, size)];
++    while (*pp)
++        pp = &(*pp)->hash_next;
++    m->hash_next = NULL;
++    *pp = m;
++}
++
++/* (Re)build the index from the list, in list order. On allocation failure the
++   old index (or none) stays: still correct, only slower. */
++static void js_module_hash_resize(JSContext *ctx, uint32_t new_size)
++{
++    JSModuleDef **tab;
++    struct list_head *el;
++
++    /* the _rt allocator: a failure here is not the caller's, so it must not
++       leave an out-of-memory exception pending */
++    tab = js_mallocz_rt(ctx->rt, sizeof(tab[0]) * new_size);
++    if (!tab)
++        return;
++    list_for_each(el, &ctx->loaded_modules) {
++        js_module_hash_append(tab, new_size, list_entry(el, JSModuleDef, link));
++    }
++    js_free_rt(ctx->rt, ctx->module_hash);
++    ctx->module_hash = tab;
++    ctx->module_hash_size = new_size;
++}
+ 
++/* m is already on ctx->loaded_modules (at its tail) */
++static void js_module_hash_add(JSContext *ctx, JSModuleDef *m)
++{
++    ctx->module_count++;
++    if (ctx->module_count > ctx->module_hash_size) {
++        uint32_t new_size = ctx->module_hash_size ? ctx->module_hash_size * 2 : 64;
++        js_module_hash_resize(ctx, new_size); /* places m too */
++        if (ctx->module_hash_size >= new_size)
++            return;
++    }
++    if (ctx->module_hash)
++        js_module_hash_append(ctx->module_hash, ctx->module_hash_size, m);
++}
++
++static void js_module_hash_remove(JSContext *ctx, JSModuleDef *m)
++{
++    JSModuleDef **pp;
++
++    ctx->module_count--;
++    if (!ctx->module_hash)
++        return;
++    pp = &ctx->module_hash[js_module_hash(m->module_name, ctx->module_hash_size)];
++    while (*pp) {
++        if (*pp == m) {
++            *pp = m->hash_next;
++            break;
++        }
++        pp = &(*pp)->hash_next;
++    }
++    m->hash_next = NULL;
++}
++
+ /* 'name' is freed */
+ static JSModuleDef *js_new_module_def(JSContext *ctx, JSAtom name)
+ {
+@@ -29701,6 +29785,7 @@
+     m->resolving_funcs[1] = JS_UNDEFINED;
+     m->private_value = JS_UNDEFINED;
+     list_add_tail(&m->link, &ctx->loaded_modules);
++    js_module_hash_add(ctx, m);
+     return m;
+ }
+ 
+@@ -29736,6 +29821,7 @@
+ {
+     int i;
+ 
++    js_module_hash_remove(ctx, m); /* while module_name still names its chain */
+     JS_FreeAtom(ctx, m->module_name);
+ 
+     for(i = 0; i < m->req_module_entries_count; i++) {
+@@ -30038,6 +30124,16 @@
+     struct list_head *el;
+     JSModuleDef *m;
+ 
++    /* clode: through the name index, not a walk of every loaded module (a walk
++       per import made loading N modules cost O(N^2)) */
++    if (ctx->module_hash) {
++        for (m = ctx->module_hash[js_module_hash(name, ctx->module_hash_size)];
++             m; m = m->hash_next) {
++            if (m->module_name == name)
++                return m;
++        }
++        return NULL;
++    }
+     /* first look at the loaded modules */
+     list_for_each(el, &ctx->loaded_modules) {
+         m = list_entry(el, JSModuleDef, link);

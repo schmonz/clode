@@ -24,10 +24,15 @@ After it, at 16 `yes`, the longest post-boot stall fell from 3.3-19.9 s (2 of 3 
 
 What remains is interpreter cost, not one pathology: naude runs the same post-boot stretches 10-20x faster, so at
 enough oversubscription quaude's longest synchronous stretch outlasts a 5 s wall-clock budget that naude's does not.
-Measured hot spots left (sample, 32 `yes`, the patched engine): QuickJS's module resolution is QUADRATIC in loaded
-modules (js_host_resolve_imported_module -> js_find_loaded_module walks ctx->loaded_modules for every import: ~10 s of
-CPU during boot under that load), parsing/compiling the carve's modules, libc getenv's linear scan (__findenv_locked,
-~18% of one post-boot slice), and regexp backtracking.
+Measured hot spots left (sample, 32 `yes`, the patched engine): parsing/compiling the carve's 3,574 modules
+(resolve_scope_var, resolve_variables and the parser lead the boot profile now), libc getenv's linear scan
+(__findenv_locked, ~18% of one post-boot slice), and regexp backtracking. The fourth, QuickJS's QUADRATIC module
+resolution (js_find_loaded_module walked ctx->loaded_modules for every import), is FIXED by
+quickjs-ng-module-name-index.patch, a name index beside the list (test/engine-module-index.test.cjs, a 4N/N
+growth-ratio gate): a no-load -p /status boot went from 11.8-12.6 s to 8.3-9.3 s user CPU, the resolver from 2,699
+1-ms samples to 7. At 32 `yes` its user CPU went from 13.2-13.6 s to 9.1-11.1 s (3 runs each), but neither engine
+timed out in those 6 runs (a different scratch harness from the 2-of-3 runs above: no request/loop-lag probe), so
+whether it removes the timeouts is unmeasured.
 
 Also measured, not changed: node-shim's fs.promises forms that run on the sync core (stat, lstat, readdir, mkdir,
 access, realpath, ...) settle in the SAME macrotask, where node's settle on a later loop turn; deferring them to a
