@@ -30,6 +30,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { builtQuaude } = require('../built-binary.cjs');
+const { debugFileArgs, readLog, assertDebugLogClean } = require('../debug-log-gate.cjs');
 const { startMockAnthropic, cannedSSE, cannedToolUseSSE } = require('../mock-anthropic-helper.cjs');
 const { toolResult, assertFailsOnMissingOutput, assertFailsOnMissingOutputClaimingNoCell } = require('../../scripts/lib/tool-result.cjs');
 
@@ -101,7 +102,19 @@ async function runCase(bin, { source = 'off', sourceSettings = ON, args = PRINT,
       for (const [k, v] of Object.entries(process.env)) if (!/^(CLAUDE|ANTHROPIC)/.test(k)) env[k] = v;
       Object.assign(env, { HOME: home, USERPROFILE: home, CLAUDE_CONFIG_DIR: cfg, TJS_HOME: tjsHome, SHELL: '/bin/bash',
         ANTHROPIC_BASE_URL: mock.url, ANTHROPIC_API_KEY: 'sk-ant-mock' });
-      const r = await turn(bin, work, env, typeof args === 'function' ? args(ctx) : args);
+      // every turn writes a debug log (test/debug-log-gate.cjs). The built quaude's is READ here, by the absolute rules
+      // (no native ran this case beside it), and a finding fails the test with its lines. A case that exits non-zero
+      // having written no log stopped before any session (a startup refusal, an unusable --settings value: rc 1, the
+      // bundle's own error, which each such case asserts by itself), so there is no log to read; a run that exits 0,
+      // or that wrote one, is judged.
+      const debugFile = path.join(base, 'turn-debug.log');
+      // FIRST: some cases end their argv with `-- <prompt>`, after which a flag is prompt text
+      const r = await turn(bin, work, env, [...debugFileArgs(debugFile), ...(typeof args === 'function' ? args(ctx) : args)]);
+      const q = builtQuaude();
+      const log = readLog(debugFile);
+      if (!q.skip && bin === q.path && (r.status === 0 || log !== null)) {
+        assertDebugLogClean({ label: `quaude (${source} settings, ${JSON.stringify(Object.keys(files))})`, quaude: log });
+      }
       const markers = [1, 2, 3].flatMap((n) => [[marker(n), work], [`out-${n}`, base]].filter(([f, d]) => fs.existsSync(path.join(d, f))).map(([f]) => f));
       return { mock, markers, r, files: fs.readdirSync(base) };
     } finally { await mock.close(); }
