@@ -403,7 +403,9 @@ const LEGS = [
     'guest-version': '14.0',
     // renovate: datasource=custom.cpa-freebsd-x86-64 depName=freebsd-x86-64-guest versioning=loose
     'ci-guest-version': '15.1',
-    'guest-packages': 'cmake gmake node git bash', floor: '14.0',
+    'guest-packages': 'cmake-core gmake node git bash', floor: '14.0',
+    // cmake-core, not cmake: FreeBSD's 15.x quarterly dropped the `cmake` metapackage (CI 45354661143,
+    // "No packages available to install matching 'cmake'"); cmake-core is the binary, in 14.x and 15.x both.
     // MEASURED: GUEST_JOB_MINUTES (above) holds this leg's numbers and the derivation.
     // It carried the 90-minute default, and on 2026-08-26 netbsd-amd64 HUNG for 54+
     // minutes with every other job green — the second such hang that day, after
@@ -527,7 +529,7 @@ const LEGS = [
                       + 'advance the trust prompt), so the iTerm2-scoped F4 is not this leg '
                       + 'tier-2 blocker; F3 is unrunnable as written — see RESULTS.md' } },
   { leg: 'freebsd-arm64', os: 'ubuntu-latest', 'guest-platform': 'freebsd', 'guest-arch': 'arm64',
-    'guest-version': '14.4', 'guest-packages': 'cmake gmake node git bash', floor: '14.4',
+    'guest-version': '14.4', 'guest-packages': 'cmake-core gmake node git bash', floor: '14.4',
     wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, timeout: 300, 'soft-fail': true,  // cpa, TCG
     fidelity: { tier: 0, date: '2026-08-02', how: 'ci',
                 note: 'floor 1/6 green (G7 — the build-pipeline PONG smoke, run in-guest under TCG); A1,B1,B4,C1,D1 not driven — see RESULTS.md' } },
