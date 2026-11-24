@@ -23,6 +23,7 @@ const { toolResult, toolResultText, assertFailsOnMissingOutput } = require('../s
 const { stageCli } = require('./oracle-models.cjs');
 
 const { runScanned } = require('./debug-log-gate.cjs');
+const { refusalRecorder } = require('./option-refusals.cjs');
 function providerBin() { const p = process.env.CLODE_PROVIDER_BIN; return p && fs.existsSync(p) ? p : null; }
 function stageBundle(bin) {
   // realpathSync.NATIVE, because os.tmpdir() on a GitHub runner is an 8.3 SHORT path:
@@ -101,10 +102,13 @@ test('agentic Bash round-trip under tjs: tool_result carries real stdout inline'
   });
   try {
     const { cli, dir } = stageBundle(bin);
+    // the default path takes no refused option (test/option-refusals.cjs)
+    const refusals = refusalRecorder(dir, 'agentic Bash turn');
     const r = await bootP(cli, dir,
       ['-p', 'run the command', '--allowedTools', 'Bash'],
       {
         ...process.env,
+        ...refusals.env,
         ...throwawayHome(`${dir}-home`),
         ANTHROPIC_BASE_URL: mock.url,
         ANTHROPIC_API_KEY: 'sk-ant-mock',              // dummy; NOT a secret
@@ -114,6 +118,7 @@ test('agentic Bash round-trip under tjs: tool_result carries real stdout inline'
     assert.match(r.stdout, /TOOLDONE/, `stdout:\n${r.stdout}`);
     assert.ok(stdoutInline(mock), 'tool_result lacks the command\'s stdout inline (missing, or degraded to the '
       + `output-file readback failure or the persisted-file detour): ${JSON.stringify(toolResultText(mock, BASH.id).slice(0, 2000))}`);
+    refusals.assertNone();
   } finally { await mock.close(); }
 });
 

@@ -109,17 +109,26 @@ const probe = (label, fn) => {
 };
 probe('socketPath', () => http.request({ socketPath: '/tmp/x', path: '/' }));
 probe('createConnection', () => http.request({ host: 'h', createConnection: () => {}, path: '/' }));
-probe('lookup', () => http.request({ host: 'h', lookup: () => {}, path: '/' }));
 probe('localAddress', () => http.request({ host: 'h', localAddress: '10.0.0.1', path: '/' }));
 probe('pfx', () => https.request({ host: 'h', pfx: 'x', path: '/' }));
 probe('ciphers', () => https.request({ host: 'h', ciphers: 'HIGH', path: '/' }));
 probe('checkServerIdentity', () => https.request({ host: 'h', checkServerIdentity: () => {}, path: '/' }));
-console.log(JSON.stringify(out));
+// lookup is honoured (test/options-census.test.cjs row http.request.lookup), never ignored: the caller's resolver is
+// asked for the host, and its answer, here an error, is the request's
+const asked = [];
+const req = http.request({ host: 'h.invalid', path: '/', lookup: (host, o, cb) => { asked.push(host); cb(Object.assign(new Error('census says no'), { code: 'ECENSUS' })); } });
+req.on('error', (e) => {
+  out.lookup = { asked, code: e.code };
+  console.log(JSON.stringify(out));
+});
+req.end();
 `);
   try {
     const r = runLoader(f);
     assert.strictEqual(r.status, 0, r.stderr);
     const got = JSON.parse(r.stdout);
+    assert.deepStrictEqual(got.lookup, { asked: ['h.invalid'], code: 'ECENSUS' }, 'lookup was not the resolver: silently ignored');
+    delete got.lookup;
     for (const [k, v] of Object.entries(got)) {
       assert.notStrictEqual(v, 'NO THROW', `option '${k}' was accepted and silently ignored`);
       assert.ok(v.named, `option '${k}' threw an unbranded error: ${JSON.stringify(v)}`);

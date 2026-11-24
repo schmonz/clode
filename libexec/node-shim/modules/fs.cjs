@@ -407,13 +407,49 @@ function openPath(p, flags, mode) {
   const creat = has(O.O_CREAT);
   const excl = creat && has(O.O_EXCL);
   const rw = of & 3;
-  const nb = has(O.O_NONBLOCK) ? 'n' : '';
   // an append open that also reads ('a+', 'ax+', 'as+', or O_APPEND|O_RDWR): the engine's synchronous open has no such
-  // mode, and opening write-only would fail every read with EBADF. Refused by name, before anything is created.
-  if (has(O.O_APPEND) && rw === O.O_RDWR) {
-    throw require('../internal/options.cjs').optionError('fs.open', typeof flags === 'string' ? flags : `0x${of.toString(16)}`,
-      'the engine\'s synchronous open has no read-and-append mode');
+  // mode, and the bundle takes it by default (its session transcript: openSync(f, O_RDWR|O_APPEND), a read, appends).
+  // The fd the caller gets is the engine's write-only O_APPEND open, so every write is the kernel's atomic append, as
+  // node's; it is paired with a read-only descriptor on the same file, through which every read goes (fssRead), with
+  // the one file position node's fd has: a read without a position reads from it and advances it, a write moves it to
+  // the end. BACKLOG.md "node-shim fs: read-and-append opens" (an engine `a+` would retire the pairing).
+  const appendRead = has(O.O_APPEND) && rw === O.O_RDWR;
+  const fd = openPathCore(p, flags, mode, of, has, creat, excl, appendRead ? O.O_WRONLY : rw);
+  if (appendRead) {
+    let readFd;
+    try { readFd = FSS.open(p, 'r'); } catch (e) { try { FSS.close(fd); } catch { /* closing */ } throw e; }
+    appendPairs.set(fd, { readFd, pos: 0 });
   }
+  return fd;
+}
+
+// write fd -> { readFd, pos } for each read-and-append open (see openPath)
+const appendPairs = new Map();
+// FSS.read for any fd: a paired append fd reads through its companion, at the shared position
+function fssRead(fd, n, pos) {
+  const pair = appendPairs.get(fd);
+  if (!pair) return FSS.read(fd, n, pos);
+  if (pos !== -1) return FSS.read(pair.readFd, n, pos);
+  const ab = FSS.read(pair.readFd, n, pair.pos);
+  pair.pos += ab ? ab.byteLength : 0;
+  return ab;
+}
+// FSS.write for any fd: after a write on a paired append fd, its position is the end, as the kernel's O_APPEND
+function fssWrite(fd, ab, pos) {
+  const n = FSS.write(fd, ab, pos);
+  const pair = appendPairs.get(fd);
+  if (pair && pos === -1) pair.pos = Number(FSS.fstat(fd).size);
+  return n;
+}
+function forgetFd(fd) {
+  const pair = appendPairs.get(fd);
+  if (!pair) return;
+  appendPairs.delete(fd);
+  try { FSS.close(pair.readFd); } catch { /* closing */ }
+}
+
+function openPathCore(p, flags, mode, of, has, creat, excl, rw) {
+  const nb = has(O.O_NONBLOCK) ? 'n' : '';
   const createBase = has(O.O_APPEND) ? 'a' : rw === O.O_RDWR ? 'w+' : rw === O.O_RDONLY ? 'r' : 'w';
   let pre = null;
   try { pre = FSS.lstat(p); } catch { /* absent, or the open below says why */ }
@@ -619,7 +655,7 @@ function readAll(fd) {
   let got = 0;
   for (;;) {
     const room = out.length - got;
-    const ab = FSS.read(fd, room > 0 ? Math.min(1 << 20, room) : 65536, -1);
+        const ab = fssRead(fd, room > 0 ? Math.min(1 << 20, room) : 65536, -1);
     if (ab.byteLength === 0) break;
     if (got + ab.byteLength > out.length) {
       const bigger = new Uint8Array(Math.max(out.length * 2, got + ab.byteLength));
@@ -741,7 +777,7 @@ function readSync(fd, buf, offset, length, position) {
     length |= 0;
   }
   if (length === 0) return 0;
-  const ab = FSS.read(fd, length, position ?? -1);
+    const ab = fssRead(fd, length, position ?? -1);
   const src = new Uint8Array(ab);
   buf.set(src, offset);
   return src.length;
@@ -810,7 +846,7 @@ function writeAll(fd, bytes, position) {
   let written = 0;
   while (written < ab.byteLength) {
     const chunk = written === 0 ? ab : ab.slice(written);
-    written += FSS.write(fd, chunk, position == null ? -1 : position + written);
+    written += fssWrite(fd, chunk, position == null ? -1 : position + written);
   }
   return written;
 }
@@ -841,7 +877,7 @@ function writeSync(fd, data, a, b, c) {
     bytes = view.subarray(offset, offset + length);
   }
   const ab = toArrayBuffer(bytes);
-  return FSS.write(fd, ab, position == null ? -1 : position);
+  return fssWrite(fd, ab, position == null ? -1 : position);
 }
 
 // node's rm: a directory needs recursive (else ERR_FS_EISDIR, before anything is removed); maxRetries/retryDelay retry
@@ -975,10 +1011,23 @@ class ReadStream extends require('node:stream').Readable {
     // after every 'end' listener has run, as node's autoDestroy: a listener sees the stream not yet destroyed
     if (autoClose) this.once('end', () => queueMicrotask(() => this.destroy()));
     if (o.encoding) this.setEncoding(o.encoding);
+    // node's `fd`: read that descriptor (from `start`, else from where it is) instead of opening the path; autoClose
+    // closes it
+    const givenFd = streamFd(o.fd);
+    this.fd = givenFd;
+    this._autoCloseFd = autoClose && givenFd !== null;
     queueMicrotask(async () => {
       try {
         const flags = o.flags || 'r';
         let data;
+        if (givenFd !== null) {
+          data = readAllAt(givenFd, start || hasEnd ? start : null);
+          if (start || hasEnd) data = data.subarray(0, hasEnd ? o.end + 1 - start : data.length);
+          const CH = typeof o.highWaterMark === 'number' && o.highWaterMark > 0 ? o.highWaterMark : 65536;
+          for (let i = 0; i < data.length; i += CH) this.push(data.subarray(i, Math.min(i + CH, data.length)));
+          this.push(null);
+          return;
+        }
         if (flags === 'r') { _refuseProcFdOffLinux('open', p, 'r'); data = await tjs.readFile(p); }
         else { const fd = openPath(p, flags, o.mode); try { data = readAll(fd); } finally { FSS.close(fd); } }
         if (start || hasEnd) data = data.subarray(start, hasEnd ? o.end + 1 : data.length);
@@ -989,12 +1038,32 @@ class ReadStream extends require('node:stream').Readable {
     });
   }
   destroy(err) {
+    if (this._autoCloseFd && !this.destroyed) { this._autoCloseFd = false; try { FSS.close(this.fd); } catch { /* closed */ } }
     if (this._emitClose || this.destroyed) return super.destroy(err);
     this.destroyed = true;
     if (err) queueMicrotask(() => this.emit('error', err));
     setTimeout(() => { this.closed = true; }, 0);
     return this;
   }
+}
+// node's stream `fd`: a number, or a FileHandle (its .fd); null when none is given
+function streamFd(v) {
+  if (v === undefined || v === null) return null;
+  const n = typeof v === 'object' && typeof v.fd === 'number' ? v.fd : v;
+  require('../internal/node-errors.cjs').validatedFd(n);
+  return n;
+}
+// every byte from `pos` (or from the descriptor's own position when null) to the end
+function readAllAt(fd, pos) {
+  const parts = [];
+  for (;;) {
+    const ab = fssRead(fd, 65536, pos === null ? -1 : pos);
+    const n = ab ? ab.byteLength : 0;
+    if (!n) break;
+    parts.push(Buffer.from(ab));
+    if (pos !== null) pos += n;
+  }
+  return Buffer.concat(parts);
 }
 function createReadStream(p, opts) {
   refuseOptions('fs.createReadStream', typeof opts === 'string' ? { encoding: opts } : opts);
@@ -1011,7 +1080,10 @@ function createWriteStream(p, opts) {
   // node opens on a later turn, so a failed open ('wx' over a file, a missing directory) is the stream's 'error'
   let fd = null;
   let openError = null;
-  try { fd = openPath(p, o.flags || 'w', o.mode); } catch (e) { if (e && e.code === 'ERR_SHIM_UNSUPPORTED_OPTION') throw e; openError = e; }
+  // node's `fd`: write to that descriptor instead of opening the path (autoClose closes it)
+  const givenFd = streamFd(o.fd);
+  if (givenFd !== null) fd = givenFd;
+  else try { fd = openPath(p, o.flags || 'w', o.mode); } catch (e) { if (e && e.code === 'ERR_SHIM_UNSUPPORTED_OPTION') throw e; openError = e; }
   let pos = typeof o.start === 'number' ? o.start : null;
   const autoClose = o.autoClose !== false;
   const emitClose = o.emitClose !== false;
@@ -1040,7 +1112,7 @@ function createWriteStream(p, opts) {
     if (this.destroyed) return this;
     this.destroyed = true;
     if (err) queueMicrotask(() => this.emit('error', err));
-    if (!fdClosed && fd !== null) { fdClosed = true; try { FSS.close(fd); } catch (_) { /* already closed */ } }
+    if (!fdClosed && fd !== null && (autoClose || givenFd === null)) { fdClosed = true; try { FSS.close(fd); } catch (_) { /* already closed */ } }
     setTimeout(() => { this.closed = true; if (emitClose) this.emit('close'); }, 0);
     return this;
   };
@@ -1270,7 +1342,7 @@ const fsMod = {
   // paths would leave the map pointing at the OLD path — fchmodSync would then
   // silently chmod the wrong file. That is precisely the class of bug this
   // fd->path map exists to avoid, so the cleanup is unconditional.
-  closeSync: (fd) => { try { FSS.close(fd); } finally { fdPaths.delete(fd); } },
+  closeSync: (fd) => { try { FSS.close(fd); } finally { fdPaths.delete(fd); forgetFd(fd); } },
   copyFileSync: (a, b) => { writeFileSync(b, readFileSync(a)); chmodBestEffort(b, statSync(a).mode & 0o7777); },
   symlinkSync: (target, p, type) => symlinkAs(target, p, type),
   chmodSync: (p, m) => chmodBestEffort(p, m),
@@ -1324,7 +1396,7 @@ function makeFileHandle(fd, p) {
   let closed = false;
   return {
     fd,
-    async close() { if (!closed) { closed = true; FSS.close(fd); } },
+    async close() { if (!closed) { closed = true; try { FSS.close(fd); } finally { forgetFd(fd); } } },
     async read(buffer, offset, length, position) {
       const bytesRead = readSync(fd, buffer, offset ?? 0, length ?? buffer.length, position ?? null);
       return { bytesRead, buffer };
@@ -1352,7 +1424,7 @@ function makeFileHandle(fd, p) {
       const enc = typeof opts === 'string' ? opts : opts?.encoding;
       const chunks = []; let total = 0;
       for (;;) {
-        const ab = FSS.read(fd, 1 << 20, -1);
+                const ab = fssRead(fd, 1 << 20, -1);
         if (!ab || ab.byteLength === 0) break;
         chunks.push(new Uint8Array(ab)); total += ab.byteLength;
       }
@@ -1592,7 +1664,7 @@ fsMod.open = (p, flags, mode, cb) => {
 fsMod.close = (fd, cb) => {
   require('../internal/node-errors.cjs').validatedFd(fd);
   try {
-    try { FSS.close(fd); } finally { fdPaths.delete(fd); }
+    try { FSS.close(fd); } finally { fdPaths.delete(fd); forgetFd(fd); }
     if (cb) cb(null);
   } catch (e) { if (cb) cb(e); }
 };

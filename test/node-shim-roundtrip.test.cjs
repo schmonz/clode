@@ -16,6 +16,7 @@ const { skipUnlessTjs } = require('./node-shim-helper.cjs');
 const { startMockAnthropic } = require('./mock-anthropic-helper.cjs');
 const { stageProviderCli, providerSkipReason, runQuaudeModelAsync } = require('./oracle-models.cjs');
 const { runScanned } = require('./debug-log-gate.cjs');
+const { refusalRecorder } = require('./option-refusals.cjs');
 
 function stage(t) {
   const staged = stageProviderCli();
@@ -45,12 +46,16 @@ test('mock round-trip under tjs: -p prints PONG, exit 0', async (t) => {
   if (!staged) return;
   const mock = await startMockAnthropic();
   const home = freshHome();
+  // the default path takes no refused option (test/option-refusals.cjs): checked BEFORE the stdout, which a swallowed
+  // refusal leaves empty
+  const refusals = refusalRecorder(home, 'mock -p turn');
   try {
     // quaude's debug log, READ (test/debug-log-gate.cjs): the absolute rules, no reference here
     const r = await runScanned(path.join(staged.dir, `roundtrip-debug-${process.hrtime.bigint()}.log`), (dbg) => runQuaudeModelAsync(staged.cli, ['-p', 'say PONG', ...dbg], {
       cwd: staged.dir,
       env: {
         ...process.env,
+        ...refusals.env,
         HOME: home,                                    // never the operator's real ~/.claude
         CLAUDE_CONFIG_DIR: path.join(home, '.claude'),
         CLODE_DEPS: path.join(home, 'deps'),
@@ -60,6 +65,7 @@ test('mock round-trip under tjs: -p prints PONG, exit 0', async (t) => {
       },
       timeout: 90000,
     }), { label: 'quaude-model (-p say PONG)' });
+    refusals.assertNone();
     assert.strictEqual(r.status, 0, `stderr:\n${r.stderr}`);
     assert.match(r.stdout, /PONG/, `stdout:\n${r.stdout}`);
     assert.ok(mock.requests.some((q) => q.method === 'POST' && /\/messages$/.test(q.url.split('?')[0])), 'no messages POST recorded');

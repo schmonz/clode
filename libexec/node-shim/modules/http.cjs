@@ -67,6 +67,13 @@ const { connectHost } = require('../internal/connect-multiple.cjs');
 // libexec/node-shim/internal/options.cjs, held to node's own list by test/options-census.test.cjs.
 const { refuseOptions } = require('../internal/options.cjs');
 
+// node's agent.createConnection(options, cb) is net.createConnection(options): the socket of every request through
+// the agent is made from the request's options merged with the agent's (the agent's win), and a subclass may adjust
+// them on the way (the bundle's own keep-alive agent passes timeout: 5000 to super() and clears it in
+// createConnection, so in node its requests get NO socket timeout). This client dials with tjs.connect itself, so the
+// base hands back the options it was given, and a request reads the socket timeout from what comes back.
+const kConnectOptions = Symbol('node-shim.connectOptions');
+
 class Agent extends EventEmitter {
   constructor(options = {}) {
     super();
@@ -86,6 +93,19 @@ class Agent extends EventEmitter {
   }
   destroy() {}
   getName() { return 'localhost:'; }
+  createConnection(options) { return { [kConnectOptions]: { ...options } }; }
+}
+
+// The socket timeout node gives a request through `agent` that names no timeout of its own: the `timeout` its
+// createConnection receives (the agent's options win the merge). Asked of the agent only when it sets one and a
+// subclass overrides createConnection; an override that does not come back through the base here (agent-base and
+// friends make their own sockets, and are not called outside their own flow) leaves node's default, the agent's.
+function agentSocketTimeout(agent, reqOptions) {
+  const own = agent.options && agent.options.timeout;
+  if (own === undefined || typeof agent.createConnection !== 'function' || agent.createConnection === Agent.prototype.createConnection) return own;
+  let r;
+  try { r = agent.createConnection({ ...reqOptions, ...agent.options }, () => {}); } catch { return own; }
+  return r && r[kConnectOptions] ? r[kConnectOptions].timeout : own;
 }
 
 const globalAgent = new Agent();
@@ -1197,6 +1217,7 @@ class ClientRequest extends EventEmitter {
     }
     this._connect();
     if (options.timeout !== undefined) this.setTimeout(options.timeout);
+    else if (viaAgent) { const t = agentSocketTimeout(viaAgent, options); if (t) this.setTimeout(t); }
     // Expect: 100-continue means the caller will WAIT for the interim response
     // before writing a body — so the head has to go out now, exactly as node
     // does. Without this the head would sit unsent until end(), and a client

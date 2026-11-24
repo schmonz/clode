@@ -283,11 +283,6 @@ const out = {};
       }
     }
   }
-  for (const flag of Object.keys(TABLES['fs.open:flags'].refused)) {
-    n++;
-    let got; try { fs.openSync(mark(n), flag); got = 'NOT REFUSED'; } catch (e) { got = e.code; }
-    out['fs.open ' + flag] = { code: got, sideEffect: fs.existsSync(mark(n)) };
-  }
   console.log(JSON.stringify(out));
   process.exit(0);
 })();

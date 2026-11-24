@@ -37,9 +37,23 @@ const INERT = {
   windowBits: [0, 15],
 };
 
+// CLODE_SHIM_REFUSAL_LOG=<file>: every refusal raised is appended there as a JSON line, whether or not its caller
+// swallows the throw. A refusal on the bundle's default path is a bug in the refusal; the suite drives a turn with
+// this set and requires the file to stay empty (test/option-refusals-default-path.test.cjs).
+function recordRefusal(e) {
+  const f = typeof process !== 'undefined' && process.env && process.env.CLODE_SHIM_REFUSAL_LOG;
+  if (!f) return;
+  try {
+    const frames = String(new Error().stack || '').split('\n').slice(2, 8).map((l) => l.trim());
+    require('fs').appendFileSync(f, JSON.stringify({ code: e.code, entry: e.entry, option: e.option, pid: process.pid, frames }) + '\n');
+  } catch { /* a recorder never changes the outcome */ }
+}
+
 function optionError(entry, key, why, code = 'ERR_SHIM_UNSUPPORTED_OPTION') {
-  return Object.assign(new Error(`node-shim: ${entry} option '${key}' cannot be applied by this engine (${why}); `
+  const e = Object.assign(new Error(`node-shim: ${entry} option '${key}' cannot be applied by this engine (${why}); `
     + 'refusing rather than ignoring it'), { code, entry, option: key });
+  recordRefusal(e);
+  return e;
 }
 
 const isSet = (key, v) => v !== undefined && v !== null && !(INERT[key] || []).includes(v);
@@ -144,11 +158,12 @@ const HTTP_AGENT = {
     proxyEnv: T('node-shim-http-proxy.test.cjs', 'proxy credentials, NO_PROXY, the disable flag, agents and socks'),
     family: row('http.Agent.connect'), autoSelectFamily: row('http.Agent.connect'),
     autoSelectFamilyAttemptTimeout: row('http.Agent.connect'), lookup: row('http.Agent.connect'),
+    timeout: row('http.Agent.timeout'),
   },
   refused: {
     noDelay: 'every connection is opened with TCP_NODELAY (node\'s default)',
     ...Object.fromEntries(SOCKET_KEYS.map((k) => [k, HTTP_REQUEST.refused[k]])),
-    host: AGENT_WIDE, port: AGENT_WIDE, timeout: AGENT_WIDE, signal: AGENT_WIDE,
+    host: AGENT_WIDE, port: AGENT_WIDE, signal: AGENT_WIDE,
   },
   exempt: {
     keepAlive: POOLING, keepAliveMsecs: POOLING, maxSockets: POOLING, maxFreeSockets: POOLING, maxTotalSockets: POOLING,
@@ -210,7 +225,7 @@ const CP = {
 };
 const WATCH_STUB = 'BACKLOG.md "fs.watch is a never-firing stub": the whole function is a stub (test/fidelity RECIPE C7), '
   + 'and refusing its options would turn the settings/keybindings watchers chokidar builds by default into thrown errors';
-const OWN_FILE = 'the stream opens its own path; a caller\'s descriptor, handle or fs implementation has no route here';
+const OWN_FILE = 'the stream reads or writes a path or a descriptor; a caller\'s fs implementation or Windows handle has no route here';
 const STREAM_COMMON = {
   autoClose: row('fs.stream.autoClose'), start: row('fs.stream.start'),
 };
@@ -256,13 +271,14 @@ const TABLES = {
   },
   'fs.createReadStream': {
     honoured: { ...STREAM_COMMON, end: row('fs.createReadStream.end'), highWaterMark: row('fs.createReadStream.highWaterMark'),
-      autoDestroy: row('fs.stream.autoClose'), flags: row('fs.createReadStream.flags'), mode: row('fs.createReadStream.flags') },
-    refused: { fd: OWN_FILE, fs: OWN_FILE, windowsHandle: OWN_FILE },
+      autoDestroy: row('fs.stream.autoClose'), flags: row('fs.createReadStream.flags'), mode: row('fs.createReadStream.flags'),
+      fd: row('fs.createReadStream.fd') },
+    refused: { fs: OWN_FILE, windowsHandle: OWN_FILE },
   },
   'fs.createWriteStream': {
     honoured: { ...STREAM_COMMON, encoding: row('fs.createWriteStream.encoding'), flags: row('fs.createWriteStream.flags'),
-      mode: row('fs.createWriteStream.mode'), autoDestroy: row('fs.stream.autoClose') },
-    refused: { fd: OWN_FILE, fs: OWN_FILE, windowsHandle: OWN_FILE },
+      mode: row('fs.createWriteStream.mode'), autoDestroy: row('fs.stream.autoClose'), fd: row('fs.createWriteStream.fd') },
+    refused: { fs: OWN_FILE, windowsHandle: OWN_FILE },
     exempt: { flush: NO_FSYNC },
   },
 
@@ -286,11 +302,15 @@ const TABLES = {
 
 // fs.open's flag strings (fs.open/openSync, and the `flag`/`flags` of readFile, writeFile and the streams): the census
 // keys are node's own flag strings (stringToFlags); fs.cjs STRING_FLAGS must map every one of them.
-const READ_APPEND = 'the engine\'s synchronous open has no read-and-append mode (O_APPEND|O_RDWR); opening write-only '
-  + 'would fail every read with EBADF';
+// The read-and-append family (the bundle opens its session transcript O_RDWR|O_APPEND by default, reads it and
+// appends): fs.cjs pairs the engine's write-only append open with a read-only descriptor (openPath).
 TABLES['fs.open:flags'] = {
-  honoured: Object.fromEntries(['r', 'rs', 'sr', 'r+', 'rs+', 'sr+', 'w', 'wx', 'xw', 'w+', 'wx+', 'xw+', 'a', 'ax', 'xa', 'as', 'sa']
-    .map((f) => [f, row('fs.open.flags')])),
-  refused: Object.fromEntries(['a+', 'ax+', 'xa+', 'as+', 'sa+'].map((f) => [f, READ_APPEND])),
+  honoured: {
+    ...Object.fromEntries(['r', 'rs', 'sr', 'r+', 'rs+', 'sr+', 'w', 'wx', 'xw', 'w+', 'wx+', 'xw+', 'a', 'ax', 'xa', 'as', 'sa']
+      .map((f) => [f, row('fs.open.flags')])),
+    ...Object.fromEntries(['a+', 'ax+', 'xa+', 'as+', 'sa+'].map((f) => [f, row('fs.open.readAppend')])),
+  },
+  refused: {},
 };
-module.exports = { TABLES, INERT, refuseOptions, optionError, isSet };
+module.exports = {
+  recordRefusal, TABLES, INERT, refuseOptions, optionError, isSet };

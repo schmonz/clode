@@ -63,14 +63,13 @@ or sent), or is on the short exempt list below. The ratchet is `test/options-cen
   `readableObjectMode`, `writableObjectMode`, `typeOfService`, `keepAlive`, `keepAliveInitialDelay`, `noDelay`,
   `highWaterMark`, `insecureHTTPParser` (axios passes `false`, which asks for nothing), `joinDuplicateHeaders`,
   `maxHeaderSize`, `uniqueHeaders`, `setDefaultHeaders`, `httpValidation`; https adds `socket`.
-- http.Agent / https.Agent: the same socket keys, plus an agent-wide `host`, `port`, `timeout`, `signal`, `noDelay`;
+- http.Agent / https.Agent: the same socket keys, plus an agent-wide `host`, `port`, `signal`, `noDelay`;
   https.Agent `maxCachedSessions`, `highWaterMark`, `path`, `socket`. (The bundle's agents pass keepAlive/maxSockets,
-  exempt below, and `lookup`, now honoured.)
+  exempt below, and `lookup` and `timeout`, honoured: its own keep-alive agent passes `timeout: 5000` and clears it in
+  an overridden createConnection, so in node, and now here, its requests get no socket timeout. Refusing `timeout`
+  at first silenced every `-p` turn: the throw was swallowed and the turn printed nothing.)
 - fs.readFileSync / fs.promises.readFile `buffer`; fs.createReadStream / createWriteStream `fd`, `fs`,
   `windowsHandle`; fs.cp `mode: COPYFILE_FICLONE_FORCE` (a clone cannot be forced).
-- fs.open flag strings `a+`, `ax+`, `xa+`, `as+`, `sa+` (and O_APPEND|O_RDWR): the engine's synchronous open has no
-  read-and-append mode, and the shim used to open these write-only, so every read failed EBADF. Only Bun's own REPL
-  history uses `a+`. Honouring it is an engine change (an `a+` base in mod_fs_sync.c's open).
 - zlib `dictionary`, `info`, `memLevel`, `strategy`, `windowBits` (each but its default), `rejectGarbageAfterEnd`.
 
 **Refused (bun-shim)** — none reached by default:
@@ -101,6 +100,13 @@ or sent), or is on the short exempt list below. The ratchet is `test/options-cen
   neither the engine's WebSocket nor this shim offers it, and the connection works uncompressed.
 
 **Divergences the census found that are not options:**
+- node-shim fs: read-and-append opens (`a+`, `ax+`, `as+`, O_RDWR|O_APPEND) are honoured by PAIRING: the engine's
+  synchronous open has no such mode, so the caller's fd is a write-only O_APPEND open (atomic appends, as node's) and
+  reads go through a second, read-only descriptor at the position node's single fd would have. Two descriptors where
+  node has one (an fd count, and `fs.readSync(fd)` after the file is replaced reads the old inode only while the
+  pair's read side is open). The bundle takes this by default (its session transcript, `appendOwedEntryAtExit` /
+  `reAppendSessionMetadata`): the first version of the census REFUSED it, and every `-p` turn's read failed. An `a+`
+  base in mod_fs_sync.c's open, advertised in `__tjs_fs_sync.openFlags`, would retire the pairing.
 - Bun's fetch `timeout` is a switch (measured: a number, even 1, does not cut off a 2.5 s answer; `false` turns Bun's
   idle timeout off). The engine's fetch has **no idle timeout**, which is what `false` asks for; Bun's default one, which
   a number keeps, is not reproduced, so a stalled body waits forever where native gives up.

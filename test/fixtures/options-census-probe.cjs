@@ -379,6 +379,53 @@ const ROWS = {
     fs.rmSync(d, { recursive: true });
     return out;
   },
+  // a stream given an fd uses it, not the path; autoClose closes it (true) or leaves it open (false)
+  'fs.createWriteStream.fd': async () => {
+    const d = tmp(); const f = path.join(d, 'x'); const other = path.join(d, 'unused');
+    const isOpen = (fd) => { try { fs.fstatSync(fd); return true; } catch (_) { return false; } };
+    const fd1 = fs.openSync(f, 'w');
+    await new Promise((res) => { const w = fs.createWriteStream(other, { fd: fd1, autoClose: false }); w.on('finish', res); w.end('ab'); });
+    const out = { open: isOpen(fd1) };
+    await new Promise((res) => { const w = fs.createWriteStream(other, { fd: fd1 }); w.on('close', res); w.end('c'); });
+    out.closed = !isOpen(fd1);
+    const ro = fs.openSync(f, 'r');
+    out.readOnly = await new Promise((res) => { const w = fs.createWriteStream(other, { fd: ro }); w.on('error', (e) => res(e.code)); w.on('finish', () => res('ok')); w.end('z'); });
+    out.content = fs.readFileSync(f, 'utf8'); out.pathTouched = fs.existsSync(other);
+    fs.rmSync(d, { recursive: true });
+    return out;
+  },
+  'fs.createReadStream.fd': async () => {
+    const d = tmp(); const f = path.join(d, 'x'); fs.writeFileSync(f, '0123456789');
+    const isOpen = (fd) => { try { fs.fstatSync(fd); return true; } catch (_) { return false; } };
+    const read = (o) => new Promise((res) => { let s = ''; const r = fs.createReadStream(path.join(d, 'unused'), o); r.on('data', (c) => { s += c; }); r.on('error', (e) => res(e.code)); r.on('end', () => setTimeout(() => res(s), 20)); });
+    const fd = fs.openSync(f, 'r');
+    fs.readSync(fd, Buffer.alloc(3), 0, 3, null);
+    const out = { fromHere: await read({ fd, autoClose: false, encoding: 'utf8' }), open: isOpen(fd) };
+    out.range = await read({ fd, start: 2, end: 4, encoding: 'utf8' });
+    out.closed = !isOpen(fd);
+    fs.rmSync(d, { recursive: true });
+    return out;
+  },
+  // read-and-append: one file position, reads from it and advance it, every write lands at the end and moves it there;
+  // a positioned read leaves it. The bundle's session transcript takes O_RDWR|O_APPEND by default.
+  'fs.open.readAppend': async () => {
+    const d = tmp(); const out = {};
+    for (const flag of ['a+', 'ax+', 'xa+', 'as+', 'sa+', fs.constants.O_RDWR | fs.constants.O_APPEND | fs.constants.O_CREAT]) {
+      const f = path.join(d, 'f' + String(flag).replace(/[^a-z0-9]/g, '_'));
+      if (!String(flag).includes('x')) fs.writeFileSync(f, 'xyz');
+      const fd = fs.openSync(f, flag);
+      const rd = (n, pos = null) => { const b = Buffer.alloc(n); return b.subarray(0, fs.readSync(fd, b, 0, n, pos)).toString(); };
+      const first = rd(2);
+      fs.writeSync(fd, 'b'); fs.writeSync(fd, 'c');
+      const afterWrite = rd(4);
+      const whole = rd(16, 0);
+      const afterPositioned = rd(4);
+      fs.closeSync(fd);
+      out[typeof flag === 'number' ? 'O_RDWR|O_APPEND|O_CREAT' : flag] = { first, afterWrite, whole, afterPositioned, content: fs.readFileSync(f, 'utf8') };
+    }
+    fs.rmSync(d, { recursive: true });
+    return out;
+  },
   'fs.createWriteStream.mode': async () => {
     const d = tmp(); const f = path.join(d, 'x');
     await new Promise((res) => { const w = fs.createWriteStream(f, { mode: 0o600 }); w.on('finish', res); w.end('m'); });
@@ -445,6 +492,21 @@ const ROWS = {
     return {
       lookup: echoOf(await request({ host: 'census.invalid', port: O(), path: '/echo', agent: new http.Agent({ lookup }) })),
       family: echoOf(await request({ host: 'localhost', port: O(), path: '/echo', agent: new http.Agent({ family: 4, autoSelectFamily: false, autoSelectFamilyAttemptTimeout: 100 }) })),
+    };
+  },
+  // an agent's timeout is its sockets' (a request naming none times out by it); a subclass that clears it in
+  // createConnection, as the bundle's own keep-alive agent does, gets none; the request's own wins
+  'http.Agent.timeout': async () => {
+    class Clearing extends http.Agent {
+      constructor() { super({ timeout: 200 }); }
+      createConnection(o, cb) { return super.createConnection(Object.assign(o, { timeout: undefined }), cb); }
+    }
+    const slow = (agent, extra = {}) => request({ host: '127.0.0.1', port: O(), path: '/slow-headers?ms=700', agent, ...extra });
+    const pick = (r) => ({ timedOut: r.events.includes('timeout'), status: r.status ?? null });
+    return {
+      agent: pick(await slow(new http.Agent({ timeout: 200 }))),
+      cleared: pick(await slow(new Clearing())),
+      own: pick(await slow(new http.Agent({ timeout: 5000 }), { timeout: 200 })),
     };
   },
   'http.Agent.defaultPort': async () => echoOf(await request({ host: '127.0.0.1', path: '/echo', agent: new http.Agent({ defaultPort: O() }) })),

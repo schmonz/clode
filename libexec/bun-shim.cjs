@@ -890,9 +890,20 @@ const BUN_OPTION_TABLES = {
 };
 // Keys refused only on some platforms' engines, so the refusal is per call: cgroup (linux) has nowhere to go.
 const _BUN_REFUSED_EVERYWHERE = { cgroup: 'no cgroup placement for a child here' };
+// CLODE_SHIM_REFUSAL_LOG: as node-shim's recordRefusal (internal/options.cjs), for bun-shim's refusals
+function _bunRecordRefusal(e) {
+  const f = process.env.CLODE_SHIM_REFUSAL_LOG;
+  if (!f) return;
+  try {
+    const frames = String(new Error().stack || '').split('\n').slice(2, 8).map((l) => l.trim());
+    require('fs').appendFileSync(f, JSON.stringify({ code: e.code, entry: e.entry, option: e.option, pid: process.pid, frames }) + '\n');
+  } catch { /* a recorder never changes the outcome */ }
+}
 function _bunOptionError(entry, key, why) {
-  return Object.assign(new Error(`clode: ${entry} option '${key}' cannot be applied by this engine (${why}); refusing `
+  const e = Object.assign(new Error(`clode: ${entry} option '${key}' cannot be applied by this engine (${why}); refusing `
     + 'rather than ignoring it'), { code: 'ERR_CLODE_UNSUPPORTED_OPTION', entry, option: key });
+  _bunRecordRefusal(e);
+  return e;
 }
 function _bunRefuse(entry, opts) {
   if (!opts || typeof opts !== 'object') return;
