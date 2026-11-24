@@ -370,16 +370,16 @@ diff --git a/src/ws.c b/src/ws.c
 @@ -481,8 +627,12 @@
          const char *s_hdrs = JS_IsUndefined(phdrs) ? "" : JS_ToCString(ctx, phdrs);
          int32_t n_port = 0;
-         route_ok = s_host && s_hdrs && !JS_ToInt32(ctx, &n_port, pport) && n_port > 0 && n_port <= 65535;
--        cci.vhost = route_ok ? tjs__lws_proxy_vhost(ctx, s_host, n_port, s_hdrs) : NULL;
+         route_ok = s_proxy_host && s_hdrs && !JS_ToInt32(ctx, &n_port, pport) && n_port > 0 && n_port <= 65535;
+-        cci.vhost = route_ok ? tjs__lws_proxy_vhost(ctx, s_proxy_host, n_port, s_hdrs) : NULL;
 -        route_ok = route_ok && cci.vhost != NULL;
 +        if (route_ok) {
-+            d->proxy_host = js_strdup(ctx, s_host);
++            d->proxy_host = js_strdup(ctx, s_proxy_host);
 +            d->proxy_headers = js_strdup(ctx, s_hdrs);
 +            d->proxy_port = n_port;
 +            route_ok = d->proxy_host && d->proxy_headers;
 +        }
-         JS_FreeCString(ctx, s_host);
+         JS_FreeCString(ctx, s_proxy_host);
          if (!JS_IsUndefined(phdrs)) {
              JS_FreeCString(ctx, s_hdrs);
 @@ -491,41 +641,37 @@
