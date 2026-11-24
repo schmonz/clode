@@ -12,6 +12,11 @@
 //   PROXY_TLS_KEY    PEM key      proxy URL); plain HTTP without them
 //   PROXY_REFUSE     '1' -> answer 403 instead of forwarding (a proxy that
 //                    denies, so a test can prove the client did not fall back)
+//   PROXY_AUTH       'user:pass' -> a request or CONNECT without
+//                    `Proxy-Authorization: Basic base64(user:pass)` (the scheme
+//                    matched without regard to case) is answered 407 with
+//                    `Proxy-Authenticate: Basic realm="proxy"`, as a real
+//                    authenticating proxy answers
 //
 // Prints `PORT <n>` on stdout once listening, like the other origin fixtures.
 const http = require('node:http');
@@ -22,6 +27,14 @@ const fs = require('node:fs');
 const LOG = process.env.PROXY_LOG;
 if (!LOG) { process.stderr.write('proxy-server: PROXY_LOG is required\n'); process.exit(2); }
 const REFUSE = process.env.PROXY_REFUSE === '1';
+const AUTH = process.env.PROXY_AUTH ? Buffer.from(process.env.PROXY_AUTH).toString('base64') : null;
+function authorized(req) {
+  if (!AUTH) return true;
+  const m = /^basic\s+(\S+)\s*$/i.exec(req.headers['proxy-authorization'] || '');
+  return !!m && m[1] === AUTH;
+}
+const DENY_407 = 'HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm="proxy"\r\n'
+  + 'Content-Type: text/plain\r\nContent-Length: 19\r\nConnection: close\r\n\r\nproxy auth required';
 
 function record(entry) {
   fs.appendFileSync(LOG, `${JSON.stringify(entry)}\n`);
@@ -42,6 +55,11 @@ function onRequest(req, res) {
     headers: rawHeaderLines(req),
   });
   if (REFUSE) { res.writeHead(403, { 'content-type': 'text/plain' }); res.end('proxy refused'); return; }
+  if (!authorized(req)) {
+    res.writeHead(407, { 'proxy-authenticate': 'Basic realm="proxy"', 'content-type': 'text/plain', connection: 'close' });
+    res.end('proxy auth required');
+    return;
+  }
   let u;
   try { u = new URL(req.url); } catch {
     // Origin-form at a proxy is a client bug — say so on the wire, loudly, so a
@@ -62,8 +80,10 @@ function onRequest(req, res) {
 }
 
 function onConnect(req, sock, head) {
+  sock.on('error', () => { /* the client hung up; nothing to forward */ });
   record({ at: 'proxy', startLine: `CONNECT ${req.url} HTTP/${req.httpVersion}`, headers: rawHeaderLines(req) });
   if (REFUSE) { sock.end('HTTP/1.1 403 Forbidden\r\n\r\n'); return; }
+  if (!authorized(req)) { sock.end(DENY_407); return; }
   const i = req.url.lastIndexOf(':');
   const host = req.url.slice(0, i).replace(/^\[|\]$/g, '');
   const port = Number(req.url.slice(i + 1));

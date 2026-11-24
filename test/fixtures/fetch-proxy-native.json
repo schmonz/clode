@@ -1,0 +1,629 @@
+{
+ "_recorded": "2026-11-24, native 2.1.330 (Claude Code), darwin-arm64, preload of test/fixtures/fetch-proxy-rows.cjs (host node v24.21.0)",
+ "http.string": {
+  "status": 200,
+  "origin": {
+   "method": "GET",
+   "url": "/echo?q=1"
+  },
+  "arrivals": [
+   {
+    "line": "GET http://127.0.0.1:<http>/echo?q=1 HTTP/1.1",
+    "host": [
+     "Host: 127.0.0.1:<http>"
+    ],
+    "proxy": [
+     "Proxy-Connection: Keep-Alive"
+    ]
+   }
+  ]
+ },
+ "https.string": {
+  "status": 200,
+  "origin": {
+   "method": "GET",
+   "url": "/x"
+  },
+  "arrivals": [
+   {
+    "line": "CONNECT 127.0.0.1:<https> HTTP/1.1",
+    "host": [
+     "Host: 127.0.0.1:<https>"
+    ],
+    "proxy": [
+     "Proxy-Connection: Keep-Alive"
+    ]
+   }
+  ]
+ },
+ "https.byName": {
+  "status": 200,
+  "origin": {
+   "method": "GET",
+   "url": "/x"
+  },
+  "arrivals": [
+   {
+    "line": "CONNECT localhost:<https> HTTP/1.1",
+    "host": [
+     "Host: localhost:<https>"
+    ],
+    "proxy": [
+     "Proxy-Connection: Keep-Alive"
+    ]
+   }
+  ]
+ },
+ "http.userinfo": {
+  "status": 200,
+  "origin": {
+   "method": "GET",
+   "url": "/echo?q=1"
+  },
+  "arrivals": [
+   {
+    "line": "GET http://127.0.0.1:<http>/echo?q=1 HTTP/1.1",
+    "host": [
+     "Host: 127.0.0.1:<http>"
+    ],
+    "proxy": [
+     "Proxy-Connection: Keep-Alive",
+     "Proxy-Authorization: Basic dTpw"
+    ]
+   }
+  ]
+ },
+ "https.userinfo": {
+  "status": 200,
+  "origin": {
+   "method": "GET",
+   "url": "/x"
+  },
+  "arrivals": [
+   {
+    "line": "CONNECT 127.0.0.1:<https> HTTP/1.1",
+    "host": [
+     "Host: 127.0.0.1:<https>"
+    ],
+    "proxy": [
+     "Proxy-Connection: Keep-Alive",
+     "Proxy-Authorization: Basic dTpw"
+    ]
+   }
+  ]
+ },
+ "http.userinfoPercentEncoded": {
+  "status": 200,
+  "origin": {
+   "method": "GET",
+   "url": "/echo?q=1"
+  },
+  "arrivals": [
+   {
+    "line": "GET http://127.0.0.1:<http>/echo?q=1 HTTP/1.1",
+    "host": [
+     "Host: 127.0.0.1:<http>"
+    ],
+    "proxy": [
+     "Proxy-Connection: Keep-Alive",
+     "Proxy-Authorization: Basic dUB4OnA6eQ=="
+    ]
+   }
+  ]
+ },
+ "http.object": {
+  "status": 200,
+  "origin": {
+   "method": "GET",
+   "url": "/echo?q=1"
+  },
+  "arrivals": [
+   {
+    "line": "GET http://127.0.0.1:<http>/echo?q=1 HTTP/1.1",
+    "host": [
+     "Host: 127.0.0.1:<http>"
+    ],
+    "proxy": [
+     "Proxy-Connection: Keep-Alive",
+     "Proxy-Authorization: Basic dTpw",
+     "X-Proxy-Extra: e"
+    ]
+   }
+  ]
+ },
+ "https.object": {
+  "status": 200,
+  "origin": {
+   "method": "GET",
+   "url": "/x"
+  },
+  "arrivals": [
+   {
+    "line": "CONNECT 127.0.0.1:<https> HTTP/1.1",
+    "host": [
+     "Host: 127.0.0.1:<https>"
+    ],
+    "proxy": [
+     "Proxy-Connection: Keep-Alive",
+     "Proxy-Authorization: Basic dTpw",
+     "X-Proxy-Extra: e"
+    ]
+   }
+  ]
+ },
+ "https.objectUserinfoUrl": {
+  "status": 200,
+  "origin": {
+   "method": "GET",
+   "url": "/x"
+  },
+  "arrivals": [
+   {
+    "line": "CONNECT 127.0.0.1:<https> HTTP/1.1",
+    "host": [
+     "Host: 127.0.0.1:<https>"
+    ],
+    "proxy": [
+     "Proxy-Connection: Keep-Alive",
+     "Proxy-Authorization: Basic dTpw"
+    ]
+   }
+  ]
+ },
+ "https.objectNoUrl": {
+  "status": 200,
+  "origin": {
+   "method": "GET",
+   "url": "/x"
+  },
+  "arrivals": [
+   {
+    "line": "CONNECT 127.0.0.1:<https> HTTP/1.1",
+    "host": [
+     "Host: 127.0.0.1:<https>"
+    ],
+    "proxy": [
+     "Proxy-Connection: Keep-Alive"
+    ]
+   }
+  ]
+ },
+ "http.407": {
+  "status": 407,
+  "origin": "proxy auth required",
+  "arrivals": [
+   {
+    "line": "GET http://127.0.0.1:<http>/echo?q=1 HTTP/1.1",
+    "host": [
+     "Host: 127.0.0.1:<http>"
+    ],
+    "proxy": [
+     "Proxy-Connection: Keep-Alive"
+    ]
+   }
+  ]
+ },
+ "https.407": {
+  "error": {
+   "name": "Error",
+   "code": "ERR_PROXY_TUNNEL",
+   "message": "Proxy refused to open a tunnel: 407 Proxy Authentication Required"
+  },
+  "arrivals": [
+   {
+    "line": "CONNECT 127.0.0.1:<https> HTTP/1.1",
+    "host": [
+     "Host: 127.0.0.1:<https>"
+    ],
+    "proxy": [
+     "Proxy-Connection: Keep-Alive"
+    ]
+   }
+  ]
+ },
+ "http.deadProxy": {
+  "error": {
+   "name": "TypeError",
+   "code": "ECONNREFUSED",
+   "message": "ECONNREFUSED: Unable to connect. Is the computer able to access the url?"
+  },
+  "arrivals": []
+ },
+ "https.deadProxy": {
+  "error": {
+   "name": "TypeError",
+   "code": "ECONNREFUSED",
+   "message": "ECONNREFUSED: Unable to connect. Is the computer able to access the url?"
+  },
+  "arrivals": []
+ },
+ "http.redirect": {
+  "status": 200,
+  "origin": "done",
+  "arrivals": [
+   {
+    "line": "GET http://127.0.0.1:<http>/redirect?n=1 HTTP/1.1",
+    "host": [
+     "Host: 127.0.0.1:<http>"
+    ],
+    "proxy": [
+     "Proxy-Connection: Keep-Alive"
+    ]
+   },
+   {
+    "line": "GET http://127.0.0.1:<http>/redirect?n=0 HTTP/1.1",
+    "host": [
+     "Host: 127.0.0.1:<http>"
+    ],
+    "proxy": [
+     "Proxy-Connection: Keep-Alive"
+    ]
+   }
+  ]
+ },
+ "http.invalidUrl": {
+  "error": {
+   "name": "TypeError",
+   "code": "ERR_INVALID_ARG_VALUE",
+   "message": "fetch() proxy URL is invalid"
+  },
+  "arrivals": []
+ },
+ "http.socks": {
+  "error": {
+   "name": "TypeError",
+   "code": "UnsupportedProxyProtocol",
+   "message": "UnsupportedProxyProtocol fetching \"http://127.0.0.1:<http>/echo?q=1\". For more information, pass `verbose: true` in the second argument to fetch()"
+  },
+  "arrivals": []
+ },
+ "http.env": {
+  "status": 200,
+  "origin": {
+   "method": "GET",
+   "url": "/echo?q=1"
+  },
+  "arrivals": [
+   {
+    "line": "GET http://127.0.0.1:<http>/echo?q=1 HTTP/1.1",
+    "host": [
+     "Host: 127.0.0.1:<http>"
+    ],
+    "proxy": [
+     "Proxy-Connection: Keep-Alive"
+    ]
+   }
+  ]
+ },
+ "https.env": {
+  "status": 200,
+  "origin": {
+   "method": "GET",
+   "url": "/x"
+  },
+  "arrivals": [
+   {
+    "line": "CONNECT 127.0.0.1:<https> HTTP/1.1",
+    "host": [
+     "Host: 127.0.0.1:<https>"
+    ],
+    "proxy": [
+     "Proxy-Connection: Keep-Alive"
+    ]
+   }
+  ]
+ },
+ "https.envHttpProxyOnly": {
+  "status": 200,
+  "origin": {
+   "method": "GET",
+   "url": "/x"
+  },
+  "arrivals": []
+ },
+ "http.envLowerCaseWins": {
+  "status": 200,
+  "origin": {
+   "method": "GET",
+   "url": "/echo?q=1"
+  },
+  "arrivals": [
+   {
+    "line": "GET http://127.0.0.1:<http>/echo?q=1 HTTP/1.1",
+    "host": [
+     "Host: 127.0.0.1:<http>"
+    ],
+    "proxy": [
+     "Proxy-Connection: Keep-Alive",
+     "Proxy-Authorization: Basic dTpw"
+    ]
+   }
+  ]
+ },
+ "https.envLowerCaseWins": {
+  "status": 200,
+  "origin": {
+   "method": "GET",
+   "url": "/x"
+  },
+  "arrivals": [
+   {
+    "line": "CONNECT 127.0.0.1:<https> HTTP/1.1",
+    "host": [
+     "Host: 127.0.0.1:<https>"
+    ],
+    "proxy": [
+     "Proxy-Connection: Keep-Alive",
+     "Proxy-Authorization: Basic dTpw"
+    ]
+   }
+  ]
+ },
+ "https.envAllProxy": {
+  "status": 200,
+  "origin": {
+   "method": "GET",
+   "url": "/x"
+  },
+  "arrivals": [
+   {
+    "line": "CONNECT 127.0.0.1:<https> HTTP/1.1",
+    "host": [
+     "Host: 127.0.0.1:<https>"
+    ],
+    "proxy": [
+     "Proxy-Connection: Keep-Alive"
+    ]
+   }
+  ]
+ },
+ "http.envNoScheme": {
+  "status": 200,
+  "origin": {
+   "method": "GET",
+   "url": "/echo?q=1"
+  },
+  "arrivals": [
+   {
+    "line": "GET http://127.0.0.1:<http>/echo?q=1 HTTP/1.1",
+    "host": [
+     "Host: 127.0.0.1:<http>"
+    ],
+    "proxy": [
+     "Proxy-Connection: Keep-Alive"
+    ]
+   }
+  ]
+ },
+ "http.envNull": {
+  "status": 200,
+  "origin": {
+   "method": "GET",
+   "url": "/echo?q=1"
+  },
+  "arrivals": [
+   {
+    "line": "GET http://127.0.0.1:<http>/echo?q=1 HTTP/1.1",
+    "host": [
+     "Host: 127.0.0.1:<http>"
+    ],
+    "proxy": [
+     "Proxy-Connection: Keep-Alive"
+    ]
+   }
+  ]
+ },
+ "http.envEmptyString": {
+  "status": 200,
+  "origin": {
+   "method": "GET",
+   "url": "/echo?q=1"
+  },
+  "arrivals": [
+   {
+    "line": "GET http://127.0.0.1:<http>/echo?q=1 HTTP/1.1",
+    "host": [
+     "Host: 127.0.0.1:<http>"
+    ],
+    "proxy": [
+     "Proxy-Connection: Keep-Alive"
+    ]
+   }
+  ]
+ },
+ "http.false": {
+  "status": 200,
+  "origin": {
+   "method": "GET",
+   "url": "/echo?q=1"
+  },
+  "arrivals": []
+ },
+ "http.none": {
+  "status": 200,
+  "origin": {
+   "method": "GET",
+   "url": "/echo?q=1"
+  },
+  "arrivals": []
+ },
+ "https.noProxyExplicit": {
+  "status": 200,
+  "origin": {
+   "method": "GET",
+   "url": "/x"
+  },
+  "arrivals": []
+ },
+ "https.noProxyEnv": {
+  "status": 200,
+  "origin": {
+   "method": "GET",
+   "url": "/x"
+  },
+  "arrivals": []
+ },
+ "https.noProxyOtherPort": {
+  "status": 200,
+  "origin": {
+   "method": "GET",
+   "url": "/x"
+  },
+  "arrivals": [
+   {
+    "line": "CONNECT 127.0.0.1:<https> HTTP/1.1",
+    "host": [
+     "Host: 127.0.0.1:<https>"
+    ],
+    "proxy": [
+     "Proxy-Connection: Keep-Alive"
+    ]
+   }
+  ]
+ },
+ "https.noProxyLowerCaseWins": {
+  "status": 200,
+  "origin": {
+   "method": "GET",
+   "url": "/x"
+  },
+  "arrivals": [
+   {
+    "line": "CONNECT 127.0.0.1:<https> HTTP/1.1",
+    "host": [
+     "Host: 127.0.0.1:<https>"
+    ],
+    "proxy": [
+     "Proxy-Connection: Keep-Alive"
+    ]
+   }
+  ]
+ },
+ "noProxy.matcher": {
+  "example.invalid": false,
+  ".example.invalid": false,
+  "*.example.invalid": false,
+  "invalid": false,
+  "sub.example.invalid": false,
+  "ample.invalid": true,
+  "SUB.EXAMPLE.INVALID": false,
+  "sub.example.invalid:8080": false,
+  "sub.example.invalid:80": true,
+  " , sub.example.invalid ": false,
+  "*": false,
+  "": true,
+  ".0.0.1": true,
+  "default port": false,
+  "ip suffix": true
+ },
+ "ws.proxy": {
+  "events": [
+   "open",
+   "message from the origin",
+   "close 1000"
+  ],
+  "arrivals": [
+   {
+    "line": "CONNECT 127.0.0.1:<http> HTTP/1.1",
+    "host": [
+     "Host: 127.0.0.1:<http>"
+    ],
+    "proxy": [
+     "Proxy-Connection: Keep-Alive"
+    ]
+   }
+  ]
+ },
+ "ws.userinfo": {
+  "events": [
+   "open",
+   "message from the origin",
+   "close 1000"
+  ],
+  "arrivals": [
+   {
+    "line": "CONNECT 127.0.0.1:<http> HTTP/1.1",
+    "host": [
+     "Host: 127.0.0.1:<http>"
+    ],
+    "proxy": [
+     "Proxy-Connection: Keep-Alive",
+     "Proxy-Authorization: Basic dTpw"
+    ]
+   }
+  ]
+ },
+ "ws.object": {
+  "events": [
+   "open",
+   "message from the origin",
+   "close 1000"
+  ],
+  "arrivals": [
+   {
+    "line": "CONNECT 127.0.0.1:<http> HTTP/1.1",
+    "host": [
+     "Host: 127.0.0.1:<http>"
+    ],
+    "proxy": [
+     "Proxy-Connection: Keep-Alive",
+     "Proxy-Authorization: Basic dTpw"
+    ]
+   }
+  ]
+ },
+ "ws.407": {
+  "events": [
+   "error: WebSocket connection to 'ws://127.0.0.1:<http>/' failed: Proxy authentication required: 407 Proxy Authentication Required",
+   "close 1006"
+  ],
+  "arrivals": [
+   {
+    "line": "CONNECT 127.0.0.1:<http> HTTP/1.1",
+    "host": [
+     "Host: 127.0.0.1:<http>"
+    ],
+    "proxy": [
+     "Proxy-Connection: Keep-Alive"
+    ]
+   }
+  ]
+ },
+ "ws.deadProxy": {
+  "events": [
+   "error: WebSocket connection to 'ws://127.0.0.1:<http>/' failed: Failed to connect",
+   "close 1006"
+  ],
+  "arrivals": []
+ },
+ "ws.envIgnored": {
+  "events": [
+   "open",
+   "message from the origin",
+   "close 1000"
+  ],
+  "arrivals": []
+ },
+ "ws.false": {
+  "events": [
+   "open",
+   "message from the origin",
+   "close 1000"
+  ],
+  "arrivals": []
+ },
+ "ws.noProxy": {
+  "events": [
+   "open",
+   "message from the origin",
+   "close 1000"
+  ],
+  "arrivals": []
+ },
+ "ws.badScheme": {
+  "events": [
+   "throw SyntaxError: Unsupported proxy protocol \"socks5\" (expected \"http\" or \"https\")"
+  ],
+  "arrivals": []
+ }
+}

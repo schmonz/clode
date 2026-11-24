@@ -266,6 +266,22 @@ const ENGINE_API_FLOOR = [
       + 'it to CLODE_ENGINE_FLOOR_LOG, so the gates listed above refuse a build path that ever reaches it',
   },
   {
+    // Without it the engine cannot route a request through a proxy of the caller's: bun-shim REFUSES Bun's fetch and
+    // WebSocket `proxy` by name (2.1.330 passes it on every API request when HTTPS_PROXY & co are set), and fetch
+    // falls back to the engine's own reading of the proxy environment (once, at start; CONNECT even for http).
+    name: '__tjs_proxy_routes',
+    expr: 'globalThis.__tjs_proxy_routes',
+    kind: 'object',
+    from: 'txiki-fetch-proxy.patch',
+    why: 'bun-shim fetch/WebSocket `proxy` and Bun\'s per-request proxy environment: the engine routes each connection '
+      + '(absolute-form for http, a CONNECT with the caller\'s header block for https/ws/wss) as bun-shim decides',
+    buildHost: false,
+    notForBuildHost: 'only bun-shim reads it, and no build step loads bun-shim: the build\'s own fetches '
+      + '(libexec/clode-build.cjs, clode-net.cjs, clode-templates.cjs) call the engine\'s fetch directly, with no proxy '
+      + 'option, and keep its environment handling unchanged. On an engine without it bun-shim REFUSES an explicit proxy '
+      + 'by name (ERR_CLODE_UNSUPPORTED_OPTION), so nothing goes direct in silence',
+  },
+  {
     // Without it node-shim's Timeout#unref STOPS the timer (the old route), so an unref'd timer never fires while
     // the loop stays alive: the TUI's nonblocking stdout then holds a turn's answer until the next keystroke.
     name: '__tjs_timer_setref',

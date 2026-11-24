@@ -73,9 +73,7 @@ or sent), or is on the short exempt list below. The ratchet is `test/options-cen
 - zlib `dictionary`, `info`, `memLevel`, `strategy`, `windowBits` (each but its default), `rejectGarbageAfterEnd`.
 
 **Refused (bun-shim)** — none reached by default:
-- fetch `unix` (ANTHROPIC_UNIX_SOCKET, or the credentialed unix-socket proxy), `proxy` (a configured HTTPS_PROXY or
-  fallback proxy: **every API request then fails by name where it used to go direct in silence**; honouring it means
-  routing fetch through node-shim's http client, which does proxy), `maxRedirects`, `session`, `protocol`,
+- fetch `unix` (ANTHROPIC_UNIX_SOCKET, or the credentialed unix-socket proxy), `maxRedirects`, `session`, `protocol`,
   `verbose: true`; `compress: true` with a stream body; `decompress: false` when the server encodes anyway (the engine's
   fetch decodes every encoded body; the bundle pairs it with `accept-encoding: identity`, which this honours).
 - Bun.spawn `ipc`, `onDisconnect`, `terminal` (the bg-session PTY path; Bun.Terminal was already absent), `maxBuffer`,
@@ -83,7 +81,9 @@ or sent), or is on the short exempt list below. The ratchet is `test/options-cen
   target (Bun.file itself is absent).
 - Bun.spawnSync `detached`, `uid`, `gid`, `signal`, `terminal`, `onDisconnect`, `maxBuffer`, `cgroup`; a Blob or
   Response as stdin.
-- WebSocket `proxy` (set only with a proxy configured).
+- fetch / WebSocket `proxy` with an `https://` proxy URL (TLS to the proxy itself), from the option or from the
+  environment: the engine speaks plain HTTP to a proxy. Native Bun does TLS to it. Everything else about `proxy` is
+  HONOURED since 2026-11-23: see "fetch and WebSocket `proxy`: honoured as native Bun honours it" below.
 
 **Exempt** (neither honoured nor refused: refusing would break a default path and honouring is not cheap):
 
@@ -132,6 +132,41 @@ Measured: test/options-census.test.cjs under node 24.21.0, native 2.1.330 (Bun 1
 
 Unmeasured: the Bun rows and refusals on linux and win32 (the rows run /bin/sh and are skipped on Windows); a turn
 behind a real proxy (to see the refusal's message where a user would).
+
+## fetch and WebSocket `proxy`: honoured as native Bun honours it (2026-11-23)
+
+Bun's fetch `proxy` (a URL, or `{ url, headers }`; `false` for none) and its own per-request reading of the proxy
+environment, and WebSocket's `proxy`, now do under quaude what they do under native Bun 1.4.4: an http URL goes to the
+proxy as an absolute-form request, an https URL (and ws/wss) through a CONNECT tunnel named by the URL's host and
+verified against the same trust as a direct request; `Proxy-Connection: Keep-Alive`, Basic auth from the proxy URL's
+userinfo, the caller's own proxy headers (proxyAuthHelper's `Proxy-Authorization` of any scheme) on the CONNECT or the
+request; the environment read per request with Bun's precedence (lower case first; https never uses HTTP_PROXY;
+ALL_PROXY last; a scheme-less value is http); no_proxy for explicit and environment proxies alike, with Bun's matcher;
+a refused CONNECT as Error ERR_PROXY_TUNNEL with the proxy's status line, a dead proxy as TypeError ECONNREFUSED, and
+WebSocket's error-event messages. Before: refused by name (2026-11-23, the options census), and before that silently
+ignored (every such request direct, past the proxy). The engine's own environment handling, which `fetch` used, also
+read the environment once at start (so a proxy set later, as settings.json `env` does, was never used), tunnelled
+plain http through CONNECT, resolved the target locally (a proxy-only network cannot) and named it by IP in the
+CONNECT. Engine: spike/quickjs/patches/txiki-fetch-proxy.patch and spike/quickjs/patches/lws-proxy-connect.patch
+(floor entry `__tjs_proxy_routes`); policy: libexec/bun-shim.cjs `_bunProxyPolicy`.
+
+What is still not native:
+- **An `https://` proxy URL is refused by name** (option or environment): native does TLS to the proxy, lws cannot.
+- **A redirect hop whose proxy cannot be used** (only an environment proxy can differ by scheme) is routed to the
+  discard port on loopback so it fails, rather than given native's own error for it.
+- **Header case from a `Headers` instance**: native keeps `X-Proxy-Extra` as given; the engine's Headers lowercases
+  names. The bundle passes a plain object, whose case is kept.
+- **A non-407 refusal of a WebSocket CONNECT** is reported as "Proxy refused to open a tunnel: <status line>"; native's
+  wording for anything but 407 was not measured.
+- **Not proxy-specific, found on the way:** the engine's fetch tries a host name's next address only when lws refuses
+  to start a connection, not when a connection to the first address is refused, so a direct fetch to `localhost`
+  (resolving `::1` first) of a server listening on 127.0.0.1 only fails ECONNREFUSED where native connects. The rows
+  therefore address loopback by IP where the request is direct.
+
+Measured: test/fetch-proxy.test.cjs (43 rows recorded under native 2.1.330 / Bun 1.4.4 in test/fixtures/fetch-proxy-native.json, darwin-arm64), red against the previous libexec/bun-shim.cjs on the same engine (2026-11-23)
+
+Unmeasured. A real `-p` or TUI turn behind an authenticating proxy (and with proxyAuthHelper), linux and win32 rows,
+and a proxy reached by a name with several addresses.
 
 ## TLS options: what the honour-or-refuse work (2026-11-23) left open
 

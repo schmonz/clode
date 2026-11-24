@@ -1,0 +1,499 @@
+diff --git a/src/private.h b/src/private.h
+--- a/src/private.h
++++ b/src/private.h
+@@ -107,6 +107,8 @@
+         unsigned int ca_gen;
+         unsigned int vh_gen;
+         void *proxy_cfgs;
++        /* CLODE (fetch-proxy): the client vhosts made for a caller's own proxy (tjs__lws_proxy_vhost), newest first */
++        void *proxy_vhosts;
+     } lws;
+     struct {
+         TJSTimer *timers;
+@@ -203,6 +205,11 @@
+ void tjs__lws_conn_ref(JSContext *ctx);
+ void tjs__lws_conn_unref(JSContext *ctx);
+ struct lws_vhost *tjs__lws_select_vhost(JSContext *ctx, const char *scheme, const char *hostname, int port);
++/* CLODE (fetch-proxy): the vhost that never uses a proxy, and the one that tunnels through host:port with a CONNECT
++ * carrying exactly `connect_headers` (CRLF lines). Both carry the current default CA set. */
++struct lws_vhost *tjs__lws_direct_vhost(JSContext *ctx);
++struct lws_vhost *tjs__lws_proxy_vhost(JSContext *ctx, const char *host, int port, const char *connect_headers);
++void tjs__lws_free_proxy_vhosts(TJSRuntime *qrt);
+ int tjs__lws_load_http(TJSRuntime *qrt, TBuf *dbuf, const char *url);
+ 
+ uv_loop_t *TJS_GetLoop(TJSRuntime *qrt);
+diff --git a/src/lws-utils.c b/src/lws-utils.c
+--- a/src/lws-utils.c
++++ b/src/lws-utils.c
+@@ -592,11 +592,95 @@
+ 
+     if (!strcmp(scheme, "https") || !strcmp(scheme, "wss")) {
+         return qrt->lws.vh_https_proxy ? qrt->lws.vh_https_proxy : qrt->lws.vh_direct;
++    }
++
++    return qrt->lws.vh_direct;
++}
++
++/* CLODE (fetch-proxy): a caller's own proxy (fetch's and WebSocket's `proxy`), not the environment's. One vhost per
++ * (proxy host, port, CONNECT header block) and default CA set, kept like the environment's vhosts are: a request in
++ * flight on one is never cut off, and a run of requests through the same proxy shares one. */
++typedef struct TJSProxyVhost {
++    struct TJSProxyVhost *next;
++    char *host;
++    int port;
++    char *headers;
++    unsigned int gen;
++    struct lws_vhost *vh;
++} TJSProxyVhost;
++
++struct lws_vhost *tjs__lws_direct_vhost(JSContext *ctx) {
++    TJSRuntime *qrt = TJS_GetRuntime(ctx);
++    CHECK_NOT_NULL(qrt);
++
++    if (qrt->lws.vh_gen != qrt->lws.ca_gen) {
++        tjs__lws_create_vhosts(qrt);
+     }
+ 
+     return qrt->lws.vh_direct;
++}
++
++struct lws_vhost *tjs__lws_proxy_vhost(JSContext *ctx, const char *host, int port, const char *connect_headers) {
++    TJSRuntime *qrt = TJS_GetRuntime(ctx);
++    CHECK_NOT_NULL(qrt);
++    const char *hdrs = connect_headers ? connect_headers : "";
++
++    for (TJSProxyVhost *p = qrt->lws.proxy_vhosts; p; p = p->next) {
++        if (p->gen == qrt->lws.ca_gen && p->port == port && !strcmp(p->host, host) && !strcmp(p->headers, hdrs)) {
++            return p->vh;
++        }
++    }
++
++    TJSProxyConfig cfg;
++    memset(&cfg, 0, sizeof(cfg));
++    /* lws_set_proxy() reads an IPv6 literal only in brackets */
++    if (strchr(host, ':')) {
++        lws_snprintf(cfg.auth_address, sizeof(cfg.auth_address), "[%s]", host);
++    } else {
++        lws_strncpy(cfg.auth_address, host, sizeof(cfg.auth_address));
++    }
++    lws_strncpy(cfg.hostname, host, sizeof(cfg.hostname));
++    cfg.port = (unsigned int) port;
++
++    static unsigned int serial;
++    char name[48];
++    snprintf(name, sizeof(name), "tjs-own-proxy-%u-%u", qrt->lws.ca_gen, ++serial);
++    struct lws_vhost *vh = tjs__create_client_vhost(qrt, name, &cfg);
++    if (!vh) {
++        return NULL;
++    }
++    if (lws_set_proxy_connect_headers(vh, hdrs)) {
++        return NULL;
++    }
++
++    TJSProxyVhost *p = tjs__mallocz(sizeof(*p));
++    CHECK_NOT_NULL(p);
++    p->host = tjs__strdup(host);
++    p->headers = tjs__strdup(hdrs);
++    CHECK_NOT_NULL(p->host);
++    CHECK_NOT_NULL(p->headers);
++    p->port = port;
++    p->gen = qrt->lws.ca_gen;
++    p->vh = vh;
++    p->next = qrt->lws.proxy_vhosts;
++    qrt->lws.proxy_vhosts = p;
++
++    return vh;
+ }
+ 
++/* CLODE (fetch-proxy): the bookkeeping only; lws_context_destroy has already destroyed the vhosts. */
++void tjs__lws_free_proxy_vhosts(TJSRuntime *qrt) {
++    TJSProxyVhost *p = qrt->lws.proxy_vhosts;
++    while (p) {
++        TJSProxyVhost *next = p->next;
++        tjs__free(p->host);
++        tjs__free(p->headers);
++        tjs__free(p);
++        p = next;
++    }
++    qrt->lws.proxy_vhosts = NULL;
++}
++
+ static int tjs__lws_load_http_once(TJSRuntime *qrt, TJSHttpLoadCtx *load_ctx, const char *url) {
+     load_ctx->status = -1;
+     load_ctx->done = false;
+diff --git a/src/vm.c b/src/vm.c
+--- a/src/vm.c
++++ b/src/vm.c
+@@ -798,6 +798,7 @@
+     qrt->lws.ca_bundle_data = NULL;
+     tjs__free(qrt->lws.proxy_cfgs); /* CLODE (default-ca) */
+     qrt->lws.proxy_cfgs = NULL;
++    tjs__lws_free_proxy_vhosts(qrt); /* CLODE (fetch-proxy) */
+ 
+     /* Destroy shared TLS context. */
+     tjs__mod_tls_cleanup(qrt);
+diff --git a/src/httpclient.c b/src/httpclient.c
+--- a/src/httpclient.c
++++ b/src/httpclient.c
+@@ -62,6 +62,15 @@
+     JSValue url;
+     /* Response decompression. */
+     TJSDecompressor *decompressor;
++    /* CLODE (fetch-proxy): setProxy(). proxy_kind 0: the environment's proxy settings, as before (never called);
++     * 1: no proxy at all; 2: through proxy_host:proxy_port, whose CONNECT (https) or absolute-form request (http)
++     * carries proxy_headers. proxy_absolute: this connection is an http request sent to the proxy in absolute form,
++     * so proxy_headers go in the request itself. */
++    int proxy_kind;
++    char *proxy_host;
++    int proxy_port;
++    char *proxy_headers;
++    bool proxy_absolute;
+ } TJSHttpClient;
+ 
+ static JSClassID tjs_httpclient_class_id;
+@@ -84,6 +93,8 @@
+         }
+         tbuf_free(&h->req_headers);
+         tbuf_free(&h->send_buf);
++        js_free_rt(rt, h->proxy_host);
++        js_free_rt(rt, h->proxy_headers);
+         js_free_rt(rt, h);
+     }
+ }
+@@ -274,6 +285,16 @@
+         case LWS_CALLBACK_CLIENT_APPEND_HANDSHAKE_HEADER: {
+             unsigned char **p = (unsigned char **) in, *end = (*p) + len;
+ 
++            /* CLODE (fetch-proxy): an absolute-form request to a proxy carries the proxy's own headers first. */
++            if (h->proxy_absolute && h->proxy_headers) {
++                size_t hl = strlen(h->proxy_headers);
++                if ((size_t) (end - *p) < hl + 1) {
++                    return -1;
++                }
++                memcpy(*p, h->proxy_headers, hl);
++                *p += hl;
++            }
++
+             /* Add User-Agent header unless the user already set one. */
+             if (!has_request_header(&h->req_headers, "User-Agent")) {
+                 if (lws_add_http_header_by_name(wsi,
+@@ -584,6 +605,11 @@
+     h->body_done = false;
+     h->completed = false;
+     h->ssl_flags = 0;
++    h->proxy_kind = 0;
++    h->proxy_host = NULL;
++    h->proxy_port = 0;
++    h->proxy_headers = NULL;
++    h->proxy_absolute = false;
+ 
+     for (int i = 0; i < HC_CALLBACK_MAX; i++) {
+         h->callbacks[i] = JS_UNDEFINED;
+@@ -688,6 +714,63 @@
+     }
+ 
+     return 0;
++}
++
++/* CLODE (fetch-proxy): where a connection goes, decided per connection (setProxy above).
++ * tjs_httpclient_dial_host: the name whose address the connection is made to — the proxy's when there is one, the
++ * URL's otherwise. tjs_httpclient_route: fills in cci for that connection, `addr` being the dial host or its resolved
++ * address. Through a proxy, an https request is a CONNECT tunnel named by the URL's host (the proxy's vhost connects to
++ * `addr`), and an http request goes to the proxy itself with the absolute URL as its target and the URL's host:port as
++ * its Host, as other clients send it. `abs_path` and `host_hdr` must outlive lws_client_connect_via_info. */
++static const char *tjs_httpclient_dial_host(TJSHttpClient *h, lws_parse_uri_t *uri) {
++    return h->proxy_kind == 2 ? h->proxy_host : uri->host;
++}
++
++static bool tjs_httpclient_route(TJSHttpClient *h,
++                                 lws_parse_uri_t *uri,
++                                 bool use_ssl,
++                                 const char *addr,
++                                 struct lws_client_connect_info *cci,
++                                 char *abs_path,
++                                 size_t abs_len,
++                                 char *host_hdr,
++                                 size_t host_len) {
++    JSContext *ctx = h->ctx;
++
++    h->proxy_absolute = false;
++
++    if (h->proxy_kind == 0) {
++        cci->vhost = tjs__lws_select_vhost(ctx, uri->scheme, uri->host, uri->port);
++        return true;
++    }
++
++    /* A vhost that could not be made fails the connection: lws given none would use its first, maybe a proxy's. */
++    if (h->proxy_kind == 1) {
++        cci->vhost = tjs__lws_direct_vhost(ctx);
++        return cci->vhost != NULL;
++    }
++
++    if (use_ssl) {
++        cci->address = uri->host;
++        cci->port = uri->port;
++        cci->vhost = tjs__lws_proxy_vhost(ctx, addr, h->proxy_port, h->proxy_headers);
++        return cci->vhost != NULL;
++    }
++
++    bool v6 = strchr(uri->host, ':') != NULL;
++    if (uri->port == 80) {
++        snprintf(host_hdr, host_len, "%s%s%s", v6 ? "[" : "", uri->host, v6 ? "]" : "");
++    } else {
++        snprintf(host_hdr, host_len, "%s%s%s:%d", v6 ? "[" : "", uri->host, v6 ? "]" : "", uri->port);
++    }
++    snprintf(abs_path, abs_len, "http://%s%s", host_hdr, cci->path);
++    cci->address = addr;
++    cci->port = h->proxy_port;
++    cci->path = abs_path;
++    cci->host = host_hdr;
++    cci->vhost = tjs__lws_direct_vhost(ctx);
++    h->proxy_absolute = true;
++    return cci->vhost != NULL;
+ }
+ 
+ /* Parse URL and initiate an lws client connection.  Returns 0 on success. */
+@@ -732,7 +815,12 @@
+     cci.local_protocol_name = TJS_LWS_HTTP_PROTOCOL_NAME;
+     cci.userdata = h;
+     cci.pwsi = &h->wsi;
+-    cci.vhost = tjs__lws_select_vhost(ctx, uri->scheme, uri->host, uri->port);
++    char abs_path[TJS_PATH_MAX + 300];
++    char host_hdr[300];
++    if (!tjs_httpclient_route(h, uri, use_ssl, tjs_httpclient_dial_host(h, uri), &cci, abs_path, sizeof(abs_path), host_hdr, sizeof(host_hdr))) {
++        lws_parse_uri_destroy(&uri);
++        return -1;
++    }
+ 
+     tjs__lws_conn_ref(ctx);
+ 
+@@ -908,7 +996,58 @@
+         h->ssl_flags |= LCCSCF_ALLOW_INSECURE;
+     } else {
+         h->ssl_flags &= ~LCCSCF_ALLOW_INSECURE;
++    }
++    return JS_UNDEFINED;
++}
++
++/* CLODE (fetch-proxy): setProxy(null) — no proxy for this request, whatever the environment says;
++ * setProxy({ host, port, headers }) — through that http proxy, `headers` (CRLF-terminated lines) on its CONNECT
++ * (https) or on the absolute-form request (http). Never called: the environment's proxy settings, as before. */
++static JSValue tjs_httpclient_set_proxy(JSContext *ctx, JSValue this_val, int argc, JSValue *argv) {
++    TJSHttpClient *h = tjs_httpclient_get(ctx, this_val);
++    if (!h) {
++        return JS_EXCEPTION;
++    }
++
++    js_free(ctx, h->proxy_host);
++    js_free(ctx, h->proxy_headers);
++    h->proxy_host = NULL;
++    h->proxy_headers = NULL;
++    h->proxy_port = 0;
++
++    if (JS_IsNull(argv[0]) || JS_IsUndefined(argv[0])) {
++        h->proxy_kind = 1;
++        return JS_UNDEFINED;
+     }
++
++    JSValue host = JS_GetPropertyStr(ctx, argv[0], "host");
++    JSValue port = JS_GetPropertyStr(ctx, argv[0], "port");
++    JSValue hdrs = JS_GetPropertyStr(ctx, argv[0], "headers");
++    const char *s_host = JS_ToCString(ctx, host);
++    const char *s_hdrs = JS_IsUndefined(hdrs) ? NULL : JS_ToCString(ctx, hdrs);
++    int32_t n_port = 0;
++    int bad = !s_host || (!JS_IsUndefined(hdrs) && !s_hdrs) || JS_ToInt32(ctx, &n_port, port) || n_port <= 0 ||
++              n_port > 65535;
++
++    if (!bad) {
++        h->proxy_host = js_strdup(ctx, s_host);
++        h->proxy_headers = js_strdup(ctx, s_hdrs ? s_hdrs : "");
++        h->proxy_port = n_port;
++        h->proxy_kind = 2;
++        bad = !h->proxy_host || !h->proxy_headers;
++    }
++
++    JS_FreeCString(ctx, s_host);
++    JS_FreeCString(ctx, s_hdrs);
++    JS_FreeValue(ctx, host);
++    JS_FreeValue(ctx, port);
++    JS_FreeValue(ctx, hdrs);
++
++    if (bad) {
++        h->proxy_kind = 0;
++        return JS_ThrowTypeError(ctx, "setProxy: expected null or { host, port, headers }");
++    }
++
+     return JS_UNDEFINED;
+ }
+ 
+@@ -931,6 +1070,7 @@
+     TJS_CFUNC_DEF("setAllowInsecure", 1, tjs_httpclient_set_allow_insecure),
+     TJS_CFUNC_DEF("sendData", 1, tjs_httpclient_senddata),
+     TJS_CFUNC_DEF("abort", 0, tjs_httpclient_abort),
++    TJS_CFUNC_DEF("setProxy", 1, tjs_httpclient_set_proxy),
+ };
+ 
+ void tjs__mod_httpclient_init(JSContext *ctx, JSValue ns) {
+diff --git a/src/ws.c b/src/ws.c
+--- a/src/ws.c
++++ b/src/ws.c
+@@ -465,9 +465,36 @@
+     cci.local_protocol_name = TJS_LWS_PROTOCOL_NAME;
+     cci.userdata = w;
+     cci.pwsi = &w->wsi;
+-    cci.vhost = tjs__lws_select_vhost(ctx, uri->scheme, uri->host, uri->port);
++    /* CLODE (fetch-proxy): an optional fifth argument routes this connection as fetch's setProxy does: null for no
++     * proxy whatever the environment says, { host, port, headers } for a CONNECT tunnel through that proxy (ws and wss
++     * alike) carrying `headers`. Absent: the environment's proxy settings, as before. A vhost that cannot be made fails
++     * the connection rather than leaving lws to pick one. */
++    bool route_ok = true;
++    if (argc > 4 && JS_IsNull(argv[4])) {
++        cci.vhost = tjs__lws_direct_vhost(ctx);
++        route_ok = cci.vhost != NULL;
++    } else if (argc > 4 && JS_IsObject(argv[4])) {
++        JSValue phost = JS_GetPropertyStr(ctx, argv[4], "host");
++        JSValue pport = JS_GetPropertyStr(ctx, argv[4], "port");
++        JSValue phdrs = JS_GetPropertyStr(ctx, argv[4], "headers");
++        const char *s_host = JS_ToCString(ctx, phost);
++        const char *s_hdrs = JS_IsUndefined(phdrs) ? "" : JS_ToCString(ctx, phdrs);
++        int32_t n_port = 0;
++        route_ok = s_host && s_hdrs && !JS_ToInt32(ctx, &n_port, pport) && n_port > 0 && n_port <= 65535;
++        cci.vhost = route_ok ? tjs__lws_proxy_vhost(ctx, s_host, n_port, s_hdrs) : NULL;
++        route_ok = route_ok && cci.vhost != NULL;
++        JS_FreeCString(ctx, s_host);
++        if (!JS_IsUndefined(phdrs)) {
++            JS_FreeCString(ctx, s_hdrs);
++        }
++        JS_FreeValue(ctx, phost);
++        JS_FreeValue(ctx, pport);
++        JS_FreeValue(ctx, phdrs);
++    } else {
++        cci.vhost = tjs__lws_select_vhost(ctx, uri->scheme, uri->host, uri->port);
++    }
+ 
+-    struct lws *wsi = lws_client_connect_via_info(&cci);
++    struct lws *wsi = route_ok ? lws_client_connect_via_info(&cci) : NULL;
+ 
+     JS_FreeCString(ctx, protocols);
+     lws_parse_uri_destroy(&uri);
+@@ -695,6 +722,6 @@
+     JS_SetClassProto(ctx, tjs_ws_class_id, proto);
+ 
+     /* WebSocket constructor */
+-    obj = JS_NewCFunction2(ctx, tjs_ws_constructor, "WebSocket", 4, JS_CFUNC_constructor, 0);
++    obj = JS_NewCFunction2(ctx, tjs_ws_constructor, "WebSocket", 5, JS_CFUNC_constructor, 0);
+     JS_DefinePropertyValueStr(ctx, ns, "WebSocket", obj, JS_PROP_C_W_E);
+ }
+diff --git a/src/js/polyfills/fetch/fetch.js b/src/js/polyfills/fetch/fetch.js
+--- a/src/js/polyfills/fetch/fetch.js
++++ b/src/js/polyfills/fetch/fetch.js
+@@ -125,6 +125,11 @@
+             client.setAllowInsecure(true);
+         }
+ 
++        // CLODE (fetch-proxy): init.proxy, a function of each hop's URL (http-client.js setProxy).
++        if (typeof init?.proxy === 'function') {
++            client.setProxy(init.proxy);
++        }
++
+         activeClients.add(client);
+ 
+         let responseResolved = false;
+diff --git a/src/js/polyfills/http-client.js b/src/js/polyfills/http-client.js
+--- a/src/js/polyfills/http-client.js
++++ b/src/js/polyfills/http-client.js
+@@ -13,6 +13,7 @@
+     #cookies = false;
+     #allowInsecure = false;
+     #client = null;
++    #proxy;
+ 
+     get onstatus() {
+         return this._onstatus ?? null;
+@@ -126,6 +127,13 @@
+         if (this.#client) {
+             this.#client.setAllowInsecure(allow);
+         }
++    }
++
++    // CLODE (fetch-proxy): fn(url) -> null (no proxy, whatever the environment says) or { host, port, headers } (that
++    // http proxy: a CONNECT tunnel for https, an absolute-form request for http, `headers` CRLF lines on either).
++    // Asked again for every redirect hop, so each hop goes where its own URL should.
++    setProxy(fn) {
++        this.#proxy = fn;
+     }
+ 
+     sendData(data) {
+@@ -170,6 +178,10 @@
+             client.streaming = true;
+         }
+ 
++        if (typeof this.#proxy === 'function') {
++            client.setProxy(this.#proxy(this.#url));
++        }
++
+         // Re-apply stored headers for redirect hops.
+         for (const [ name, value ] of this.#headers) {
+             client.setRequestHeader(name, value);
+diff --git a/src/js/polyfills/ws.js b/src/js/polyfills/ws.js
+--- a/src/js/polyfills/ws.js
++++ b/src/js/polyfills/ws.js
+@@ -101,6 +101,7 @@
+ 
+         let protocols;
+         let headers;
++        let proxy;
+ 
+         if (typeof protocolsOrOptions === 'string') {
+             protocols = [ protocolsOrOptions ];
+@@ -109,6 +110,10 @@
+         } else if (protocolsOrOptions !== null && typeof protocolsOrOptions === 'object') {
+             protocols = protocolsOrOptions.protocols || [];
+             headers = protocolsOrOptions.headers;
++            // CLODE (fetch-proxy): `proxy`, a function of the URL answering null (no proxy, whatever the environment
++            // says) or { host, port, headers } (a CONNECT tunnel through that proxy, `headers` CRLF lines on it).
++            // Absent: the environment's proxy settings.
++            proxy = protocolsOrOptions.proxy;
+         } else {
+             protocols = [];
+         }
+@@ -132,7 +137,10 @@
+             }
+         }
+ 
+-        const ws = new WS(urlStr, protocolStr, headerNames, headerValues);
++        const route = typeof proxy === 'function' ? proxy(urlStr) : undefined;
++        const ws = route === undefined
++            ? new WS(urlStr, protocolStr, headerNames, headerValues)
++            : new WS(urlStr, protocolStr, headerNames ?? [], headerValues ?? [], route);
+ 
+         ws.onopen = protocol => {
+             this.#protocol = protocol || '';
+@@ -151,7 +159,10 @@
+         };
+ 
+         ws.onerror = reason => {
+-            this.dispatchEvent(new ErrorEvent('error', { message: reason || '' }));
++            // CLODE (fetch-proxy): this tree's ErrorEvent takes the error itself (event-target-polyfill.js), not
++            // (type, init): handed ('error', { message }) its message was the string 'error' and lws's reason (a
++            // proxy's refusal, a failed connect) never reached a listener.
++            this.dispatchEvent(new ErrorEvent(reason || ''));
+         };
+ 
+         ws.onclose = (code, reason) => {
+diff --git a/src/js/polyfills/index.js b/src/js/polyfills/index.js
+--- a/src/js/polyfills/index.js
++++ b/src/js/polyfills/index.js
+@@ -30,3 +30,12 @@
+ import 'web-streams-polyfill/polyfill';
+ import './compression-streams.js';
+ import './ws-stream.js';
++
++// CLODE (fetch-proxy): fetch's init and WebSocket's options take `proxy` (http-client.js setProxy, ws.js), so a caller
++// can route a request through a proxy of its own, or past the environment's. Read by node-shim/bun-shim and by
++// scripts/engine-api-floor.cjs.
++Object.defineProperty(globalThis, '__tjs_proxy_routes', {
++    value: Object.freeze({ fetch: true, WebSocket: true }),
++    enumerable: false,
++    configurable: true,
++});

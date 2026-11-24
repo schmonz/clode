@@ -519,6 +519,7 @@ const TXIKI_PATCH_ORDER = [
   'txiki-default-ca.patch',                   // globalThis.__tjs_set_default_ca(pem): REPLACE the CA set fetch/XHR/WebSocket (new lws client vhosts) and tjs.connect('tls') without a ca (a new mod_tls chain) trust by default, any number of times: node's tls.setDefaultCACertificates, which native Claude Code calls with a list that BLOCKS four of the engine's compiled-in roots. private.h/mod_tls.c/lws-utils.c/vm.c; generated against the fully patched tree (after win32-utf8), so LAST
   'txiki-libc-global.patch',                  // globalThis.__tjs_libc(): { glibcVersionRuntime, glibcVersionCompiler } on a glibc build ({} elsewhere), the two header fields of node's process.report.getReport() that only the C side knows (2.1.330's linux carve picks its musl/glibc SDK binary from them). vm.c; generated against the fully patched tree (after default-ca), so LAST
   'txiki-spawn-options.patch',                // node's spawn options the engine dropped: tjs.spawn takes detached (UV_PROCESS_DETACHED: the Bash tool's process-group kill), windowsHide, windowsVerbatimArguments and argv0, and __tjs_spawn_sync argv0/killSignal (POSIX) and windowsHide/windowsVerbatimArguments (Windows); each names what it honours in globalThis.__tjs_spawn_options / __tjs_spawn_sync.options for node-shim's options census. mod_process.c/mod_spawn_sync.c; generated against the fully patched tree (after default-ca), so LAST
+  'txiki-fetch-proxy.patch',                  // fetch's init and WebSocket's options take `proxy`: a function of each hop's URL answering null (no proxy, whatever the environment says) or { host, port, headers } (an absolute-form request for http, a CONNECT carrying exactly `headers` for https/ws/wss), through vhosts lws-proxy-connect.patch lets carry that header block; httpclient.setProxy, tjs__lws_direct_vhost/tjs__lws_proxy_vhost, globalThis.__tjs_proxy_routes; and ws.js's error event carries lws's reason (its ErrorEvent took ('error', {message}), so every message was 'error'). bun-shim decides the route in Bun's terms. private.h/lws-utils.c/vm.c/httpclient.c/ws.c + four polyfills; fixupHttpclientAsyncDns anchors on the connect fn it edits. Generated against the fully patched tree, so LAST
 ];
 
 function orderedPatches(prefix) {
@@ -528,7 +529,7 @@ function orderedPatches(prefix) {
     if (undocumented.length) throw new Error(`patches without a documented order: ${undocumented.join(', ')} (add to TXIKI_PATCH_ORDER)`);
     return TXIKI_PATCH_ORDER.filter((f) => present.includes(f));
   }
-  // quickjs-ng-*: name order, stated rather than left to readdir. quickjs-ng-regexp-capture-u16.patch's quickjs.c hunk
+  // quickjs-ng-* and lws-*: name order, stated rather than left to readdir. quickjs-ng-regexp-capture-u16.patch's quickjs.c hunk
   // edits the function quickjs-ng-canonical-le-bytecode.patch adds, so the order is load-bearing.
   return present.sort();
 }
@@ -2027,7 +2028,10 @@ function fixupHttpclientAsyncDns(dir) {
   // already in-tree: lws-utils.c (IP -> cci.address) and mod_dns.c (async cb).
   // ws.c has the same lws-DNS pattern; left as a follow-up (not the login path),
   // so LWS_WITH_SYS_ASYNC_DNS stays enabled for it. Runs AFTER the txiki patches
-  // (anchors on the post-no-origin-header connect fn). libuv/lws candidate.
+  // (anchors on the post-no-origin-header, post-fetch-proxy connect fn). libuv/lws candidate.
+  // Through a caller's proxy (txiki-fetch-proxy.patch) the name resolved is the PROXY's
+  // (tjs_httpclient_dial_host): a proxy-only network may not resolve the URL's host at all,
+  // and the CONNECT names it, so the target is never looked up here.
   const marker = 'Async DNS: resolve uri->host via uv_getaddrinfo';
   const f = path.join(dir, 'src/httpclient.c');
   const src = fs.readFileSync(f, 'utf8');
@@ -2077,7 +2081,12 @@ static int tjs_httpclient_connect(TJSHttpClient *h) {
     cci.local_protocol_name = TJS_LWS_HTTP_PROTOCOL_NAME;
     cci.userdata = h;
     cci.pwsi = &h->wsi;
-    cci.vhost = tjs__lws_select_vhost(ctx, uri->scheme, uri->host, uri->port);
+    char abs_path[TJS_PATH_MAX + 300];
+    char host_hdr[300];
+    if (!tjs_httpclient_route(h, uri, use_ssl, tjs_httpclient_dial_host(h, uri), &cci, abs_path, sizeof(abs_path), host_hdr, sizeof(host_hdr))) {
+        lws_parse_uri_destroy(&uri);
+        return -1;
+    }
 
     tjs__lws_conn_ref(ctx);
 
@@ -2205,7 +2214,11 @@ static void tjs_httpclient_resolve_cb(uv_getaddrinfo_t *req, int status, struct 
         cci.local_protocol_name = TJS_LWS_HTTP_PROTOCOL_NAME;
         cci.userdata = h;
         cci.pwsi = &h->wsi;
-        cci.vhost = tjs__lws_select_vhost(ctx, cr->uri->scheme, cr->uri->host, cr->uri->port);
+        char abs_path[TJS_PATH_MAX + 300];
+        char host_hdr[300];
+        if (!tjs_httpclient_route(h, cr->uri, cr->use_ssl, ip_str, &cci, abs_path, sizeof(abs_path), host_hdr, sizeof(host_hdr))) {
+            break;
+        }
 
         wsi = lws_client_connect_via_info(&cci);
     }
@@ -2262,7 +2275,7 @@ static int tjs_httpclient_connect(TJSHttpClient *h) {
      * the CLOSED/CONNECTION_ERROR callback unrefs once connected. */
     tjs__lws_conn_ref(ctx);
 
-    int r = uv_getaddrinfo(&TJS_GetRuntime(ctx)->loop, &cr->req, tjs_httpclient_resolve_cb, uri->host, NULL, &hints);
+    int r = uv_getaddrinfo(&TJS_GetRuntime(ctx)->loop, &cr->req, tjs_httpclient_resolve_cb, tjs_httpclient_dial_host(h, uri), NULL, &hints);
     if (r != 0) {
         tjs__lws_conn_unref(ctx);
         lws_parse_uri_destroy(&uri);
@@ -3436,6 +3449,15 @@ if (buildOnly) {
   // is pure alignment padding and js_exepath-netbsd is NetBSD-only, so
   // mainlining them is behavior-neutral for every published leg.
   applyPatches(path.join(tjsDir, 'deps/quickjs'), 'quickjs-ng-');
+  // lws-* patches apply to the libwebsockets submodule checkout (paths relative to
+  // deps/libwebsockets, like the cosmo leg's libwebsockets-cosmo.patch, which touches
+  // only lib/misc/sha-1.c). lws-proxy-connect.patch: a vhost's CONNECT can carry a
+  // header block of the client's (lws_set_proxy_connect_headers), names an IPv6 target
+  // in brackets, reports a proxy's refusal with its status line, takes an absolute-form
+  // request target unslashed, and lws_set_proxy reads a bracketed IPv6 proxy's port.
+  // txiki-fetch-proxy.patch calls into it. Applied BEFORE the fixups, whose lws
+  // anchors (fixupLws*) it leaves alone.
+  applyPatches(path.join(tjsDir, 'deps/libwebsockets'), 'lws-');
   // THE JS BUNDLE STEP'S INPUTS, CHECKED UP FRONT (scripts/bundle-inputs-gate.cjs).
   //
   // Everything below this line is ~50 source fixups and then esbuildBundles, and until

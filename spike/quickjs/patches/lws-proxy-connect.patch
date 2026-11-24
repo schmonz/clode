@@ -1,0 +1,198 @@
+diff --git a/include/libwebsockets/lws-context-vhost.h b/include/libwebsockets/lws-context-vhost.h
+--- a/include/libwebsockets/lws-context-vhost.h
++++ b/include/libwebsockets/lws-context-vhost.h
+@@ -1210,6 +1210,19 @@
+ lws_set_proxy(struct lws_vhost *vhost, const char *proxy);
+ 
+ /**
++ * lws_set_proxy_connect_headers() - the header lines a CONNECT to this vhost's proxy carries
++ * \param vhost:	the vhost whose http proxy is used (lws_set_proxy / http_proxy_address)
++ * \param headers:	CRLF-terminated header lines, sent verbatim after the Host line; NULL restores the default
++ *
++ * CLODE (lws-proxy-connect): by default a CONNECT carries "User-agent: lws" and, when the proxy address had
++ * userinfo, "Proxy-authorization: basic <token>". A client that must say what another client says (a
++ * Proxy-Authorization of any scheme, a Proxy-Connection line, the caller's own proxy headers) sets the whole
++ * block here; the default lines are then not sent. The string is copied. Returns 0, or -1 if it cannot be kept.
++ */
++LWS_VISIBLE LWS_EXTERN int
++lws_set_proxy_connect_headers(struct lws_vhost *vhost, const char *headers);
++
++/**
+  * lws_set_socks() - Setup socks to lws_context.
+  * \param vhost:	pointer to struct lws_vhost you want set socks for
+  * \param socks: pointer to c string containing socks in format address:port
+diff --git a/lib/core-net/private-lib-core-net.h b/lib/core-net/private-lib-core-net.h
+--- a/lib/core-net/private-lib-core-net.h
++++ b/lib/core-net/private-lib-core-net.h
+@@ -484,6 +484,7 @@
+ struct lws_vhost {
+ #if defined(LWS_WITH_CLIENT) && defined(LWS_CLIENT_HTTP_PROXYING)
+ 	char proxy_basic_auth_token[128];
++	char *proxy_connect_headers; /* CLODE (lws-proxy-connect): lws_set_proxy_connect_headers */
+ #endif
+ #if LWS_MAX_SMP > 1
+ 	struct lws_mutex_refcount		mr;
+diff --git a/lib/core-net/client/client.c b/lib/core-net/client/client.c
+--- a/lib/core-net/client/client.c
++++ b/lib/core-net/client/client.c
+@@ -26,7 +26,27 @@
+ 
+ #if defined(LWS_CLIENT_HTTP_PROXYING)
+ 
++/* CLODE (lws-proxy-connect): see libwebsockets/lws-context-vhost.h */
+ int
++lws_set_proxy_connect_headers(struct lws_vhost *vhost, const char *headers)
++{
++	char *copy = NULL;
++
++	if (headers) {
++		size_t n = strlen(headers);
++
++		copy = lws_malloc(n + 1, "proxy connect headers");
++		if (!copy)
++			return -1;
++		memcpy(copy, headers, n + 1);
++	}
++	lws_free(vhost->proxy_connect_headers);
++	vhost->proxy_connect_headers = copy;
++
++	return 0;
++}
++
++int
+ lws_set_proxy(struct lws_vhost *vhost, const char *proxy)
+ {
+ 	char authstring[96];
+@@ -97,6 +117,9 @@
+ 			return -1;
+ 		}
+ 		*ncp++ = '\0';
++		/* CLODE (lws-proxy-connect): the port follows the bracket; searching from the start found the
++		 * first ':' of the address itself ("[::1]:8080" took port atoi(":1") = 0) */
++		p = ncp;
+ 	}
+ #endif
+ 
+diff --git a/lib/core-net/client/connect.c b/lib/core-net/client/connect.c
+--- a/lib/core-net/client/connect.c
++++ b/lib/core-net/client/connect.c
+@@ -116,7 +116,9 @@
+ 		if (cisin[n]) {
+ 			size_t mm;
+ 			wsi->stash->cis[n] = pc;
+-			if (n == CIS_PATH && cisin[n][0] != '/')
++			/* CLODE (lws-proxy-connect): an absolute-form target ("http://host/path", a request to a forward
++			 * proxy, RFC 9112 3.2.2) is sent as it is, not slashed */
++			if (n == CIS_PATH && cisin[n][0] != '/' && strncmp(cisin[n], "http://", 7))
+ 				*pc++ = '/';
+ 			mm = strlen(cisin[n]) + 1;
+ 			memcpy(pc, cisin[n], mm);
+diff --git a/lib/core-net/client/connect4.c b/lib/core-net/client/connect4.c
+--- a/lib/core-net/client/connect4.c
++++ b/lib/core-net/client/connect4.c
+@@ -66,18 +66,37 @@
+ 
+ 		lwsl_wsi_info(wsi, "going via proxy");
+ 
+-		plen = lws_snprintf((char *)pt->serv_buf, 256,
+-			"CONNECT %s:%u HTTP/1.1\x0d\x0a"
+-			"Host: %s:%u\x0d\x0a"
+-			"User-agent: lws\x0d\x0a", cpa, wsi->ocport,
+-						   cpa, wsi->ocport);
++		/* CLODE (lws-proxy-connect): the host and port a CONNECT names in brackets when the host is an
++		 * IPv6 literal (RFC 9110 authority-form), and the vhost's own header block in place of the
++		 * default lines when it has one. */
++		{
++			int v6 = !!strchr(cpa, ':');
+ 
+-#if defined(LWS_WITH_HTTP_BASIC_AUTH)
+-		if (wsi->a.vhost->proxy_basic_auth_token[0])
+-			plen += lws_snprintf((char *)pt->serv_buf + plen, 256,
+-					"Proxy-authorization: basic %s\x0d\x0a",
+-					wsi->a.vhost->proxy_basic_auth_token);
++			plen = lws_snprintf((char *)pt->serv_buf, 512,
++				"CONNECT %s%s%s:%u HTTP/1.1\x0d\x0a"
++				"Host: %s%s%s:%u\x0d\x0a", v6 ? "[" : "", cpa, v6 ? "]" : "",
++				wsi->ocport, v6 ? "[" : "", cpa, v6 ? "]" : "", wsi->ocport);
++		}
++
++		if (wsi->a.vhost->proxy_connect_headers) {
++			size_t hl = strlen(wsi->a.vhost->proxy_connect_headers);
++
++			if (hl + (size_t)plen + 3 > wsi->a.context->pt_serv_buf_size) {
++				cce = "proxy connect headers too long";
++				goto failed;
++			}
++			memcpy((char *)pt->serv_buf + plen, wsi->a.vhost->proxy_connect_headers, hl);
++			plen += (int)hl;
++		} else {
++			plen += lws_snprintf((char *)pt->serv_buf + plen, 256,
++					"User-agent: lws\x0d\x0a");
++#if defined(LWS_WITH_HTTP_BASIC_AUTH)
++			if (wsi->a.vhost->proxy_basic_auth_token[0])
++				plen += lws_snprintf((char *)pt->serv_buf + plen, 256,
++						"Proxy-authorization: basic %s\x0d\x0a",
++						wsi->a.vhost->proxy_basic_auth_token);
+ #endif
++		}
+ 
+ 		plen += lws_snprintf((char *)pt->serv_buf + plen, 5,
+ 					"\x0d\x0a");
+diff --git a/lib/core-net/vhost.c b/lib/core-net/vhost.c
+--- a/lib/core-net/vhost.c
++++ b/lib/core-net/vhost.c
+@@ -1792,6 +1792,10 @@
+ #ifdef LWS_WITH_ACCESS_LOG
+ 	if (vh->log_fd != (int)LWS_INVALID_FILE)
+ 		close(vh->log_fd);
++#endif
++
++#if defined(LWS_WITH_CLIENT) && defined(LWS_CLIENT_HTTP_PROXYING)
++	lws_free_set_NULL(vh->proxy_connect_headers); /* CLODE (lws-proxy-connect) */
+ #endif
+ 
+ #if defined (LWS_WITH_TLS)
+diff --git a/lib/roles/http/client/client-http.c b/lib/roles/http/client/client-http.c
+--- a/lib/roles/http/client/client-http.c
++++ b/lib/roles/http/client/client-http.c
+@@ -125,7 +125,6 @@
+ 
+ 		/* sanity check what we were sent... */
+ 
+-		pt->serv_buf[13] = '\0';
+ 		if (n < 13 || strncmp(sb, "HTTP/1.", 7) ||
+ 			      (sb[7] != '0' && sb[7] != '1') || sb[8] != ' ') {
+ 			/* lwsl_hexdump_notice(sb, n); */
+@@ -134,12 +133,26 @@
+ 		}
+ 
+ 		/* it's h1 alright... what's his logical response code? */
+-		n = atoi(&sb[9]);
+-		if (n != 200) {
+-			lws_snprintf(sb, 20, "http_proxy -> %u",
+-				     (unsigned int)n);
+-			cce = sb;
+-			goto bail3;
++		{
++			int code = atoi(&sb[9]);
++
++			if (code != 200) {
++				/* CLODE (lws-proxy-connect): the refusal carries the proxy's whole status line
++				 * after the version ("407 Proxy Authentication Required"), so a client can say
++				 * what the proxy said; it used to be the bare code. */
++				char line[128];
++				int i = 0;
++
++				while (9 + i < n && i < (int)sizeof(line) - 1 &&
++				       sb[9 + i] != '\x0d' && sb[9 + i] != '\x0a') {
++					line[i] = sb[9 + i];
++					i++;
++				}
++				line[i] = '\0';
++				lws_snprintf(sb, 160, "http_proxy -> %s", line);
++				cce = sb;
++				goto bail3;
++			}
+ 		}
+ 
+ 		lwsl_info("%s: proxy connection established\n", __func__);

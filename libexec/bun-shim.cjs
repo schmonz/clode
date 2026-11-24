@@ -834,10 +834,10 @@ const BUN_OPTION_TABLES = {
       redirect: _bunRow('fetch.redirect'), signal: _bunRow('fetch.signal'), tls: 'tls: the tls census (test/node-shim-tls-options.test.cjs)',
       timeout: _bunRow('fetch.timeout'), decompress: _bunRow('fetch.decompress'), compress: _bunRow('fetch.compress'),
       keepalive: _bunRow('fetch.keepalive'),
+      proxy: 'test:fetch-proxy.test.cjs::proxy rows: every row answers under the shim as native Bun answered it',
     },
     refused: {
       unix: 'the engine\'s fetch connects over TCP only (lws); a request to a unix socket cannot be made',
-      proxy: 'the engine\'s fetch has no proxy support; sending the request direct would bypass the proxy asked for',
       maxRedirects: 'the engine\'s fetch follows redirects without a cap of its own',
       session: 'the engine\'s fetch has no TLS session reuse to name', protocol: 'the engine\'s fetch speaks HTTP/1.1 only',
       verbose: 'the engine\'s fetch has no request/response trace',
@@ -882,8 +882,8 @@ const BUN_OPTION_TABLES = {
   },
   WebSocket: {
     honoured: { headers: _bunRow('ws.args'), protocols: _bunRow('ws.args'), protocol: _bunRow('ws.args'),
-      tls: 'tls: the tls census (test/node-shim-tls-options.test.cjs)' },
-    refused: { proxy: 'neither the engine\'s WebSocket nor npm ws is given a proxy here; connecting direct would bypass it' },
+      tls: 'tls: the tls census (test/node-shim-tls-options.test.cjs)',
+      proxy: 'test:fetch-proxy.test.cjs::proxy rows: every row answers under the shim as native Bun answered it' },
     exempt: { perMessageDeflate: 'BACKLOG.md "WebSocket perMessageDeflate is never offered": an offer a server may decline; '
       + 'refusing would fail a connection that works uncompressed' },
   },
@@ -2107,6 +2107,20 @@ function _wsArgs(url, opts){
 // `socket._writableState.length` for bufferedAmount besides). Unblocking ws
 // means a real net.Socket, not more HTTP. Nothing on the surface the bundle
 // actually uses needs it.
+// The engine's WebSocket connection errors -> native Bun's error-event messages (measured, 2026-11-23): a proxy's
+// refused CONNECT and a connection that could not be made. Registered first, so every listener sees the message.
+function _wsProxyErrors(ws, url) {
+  if (!ws || typeof ws.addEventListener !== 'function') return ws;
+  ws.addEventListener('error', (e) => {
+    const m = e && typeof e.message === 'string' ? e.message : '';
+    const r = /http_proxy -> (\d{3}[^\n]*)/.exec(m);
+    let msg = null;
+    if (r) msg = r[1].startsWith('407') ? `Proxy authentication required: ${r[1].trim()}` : `Proxy refused to open a tunnel: ${r[1].trim()}`;
+    else if (/conn fail/.test(m)) msg = 'Failed to connect';
+    if (msg) { try { Object.defineProperty(e, 'message', { value: `WebSocket connection to '${String(url)}' failed: ${msg}`, configurable: true }); } catch (_) { /* frozen */ } }
+  });
+  return ws;
+}
 function _wsShape(ws) {
   if (!ws || typeof ws.addEventListener !== 'function' || typeof ws.on === 'function') return ws;
   const B = (() => { try { return require('buffer').Buffer; } catch (_) { return null; } })();
@@ -2170,12 +2184,17 @@ function _wsShape(ws) {
 }
 
 function BunWebSocket(url, opts){
-  if (opts && typeof opts === 'object' && !Array.isArray(opts)) _bunRefuse('WebSocket', opts);   // proxy: refused by name
+  const isOpts = opts && typeof opts === 'object' && !Array.isArray(opts);
+  if (isOpts) _bunRefuse('WebSocket', opts);
+  // proxy: routed by the engine where it can (_bunProxyPolicy), refused by name where it cannot (npm ws, older engines)
+  const policy = isOpts ? _bunProxyPolicy('WebSocket', opts.proxy, String(url)) : undefined;
   const WS = _realWS();
   if (WS) { const [u, p, o] = _wsArgs(url, opts); return new WS(u, p, o); }   // npm ws (Node hosts)
   if (UNDER_TJS && typeof _nativeWS === 'function') {                          // native tjs WS (header-capable)
-    if (opts && typeof opts === 'object' && !Array.isArray(opts)) _checkBunTls(opts.tls, url, 'WebSocket');  // lws: default trust only
-    return _wsShape(new _nativeWS(url, _nativeWsOptions(opts)));               // + the ws surface the bundle uses
+    if (isOpts) _checkBunTls(opts.tls, url, 'WebSocket');                      // lws: default trust only
+    const o = _nativeWsOptions(opts);
+    if (policy) o.proxy = policy;
+    return _wsShape(_wsProxyErrors(new _nativeWS(url, o), url));               // + the ws surface the bundle uses
   }
   _wsFatal();                                                                  // Node without ws, or no native WS
 }
@@ -2193,6 +2212,140 @@ globalThis.WebSocket = BunWebSocket;
 // to gate WebSocket features off with an honest notice instead of a
 // swallowed async crash.
 globalThis.__clodeWsUnavailable = !_wsTransportAvailable();
+
+// --- Bun's `proxy` (fetch, WebSocket): honoured as native Bun honours it --------------------------------------------
+// Native Claude Code hands Bun's fetch `proxy` whenever a proxy is configured (HTTPS_PROXY and friends: a string, or
+// { url, headers: { 'Proxy-Authorization': <proxyAuthHelper's answer> } }), and `proxy: false` where it wants none;
+// Bun's fetch also consults the proxy environment ITSELF on every request that names no proxy. What native Bun 1.4.4
+// does, measured against a recording proxy (test/fixtures/fetch-proxy-rows.cjs, recorded in
+// test/fixtures/fetch-proxy-native.json, 2026-11-23):
+//   - an http:// URL goes to the proxy as an absolute-form request; an https:// URL through a CONNECT tunnel named by
+//     the URL's host, its TLS verified exactly as a direct request's (tls.ca and all);
+//   - both carry `Proxy-Connection: Keep-Alive`, then `Proxy-Authorization: Basic <user:pass>` from the proxy URL's
+//     (percent-decoded) userinfo unless the caller's headers name one, then the caller's own proxy headers in order;
+//   - no `proxy` (or null, '', an object without a url): the environment, read per request. https: https_proxy,
+//     HTTPS_PROXY, then all_proxy/ALL_PROXY; http: http_proxy, HTTP_PROXY, then all_proxy/ALL_PROXY (lower case wins;
+//     an https URL never uses HTTP_PROXY); a proxy URL without a scheme is http://. `proxy: false`: no proxy at all;
+//   - no_proxy (then NO_PROXY) is honoured for an explicit proxy as well as the environment's: comma-separated,
+//     trimmed, `*` for every host, `host:port` only on that port (the URL's port, default included), a leading `.` or
+//     `*.` dropped, a host name matched by itself or by a dot-boundary suffix, an IP address only exactly;
+//   - a non-200 answer to a CONNECT rejects with Error code ERR_PROXY_TUNNEL, "Proxy refused to open a tunnel: <the
+//     proxy's status line>"; to an absolute-form request it is simply the response; a proxy that refuses the
+//     connection rejects with TypeError code ECONNREFUSED; an unparseable proxy URL is TypeError ERR_INVALID_ARG_VALUE,
+//     a scheme other than http/https TypeError code UnsupportedProxyProtocol;
+//   - WebSocket takes only an explicit `proxy` (never the environment), tunnels ws:// and wss:// alike with CONNECT,
+//     honours no_proxy, throws SyntaxError on a scheme other than http/https, and reports a refusal as its error
+//     event's message ("Proxy authentication required: 407 ..." for a 407, "Failed to connect" for a dead proxy).
+// Here the engine routes each connection as told (txiki-fetch-proxy.patch + lws-proxy-connect.patch, announced by
+// globalThis.__tjs_proxy_routes), and this decides the route, per redirect hop, in Bun's terms. NOT reproduced, and
+// refused by name: an https:// proxy URL (TLS to the proxy itself; the engine speaks plain HTTP to a proxy). On an
+// engine without the routes an explicit proxy is refused by name, and the engine's own environment handling stays.
+const _PROXY_ROUTES = () => globalThis.__tjs_proxy_routes || null;
+const _proxyEnv = (k) => { const v = process.env[k]; return typeof v === 'string' && v !== '' ? v : null; };
+function _bunEnvProxy(scheme) {
+  const names = scheme === 'https:' || scheme === 'wss:' ? ['https_proxy', 'HTTPS_PROXY'] : ['http_proxy', 'HTTP_PROXY'];
+  for (const k of [...names, 'all_proxy', 'ALL_PROXY']) { const v = _proxyEnv(k); if (v) return v; }
+  return null;
+}
+const _IPV4 = /^\d{1,3}(\.\d{1,3}){3}$/;
+function _bunNoProxy(u) {
+  const list = _proxyEnv('no_proxy') ?? _proxyEnv('NO_PROXY');
+  if (!list) return false;
+  const host = u.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  const port = Number(u.port || (u.protocol === 'https:' || u.protocol === 'wss:' ? 443 : 80));
+  const isIp = _IPV4.test(host) || host.includes(':');
+  for (let e of list.split(',')) {
+    e = e.trim().toLowerCase();
+    if (!e) continue;
+    if (e === '*') return true;
+    const m = /^(.*):(\d+)$/.exec(e);
+    if (m && !m[1].includes(':')) { if (Number(m[2]) !== port) continue; e = m[1]; }
+    e = e.replace(/^\*?\./, '').replace(/^\[|\]$/g, '');
+    if (!e) continue;
+    if (host === e || (!isIp && host.endsWith(`.${e}`))) return true;
+  }
+  return false;
+}
+function _proxyHeaderLines(entries) {
+  let out = '';
+  for (const [k, v] of entries) {
+    const name = String(k); const value = String(v);
+    if (!/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(name) || /[\r\n\0]/.test(value)) throw new TypeError(`Invalid proxy header: ${name}`);
+    out += `${name}: ${value}\r\n`;
+  }
+  return out;
+}
+function _headerEntries(h) {
+  if (h === undefined || h === null) return [];
+  if (typeof h.forEach === 'function' && typeof h.get === 'function') { const e = []; h.forEach((v, k) => e.push([k, v])); return e; }
+  if (Array.isArray(h)) return h.map((p) => [p[0], p[1]]);
+  if (typeof h === 'object') return Object.entries(h);
+  throw new TypeError('proxy headers must be an object, Headers or an array of pairs');
+}
+// A proxy URL and the caller's proxy headers -> the engine's route { host, port, headers } through that proxy. Throws
+// what native throws for a proxy URL it cannot use; `target` is the request's URL, for the message.
+function _bunProxyRoute(entry, raw, callerHeaders, fromEnv, target) {
+  let s = String(raw);
+  if (fromEnv && !/^[a-z][a-z0-9+.-]*:\/\//i.test(s)) s = `http://${s}`;
+  let u;
+  try { u = new URL(s); } catch (_) {
+    if (entry === 'WebSocket') throw new SyntaxError(`Unsupported proxy protocol "${s.split(':')[0]}" (expected "http" or "https")`);
+    throw Object.assign(new TypeError('fetch() proxy URL is invalid'), { code: 'ERR_INVALID_ARG_VALUE' });
+  }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') {
+    if (entry === 'WebSocket') throw new SyntaxError(`Unsupported proxy protocol "${u.protocol.slice(0, -1)}" (expected "http" or "https")`);
+    throw Object.assign(new TypeError(`UnsupportedProxyProtocol fetching "${target}". For more information, pass \`verbose: true\` `
+      + 'in the second argument to fetch()'), { code: 'UnsupportedProxyProtocol' });
+  }
+  if (u.protocol === 'https:') {
+    throw _bunOptionError(entry, 'proxy', `${fromEnv ? 'the environment\'s proxy is' : 'it is'} an https:// proxy, and the engine `
+      + 'speaks plain HTTP to a proxy (no TLS to the proxy itself); sending the request any other way would bypass it');
+  }
+  const entries = [['Proxy-Connection', 'Keep-Alive']];
+  const own = _headerEntries(callerHeaders);
+  if ((u.username || u.password) && !own.some(([k]) => String(k).toLowerCase() === 'proxy-authorization')) {
+    const cred = `${decodeURIComponent(u.username)}:${decodeURIComponent(u.password)}`;
+    entries.push(['Proxy-Authorization', `Basic ${Buffer.from(cred, 'utf8').toString('base64')}`]);
+  }
+  return { host: u.hostname.replace(/^\[|\]$/g, ''), port: Number(u.port || 80), headers: _proxyHeaderLines([...entries, ...own]) };
+}
+// A redirect hop whose proxy cannot be used (a scheme-dependent environment proxy that is bad for that hop's scheme)
+// must not go direct: it is routed to the discard port on loopback, so the hop fails instead.
+const _PROXY_FAIL_CLOSED = Object.freeze({ host: '127.0.0.1', port: 9, headers: '' });
+// Bun's `proxy` option -> a function of each hop's URL answering null (no proxy) or the route. It is asked about the
+// first URL at once, so a proxy that cannot be used is refused before anything is sent. undefined: leave the engine
+// to its own environment handling (an engine without the routes, and no explicit proxy).
+function _bunProxyPolicy(entry, opt, target) {
+  const explicit = typeof opt === 'string' ? (opt !== '' ? { url: opt, headers: undefined } : null)
+    : opt && typeof opt === 'object' && typeof opt.url === 'string' && opt.url !== '' ? { url: opt.url, headers: opt.headers } : null;
+  if (!_PROXY_ROUTES()) {
+    if (explicit) {
+      throw _bunOptionError(entry, 'proxy', 'this engine predates txiki-fetch-proxy.patch and cannot route a request through '
+        + 'the caller\'s proxy; sending it direct would bypass the proxy');
+    }
+    return undefined;
+  }
+  if (opt === false) return () => null;
+  if (entry === 'WebSocket' && !explicit) return () => null;   // Bun's WebSocket never reads the environment
+  const policy = (url) => {
+    let u; try { u = new URL(String(url)); } catch (_) { return null; }
+    const raw = explicit ? explicit.url : _bunEnvProxy(u.protocol);
+    if (!raw || _bunNoProxy(u)) return null;
+    return _bunProxyRoute(entry, raw, explicit ? explicit.headers : undefined, !explicit, u.href);
+  };
+  policy(target);
+  return (url) => { try { return policy(url); } catch (_) { return _PROXY_FAIL_CLOSED; } };
+}
+// The engine's fetch errors -> native Bun's (measured; see above): a proxy's refused CONNECT, a refused connection.
+function _bunFetchError(e) {
+  const m = e && typeof e.message === 'string' ? e.message : '';
+  const r = /http_proxy -> (\d{3}[^\n]*)/.exec(m);
+  if (r) return Object.assign(new Error(`Proxy refused to open a tunnel: ${r[1].trim()}`), { code: 'ERR_PROXY_TUNNEL' });
+  if (/conn fail: ECONNREFUSED/.test(m)) {
+    return Object.assign(new TypeError('ECONNREFUSED: Unable to connect. Is the computer able to access the url?'), { code: 'ECONNREFUSED' });
+  }
+  return e;
+}
 
 // fetch(input, init) — Bun's own init keys (BUN_OPTION_TABLES.fetch), honoured or refused here on every engine (tjs's
 // fetch and node's both ignore them, so this is the only place it can be done). A refusal REJECTS, before any request
@@ -2214,6 +2367,10 @@ function _bunFetchInit(input, init) {
   if (init.tls !== undefined) _checkBunTls(init.tls, url, 'fetch');
   const eng = {};
   for (const k of Object.keys(init)) if (!_BUN_FETCH_KEYS.includes(k)) eng[k] = init[k];
+  // proxy: the route of every hop, decided here in Bun's terms (_bunProxyPolicy above), the environment's included
+  const target = typeof input === 'string' ? input : input && (input.href || input.url) ? String(input.href || input.url) : String(input);
+  const policy = _bunProxyPolicy('fetch', init.proxy, target);
+  if (policy) eng.proxy = policy;
   if (init.keepalive === false) eng.keepalive = false;
   const wantRaw = init.decompress === false;
   if (wantRaw || init.compress === true) {
@@ -2236,10 +2393,12 @@ function _bunFetchInit(input, init) {
 if (typeof globalThis.fetch === 'function' && !globalThis.fetch.__clodeTlsChecked) {
   const _engineFetch = globalThis.fetch;
   const checked = function fetch(input, init) {
-    if (!init || typeof init !== 'object' || !_BUN_FETCH_KEYS.some((k) => init[k] !== undefined)) return _engineFetch.apply(this, arguments);
+    // an engine with proxy routes takes every request: one that names no proxy still goes where Bun's environment says
+    const routes = !!_PROXY_ROUTES();
+    if (!routes && (!init || typeof init !== 'object' || !_BUN_FETCH_KEYS.some((k) => init[k] !== undefined))) return _engineFetch.apply(this, arguments);
     let plan;
-    try { plan = _bunFetchInit(input, init); } catch (e) { return Promise.reject(e); }
-    const p = _engineFetch.call(this, input, plan.eng);
+    try { plan = _bunFetchInit(input, init && typeof init === 'object' ? init : {}); } catch (e) { return Promise.reject(e); }
+    const p = _engineFetch.call(this, input, plan.eng).catch((e) => { throw _bunFetchError(e); });
     if (!plan.wantRaw) return p;
     return p.then((r) => {
       const ce = r.headers.get('content-encoding');
