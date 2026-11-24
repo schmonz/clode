@@ -47,6 +47,7 @@ const NATIVE = rgOracle(process.env), NATIVE_SKIP = rgOracleSkip(process.env);
 // RG-ARGV0: native 2.1.283 (darwin-arm64), `--version` run under each spelling, 2026-10-04: `ripgrep 14.1.1 ...`
 // (rg) or `2.1.283 (Claude Code)` (not rg).
 // `a\rg` and `C:rg` are Claude Code too off Windows (review M-1: a backslash and a drive are no separators there).
+const { updaterOff } = require('./updater-off.cjs');
 const ARGV0_ROWS = [
   ['rg', {}, true], ['/x/rg', {}, true], ['RG', {}, false], ['rg.exe', {}, false], ['claude', {}, false],
   ['/x/claude', { ARGV0: 'rg' }, true], ['/x/claude', { ARGV0: '/x/rg' }, false], ['/x/claude', { ARGV0: 'xx' }, false],
@@ -128,7 +129,8 @@ test('RG-ARGV0: naude\'s entry is rg-entry\'s rule', () => {
 
 test('RG-ARGV0: native answers as rg exactly where the table says (native, off Windows)', { skip: POSIX || (!NATIVE ? NATIVE_SKIP : false) }, () => {
   for (const [argv0, env, want] of ARGV0_ROWS) {
-    const r = cp.spawnSync(NATIVE, ['--version'], { argv0, env: { HOME: os.tmpdir(), PATH: '/usr/bin:/bin', ...env }, encoding: 'utf8', timeout: 60000 });
+    // updaterOff: a row whose argv0 is not rg starts Claude Code itself (test/updater-off.cjs)
+    const r = cp.spawnSync(NATIVE, ['--version'], { argv0, env: updaterOff({ HOME: os.tmpdir(), PATH: '/usr/bin:/bin', ...env }), encoding: 'utf8', timeout: 60000 });
     assert.strictEqual(r.stdout.startsWith('ripgrep '), want, `${argv0} ${JSON.stringify(env)}: ${r.stdout.split('\n')[0]}`);
   }
 });

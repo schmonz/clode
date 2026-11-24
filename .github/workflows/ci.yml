@@ -1293,6 +1293,8 @@ jobs:
           ORACLE="$RUNNER_TEMP/oracle/node_modules/@anthropic-ai/claude-code-linux-x64/claude"
           test -x "$ORACLE" || { echo "ERROR: no native claude at $ORACLE after installing $OV" >&2; exit 1; }
           echo "CLODE_NATIVE_ORACLE=$ORACLE" >> "$GITHUB_ENV"
+          # An instrument like the provider: recorded here, held to it where it judges and at the job's end.
+          node scripts/record-provider.mjs --as NATIVE_ORACLE "$ORACLE"
       # Every pin in scripts/unicode-inputs.json, not only the header's two versions (its
       # `unicode` and `cell.unicode`): the freshness gate REGENERATES the table, and the
       # generator's version choice reads every pinned version's EastAsianWidth + emoji-data;
@@ -1470,6 +1472,7 @@ jobs:
           CLODE_OFFLINE: '1'
         run: |
           set -euo pipefail
+          node scripts/record-provider.mjs --verify NATIVE_ORACLE
           mkdir -p "$RUNNER_TEMP/cells"
           CLODE_PROVIDER_BIN="$CLODE_NATIVE_ORACLE" \
             node --require ./test/file-watchdog-preload.cjs --test --test-concurrency=1 \
@@ -1496,7 +1499,9 @@ jobs:
         if: ${{ !cancelled() && steps.oracle.outcome == 'success' && steps.ucd.outcome == 'success' }}
         env:
           CLODE_OFFLINE: '1'
-        run: node scripts/cell-profile-diff.cjs --native "$CLODE_NATIVE_ORACLE"
+        run: |
+          node scripts/record-provider.mjs --verify NATIVE_ORACLE
+          node scripts/cell-profile-diff.cjs --native "$CLODE_NATIVE_ORACLE"
       # THE rg GATES (grep-native plan, Task 11). quaude answers rg itself (libexec/rg-native.cjs), and searches
       # with the HOST's ugrep: ugrep proposes candidate lines, quaude's own Rust-regex port decides. ugrep is
       # never vendored and never shipped; rg-native refuses one older than UGREP_MIN (5.0.0, measured: 3.11.2
@@ -1577,6 +1582,7 @@ jobs:
           NATIVE="$RUNNER_TEMP/rg-oracle/node_modules/@anthropic-ai/claude-code-linux-x64/claude"
           test -x "$NATIVE" || { echo "ERROR: no native claude at $NATIVE after installing $V" >&2; exit 1; }
           echo "native: $NATIVE ($V)"
+          node scripts/record-provider.mjs --as RG_ORACLE "$NATIVE"
           mkdir -p "$RUNNER_TEMP/cells"
           CLODE_PROVIDER_BIN="$NATIVE" CLODE_CLAUDE_BIN="$NATIVE" \
             node --require ./test/file-watchdog-preload.cjs --test --test-concurrency=1 \
@@ -1659,6 +1665,14 @@ jobs:
             --test-reporter=spec --test-reporter-destination=stdout \
             --test-reporter=./test/cell-reporter.mjs --test-reporter-destination="$RUNNER_TEMP/gates/cells-check.jsonl" \
             --test-name-pattern=cells-ran-in-ci-job test/build-gates/tool-coverage-gates.test.cjs
+
+      # THE INSTRUMENTS STILL ARE WHAT THIS JOB INSTALLED: every native it recorded (scripts/record-provider.mjs: the
+      # provider, and each oracle installed on its own) is the same file, byte for byte, after every gate above ran
+      # it. A changed one is refused by name, so a mid-job self-update (CI 45354661143) is a named red here, not a
+      # decode failure an hour later. Whatever happened above, like the gate-list upload below.
+      - name: Instruments unchanged — every native this job installed is still the file it recorded
+        if: ${{ !cancelled() }}
+        run: node scripts/record-provider.mjs --verify
 
       # THIS JOB'S GATE LIST (observability plan Task 5): every record test/cell-reporter.mjs wrote above, for ci.yml's
       # gates-ran-in-ci job to hold against test/ci-gates.cjs. Uploaded whatever happened above: a red job's list still
@@ -1847,6 +1861,7 @@ jobs:
           NATIVE="$RUNNER_TEMP/native-darwin/node_modules/@anthropic-ai/claude-code-darwin-arm64/claude"
           test -x "$NATIVE" || { echo "ERROR: no native claude at $NATIVE after installing $V" >&2; exit 1; }
           echo "native: $NATIVE ($V)"
+          node scripts/record-provider.mjs --as NATIVE_DARWIN "$NATIVE"
           mkdir -p "$RUNNER_TEMP/cells"
           CLODE_PROVIDER_BIN="$NATIVE" CLODE_CLAUDE_BIN="$NATIVE" \
             node --require ./test/file-watchdog-preload.cjs --test --test-concurrency=1 \
@@ -1932,6 +1947,14 @@ jobs:
           CLODE_CLAUDE_BIN="$LINUX_PROVIDER" \
             node scripts/stage0.mjs build --target linux-x64 --out "${{ runner.temp }}/quaude-linux-graph-check/quaude"
           test -s "${{ runner.temp }}/quaude-linux-graph-check/quaude"
+
+      # THE INSTRUMENTS STILL ARE WHAT THIS JOB INSTALLED: every native it recorded (scripts/record-provider.mjs: the
+      # provider, and each oracle installed on its own) is the same file, byte for byte, after every gate above ran
+      # it. A changed one is refused by name, so a mid-job self-update (CI 45354661143) is a named red here, not a
+      # decode failure an hour later. Whatever happened above, like the gate-list upload below.
+      - name: Instruments unchanged — every native this job installed is still the file it recorded
+        if: ${{ !cancelled() }}
+        run: node scripts/record-provider.mjs --verify
 
       # THIS JOB'S GATE LIST (observability plan Task 5): every record test/cell-reporter.mjs wrote above, for ci.yml's
       # gates-ran-in-ci job to hold against test/ci-gates.cjs. Uploaded whatever happened above: a red job's list still

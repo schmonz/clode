@@ -75,12 +75,20 @@ function gate() {
 const STATUS_TYPED = '2f737461747573'; // "/status"
 const STATUS_QUIET_MS = 3000;
 
+// THE ONE OPT-OUT from test/updater-off.cjs's DISABLE_AUTOUPDATER. This file characterizes the update surface a user
+// sees, and a user's environment does not set the knob, so neither does the capture. Safe: the subject is a built
+// quaude, whose install dispatch is spliced out (notify-only, test/extract-autoupdater.test.cjs), so nothing it runs
+// can rewrite an install; no native is spawned here.
+const UPDATER_ON = 'update-notify characterizes the notice a user sees with the updater as shipped; the subject is a '
+  + 'notify-only quaude that cannot install';
+
 async function statusScreen(quaude, env, until) {
   const sbx = sandbox();
   seedClaudeProfile(sbx.home, { cwd: process.cwd() });
   try {
     const s = await captureSession(sbx, {
       cols: 120, rows: 50, cmd: [quaude], env, settleMs: STATUS_QUIET_MS, maxSettleMs: 30000,
+      autoUpdaterBecause: UPDATER_ON,
       script: [{ label: 'type', send: STATUS_TYPED, until: '/status' }, { label: 'enter', send: '0d', until }],
     });
     const last = s.frames[s.frames.length - 1];

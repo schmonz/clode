@@ -59,6 +59,8 @@ jobs:
       # SCC-merge break — see that file). Pinning here would blind the early-warning system
       # at exactly the moment we choose to lag on purpose: this job's only reason to exist is
       # to notice upstream moving WHILE everything else holds still. Leave it unpinned.
+      # no-record: this job carves the bytes and never runs a native, so nothing in it can rewrite the install
+      # (scripts/record-provider.mjs; test/build-gates/record-provider-gates.test.cjs).
       - name: Install the `next` Claude Code
         run: npm i -g @anthropic-ai/claude-code@next 2>&1 | tail -3
       - name: Every clode hook anchor still matches the newest bundle
@@ -218,6 +220,7 @@ jobs:
         id: upstream
         run: |
           set -uo pipefail
+          # no-record: carve-probe carves the bytes and never runs a native (test/build-gates/record-provider-gates.test.cjs)
           if ! npm i -g @anthropic-ai/claude-code@next 2>&1 | tail -3; then
             echo "carve-probe: could not install upstream — this run measures nothing" >&2
           fi

@@ -58,6 +58,9 @@ const BARE_NAME = /(['"`])(CLODE_[A-Z0-9_]+)\1/g;
 
 const KEY_AGNOSTIC = 'key-agnostic';
 
+// Every instrument scripts/record-provider.mjs records in CI (bare: PROVIDER; `--as NAME`: the rest).
+const RECORDED_INSTRUMENTS = ['PROVIDER', 'NATIVE_ORACLE', 'RG_ORACLE', 'NATIVE_DARWIN'];
+
 // INDIRECT_SITES — one entry per shipped FILE that reads env by a computed key.
 //
 // Keyed by file rather than by line so an unrelated edit above the site does not churn
@@ -89,6 +92,14 @@ const INDIRECT_SITES = [
       + "row and `overrideEnv` is that host tool's override variable. THE ORIGINAL BLIND SPOT: "
       + 'four of these five had no verdict at all, and the fifth (CLODE_ZSTD) only had one '
       + 'because libexec/bun-graph.cjs happens to read it directly as well.',
+  },
+  {
+    file: 'scripts/record-provider.mjs',
+    reaches: RECORDED_INSTRUMENTS.flatMap((n) => ['PATH', 'SHA256', 'SIZE'].map((f) => `CLODE_${n}_RECORDED_${f}`)),
+    because: 'record() writes, and verifyRecorded() reads, CLODE_<NAME>_RECORDED_{PATH,SHA256,SIZE} for each instrument a '
+      + 'CI job installs: PROVIDER (the pin, `npm i -g`) and each native installed on its own (`--as NAME`). '
+      + 'RECORDED_INSTRUMENTS is every NAME the workflows use; test/build-gates/record-provider-gates.test.cjs fails on '
+      + 'a `--as NAME` not listed there.',
   },
   {
     file: 'libexec/node-shim/modules/tty.cjs',
@@ -205,4 +216,4 @@ function indirectReads() {
   return m;
 }
 
-module.exports = { INDIRECT_SITES, KEY_AGNOSTIC, findIndirectEnvSites, indirectLiteralAudit, indirectReads, REPO };
+module.exports = { INDIRECT_SITES, KEY_AGNOSTIC, RECORDED_INSTRUMENTS, findIndirectEnvSites, indirectLiteralAudit, indirectReads, REPO };

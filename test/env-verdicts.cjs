@@ -40,7 +40,8 @@ const VERDICT_KINDS = ['absorbed', 'env-only', 'dead', 'phase4-engine'];
 // flag cannot do that — it would have to be re-typed at every spawn site — so making these
 // flags would be a regression, not an improvement.
 const PROVIDER_RECORD_BECAUSE = 'env-only by necessity: CI writes these to $GITHUB_ENV right after it installs the pinned '
-  + 'provider (scripts/record-provider.mjs) and scripts/stage-provider.mjs refuses a provider that no longer matches them; '
+  + 'provider or an oracle native (scripts/record-provider.mjs), and stage-provider.mjs and `record-provider.mjs --verify` '
+  + 'refuse one that no longer matches them; '
   + 'they carry one job\'s record from one step to a later one, and no user sets them.';
 const PLUMBING_BECAUSE = 'env-only by necessity: the harness sets this once and it must '
   + 'survive three layers of spawn into a worker that parses its own argv; a CLI flag '
@@ -204,6 +205,9 @@ const VERDICTS = [
   { name: 'CLODE_PROVIDER_RECORDED_PATH', verdict: 'env-only', because: PROVIDER_RECORD_BECAUSE },
   { name: 'CLODE_PROVIDER_RECORDED_SHA256', verdict: 'env-only', because: PROVIDER_RECORD_BECAUSE },
   { name: 'CLODE_PROVIDER_RECORDED_SIZE', verdict: 'env-only', because: PROVIDER_RECORD_BECAUSE },
+  // The same record for each native a job installs on its own (`record-provider.mjs --as NAME`).
+  ...['NATIVE_ORACLE', 'RG_ORACLE', 'NATIVE_DARWIN'].flatMap((n) => ['PATH', 'SHA256', 'SIZE'].map((f) => (
+    { name: `CLODE_${n}_RECORDED_${f}`, verdict: 'env-only', because: PROVIDER_RECORD_BECAUSE }))),
   { name: 'CLODE_NODES', verdict: 'env-only', because: PLUMBING_BECAUSE },
   { name: 'CLODE_TRACE_LOG', verdict: 'env-only', because: PLUMBING_BECAUSE },
   { name: 'CLODE_WATCH_DIR', verdict: 'env-only', because: PLUMBING_BECAUSE },

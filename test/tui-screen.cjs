@@ -264,6 +264,9 @@ function dumpCells(term) {
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
   const { secs, cmd, sends, resizes, signals, rows, cols, cells } = opts;
+  // Every PTY drive in this repo comes through here, refused before anything loads or spawns: none may leave a Claude
+  // Code's updater on unasked (test/updater-off.cjs; e2e-pty.cjs driveArgs sets the knob, or carries a written reason).
+  require('./updater-off.cjs').refuseUpdaterOn(process.env, `tui-screen (${cmd[0]})`);
   // Read and check the script BEFORE anything is spawned: a bad script never starts a TUI.
   const steps = opts.script === null ? null : parseScript(JSON.parse(fs.readFileSync(opts.script, 'utf8')));
   const { pty, Terminal } = loadHarness();

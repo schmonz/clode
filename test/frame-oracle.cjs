@@ -35,6 +35,7 @@ const { captureSession, seedClaudeProfile } = require('./e2e-pty.cjs');
 const { debugFileArgs, readLog, assertDebugLogClean } = require('./debug-log-gate.cjs');
 const { diff, describe } = require('./frame-diff.cjs');
 const { startMockAnthropic } = require('./mock-anthropic-helper.cjs');
+const { updaterOff } = require('./updater-off.cjs');
 
 function parse(argv) {
   const o = { rows: 40, cols: 100, script: [], out: null };
@@ -107,22 +108,27 @@ async function captureSessions(o) {
 // THE DEBUG LOG (test/debug-log-gate.cjs): each side runs with a --debug-file in its own sandbox, and once both shots
 // are taken the SUBJECT's log is held to the reference's. A finding throws, with the lines, so every frame and session
 // gate built on this fails on what quaude logged, not only on what it painted. The judgement is the result's debugLog.
+// The driver's own scratch locators (it loads node-pty from the per-platform
+// harness dir), plus the mock endpoint and a hard no to the auto-updater (test/updater-off.cjs:
+// o.autoUpdaterBecause, a written reason, is the only way to leave it on).
+function sceneEnv(mockUrl, o = {}, parent = process.env) {
+  const env = {
+    ANTHROPIC_BASE_URL: mockUrl,
+    ANTHROPIC_API_KEY: 'sk-ant-mock-0000000000000000000000',
+    DISABLE_TELEMETRY: '1',
+    DISABLE_ERROR_REPORTING: '1',
+  };
+  for (const k of ['TMPDIR', 'CLODE_BUILD_SCRATCH']) if (parent[k]) env[k] = parent[k];
+  Object.assign(env, o.env || {});
+  return updaterOff(env, o.autoUpdaterBecause);
+}
+
 async function inScene(o, capture) {
   const mock = await startMockAnthropic({ text: o.mockText || 'PONG' });
   const out = o.out || null;
   if (out) fs.mkdirSync(out, { recursive: true });
 
-  // The driver's own scratch locators (it loads node-pty from the per-platform
-  // harness dir), plus the mock endpoint and a hard no to the auto-updater.
-  const env = {
-    ANTHROPIC_BASE_URL: mock.url,
-    ANTHROPIC_API_KEY: 'sk-ant-mock-0000000000000000000000',
-    DISABLE_AUTOUPDATER: '1',
-    DISABLE_TELEMETRY: '1',
-    DISABLE_ERROR_REPORTING: '1',
-  };
-  for (const k of ['TMPDIR', 'CLODE_BUILD_SCRATCH']) if (process.env[k]) env[k] = process.env[k];
-  Object.assign(env, o.env || {});
+  const env = sceneEnv(mock.url, o);
 
   // A FRESH HOME PER CAPTURE, not one shared sandbox. tui-screen ends a capture
   // with SIGKILL, and a Claude Code killed inside the fullscreen renderer leaves
@@ -180,7 +186,7 @@ async function main() {
   process.exit(d.equal ? 0 : 1);
 }
 
-module.exports = { captureFrames, captureSessions };
+module.exports = { captureFrames, captureSessions, sceneEnv };
 
 if (require.main === module) {
   main().catch((e) => { process.stderr.write('frame-oracle: ' + ((e && e.stack) || e) + '\n'); process.exit(2); });

@@ -252,3 +252,29 @@ test('record-provider writes what stage-provider checks, and a rewritten provide
   assert.match(st.stderr, /the provider changed since this job installed it/);
   assert.ok(st.stderr.includes(vars.CLODE_PROVIDER_RECORDED_SHA256), 'the refusal names the recorded hash');
 });
+
+// THE OTHER INSTRUMENTS: an oracle installed on its own (`npm i --prefix`, CLODE_NATIVE_ORACLE) is recorded by name with
+// --as, and --verify holds every recorded instrument to its record, refusing each changed one by name.
+test('record-provider --as records an oracle by name, and --verify refuses a changed one by name', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'record-oracle-'));
+  const bin = path.join(dir, 'claude');
+  fs.writeFileSync(bin, 'oracle bytes');
+  const ghEnv = path.join(dir, 'github-env');
+  fs.writeFileSync(ghEnv, '');
+  const env = { ...process.env, GITHUB_ENV: ghEnv };
+  for (const k of Object.keys(env)) if (/^CLODE_[A-Z0-9_]+_RECORDED_/.test(k)) delete env[k];
+  const rec = spawnSync(process.execPath, [RECORD, '--as', 'NATIVE_ORACLE', bin], { encoding: 'utf8', env });
+  assert.strictEqual(rec.status, 0, rec.stderr);
+  const vars = Object.fromEntries(fs.readFileSync(ghEnv, 'utf8').trim().split('\n').map((l) => l.split(/=(.*)/s).slice(0, 2)));
+  assert.match(vars.CLODE_NATIVE_ORACLE_RECORDED_SHA256, /^[0-9a-f]{64}$/);
+  const verify = () => spawnSync(process.execPath, [RECORD, '--verify'], { encoding: 'utf8', env: { ...env, GITHUB_ENV: '', ...vars } });
+  const ok = verify();
+  assert.strictEqual(ok.status, 0, ok.stderr);
+  assert.match(ok.stdout, /unchanged: NATIVE_ORACLE/);
+  fs.appendFileSync(bin, 'x');
+  const bad = verify();
+  assert.strictEqual(bad.status, 1, `a changed oracle must be refused:\n${bad.stdout}${bad.stderr}`);
+  assert.match(bad.stderr, /NATIVE_ORACLE changed since this job installed it/);
+  assert.ok(bad.stderr.includes(vars.CLODE_NATIVE_ORACLE_RECORDED_SHA256), 'the refusal names the recorded hash');
+  assert.strictEqual(spawnSync(process.execPath, [RECORD, '--as', 'lower', bin], { encoding: 'utf8', env }).status, 2);
+});

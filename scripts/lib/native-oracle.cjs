@@ -6,7 +6,7 @@
 // before Claude's own code starts. BUN_BE_BUN=1 is NOT honoured. This is a TEST/DEV
 // instrument only; nothing in libexec/ may depend on it.
 //
-// SAFETY: stripped environment (PATH, a throwaway HOME, and our three variables only),
+// SAFETY: stripped environment (PATH, a throwaway HOME, DISABLE_AUTOUPDATER and our three variables only),
 // and the wrapper exits the process as soon as the program returns, so Claude never
 // reaches its credential, network or Keychain code.
 //
@@ -64,6 +64,17 @@ function nativeVersion(bin) {
   return ((r.stdout || '') + (r.stderr || '')).split('\n')[0].trim();
 }
 
+// The stripped environment a preload runs under. DISABLE_AUTOUPDATER even though the wrapper exits before Claude's own
+// code starts: no native a test drives may update its own install (test/updater-off.cjs, CI 45354661143), and a
+// preload that did not run would leave Claude to start.
+function preloadEnv({ home, prog, outf, inf, tz }) {
+  const env = { PATH: '/usr/bin:/bin', HOME: home, OUTF: outf, INF: inf, BUN_OPTIONS: `--preload ${prog}`, DISABLE_AUTOUPDATER: '1' };
+  if (process.platform === 'win32') { env.USERPROFILE = home; env.SystemRoot = process.env.SystemRoot; }
+  // a program whose answer reads the local clock (Date's local getters) names its zone
+  if (tz) env.TZ = tz;
+  return env;
+}
+
 function runInNative(bin, programSource, opts = {}) {
   if (!bin || !fs.existsSync(bin)) throw new NativeOracleRefusal(`native claude ${bin} does not exist`);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'native-oracle-'));
@@ -85,10 +96,7 @@ function runInNative(bin, programSource, opts = {}) {
       'fs.writeFileSync(process.env.OUTF, JSON.stringify(r));',
       'process.exit(0);',
     ].join('\n'));
-    const env = { PATH: '/usr/bin:/bin', HOME: home, OUTF: outf, INF: inf, BUN_OPTIONS: `--preload ${prog}` };
-    if (process.platform === 'win32') { env.USERPROFILE = home; env.SystemRoot = process.env.SystemRoot; }
-    // a program whose answer reads the local clock (Date's local getters) names its zone
-    if (opts.tz) env.TZ = opts.tz;
+    const env = preloadEnv({ home, prog, outf, inf, tz: opts.tz });
     const r = spawnSync(bin, ['--version'], { encoding: 'utf8', env, timeout: opts.timeoutMs || 120000, maxBuffer: 64 * 1024 * 1024 });
     let raw = '';
     try { raw = fs.readFileSync(outf, 'utf8'); } catch { /* absent */ }
@@ -107,4 +115,4 @@ function runInNative(bin, programSource, opts = {}) {
   }
 }
 
-module.exports = { resolveNativeClaude, resolveNativeOracle, nativeVersion, runInNative, NativeOracleRefusal };
+module.exports = { resolveNativeClaude, resolveNativeOracle, nativeVersion, runInNative, preloadEnv, NativeOracleRefusal };

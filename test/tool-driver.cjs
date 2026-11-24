@@ -100,6 +100,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnCollect } = require('./spawn-collect.cjs');
+const { updaterOff, refuseUpdaterOn } = require('./updater-off.cjs');
 const { throwawayHome } = require('./throwaway-home.cjs');
 const { startMockAnthropic, cannedSSE, cannedToolUseSSE, cannedMessage } = require('./mock-anthropic-helper.cjs');
 const { toolResult, toolResultText } = require('../scripts/lib/tool-result.cjs');
@@ -153,10 +154,21 @@ function rulesOf(opts) {
 }
 
 // The caller's environment less any Claude Code or API setting.
-function baseEnv() {
+function baseEnv(parent = process.env) {
   const env = {};
-  for (const [k, v] of Object.entries(process.env)) if (!/^(CLAUDE|ANTHROPIC)/.test(k)) env[k] = v;
+  for (const [k, v] of Object.entries(parent)) if (!/^(CLAUDE|ANTHROPIC)/.test(k)) env[k] = v;
   return env;
+}
+
+// One side's environment (PATH gets the keychain shadow after). DISABLE_AUTOUPDATER on both sides, as
+// test/frame-oracle.cjs has always set it: an interactive native left to itself updates its own install mid-job (the
+// suspect when linux-x64-pty's global provider no longer decoded an hour after it was installed, CI 45354661143 /
+// 45381323279; scripts/record-provider.mjs now makes that a named refusal). One knob, both sides: what a turn is judged
+// on is never the updater. opts.autoUpdaterBecause leaves it unset, with the reason (test/updater-off.cjs). Set HERE,
+// not inherited: the caller's own environment is whatever ran the file (test/autoupdater-off-gate.test.cjs).
+function sideEnv({ home, mockUrl, opts = {}, parent = process.env }) {
+  return updaterOff({ ...baseEnv(parent), ...home, ANTHROPIC_BASE_URL: mockUrl, ANTHROPIC_API_KEY: 'sk-ant-mock',
+    ...(opts.env || {}), ...(opts.switches || {}) }, opts.autoUpdaterBecause);
 }
 
 // THE KEYCHAIN, SHADOWED HERE (fix round 2). Native reads it on every turn, -p and interactive alike, by `security` on
@@ -265,14 +277,10 @@ async function runSide(side, bin, rules, opts, base) {
     const debugFile = path.join(base, `${side}-debug.log`);
     const runFlags = [...flags, ...debugFileArgs(debugFile)];
     const args = ['-p', opts.prompt || 'drive the tool', ...runFlags];
-    // DISABLE_AUTOUPDATER on both sides, as test/frame-oracle.cjs has always set it: an interactive native left to
-    // itself updates its own install mid-job (the suspect when linux-x64-pty's global provider no longer decoded an
-    // hour after it was installed, CI 45354661143 / 45381323279; scripts/record-provider.mjs now makes that a named
-    // refusal). One knob, both sides: what a turn is judged on is never the updater.
-    const env = { ...baseEnv(), ...home, ANTHROPIC_BASE_URL: mock.url, ANTHROPIC_API_KEY: 'sk-ant-mock', DISABLE_AUTOUPDATER: '1', ...(opts.env || {}),
-      ...(opts.switches || {}) };
+    const env = sideEnv({ home, mockUrl: mock.url, opts });
     const kc = shadowKeychain(base, side);
     env.PATH = [kc.dir, env.PATH || ''].join(path.delimiter);
+    refuseUpdaterOn(env, `driveTool ${side} (${bin})`);
     const r = opts.interactive ? await interactiveTurn(bin, runFlags, work, env, home, opts, afterSteps(opts))
       : await spawnCollect(bin, args, { cwd: work, env }, { timeoutMs: turnTimeout(opts) });
     // the log, and the side's own temp dir beside it (a check that judges a path under it reads it here, never from a
@@ -474,4 +482,4 @@ function ptyHarnessMissing() {
   } catch (e) { return `no PTY harness here (node-pty): ${e.message.split('\n')[0]}`; }
 }
 
-module.exports = { driveTool, DONE, TOOL_SWITCHES, MODE_TURNS, modeTurnFinding, modeTurnFindingFor, shadowKeychain, keychainShadowFinding, CLASSIFIER_STOP, ptyHarnessMissing, SCALE, interactiveLimits };
+module.exports = { driveTool, sideEnv, DONE, TOOL_SWITCHES, MODE_TURNS, modeTurnFinding, modeTurnFindingFor, shadowKeychain, keychainShadowFinding, CLASSIFIER_STOP, ptyHarnessMissing, SCALE, interactiveLimits };

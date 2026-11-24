@@ -9,6 +9,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { REPO, NODE } = require('./e2e.cjs');
 const { isApeFile, wantsTrampoline } = require('./node-shim-helper.cjs');
+const { updaterOff } = require('./updater-off.cjs');
 
 const TUI_SCREEN = path.join(REPO, 'test', 'tui-screen.cjs');
 
@@ -65,7 +66,7 @@ function seedClaudeProfile(home, opts = {}) {
 // Drive opts.cmd under a PTY via tui-screen.cjs; return the rendered screen (stdout).
 // tui-screen self-terminates after opts.seconds, so no external timeout is needed.
 // opts: { seconds, fixedWindowBecause, cmd:[...], sendHex?, thenHex?:['HEX@DELAY'], signal?:['NAME@DELAY'],
-// resize?:['COLSxROWS@DELAY'], rows?, cols?, env? }. cmd[0] is
+// resize?:['COLSxROWS@DELAY'], rows?, cols?, env?, autoUpdaterBecause? }. cmd[0] is
 // the absolute program to run under the PTY (e.g. a built quaude, or a native binary).
 // A scripted session (captureSession) passes scriptFile and the settle limits instead.
 //
@@ -110,7 +111,8 @@ function driveArgs(sbx, opts) {
   if (opts.rows) args.push('--rows', String(opts.rows));
   if (opts.cols) args.push('--cols', String(opts.cols));
   args.push('--', ...apeCmd(opts.cmd));
-  const env = { ...sbx.env, ...(opts.env || {}), TERM: 'xterm-256color' };
+  // DISABLE_AUTOUPDATER unless opts.autoUpdaterBecause says why not (test/updater-off.cjs); tui-screen refuses an env with neither.
+  const env = updaterOff({ ...sbx.env, ...(opts.env || {}), TERM: 'xterm-256color' }, opts.autoUpdaterBecause);
   for (const k of ['TMUX', 'TMUX_PANE', 'TERM_PROGRAM', 'NODE_PATH']) delete env[k];
   return { args: [TUI_SCREEN, ...args], env };
 }
