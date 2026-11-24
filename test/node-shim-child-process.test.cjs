@@ -318,13 +318,10 @@ test('spawnSync: timeout kills and reports like node (signal is a NAME, not a nu
   assert.strictEqual(out.statusNull, node.statusNull);
   assert.strictEqual(out.signalType, 'string', `signal must be a name string, got ${JSON.stringify(out.signal)} (${out.signalType})`);
   assert.strictEqual(out.code, node.code);
-  // DIVERGENCE (characterized, not diffed): the C primitive always SIGKILLs on
-  // timeout, so the shim reports "SIGKILL" where node's timeout default is
-  // "SIGTERM" (see mod_spawn_sync.c / child_process.cjs spawnSync comment). We
-  // assert the shim's actual value so the divergence is pinned, and confirm it
-  // genuinely differs from node's here.
-  assert.strictEqual(out.signal, 'SIGKILL');
-  assert.notStrictEqual(out.signal, node.signal);
+  // The child is killed with killSignal, node's default SIGTERM (txiki-spawn-options.patch). Before it the C primitive
+  // always SIGKILLed, and an engine without the patch still does: that is the one route this row allows besides node's.
+  const engineKillSignal = runLoader(prog('console.log(JSON.stringify((globalThis.__tjs_spawn_sync.options || []).includes("killSignal")))')).stdout.trim() === 'true';
+  assert.strictEqual(out.signal, engineKillSignal ? node.signal : 'SIGKILL');
 });
 
 // DIVERGENCE characterization (tjs-only — deliberately NOT diffed against node,

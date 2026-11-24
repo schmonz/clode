@@ -96,6 +96,8 @@ const FSS = (() => {
   return gated;
 })();
 const path = require('node:path');
+// The options each fs entry point honours or refuses by name (test/options-census.test.cjs holds it to node's list).
+const { refuseOptions } = require('../internal/options.cjs');
 const td = new TextDecoder();
 const te = new TextEncoder();
 
@@ -406,6 +408,12 @@ function openPath(p, flags, mode) {
   const excl = creat && has(O.O_EXCL);
   const rw = of & 3;
   const nb = has(O.O_NONBLOCK) ? 'n' : '';
+  // an append open that also reads ('a+', 'ax+', 'as+', or O_APPEND|O_RDWR): the engine's synchronous open has no such
+  // mode, and opening write-only would fail every read with EBADF. Refused by name, before anything is created.
+  if (has(O.O_APPEND) && rw === O.O_RDWR) {
+    throw require('../internal/options.cjs').optionError('fs.open', typeof flags === 'string' ? flags : `0x${of.toString(16)}`,
+      'the engine\'s synchronous open has no read-and-append mode');
+  }
   const createBase = has(O.O_APPEND) ? 'a' : rw === O.O_RDWR ? 'w+' : rw === O.O_RDONLY ? 'r' : 'w';
   let pre = null;
   try { pre = FSS.lstat(p); } catch { /* absent, or the open below says why */ }
@@ -635,27 +643,25 @@ function asBuffer(data) {
 }
 
 // A descriptor is read from where it stands and left open, as node does (readFileSync(0) reads stdin).
-function readFileSync(p, opts) {
+function readFileSync(p, opts, entry = 'fs.readFileSync') {
+  refuseOptions(entry, opts);
   const enc = typeof opts === 'string' ? opts : opts?.encoding;
+  checkEncoding(enc);
+  const flag = (opts && typeof opts === 'object' && opts.flag) || 'r';
   const own = typeof p !== 'number';
-  const fd = own ? FSS.open(p, 'r') : p;
+  const fd = own ? (flag === 'r' ? FSS.open(p, 'r') : openPath(p, flag)) : p;
   try {
-    const data = readAll(fd);
-    if (enc === 'utf8' || enc === 'utf-8') return td.decode(data);
-    if (isLatin1(enc)) return latin1Decode(data);
-    return asBuffer(data);
+    return decodeBytes(readAll(fd), enc);
   } finally { if (own) FSS.close(fd); }
 }
 
-function writeFileSync(p, data, opts) {
+function writeFileSync(p, data, opts, entry = 'fs.writeFileSync') {
+  refuseOptions(entry, opts);
   let bytes;
   if (typeof data === 'string') {
-    // Honor the string encoding; never silently fall back to UTF-8 for one we
-    // don't implement — that would corrupt bytes and hide the gap.
+    // Honor the string encoding (any node's Buffer takes); never silently fall back to UTF-8.
     const enc = (typeof opts === 'string' ? opts : opts?.encoding) ?? 'utf8';
-    if (enc === 'utf8' || enc === 'utf-8') bytes = te.encode(data);
-    else if (isLatin1(enc)) bytes = latin1Encode(data);
-    else throw new Error(`node-shim: fs.writeFileSync encoding '${enc}' not implemented`);
+    bytes = encodeStr(data, enc);
   } else {
     bytes = new Uint8Array(data.buffer ?? data, data.byteOffset ?? 0, data.byteLength ?? data.length);
   }
@@ -679,7 +685,8 @@ function writeFileSync(p, data, opts) {
 // every directory 0777-minus-umask whatever the caller asked (0755 for a 0o700 ~/.claude subdirectory),
 // returned undefined, and passed silently over a regular file (test/node-shim-differential.test.cjs,
 // DIFF-MKDIR-RECURSIVE).
-function mkdirSync(p, opts) {
+function mkdirSync(p, opts, entry = 'fs.mkdirSync') {
+  refuseOptions(entry, opts);
   const o = typeof opts === 'number' ? { mode: opts } : (opts || {});
   const mode = o.mode ?? 0o777;
   if (o.recursive) {
@@ -765,7 +772,33 @@ function encodeStr(data, enc) {
   enc = enc || 'utf8';
   if (enc === 'utf8' || enc === 'utf-8') return te.encode(data);
   if (isLatin1(enc)) return latin1Encode(data);
-  throw new Error(`node-shim: fs string encoding '${enc}' not implemented`);
+  return new Uint8Array(bufferFor(data, enc));
+}
+// A string in any other encoding node's Buffer takes (hex, base64, base64url, ucs2/utf16le, ascii), through Buffer;
+// one it does not know is node's ERR_INVALID_ARG_VALUE, never a silent UTF-8.
+const NODE_ENCODINGS = new Set(['utf8', 'utf-8', 'utf16le', 'utf-16le', 'ucs2', 'ucs-2', 'latin1', 'binary', 'base64',
+  'base64url', 'hex', 'ascii']);
+function checkEncoding(enc) {
+  if (enc === undefined || enc === null || enc === 'buffer') return;
+  if (!NODE_ENCODINGS.has(String(enc).toLowerCase())) {
+    throw Object.assign(new TypeError(`The argument 'encoding' is invalid encoding. Received '${enc}'`), { code: 'ERR_INVALID_ARG_VALUE' });
+  }
+}
+function bufferFor(data, enc) { checkEncoding(enc); return Buffer.from(data, enc); }
+function decodeBytes(data, enc) {
+  if (enc === 'utf8' || enc === 'utf-8') return td.decode(data);
+  if (isLatin1(enc)) return latin1Decode(data);
+  if (enc === undefined || enc === null || enc === 'buffer') return asBuffer(data);
+  checkEncoding(enc);
+  return asBuffer(data).toString(enc);
+}
+// node's readFile/writeFile signal: already aborted, the call rejects with an AbortError and does nothing
+function checkAborted(signal) {
+  if (signal && signal.aborted) {
+    const e = new Error('The operation was aborted', signal.reason !== undefined ? { cause: signal.reason } : undefined);
+    e.name = 'AbortError'; e.code = 'ABORT_ERR';
+    throw e;
+  }
 }
 // Turn a Uint8Array view into a standalone ArrayBuffer for FSS.write (which
 // requires an ArrayBuffer, not a view).
@@ -811,15 +844,39 @@ function writeSync(fd, data, a, b, c) {
   return FSS.write(fd, ab, position == null ? -1 : position);
 }
 
-function rmSync(p, opts) {
+// node's rm: a directory needs recursive (else ERR_FS_EISDIR, before anything is removed); maxRetries/retryDelay retry
+// the whole removal on EBUSY/EMFILE/ENFILE/ENOTEMPTY/EPERM, waiting retryDelay * attempt between tries (node's rimraf).
+const RM_RETRY = new Set(['EBUSY', 'EMFILE', 'ENFILE', 'ENOTEMPTY', 'EPERM']);
+function rmEisdir(p) {
+  return Object.assign(new Error(`Path is a directory: rm returned EISDIR (is a directory) ${p}`),
+    { code: 'ERR_FS_EISDIR', errno: 21, syscall: 'rm', path: p, name: 'SystemError' });
+}
+function rmRetries(opts) {
+  const n = opts && typeof opts === 'object' && Number.isInteger(opts.maxRetries) ? opts.maxRetries : 0;
+  const delay = opts && typeof opts === 'object' && typeof opts.retryDelay === 'number' ? opts.retryDelay : 100;
+  return { n: Math.max(0, n), delay };
+}
+function rmOnce(p, opts) {
   let l;
   try { l = lstatSync(p); } catch (e) { if (opts?.force && e.code === 'ENOENT') return; throw e; }
   if (l.isDirectory()) {
-    if (!opts?.recursive) return FSS.rmdir(p);
-    for (const n of FSS.readdir(p)) rmSync(path.join(p, n), opts);
+    if (!opts?.recursive) throw rmEisdir(p);
+    for (const n of FSS.readdir(p)) rmOnce(path.join(p, n), opts);
     return FSS.rmdir(p);
   }
   return FSS.unlink(p);
+}
+function rmSync(p, opts, entry = 'fs.rmSync') {
+  refuseOptions(entry, opts);
+  const { n, delay } = rmRetries(opts);
+  for (let attempt = 0; ; attempt++) {
+    try { return rmOnce(p, opts); } catch (e) {
+      if (attempt >= n || !RM_RETRY.has(e && e.code)) throw e;
+      // a synchronous wait (node's own rmSync sleeps between tries); the engine's main thread cannot Atomics.wait
+      const until = Date.now() + delay * (attempt + 1);
+      while (Date.now() < until) { /* waiting out retryDelay */ }
+    }
+  }
 }
 
 // fs.mkdtempSync(prefix): create a uniquely-suffixed dir (Node appends 6 random
@@ -920,10 +977,12 @@ class ReadStream extends require('node:stream').Readable {
     if (o.encoding) this.setEncoding(o.encoding);
     queueMicrotask(async () => {
       try {
-        _refuseProcFdOffLinux('open', p, 'r');
-        let data = await tjs.readFile(p);
+        const flags = o.flags || 'r';
+        let data;
+        if (flags === 'r') { _refuseProcFdOffLinux('open', p, 'r'); data = await tjs.readFile(p); }
+        else { const fd = openPath(p, flags, o.mode); try { data = readAll(fd); } finally { FSS.close(fd); } }
         if (start || hasEnd) data = data.subarray(start, hasEnd ? o.end + 1 : data.length);
-        const CH = 65536;
+        const CH = typeof o.highWaterMark === 'number' && o.highWaterMark > 0 ? o.highWaterMark : 65536;
         for (let i = 0; i < data.length; i += CH) this.push(data.subarray(i, Math.min(i + CH, data.length)));
         this.push(null);
       } catch (e) { if (autoClose) this.destroy(e); else this.emit('error', e); }
@@ -937,7 +996,10 @@ class ReadStream extends require('node:stream').Readable {
     return this;
   }
 }
-function createReadStream(p, opts) { return new ReadStream(p, opts); }
+function createReadStream(p, opts) {
+  refuseOptions('fs.createReadStream', typeof opts === 'string' ? { encoding: opts } : opts);
+  return new ReadStream(p, opts);
+}
 
 // fs.createWriteStream: a Writable that overwrites ('w') or appends ('a') a file
 // (17 sites). {mode} sets the file mode, {start} positions writes. Writes route
@@ -945,14 +1007,22 @@ function createReadStream(p, opts) { return new ReadStream(p, opts); }
 function createWriteStream(p, opts) {
   const stream = require('node:stream');
   const o = typeof opts === 'string' ? { encoding: opts } : (opts || {});
-  const fd = openPath(p, o.flags || 'w', o.mode);
+  refuseOptions('fs.createWriteStream', o);
+  // node opens on a later turn, so a failed open ('wx' over a file, a missing directory) is the stream's 'error'
+  let fd = null;
+  let openError = null;
+  try { fd = openPath(p, o.flags || 'w', o.mode); } catch (e) { if (e && e.code === 'ERR_SHIM_UNSUPPORTED_OPTION') throw e; openError = e; }
   let pos = typeof o.start === 'number' ? o.start : null;
   const autoClose = o.autoClose !== false;
   const emitClose = o.emitClose !== false;
   const w = new stream.Writable({
+    // node's fs.WriteStream: the stream's encoding is its default encoding, so write('7a7a') under 'hex' writes 0x7a 0x7a
+    defaultEncoding: o.encoding || 'utf8',
+    decodeStrings: false,
     write(chunk, enc, cb) {
       try {
-        const bytes = typeof chunk === 'string' ? encodeStr(chunk, typeof enc === 'string' ? enc : o.encoding) : chunk;
+        if (fd === null) throw openError;
+        const bytes = typeof chunk === 'string' ? encodeStr(chunk, typeof enc === 'string' && enc !== 'buffer' ? enc : (o.encoding || 'utf8')) : chunk;
         writeAll(fd, bytes, pos);
         if (pos !== null) pos += bytes.length;
         cb();
@@ -970,10 +1040,11 @@ function createWriteStream(p, opts) {
     if (this.destroyed) return this;
     this.destroyed = true;
     if (err) queueMicrotask(() => this.emit('error', err));
-    if (!fdClosed) { fdClosed = true; try { FSS.close(fd); } catch (_) { /* already closed */ } }
+    if (!fdClosed && fd !== null) { fdClosed = true; try { FSS.close(fd); } catch (_) { /* already closed */ } }
     setTimeout(() => { this.closed = true; if (emitClose) this.emit('close'); }, 0);
     return this;
   };
+  if (openError) queueMicrotask(() => w.destroy(openError));
   w.close = function close(cb) {
     if (typeof cb === 'function') this.once('close', () => cb());
     if (!this.writableEnded) { this.once('finish', () => this.destroy()); this.end(); } else this.destroy();
@@ -983,12 +1054,42 @@ function createWriteStream(p, opts) {
   return w;
 }
 
-// fs.cpSync: recursive copy (dir/file/symlink), mirroring promises.rm's recursion.
-// Guards against copying a directory onto itself or into a subdirectory of
-// itself (host node throws ERR_FS_CP_EINVAL) — otherwise cpDir would recurse
-// forever building .../sub/sub/sub until ENAMETOOLONG or a blown stack. The
-// check runs once on the public entry, not per recursion.
-function cpSync(src, dest, opts = {}) {
+// fs.cpSync / fs.cp: recursive copy (dir/file/symlink). Guards against copying a directory onto itself or into a
+// subdirectory of itself (host node throws ERR_FS_CP_EINVAL) — otherwise the walk would recurse forever building
+// .../sub/sub/sub until ENAMETOOLONG or a blown stack. Preserves each source's permission bits, as host node's cp
+// does: load-bearing for plugin installs, where a git-subdir plugin's hook scripts are checked out 0755 then
+// cpSync'd into the version cache — dropping +x makes the SessionStart hook non-executable.
+// node's cp/cpSync options: recursive (a directory needs it: ERR_FS_EISDIR), force (default true: overwrite; false:
+// leave an existing file, or with errorOnExist fail ERR_FS_CP_EEXIST), filter(src, dest) (false: skip that path and
+// what is under it; cp's may answer a promise), dereference (copy what a symlink points at), preserveTimestamps,
+// verbatimSymlinks (false, the default: a relative link target is made absolute against the source's directory, as
+// node does), mode (copyFile's flags, applied after force has removed or kept the destination, so COPYFILE_EXCL never
+// finds one, as in node; COPYFILE_FICLONE falls back to a copy, as node's does; COPYFILE_FICLONE_FORCE, which must
+// clone, is refused).
+function cpOptions(opts, entry) {
+  opts = opts || {};
+  refuseOptions(entry, opts);
+  const mode = opts.mode || 0;
+  if (mode & constants.COPYFILE_FICLONE_FORCE) {
+    throw require('../internal/options.cjs').optionError(entry, 'mode', 'COPYFILE_FICLONE_FORCE: this engine cannot clone a file');
+  }
+  if (opts.filter !== undefined && typeof opts.filter !== 'function') {
+    throw Object.assign(new TypeError('The "options.filter" property must be of type function'), { code: 'ERR_INVALID_ARG_TYPE' });
+  }
+  return {
+    recursive: !!opts.recursive, force: opts.force !== false, errorOnExist: !!opts.errorOnExist, filter: opts.filter,
+    dereference: !!opts.dereference, preserveTimestamps: !!opts.preserveTimestamps, verbatimSymlinks: !!opts.verbatimSymlinks,
+  };
+}
+function cpEisdir(src) {
+  return Object.assign(new Error(`Recursive option is required to copy a directory: ${src}`),
+    { code: 'ERR_FS_EISDIR', errno: 21, syscall: 'cp', path: src, name: 'SystemError' });
+}
+function cpEexist(dest) {
+  return Object.assign(new Error(`Target already exists: cp returned EEXIST (${dest} already exists)`),
+    { code: 'ERR_FS_CP_EEXIST', errno: 17, syscall: 'cp', path: dest, name: 'SystemError' });
+}
+function cpSelfCheck(src, dest) {
   const a = path.resolve(src);
   const b = path.resolve(dest);
   if (a === b) {
@@ -1001,26 +1102,54 @@ function cpSync(src, dest, opts = {}) {
     e.code = 'ERR_FS_CP_EINVAL';
     throw e;
   }
-  cpDir(src, dest, opts);
 }
-
-// Recursive copy worker (no self-recursion guard — the public cpSync vetted the
-// roots once). Preserves each source's permission bits, as host node's cp does:
-// load-bearing for plugin installs, where a git-subdir plugin's hook scripts are
-// checked out 0755 then cpSync'd into the version cache — dropping +x makes the
-// SessionStart hook non-executable ("hook error: Permission denied").
-function cpDir(src, dest, opts) {
-  const st = lstatSync(src);
-  if (st.isSymbolicLink && st.isSymbolicLink()) { symlinkAs(FSS.readlink(src), dest); return; }
+// One entry of the copy, once filter has said yes: returns the directory's children to visit, or null.
+function cpEntry(src, dest, o) {
+  const st = o.dereference ? statSync(src) : lstatSync(src);
   if (st.isDirectory()) {
+    if (!o.recursive) throw cpEisdir(src);
     mkdirSync(dest, { recursive: true });
-    for (const n of FSS.readdir(src)) cpDir(path.join(src, n), path.join(dest, n), opts);
-    return;
+    if (o.preserveTimestamps) utimesSync(dest, st.atime, st.mtime);
+    return FSS.readdir(src);
+  }
+  let exists = false;
+  try { lstatSync(dest); exists = true; } catch { /* free */ }
+  if (exists) {
+    if (!o.force) { if (o.errorOnExist) throw cpEexist(dest); return null; }
+    if (st.isSymbolicLink && st.isSymbolicLink()) FSS.unlink(dest);
+  }
+  if (st.isSymbolicLink && st.isSymbolicLink()) {
+    let target = FSS.readlink(src);
+    // node's cpSync resolves against the source's REAL directory, its cp against the path as given
+    if (!o.verbatimSymlinks && !path.isAbsolute(target)) target = path.resolve(o.sync ? realpathJs(path.dirname(src)) : path.dirname(src), target);
+    symlinkAs(target, dest);
+    return null;
   }
   writeFileSync(dest, readFileSync(src));
   chmodBestEffort(dest, st.mode & 0o7777);
+  if (o.preserveTimestamps) utimesSync(dest, st.atime, st.mtime);
+  return null;
 }
-
+function cpWalkSync(src, dest, o) {
+  if (o.filter && !o.filter(src, dest)) return;
+  const kids = cpEntry(src, dest, o);
+  if (kids) for (const n of kids) cpWalkSync(path.join(src, n), path.join(dest, n), o);
+}
+async function cpWalkAsync(src, dest, o) {
+  if (o.filter && !(await o.filter(src, dest))) return;
+  const kids = cpEntry(src, dest, o);
+  if (kids) for (const n of kids) await cpWalkAsync(path.join(src, n), path.join(dest, n), o);
+}
+async function cpAsync(src, dest, opts, entry) {
+  const o = cpOptions(opts, entry);
+  cpSelfCheck(src, dest);
+  await cpWalkAsync(src, dest, o);
+}
+function cpSync(src, dest, opts) {
+  const o = { ...cpOptions(opts, 'fs.cpSync'), sync: true };
+  cpSelfCheck(src, dest);
+  cpWalkSync(src, dest, o);
+}
 function openDir(p, opts, withPath) {
   // A Dir over an eager Dirent list in the OS's readdir order (the engine's readdir(p, true) does not sort,
   // as node's Dir does not, where readdirSync's does: test/node-shim-fs-opendir.test.cjs): readSync()/read() hand over the next
@@ -1257,17 +1386,23 @@ function makeFileHandle(fd, p) {
 }
 
 const promises = {
-  readFile: async (p, opts) => {
+  readFile: async (p, opts, entry = 'fs.promises.readFile') => {
+    refuseOptions(entry, opts);
     const enc = typeof opts === 'string' ? opts : opts?.encoding;
+    checkEncoding(enc);
+    checkAborted(opts && typeof opts === 'object' ? opts.signal : undefined);
+    const flag = (opts && typeof opts === 'object' && opts.flag) || 'r';
+    if (flag !== 'r' || typeof p === 'number') return readFileSync(p, { encoding: enc, flag }, entry);
     _refuseProcFdOffLinux('open', p, 'r');
     const data = await tjs.readFile(p); // Uint8Array, verified against pinned tjs v26.6.0
-    if (enc === 'utf8' || enc === 'utf-8') return td.decode(data);
-    if (isLatin1(enc)) return latin1Decode(data);
-    return asBuffer(data);
+    return decodeBytes(data, enc);
   },
   // opts was dropped here entirely, so the promises form ignored BOTH encoding and
   // mode while the sync form honoured encoding. Thread it.
-  writeFile: async (p, data, opts) => { writeFileSync(p, data, opts); },
+  writeFile: async (p, data, opts, entry = 'fs.promises.writeFile') => {
+    checkAborted(opts && typeof opts === 'object' ? opts.signal : undefined);
+    writeFileSync(p, data, opts, entry);
+  },
   utimes: async (p, atime, mtime) => { _refuseProcFdOffLinux('utime', p); await tjs.utime(p, timeToMs(atime), timeToMs(mtime)); },
   lutimes: async (p, atime, mtime) => { _refuseProcFdOffLinux('lutime', p); await tjs.lutime(p, timeToMs(atime), timeToMs(mtime)); },
   // statfs: the bundle CALLS this (not feature-detects it) on its low-disk
@@ -1299,7 +1434,7 @@ const promises = {
   stat: async (p, opts) => statSync(p, opts),
   lstat: async (p, opts) => makeStats(FSS.lstat(validatePathArg(p)), opts), // ignores throwIfNoEntry, as node's does
   fstat: async (fd, opts) => fsMod.fstatSync(fd, opts),
-  mkdir: async (p, opts) => mkdirSync(p, opts),
+  mkdir: async (p, opts, entry = 'fs.promises.mkdir') => mkdirSync(p, opts, entry),
   readdir: async (p, opts) => readdirCore(p, opts),
   opendir: async (p, opts) => openDir(p, opts, true),
   access: async (p, m) => FSS.access(p, m ?? constants.F_OK),
@@ -1331,15 +1466,15 @@ const promises = {
   open: async (p, flags, mode) => makeFileHandle(openPath(p, flags ?? 'r', mode), p),
   fsync: async () => {},       // best-effort (see fsyncSync note)
   fdatasync: async () => {},
-  rm: async (p, opts) => {
-    const l = (() => { try { return lstatSync(p); } catch (e) { if (opts?.force && e.code === 'ENOENT') return null; throw e; } })();
-    if (!l) return;
-    if (l.isDirectory()) {
-      if (!opts?.recursive) return FSS.rmdir(p);
-      for (const n of FSS.readdir(p)) await promises.rm(path.join(p, n), opts);
-      return FSS.rmdir(p);
+  rm: async (p, opts, entry = 'fs.promises.rm') => {
+    refuseOptions(entry, opts);
+    const { n, delay } = rmRetries(opts);
+    for (let attempt = 0; ; attempt++) {
+      try { return rmOnce(p, opts); } catch (e) {
+        if (attempt >= n || !RM_RETRY.has(e && e.code)) throw e;
+        await new Promise((res) => setTimeout(res, delay * (attempt + 1)));
+      }
     }
-    return FSS.unlink(p);
   },
 };
 // realpathSync.native (4 sites) — same resolution as realpathSync here.
@@ -1350,7 +1485,7 @@ fsMod.realpathSync.native = (p) => FSS.realpath(p);
 // supports it). Deliberately left absent rather than faked: the reachable
 // caller is the async/promises path above, and a wrong sync answer would be
 // worse than a missing one. Revisit if a probe ever shows statfsSync reached.
-promises.cp = async (src, dest, opts) => cpSync(src, dest, opts);
+promises.cp = async (src, dest, opts, entry = 'fs.promises.cp') => cpAsync(src, dest, opts, entry);
 fsMod.promises = promises;
 
 // Node's callback fs APIs take an optional options arg before the callback; the
@@ -1365,6 +1500,18 @@ for (const name of ['readFile', 'writeFile', 'stat', 'lstat', 'fstat', 'access',
   'utimes', 'lutimes', 'appendFile', 'chmod', 'symlink', 'link', 'mkdtemp', 'fsync', 'fdatasync',
   'statfs']) {
   fsMod[name] = cbWrap(promises[name]);
+}
+// readFile/writeFile/mkdir/rm/cp: the callback form's options are refused (and its abort signal answered) under its
+// own name, before the callback is called, as node validates first. A refusal is THROWN, as node's validation is.
+for (const [name, arity] of [['readFile', 2], ['writeFile', 3], ['mkdir', 2], ['rm', 2], ['cp', 3]]) {
+  const pfn = promises[name];
+  fsMod[name] = (...args) => {
+    const cb = args.pop();
+    if (typeof cb !== 'function') throw new TypeError('callback must be a function');
+    while (args.length < arity) args.push(undefined);
+    refuseOptions(`fs.${name}`, args[arity - 1]);
+    pfn(...args, `fs.${name}`).then((v) => cb(null, v), (e) => cb(e));
+  };
 }
 // node's callback realpath is its JS walk (lstat/stat errors), fs.promises.realpath and fs.realpath.native the
 // realpath syscall.

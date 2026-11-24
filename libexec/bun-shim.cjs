@@ -815,11 +815,141 @@ function _rgDebug(cmd, verdict) {
   process.stderr.write(`clode rg-debug: ${cmd.join(' ')} ${verdict}\n`);
 }
 
-// --- spawn: approximate Bun.spawn -> Node child_process ---
+// --- THE OPTIONS TABLES: Bun's option objects, honoured or refused by name -----------------------------------------
+// The bun half of the options census (node-shim's is libexec/node-shim/internal/options.cjs; the ratchet for both is
+// test/options-census.test.cjs). For fetch's init, Bun.spawn's and Bun.spawnSync's options and WebSocket's, every key
+// native Bun READS (recorded inside native Claude Code's Bun: test/fixtures/options-census-bun-native.json) is
+// HONOURED (a row of test/fixtures/options-census-bun-rows.cjs answers as native Bun answered it, recorded in
+// test/fixtures/options-census-bun-rows-native.json), REFUSED BY NAME (a thrown, coded error before anything is
+// started or sent), or EXEMPT (a short list, each naming its BACKLOG.md entry). `platform` names keys Bun reads only on
+// another platform than the recording's; they are honoured or refused here like any other, and not called stale.
+// `inert` values ask for nothing (Bun's defaults), so passing them is not refused.
+const _BUN_INERT = { verbose: [false], lazy: [false], ipc: [], perMessageDeflate: [false], decompress: [true],
+  compress: [false], keepalive: [true] };
+const _bunRow = (label) => `row:${label}`;
+const BUN_OPTION_TABLES = {
+  fetch: {
+    honoured: {
+      body: _bunRow('fetch.methodHeadersBody'), headers: _bunRow('fetch.methodHeadersBody'), method: _bunRow('fetch.methodHeadersBody'),
+      redirect: _bunRow('fetch.redirect'), signal: _bunRow('fetch.signal'), tls: 'tls: the tls census (test/node-shim-tls-options.test.cjs)',
+      timeout: _bunRow('fetch.timeout'), decompress: _bunRow('fetch.decompress'), compress: _bunRow('fetch.compress'),
+      keepalive: _bunRow('fetch.keepalive'),
+    },
+    refused: {
+      unix: 'the engine\'s fetch connects over TCP only (lws); a request to a unix socket cannot be made',
+      proxy: 'the engine\'s fetch has no proxy support; sending the request direct would bypass the proxy asked for',
+      maxRedirects: 'the engine\'s fetch follows redirects without a cap of its own',
+      session: 'the engine\'s fetch has no TLS session reuse to name', protocol: 'the engine\'s fetch speaks HTTP/1.1 only',
+      verbose: 'the engine\'s fetch has no request/response trace',
+    },
+  },
+  'Bun.spawn': {
+    honoured: {
+      cmd: _bunRow('spawn.cwdEnv'), cwd: _bunRow('spawn.cwdEnv'), env: _bunRow('spawn.cwdEnv'), argv0: _bunRow('spawn.argv0'),
+      stdin: _bunRow('spawn.stdin'), stdout: _bunRow('spawn.stdout'), stderr: _bunRow('spawn.stdout'), stdio: _bunRow('spawn.stdio'),
+      timeout: _bunRow('spawn.timeout'), killSignal: _bunRow('spawn.timeout'), signal: _bunRow('spawn.signal'),
+      onExit: _bunRow('spawn.onExit'), detached: _bunRow('spawn.detached'), uid: _bunRow('spawn.uidGid'), gid: _bunRow('spawn.uidGid'),
+      lazy: 'false only (inert); true is refused',
+    },
+    refused: {
+      ipc: 'no IPC channel to a child (node-shim fork is absent too)', onDisconnect: 'no IPC channel to disconnect',
+      terminal: 'no pseudo-terminal for a child here (Bun.Terminal is not provided)',
+      maxBuffer: 'Bun kills the child past maxBuffer at its own chunk granularity; not reproduced here',
+      lazy: 'every pipe is read as the child writes it; lazy reading is not offered',
+    },
+    platform: {
+      windowsHide: 'win32: honoured, passed to child_process.spawn', windowsVerbatimArguments: 'win32: honoured, passed to child_process.spawn',
+      cgroup: 'linux: refused (no cgroup placement here)',
+    },
+  },
+  'Bun.spawnSync': {
+    honoured: {
+      cmd: _bunRow('spawnSync.argvCwdEnv'), cwd: _bunRow('spawnSync.argvCwdEnv'), env: _bunRow('spawnSync.argvCwdEnv'),
+      argv0: _bunRow('spawnSync.argvCwdEnv'), stdin: _bunRow('spawnSync.stdin'), stdout: _bunRow('spawnSync.stdout'),
+      stderr: _bunRow('spawnSync.stdout'), stdio: _bunRow('spawnSync.stdout'), timeout: _bunRow('spawnSync.timeout'),
+      killSignal: _bunRow('spawnSync.timeout'), onExit: _bunRow('spawnSync.onExit'),
+    },
+    refused: {
+      detached: 'the synchronous spawn primitive has no detached process group', uid: 'the synchronous spawn primitive cannot change user',
+      gid: 'the synchronous spawn primitive cannot change group', signal: 'a synchronous spawn cannot be aborted while it blocks',
+      terminal: 'no pseudo-terminal for a child here (Bun.Terminal is not provided)', onDisconnect: 'no IPC channel to disconnect',
+      maxBuffer: 'Bun kills the child past maxBuffer at its own chunk granularity; not reproduced here',
+    },
+    platform: {
+      windowsHide: 'win32: honoured, passed to child_process.spawnSync', windowsVerbatimArguments: 'win32: honoured, passed to child_process.spawnSync',
+      cgroup: 'linux: refused (no cgroup placement here)',
+    },
+  },
+  WebSocket: {
+    honoured: { headers: _bunRow('ws.args'), protocols: _bunRow('ws.args'), protocol: _bunRow('ws.args'),
+      tls: 'tls: the tls census (test/node-shim-tls-options.test.cjs)' },
+    refused: { proxy: 'neither the engine\'s WebSocket nor npm ws is given a proxy here; connecting direct would bypass it' },
+    exempt: { perMessageDeflate: 'BACKLOG.md "WebSocket perMessageDeflate is never offered": an offer a server may decline; '
+      + 'refusing would fail a connection that works uncompressed' },
+  },
+};
+// Keys refused only on some platforms' engines, so the refusal is per call: cgroup (linux) has nowhere to go.
+const _BUN_REFUSED_EVERYWHERE = { cgroup: 'no cgroup placement for a child here' };
+function _bunOptionError(entry, key, why) {
+  return Object.assign(new Error(`clode: ${entry} option '${key}' cannot be applied by this engine (${why}); refusing `
+    + 'rather than ignoring it'), { code: 'ERR_CLODE_UNSUPPORTED_OPTION', entry, option: key });
+}
+function _bunRefuse(entry, opts) {
+  if (!opts || typeof opts !== 'object') return;
+  const t = BUN_OPTION_TABLES[entry];
+  const refused = { ...(t.refused || {}), ...(entry.startsWith('Bun.spawn') ? _BUN_REFUSED_EVERYWHERE : {}) };
+  for (const [key, why] of Object.entries(refused)) {
+    const v = opts[key];
+    if (v !== undefined && v !== null && !(_BUN_INERT[key] || []).includes(v)) throw _bunOptionError(entry, key, why);
+  }
+}
+
+// Bun's stdio values -> child_process's, for slot i (0 stdin, 1 stdout, 2 stderr). Bun: 'pipe' | 'inherit' | 'ignore' |
+// null (ignore) | a file descriptor number; stdin also takes the bytes to feed it (a TypedArray, ArrayBuffer, Blob,
+// Response, Request or ReadableStream). Undefined is the slot's default. Anything else is Bun's TypeError, or, for
+// what Bun takes and this shim cannot (Bun.file targets: Bun.file is not provided), a refusal by name.
+function _bunStdio(entry, v, i, dflt) {
+  if (v === undefined) v = dflt;
+  if (v === null) return { node: 'ignore' };
+  if (v === 'pipe' || v === 'inherit' || v === 'ignore') return { node: v };
+  if (typeof v === 'number' && Number.isInteger(v) && v >= 0) return { node: v };
+  if (i === 0 && typeof v === 'object') {
+    if (ArrayBuffer.isView(v) || v instanceof ArrayBuffer) return { node: 'pipe', feed: v };
+    if (typeof v.arrayBuffer === 'function' || typeof v.getReader === 'function') return { node: 'pipe', feed: v };
+  }
+  if (typeof v === 'object') throw _bunOptionError(entry, ['stdin', 'stdout', 'stderr'][i] || 'stdio', 'a Bun.file target: Bun.file is not provided here');
+  throw new TypeError("stdio must be an array of 'inherit', 'pipe', 'ignore', Bun.file(pathOrFd), number, or null");
+}
+function _bunStdioAll(entry, opts, defaults) {
+  if (Array.isArray(opts.stdio)) {
+    if (opts.stdio.length > 3) throw _bunOptionError(entry, 'stdio', 'only stdin, stdout and stderr are wired; extra descriptors are not');
+    return [0, 1, 2].map((i) => _bunStdio(entry, opts.stdio[i], i, defaults[i]));
+  }
+  return [_bunStdio(entry, opts.stdin, 0, defaults[0]), _bunStdio(entry, opts.stdout, 1, defaults[1]), _bunStdio(entry, opts.stderr, 2, defaults[2])];
+}
+async function _bunFeedBytes(feed) {
+  if (ArrayBuffer.isView(feed)) return Buffer.from(feed.buffer, feed.byteOffset, feed.byteLength);
+  if (feed instanceof ArrayBuffer) return Buffer.from(new Uint8Array(feed));
+  if (typeof feed.arrayBuffer === 'function') return Buffer.from(new Uint8Array(await feed.arrayBuffer()));
+  const chunks = []; const reader = feed.getReader();
+  for (;;) { const { value, done } = await reader.read(); if (done) break; chunks.push(Buffer.from(value)); }
+  return Buffer.concat(chunks);
+}
+function _bunAbortError() {
+  const e = new Error('The operation was aborted.'); e.name = 'AbortError'; e.code = 20; return e;
+}
+const _SIGNUM = (() => { try { return require('os').constants.signals || {}; } catch (_) { return {}; } })();
+
+// --- spawn: Bun.spawn -> Node child_process, every option honoured or refused (BUN_OPTION_TABLES above) ---
 function spawn(cmdOrOpts, maybeOpts){
   let cmd, opts;
   if (Array.isArray(cmdOrOpts)) { cmd = cmdOrOpts; opts = maybeOpts||{}; }
   else { opts = cmdOrOpts||{}; cmd = opts.cmd; }
+  _bunRefuse('Bun.spawn', opts);
+  // Bun's defaults: stdin ignored, stdout piped, stderr inherited (measured, native 2.1.330)
+  const stdio = _bunStdioAll('Bun.spawn', opts, ['ignore', 'pipe', 'inherit']);
+  // an already-aborted signal: Bun throws the AbortError and starts nothing
+  if (opts.signal && opts.signal.aborted) throw _bunAbortError();
   const exe = cmd[0];
   // rg is never looked up: cp.spawn (wrapped above) answers it with quaude's rg, whether
   // or not the host has one.
@@ -849,30 +979,70 @@ function spawn(cmdOrOpts, maybeOpts){
       catch (_) { throw new Error(`Executable not found: "${exe}"`); }
     }
   }
-  const child = cp.spawn(exe, cmd.slice(1), {
-    cwd: opts.cwd, env,
-    stdio: [ opts.stdin==='inherit'?'inherit':'pipe',
-             opts.stdout==='inherit'?'inherit':'pipe',
-             opts.stderr==='inherit'?'inherit':'pipe' ],
-  });
-  // Resolve exited on BOTH 'exit' and 'error' so a late spawn failure can never
-  // hang an awaiter or crash via an unhandled 'error' event.
+  const spawnOpts = { cwd: opts.cwd, env, stdio: stdio.map((x) => x.node) };
+  for (const k of ['argv0', 'detached', 'uid', 'gid', 'timeout', 'killSignal', 'signal', 'windowsHide', 'windowsVerbatimArguments']) {
+    if (opts[k] !== undefined && opts[k] !== null) spawnOpts[k] = opts[k];
+  }
+  const child = cp.spawn(exe, cmd.slice(1), spawnOpts);
+  child.on('error', () => {});   // a failure reaches the caller through exited; an abort is its AbortError, already handled
+  if (stdio[0].feed !== undefined && child.stdin) {
+    _bunFeedBytes(stdio[0].feed).then((b) => child.stdin.end(b), () => child.stdin.end());
+  }
+  let proc;
+  // Resolve exited on BOTH 'exit' and 'error' so a late spawn failure can never hang an awaiter. Bun's value: the
+  // exit code, or 128 + the signal's number when a signal ended the child.
   const exited = new Promise((res)=>{
     let done = false; const fin = (c)=>{ if(!done){ done=true; res(c); } };
-    child.on('exit', (code)=>fin(code??0));
-    child.on('error', ()=>fin(1));
+    child.on('exit', (code, sig)=>{
+      fin(code !== null && code !== undefined ? code : (sig && _SIGNUM[sig] ? 128 + _SIGNUM[sig] : 1));
+      if (typeof opts.onExit === 'function') { try { opts.onExit(proc, code, sig, undefined); } catch (_) { /* Bun ignores it too */ } }
+    });
+    // a failure to start ends it; an abort (signal) is followed by the child's own exit, which carries the signal
+    child.on('error', (e)=>{ if (!(e && e.name === 'AbortError')) fin(1); });
   });
-  return {
-    pid: child.pid, stdin: child.stdin, stdout: child.stdout, stderr: child.stderr,
+  // a slot that is not piped is undefined on the Bun object, as in Bun
+  const piped = (i, s) => (stdio[i].node === 'pipe' ? s : undefined);
+  proc = {
+    pid: child.pid, stdin: stdio[0].feed !== undefined ? undefined : piped(0, child.stdin), stdout: piped(1, child.stdout),
+    stderr: piped(2, child.stderr),
     exited, kill: (s)=>child.kill(s), get exitCode(){ return child.exitCode; },
+    get signalCode(){ return child.signalCode; }, get killed(){ return !!child.killed; },
     ref(){}, unref(){ child.unref(); },
   };
+  return proc;
 }
 // rg needs nothing here: cp.spawnSync (wrapped above) answers it with quaude's rg.
-spawn.sync = function(cmdOrOpts){
-  const cmd = Array.isArray(cmdOrOpts)?cmdOrOpts:(cmdOrOpts.cmd);
-  const r = cp.spawnSync(cmd[0], cmd.slice(1), {encoding:'buffer'});
-  return { exitCode: r.status??0, stdout: r.stdout||Buffer.alloc(0), stderr: r.stderr||Buffer.alloc(0), success: (r.status===0) };
+// Bun.spawnSync: Bun's defaults are stdin ignored, stdout and stderr piped (and returned); a slot not piped is undefined
+// in the result. onExit is read and never called by Bun's spawnSync (measured, native 2.1.330), so not here either.
+spawn.sync = function(cmdOrOpts, maybeOpts){
+  let cmd, opts;
+  if (Array.isArray(cmdOrOpts)) { cmd = cmdOrOpts; opts = maybeOpts || {}; }
+  else { opts = cmdOrOpts || {}; cmd = opts.cmd; }
+  _bunRefuse('Bun.spawnSync', opts);
+  const stdio = _bunStdioAll('Bun.spawnSync', opts, ['ignore', 'pipe', 'pipe']);
+  let input;
+  if (stdio[0].feed !== undefined) {
+    const f = stdio[0].feed;
+    if (ArrayBuffer.isView(f)) input = Buffer.from(f.buffer, f.byteOffset, f.byteLength);
+    else if (f instanceof ArrayBuffer) input = Buffer.from(new Uint8Array(f));
+    else throw _bunOptionError('Bun.spawnSync', 'stdin', 'a Blob/Response/stream cannot be read synchronously here; pass its bytes');
+  }
+  if (stdio[0].node === 'pipe' && input === undefined) stdio[0].node = 'ignore';   // nothing to write: Bun gives EOF
+  const o = { encoding: 'buffer', stdio: stdio.map((x) => x.node), maxBuffer: Infinity };
+  if (input !== undefined) o.input = input;
+  for (const k of ['cwd', 'env', 'argv0', 'timeout', 'killSignal', 'windowsHide', 'windowsVerbatimArguments']) {
+    if (opts[k] !== undefined && opts[k] !== null) o[k] = opts[k];
+  }
+  const r = cp.spawnSync(cmd[0], cmd.slice(1), o);
+  const out = {
+    exitCode: r.signal ? null : (r.status ?? (r.error ? 1 : 0)),
+    stdout: stdio[1].node === 'pipe' ? (r.stdout || Buffer.alloc(0)) : undefined,
+    stderr: stdio[2].node === 'pipe' ? (r.stderr || Buffer.alloc(0)) : undefined,
+    success: r.status === 0 && !r.signal, pid: r.pid,
+  };
+  if (r.signal) out.signalCode = r.signal;
+  if (r.error && r.error.code === 'ETIMEDOUT') out.exitedDueToTimeout = true;
+  return out;
 };
 
 // Fallback only. On a real Windows PATHEXT is always set; this is the documented
@@ -1766,7 +1936,9 @@ function _nativeWsOptions(opts){
   if (opts && typeof opts === 'object' && !Array.isArray(opts)) {
     const o = {};
     if (opts.headers) o.headers = opts.headers;
-    if (opts.protocols) o.protocols = opts.protocols;
+    // Bun's single-protocol spelling, and a lone string either way: the engine's WebSocket takes a list here
+    const protos = opts.protocols !== undefined && opts.protocols !== null ? opts.protocols : opts.protocol;
+    if (protos !== undefined && protos !== null && protos !== '') o.protocols = Array.isArray(protos) ? protos : [String(protos)];
     return o;
   }
   if (opts !== undefined) return { protocols: opts };   // WHATWG form: 2nd arg is protocols
@@ -1892,7 +2064,8 @@ function _wsArgs(url, opts){
     const options = {};
     if (opts.headers) options.headers = opts.headers;
     if (opts.tls && typeof opts.tls === 'object') Object.assign(options, _bunTlsForNode(opts.tls));  // node's tls.connect keys
-    return [url, opts.protocols, options];
+    // Bun takes `protocol` (one) as well as `protocols`; protocols wins when both are given
+    return [url, opts.protocols !== undefined ? opts.protocols : opts.protocol, options];
   }
   return [url, opts, undefined];                 // WHATWG form: 2nd arg is protocols
 }
@@ -1986,6 +2159,7 @@ function _wsShape(ws) {
 }
 
 function BunWebSocket(url, opts){
+  if (opts && typeof opts === 'object' && !Array.isArray(opts)) _bunRefuse('WebSocket', opts);   // proxy: refused by name
   const WS = _realWS();
   if (WS) { const [u, p, o] = _wsArgs(url, opts); return new WS(u, p, o); }   // npm ws (Node hosts)
   if (UNDER_TJS && typeof _nativeWS === 'function') {                          // native tjs WS (header-capable)
@@ -2009,17 +2183,62 @@ globalThis.WebSocket = BunWebSocket;
 // swallowed async crash.
 globalThis.__clodeWsUnavailable = !_wsTransportAvailable();
 
-// fetch(input, { tls }) — Bun's option, checked by _checkBunTls above on every engine (tjs's fetch and node's both
-// ignore the key, so this is the only place it can be honoured or refused). A refusal REJECTS, before any request is
-// made, as a failed fetch does; everything else is the engine's own fetch, untouched.
+// fetch(input, init) — Bun's own init keys (BUN_OPTION_TABLES.fetch), honoured or refused here on every engine (tjs's
+// fetch and node's both ignore them, so this is the only place it can be done). A refusal REJECTS, before any request
+// is made, as a failed fetch does. tls is checked by _checkBunTls above. What each honoured Bun key does here:
+//   timeout     Bun reads it as a switch (measured: a number, even 1, does not time out a 2.5 s answer; false turns
+//               Bun's idle timeout off). The engine's fetch has no idle timeout, which is what false asks for; Bun's
+//               default one, which a number or true keeps, is not reproduced (BACKLOG.md "fetch has no idle timeout").
+//   decompress  false: the body is handed back as the server encoded it. The engine's fetch decodes every encoded
+//               body, so false asks the server for none (accept-encoding: identity, unless the caller named one, as
+//               the bundle does), and an answer encoded all the same is REFUSED by name rather than handed back decoded.
+//   compress    true: Bun gzips the request body and says so (content-encoding: gzip); here likewise, for a body given
+//               as a string or bytes (a stream body is refused by name).
+//   keepalive   false: the connection is not reused. The engine's fetch never reuses one (BACKLOG.md "node-shim http
+//               has no connection pool"), so false is what it does; true, Bun's default, asks for reuse it does not do.
+const _BUN_FETCH_KEYS = ['tls', 'timeout', 'decompress', 'compress', 'keepalive', 'verbose', 'unix', 'proxy', 'maxRedirects', 'session', 'protocol'];
+function _bunFetchInit(input, init) {
+  _bunRefuse('fetch', init);
+  const url = input && typeof input === 'object' && 'url' in input ? input.url : input;
+  if (init.tls !== undefined) _checkBunTls(init.tls, url, 'fetch');
+  const eng = {};
+  for (const k of Object.keys(init)) if (!_BUN_FETCH_KEYS.includes(k)) eng[k] = init[k];
+  if (init.keepalive === false) eng.keepalive = false;
+  const wantRaw = init.decompress === false;
+  if (wantRaw || init.compress === true) {
+    const h = new Headers(init.headers !== undefined ? init.headers : (input && typeof input === 'object' && input.headers) || undefined);
+    if (wantRaw && !h.has('accept-encoding')) h.set('accept-encoding', 'identity');
+    if (init.compress === true && init.body !== undefined && init.body !== null) {
+      const b = init.body;
+      let bytes;
+      if (typeof b === 'string') bytes = Buffer.from(b, 'utf8');
+      else if (ArrayBuffer.isView(b)) bytes = Buffer.from(b.buffer, b.byteOffset, b.byteLength);
+      else if (b instanceof ArrayBuffer) bytes = Buffer.from(new Uint8Array(b));
+      else throw _bunOptionError('fetch', 'compress', 'only a string or bytes body can be gzipped here; this body is a stream or form');
+      eng.body = require('zlib').gzipSync(bytes);
+      h.set('content-encoding', 'gzip');
+    }
+    eng.headers = h;
+  }
+  return { eng, wantRaw };
+}
 if (typeof globalThis.fetch === 'function' && !globalThis.fetch.__clodeTlsChecked) {
   const _engineFetch = globalThis.fetch;
   const checked = function fetch(input, init) {
-    if (init && typeof init === 'object' && init.tls !== undefined) {
-      try { _checkBunTls(init.tls, input && typeof input === 'object' && 'url' in input ? input.url : input, 'fetch'); }
-      catch (e) { return Promise.reject(e); }
-    }
-    return _engineFetch.apply(this, arguments);
+    if (!init || typeof init !== 'object' || !_BUN_FETCH_KEYS.some((k) => init[k] !== undefined)) return _engineFetch.apply(this, arguments);
+    let plan;
+    try { plan = _bunFetchInit(input, init); } catch (e) { return Promise.reject(e); }
+    const p = _engineFetch.call(this, input, plan.eng);
+    if (!plan.wantRaw) return p;
+    return p.then((r) => {
+      const ce = r.headers.get('content-encoding');
+      if (ce && !/^\s*identity\s*$/i.test(ce)) {
+        try { r.body && r.body.cancel && r.body.cancel(); } catch (_) { /* gone */ }
+        throw _bunOptionError('fetch', 'decompress', `the server answered content-encoding '${ce}' and the engine's fetch decodes `
+          + 'every encoded body, so the bytes as sent cannot be handed back');
+      }
+      return r;
+    });
   };
   for (const k of Object.getOwnPropertyNames(_engineFetch)) {
     if (!(k in checked)) { try { Object.defineProperty(checked, k, Object.getOwnPropertyDescriptor(_engineFetch, k)); } catch (_) { /* fixed */ } }
@@ -2115,6 +2334,7 @@ module.exports.parseShadow = parseShadow;               // for test/build-gates/
 module.exports.SHADOW_ARG_SPELLINGS = SHADOW_ARG_SPELLINGS; //   (0b: the gate must use this, not restate it)
 module.exports._wsArgs = _wsArgs;
 module.exports._checkBunTls = _checkBunTls;     // for test/node-shim-tls-options.test.cjs (the fetch/WebSocket tls table)
+module.exports._bunOptionTables = { tables: BUN_OPTION_TABLES, inert: _BUN_INERT, refusedEverywhere: _BUN_REFUSED_EVERYWHERE };
 module.exports._bunTlsKeys = { honoured: BUN_TLS_HONOURED, falseIsUnset: BUN_TLS_FALSE_IS_UNSET, refused: BUN_TLS_REFUSED };
 module.exports.warnAppletSkew = warnAppletSkew;
 module.exports.awaitSkewProbe = awaitSkewProbe;

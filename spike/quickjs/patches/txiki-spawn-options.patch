@@ -1,0 +1,186 @@
+diff --git a/src/mod_process.c b/src/mod_process.c
+--- a/src/mod_process.c
++++ b/src/mod_process.c
+@@ -158,6 +158,7 @@
+ 
+     uv_process_options_t options;
+     memset(&options, 0, sizeof(uv_process_options_t));
++    char *file_owned = NULL; /* the executable, when argv0 took args[0]'s place */
+ 
+     options.flags = UV_PROCESS_WINDOWS_FILE_PATH_EXACT_NAME;
+ 
+@@ -320,6 +321,48 @@
+         }
+         JS_FreeValue(ctx, js_gid);
+ 
++        /* node's spawn flags, as libuv's: detached (a new session, so the child
++         * leads its own process group and kill(-pid) reaches its tree),
++         * windowsHide, windowsVerbatimArguments. Read on every platform; libuv
++         * ignores the two Windows flags elsewhere, as node does. */
++        static const struct { const char *name; unsigned int flag; } spawn_flags[] = {
++            { "detached", UV_PROCESS_DETACHED },
++            { "windowsHide", UV_PROCESS_WINDOWS_HIDE },
++            { "windowsVerbatimArguments", UV_PROCESS_WINDOWS_VERBATIM_ARGUMENTS },
++        };
++        for (size_t k = 0; k < countof(spawn_flags); k++) {
++            JSValue js_flag = JS_GetPropertyStr(ctx, arg1, spawn_flags[k].name);
++            if (JS_IsException(js_flag)) {
++                goto fail;
++            }
++            if (JS_ToBool(ctx, js_flag) > 0) {
++                options.flags |= spawn_flags[k].flag;
++            }
++            JS_FreeValue(ctx, js_flag);
++        }
++
++        /* argv0: the child's argv[0], while the executable stays args[0] as given
++         * (libuv runs options.file and passes options.args) */
++        JSValue js_argv0 = JS_GetPropertyStr(ctx, arg1, "argv0");
++        if (JS_IsException(js_argv0)) {
++            goto fail;
++        }
++        if (JS_IsString(js_argv0)) {
++            const char *a0 = JS_ToCString(ctx, js_argv0);
++            char *a0_dup = a0 ? js_strdup(ctx, a0) : NULL;
++            if (a0) {
++                JS_FreeCString(ctx, a0);
++            }
++            if (!a0_dup) {
++                JS_FreeValue(ctx, js_argv0);
++                goto fail;
++            }
++            file_owned = options.args[0];
++            options.args[0] = a0_dup;
++            options.file = file_owned;
++        }
++        JS_FreeValue(ctx, js_argv0);
++
+         /* stdio */
+         JSValue js_stdin = JS_GetPropertyStr(ctx, arg1, "stdin");
+         if (!JS_IsException(js_stdin) && !JS_IsUndefined(js_stdin)) {
+@@ -466,6 +509,9 @@
+     if (options.cwd) {
+         js_free(ctx, (void *) options.cwd);
+     }
++    if (file_owned) {
++        js_free(ctx, file_owned);
++    }
+ 
+     return ret;
+ }
+@@ -591,4 +637,16 @@
+     JS_SetClassProto(ctx, tjs_process_class_id, proto);
+ 
+     JS_SetPropertyFunctionList(ctx, ns, tjs_process_funcs, countof(tjs_process_funcs));
++
++    /* globalThis.__tjs_spawn_options: the node spawn options tjs.spawn honours
++     * beyond cwd/env/uid/gid/stdio, so node-shim can tell this engine from one
++     * that predates them (and refuse, by name, what an older engine would drop). */
++    static const char *const spawn_option_names[] = { "detached", "windowsHide", "windowsVerbatimArguments", "argv0" };
++    JSValue names = JS_NewArray(ctx);
++    for (uint32_t k = 0; k < countof(spawn_option_names); k++) {
++        JS_SetPropertyUint32(ctx, names, k, JS_NewString(ctx, spawn_option_names[k]));
++    }
++    JSValue global = JS_GetGlobalObject(ctx);
++    JS_DefinePropertyValueStr(ctx, global, "__tjs_spawn_options", names, JS_PROP_C_W_E);
++    JS_FreeValue(ctx, global);
+ }
+diff --git a/src/mod_spawn_sync.c b/src/mod_spawn_sync.c
+--- a/src/mod_spawn_sync.c
++++ b/src/mod_spawn_sync.c
+@@ -248,7 +248,18 @@
+     stdio_slot_t slot[3];
+     if (read_stdio_slots(ctx, opts, slot) < 0) { JS_FreeCString(ctx, file); return JS_EXCEPTION; }
+ 
+-    char **cargv = js_string_array(ctx, argv[1], 1, file);
++    /* argv0 (node's option): the child's argv[0]; the executable is still `file` */
++    JSValue a0v = JS_GetPropertyStr(ctx, opts, "argv0");
++    const char *argv0 = JS_IsString(a0v) ? JS_ToCString(ctx, a0v) : NULL;
++    JS_FreeValue(ctx, a0v);
++    char **cargv = js_string_array(ctx, argv[1], 1, argv0 ? argv0 : file);
++    if (argv0) JS_FreeCString(ctx, argv0);
++    /* killSignal (node's option, a signal NUMBER here): what a timeout or a
++     * maxBuffer overrun kills the child with. Absent: SIGKILL, as before. */
++    int kill_sig = SIGKILL;
++    JSValue ksv = JS_GetPropertyStr(ctx, opts, "killSignal");
++    if (JS_IsNumber(ksv)) { int32_t k = 0; if (JS_ToInt32(ctx, &k, ksv) == 0 && k > 0) kill_sig = k; }
++    JS_FreeValue(ctx, ksv);
+     if (!cargv) { JS_FreeCString(ctx, file); return JS_ThrowOutOfMemory(ctx); }
+     JSValue envv = JS_GetPropertyStr(ctx, opts, "env");
+     char **cenv = JS_IsArray(envv) ? js_string_array(ctx, envv, 0, NULL) : NULL;
+@@ -489,7 +500,7 @@
+             poll(NULL, 0, rem < 10 ? (int)rem : 10);
+         }
+     }
+-    if (timed_out) kill(pid, SIGKILL);
++    if (timed_out) kill(pid, kill_sig);
+ 
+     if (!exited)
+         while (waitpid(pid, &wstatus, 0) < 0 && errno == EINTR) {}
+@@ -499,10 +510,10 @@
+     JS_DefinePropertyValueStr(ctx, result, "pid", JS_NewInt32(ctx, pid), JS_PROP_C_W_E);
+     JS_DefinePropertyValueStr(ctx, result, "status",
+         (has_status && !timed_out) ? JS_NewInt32(ctx, WEXITSTATUS(wstatus)) : JS_NULL, JS_PROP_C_W_E);
+-    /* DIVERGENCE: on timeout/maxBuffer the child is always killed with SIGKILL
+-     * (reported here as the signal); Node defaults to SIGTERM then escalates. */
++    /* On timeout/maxBuffer the child is killed with killSignal (SIGKILL when the
++     * caller gave none; node-shim passes node's default, SIGTERM). */
+     JS_DefinePropertyValueStr(ctx, result, "signal",
+-        has_sig ? JS_NewInt32(ctx, WTERMSIG(wstatus)) : (timed_out ? JS_NewInt32(ctx, SIGKILL) : JS_NULL), JS_PROP_C_W_E);
++        has_sig ? JS_NewInt32(ctx, WTERMSIG(wstatus)) : (timed_out ? JS_NewInt32(ctx, kill_sig) : JS_NULL), JS_PROP_C_W_E);
+     JS_DefinePropertyValueStr(ctx, result, "stdout", slot[1].kind != SLOT_PIPE ? JS_NULL :
+         JS_NewArrayBufferCopy(ctx, ob.data ? ob.data : (const uint8_t *)"", ob.len), JS_PROP_C_W_E);
+     JS_DefinePropertyValueStr(ctx, result, "stderr", slot[2].kind != SLOT_PIPE ? JS_NULL :
+@@ -732,6 +743,13 @@
+     if (read_stdio_slots(ctx, opts, slot) < 0) { JS_FreeCString(ctx, file); return JS_EXCEPTION; }
+ 
+     char **cargv = js_string_array(ctx, argv[1], 1, file);
++    /* windowsHide / windowsVerbatimArguments (node's options, as libuv applies them) */
++    JSValue whv = JS_GetPropertyStr(ctx, opts, "windowsHide");
++    int windows_hide = JS_ToBool(ctx, whv) > 0;
++    JS_FreeValue(ctx, whv);
++    JSValue wvv = JS_GetPropertyStr(ctx, opts, "windowsVerbatimArguments");
++    int windows_verbatim = JS_ToBool(ctx, wvv) > 0;
++    JS_FreeValue(ctx, wvv);
+     if (!cargv) { JS_FreeCString(ctx, file); return JS_ThrowOutOfMemory(ctx); }
+     JSValue envv = JS_GetPropertyStr(ctx, opts, "env");
+     char **cenv = JS_IsArray(envv) ? js_string_array(ctx, envv, 0, NULL) : NULL;
+@@ -757,7 +775,11 @@
+ 
+     /* command line */
+     buf_t cl = {0};
+-    for (char **p = cargv; *p; p++) { if (p != cargv) buf_append(&cl, (const uint8_t *)" ", 1, (size_t)-1); append_quoted(&cl, *p); }
++    for (char **p = cargv; *p; p++) {
++        if (p != cargv) buf_append(&cl, (const uint8_t *)" ", 1, (size_t)-1);
++        if (windows_verbatim && p != cargv) buf_append(&cl, (const uint8_t *)*p, strlen(*p), (size_t)-1);
++        else append_quoted(&cl, *p);
++    }
+     buf_append(&cl, (const uint8_t *)"\0", 1, (size_t)-1);  /* CreateProcessA needs a writable NUL-terminated string */
+     char *envblk = build_env_block(cenv);
+ 
+@@ -789,6 +811,7 @@
+ 
+     STARTUPINFOA si; ZeroMemory(&si, sizeof(si)); si.cb = sizeof(si);
+     si.dwFlags = STARTF_USESTDHANDLES;
++    if (windows_hide) { si.dwFlags |= STARTF_USESHOWWINDOW; si.wShowWindow = SW_HIDE; }
+     si.hStdInput = child_h[0];
+     si.hStdOutput = child_h[1];
+     si.hStdError = child_h[2];
+@@ -929,6 +952,17 @@
+      * inherited or ignored, not only piped). node-shim's spawnSync reads it to
+      * tell this engine from one that predates it, which pipes every slot. */
+     JS_DefinePropertyValueStr(ctx, fn, "stdio", JS_TRUE, JS_PROP_ENUMERABLE);
++    /* __tjs_spawn_sync.options: the node spawnSync options this spawner honours
++     * beyond cwd/env/input/stdio/timeoutMs/maxBuffer, per platform. */
++#if defined(_WIN32)
++    static const char *const sync_option_names[] = { "windowsHide", "windowsVerbatimArguments" };
++#else
++    static const char *const sync_option_names[] = { "argv0", "killSignal" };
++#endif
++    JSValue onames = JS_NewArray(ctx);
++    for (uint32_t k = 0; k < sizeof(sync_option_names) / sizeof(sync_option_names[0]); k++)
++        JS_SetPropertyUint32(ctx, onames, k, JS_NewString(ctx, sync_option_names[k]));
++    JS_DefinePropertyValueStr(ctx, fn, "options", onames, JS_PROP_ENUMERABLE);
+     JS_DefinePropertyValueStr(ctx, global, "__tjs_spawn_sync", fn, JS_PROP_C_W_E);
+     JSValue kfn = JS_GetPropertyStr(ctx, obj, "kill");
+     JS_DefinePropertyValueStr(ctx, global, "__tjs_kill", kfn, JS_PROP_C_W_E);

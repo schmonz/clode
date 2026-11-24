@@ -43,6 +43,89 @@ Measured: scripts/apicheck.mjs Axis 4 (quaude only, twice) and a scratch -p turn
 
 Unmeasured. Whether native logs it as often (its single-binary start is faster, which may narrow the race), and what
 the bundle races against (a second writer of .claude.json during startup).
+## Options census: what "honoured or refused by name" (2026-11-23) refuses, exempts, and left open
+
+Every key node or native Bun reads from an options object at a shim entry point is now honoured (a behavioural row,
+compared with host node or with native Bun's recorded answer) or refused by name (`ERR_SHIM_UNSUPPORTED_OPTION` /
+`ERR_SHIM_HTTP_UNSUPPORTED_OPTION` / `ERR_CLODE_UNSUPPORTED_OPTION`, thrown before anything is started, opened, created
+or sent), or is on the short exempt list below. The ratchet is `test/options-census.test.cjs` (guards
+`options-census-node` and `options-census-bun`); the tables are `libexec/node-shim/internal/options.cjs` and
+`libexec/bun-shim.cjs` BUN_OPTION_TABLES. "Default?" says whether the bundle reaches the refusal with default settings
+(read from the 2.1.330 carve).
+
+**Refused (node-shim)** — none reached by default:
+- child_process.spawn `serialization`: no IPC channel (stdio 'ipc' is refused already). Only Bun's own cluster code.
+- spawnSync / execFileSync / execSync `detached`, `uid`, `gid`: the synchronous spawner starts no session and changes
+  no ids. (The bundle's `detached:!0` sites are all async spawn, which honours them.)
+- http.request / https.request socket-level keys: `createConnection`, `socketPath` (both refused before; `ws` and the
+  bundle's unix-socket health probe hit them, unchanged), `localAddress`, `localPort`, `hints`, `blockList`, `fd`,
+  `handle`, `onread`, `manualStart`, `pauseOnCreate`, `readable`, `allowHalfOpen`, `objectMode`,
+  `readableObjectMode`, `writableObjectMode`, `typeOfService`, `keepAlive`, `keepAliveInitialDelay`, `noDelay`,
+  `highWaterMark`, `insecureHTTPParser` (axios passes `false`, which asks for nothing), `joinDuplicateHeaders`,
+  `maxHeaderSize`, `uniqueHeaders`, `setDefaultHeaders`, `httpValidation`; https adds `socket`.
+- http.Agent / https.Agent: the same socket keys, plus an agent-wide `host`, `port`, `timeout`, `signal`, `noDelay`;
+  https.Agent `maxCachedSessions`, `highWaterMark`, `path`, `socket`. (The bundle's agents pass keepAlive/maxSockets,
+  exempt below, and `lookup`, now honoured.)
+- fs.readFileSync / fs.promises.readFile `buffer`; fs.createReadStream / createWriteStream `fd`, `fs`,
+  `windowsHandle`; fs.cp `mode: COPYFILE_FICLONE_FORCE` (a clone cannot be forced).
+- fs.open flag strings `a+`, `ax+`, `xa+`, `as+`, `sa+` (and O_APPEND|O_RDWR): the engine's synchronous open has no
+  read-and-append mode, and the shim used to open these write-only, so every read failed EBADF. Only Bun's own REPL
+  history uses `a+`. Honouring it is an engine change (an `a+` base in mod_fs_sync.c's open).
+- zlib `dictionary`, `info`, `memLevel`, `strategy`, `windowBits` (each but its default), `rejectGarbageAfterEnd`.
+
+**Refused (bun-shim)** — none reached by default:
+- fetch `unix` (ANTHROPIC_UNIX_SOCKET, or the credentialed unix-socket proxy), `proxy` (a configured HTTPS_PROXY or
+  fallback proxy: **every API request then fails by name where it used to go direct in silence**; honouring it means
+  routing fetch through node-shim's http client, which does proxy), `maxRedirects`, `session`, `protocol`,
+  `verbose: true`; `compress: true` with a stream body; `decompress: false` when the server encodes anyway (the engine's
+  fetch decodes every encoded body; the bundle pairs it with `accept-encoding: identity`, which this honours).
+- Bun.spawn `ipc`, `onDisconnect`, `terminal` (the bg-session PTY path; Bun.Terminal was already absent), `maxBuffer`,
+  `lazy: true`, `cgroup` (linux, only with a configured cgroup layout), a stdio array longer than 3, a Bun.file stdio
+  target (Bun.file itself is absent).
+- Bun.spawnSync `detached`, `uid`, `gid`, `signal`, `terminal`, `onDisconnect`, `maxBuffer`, `cgroup`; a Blob or
+  Response as stdin.
+- WebSocket `proxy` (set only with a proxy configured).
+
+**Exempt** (neither honoured nor refused: refusing would break a default path and honouring is not cheap):
+
+- **node-shim http has no connection pool.** http.Agent / https.Agent `keepAlive`, `keepAliveMsecs`, `maxSockets`,
+  `maxFreeSockets`, `maxTotalSockets`, `scheduling`, `agentKeepAliveTimeoutBuffer`: every request is its own
+  connection (`Connection: close`). The bundle's agents are built with `keepAlive: true, maxSockets: 50/1` by default.
+  Bun's fetch `keepalive: true` (its default) is the same gap on the fetch side.
+- **fs.watch is a never-firing stub.** fs.watch `encoding`, `ignore`, `maxQueue`, `overflow`, `persistent`,
+  `recursive`, `signal`, `throwIfNoEntry`: the whole function is a stub (test/fidelity RECIPE C7); chokidar watches
+  settings and keybindings through it by default, so refusing its options would make those watchers throw.
+- **node-shim fs has no fsync.** fs.writeFile* / createWriteStream `flush`: the bytes are written, but fsyncSync is a
+  documented no-op (no sync fsync primitive in the engine). The bundle writes with `flush: true` at 17 sites.
+- **WebSocket perMessageDeflate is never offered.** Bun's WebSocket `perMessageDeflate`: an offer a server may decline;
+  neither the engine's WebSocket nor this shim offers it, and the connection works uncompressed.
+
+**Divergences the census found that are not options:**
+- Bun's fetch `timeout` is a switch (measured: a number, even 1, does not cut off a 2.5 s answer; `false` turns Bun's
+  idle timeout off). The engine's fetch has **no idle timeout**, which is what `false` asks for; Bun's default one, which
+  a number keeps, is not reproduced, so a stalled body waits forever where native gives up.
+- The engine's fetch Response has no `redirected` (native: true after a followed redirect).
+- node 24's fs.cpSync answers `dereference: true` with ERR_FS_EISDIR for a link to a FILE and keeps the links of a
+  recursive copy (24.21 and 26.10); its fs.cp does what the docs say, and the shim's cp and cpSync both do that.
+- Fixed on the way: fs string encodings beyond utf8/latin1 (hex, base64, base64url, ucs2/utf16le, ascii) and node's
+  ERR_INVALID_ARG_VALUE for an unknown one; fs.rm of a directory without `recursive` (node's ERR_FS_EISDIR, not a
+  silent rmdir); a stream Writable's `defaultEncoding`/`decodeStrings` (createWriteStream `encoding: 'hex'` wrote
+  UTF-8); createWriteStream open errors are its 'error' event, as node's; http's Host header leaves out the request's
+  OR AGENT's default port; a truncated zlib stream under the default finishFlush is node's "unexpected end of file";
+  zlib streams never emit a chunk larger than chunkSize; Bun.spawn's defaults (stdin ignored, stderr inherited) and
+  `exited` (128+signal for a signalled child).
+
+**The census's limits.**
+- The Bun reference was recorded on darwin-arm64: keys Bun reads only elsewhere (`windowsHide`,
+  `windowsVerbatimArguments`, `cgroup`) are listed by hand as `platform` keys. Re-record on linux and win32 to check.
+- A key passed THROUGH an object the reference does not follow is invisible: the http agents now include net.connect's
+  keys (an agent's options reach every connection), but a stream's own options (`stream.Writable`'s `highWaterMark`,
+  ...) are not censused.
+
+Measured: test/options-census.test.cjs under node 24.21.0, native 2.1.330 (Bun 1.4.4), darwin-arm64 (2026-11-23)
+
+Unmeasured: the Bun rows and refusals on linux and win32 (the rows run /bin/sh and are skipped on Windows); a turn
+behind a real proxy (to see the refusal's message where a user would).
 
 ## TLS options: what the honour-or-refuse work (2026-11-23) left open
 

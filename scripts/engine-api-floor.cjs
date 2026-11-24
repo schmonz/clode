@@ -237,6 +237,35 @@ const ENGINE_API_FLOOR = [
       + 'Not logged: it is a working route, not a refusal; test/node-shim-execve.test.cjs pins it on the stand-in',
   },
   {
+    // Without it tjs.spawn drops detached/windowsHide/windowsVerbatimArguments/argv0: the Bash tool's detached child
+    // led no process group, so its kill(-pid) of the command's tree reached nothing (node-shim options census).
+    name: '__tjs_spawn_options',
+    expr: 'globalThis.__tjs_spawn_options',
+    kind: 'object',
+    from: 'txiki-spawn-options.patch',
+    why: 'node-shim child_process.spawn detached/windowsHide/windowsVerbatimArguments/argv0, applied by libuv as node applies them',
+    buildHost: false,
+    notForBuildHost: 'nothing the build runs passes those options to spawn: in scripts/, libexec/ (outside node-shim and '
+      + 'bun-shim) and build.sh only libexec/clode-watch.cjs (the update notifier, which no build step runs) passes '
+      + 'detached: true, and scripts/apicheck.mjs passes detached: false, which asks for nothing. On an engine without it '
+      + 'node-shim REFUSES a caller\'s option by name (ERR_SHIM_UNSUPPORTED_OPTION) and appends it to '
+      + 'CLODE_ENGINE_FLOOR_LOG, so the gates listed above refuse a build path that ever reaches it',
+  },
+  {
+    // Without it __tjs_spawn_sync kills a timed-out child with SIGKILL whatever killSignal says, and runs it with the
+    // executable as argv[0] whatever argv0 says (POSIX); on Windows it shows the console and re-quotes verbatim args.
+    name: '__tjs_spawn_sync.options',
+    expr: 'globalThis.__tjs_spawn_sync.options',
+    kind: 'object',
+    from: 'txiki-spawn-options.patch',
+    why: 'node-shim spawnSync killSignal/argv0 (POSIX), windowsHide/windowsVerbatimArguments (Windows)',
+    buildHost: false,
+    notForBuildHost: 'nothing the build runs passes killSignal, argv0, windowsHide or windowsVerbatimArguments to '
+      + 'spawnSync/execFileSync (grep of scripts/, libexec/ outside node-shim, bun-shim and rg-native, and build.sh). '
+      + 'On an engine without it node-shim REFUSES a caller\'s option by name (ERR_SHIM_UNSUPPORTED_OPTION) and appends '
+      + 'it to CLODE_ENGINE_FLOOR_LOG, so the gates listed above refuse a build path that ever reaches it',
+  },
+  {
     // Without it node-shim's Timeout#unref STOPS the timer (the old route), so an unref'd timer never fires while
     // the loop stays alive: the TUI's nonblocking stdout then holds a turn's answer until the next keystroke.
     name: '__tjs_timer_setref',

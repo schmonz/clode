@@ -150,6 +150,56 @@ function normStdio(opts) {
   };
 }
 
+// THE OPTIONS each entry point honours or refuses by name: libexec/node-shim/internal/options.cjs, held to node's own
+// list by test/options-census.test.cjs. Refusals come first, before anything is spawned.
+const { refuseOptions, optionError } = require('../internal/options.cjs');
+const { engineFloorLog } = require('../internal/engine-floor-log.cjs');
+// A stdio slot this engine can give the child: node's strings, a descriptor number, or nothing. 'ipc' (no channel)
+// and a stream object (node passes its descriptor; this engine has none to pass) are refused by name, not piped.
+function refuseStdio(entry, opts) {
+  const s = opts.stdio;
+  if (s === undefined || s === null || s === 'pipe' || s === 'overlapped' || s === 'inherit' || s === 'ignore') return;
+  if (!Array.isArray(s)) throw optionError(entry, 'stdio', `the value ${JSON.stringify(s)} is not one this engine can give a child`);
+  s.forEach((v, i) => {
+    if (v === undefined || v === null || v === 'pipe' || v === 'overlapped' || v === 'inherit' || v === 'ignore') return;
+    if (typeof v === 'number' && Number.isInteger(v) && v >= 0) return;
+    if (i > 2) throw optionError(entry, 'stdio', `slot ${i}: the engine gives a child descriptors 0-2 only`);
+    throw optionError(entry, 'stdio', v === 'ipc' ? 'there is no IPC channel' : `slot ${i}: a ${typeof v} is not a slot this engine can give a child (only 'pipe', 'inherit', 'ignore' or a descriptor number)`);
+  });
+}
+// The options only an engine with txiki-spawn-options.patch applies: each is refused by name on an older engine (and
+// logged for CLODE_ENGINE_FLOOR_LOG) when the caller asks for something, and handed to the engine otherwise.
+const WIN_ONLY = new Set(['windowsHide', 'windowsVerbatimArguments']);
+const ENGINE_ASYNC = ['detached', 'windowsHide', 'windowsVerbatimArguments', 'argv0'];
+const ENGINE_SYNC = ['windowsHide', 'windowsVerbatimArguments', 'argv0', 'killSignal'];
+function engineSpawnOptions(entry, opts, supported, keys) {
+  const out = {};
+  for (const k of keys) {
+    const v = opts[k];
+    if (v === undefined || v === null || v === false) continue;
+    if (WIN_ONLY.has(k) && !CP_IS_WIN) continue;            // node applies these on Windows only
+    if (!supported.includes(k)) {
+      engineFloorLog(`${entry} option '${k}': this engine predates txiki-spawn-options.patch`);
+      throw optionError(entry, k, `${ENGINE_SPAWN_WHY} (txiki-spawn-options.patch)`);
+    }
+    out[k] = v;
+  }
+  return out;
+}
+const ENGINE_SPAWN_WHY = 'this engine\'s spawner does not apply it';
+// node's killSignal: a name or a number, validated as node does (ERR_UNKNOWN_SIGNAL); answered as a NAME.
+function killSignalName(v) {
+  if (v === undefined || v === null) return 'SIGTERM';
+  if (typeof v === 'number') { const n = signalName(v); if (n) return n; }
+  else if (typeof v === 'string') { const sig = (require('node:os').constants || {}).signals || {}; if (sig[v] !== undefined) return v; }
+  throw Object.assign(new TypeError(`Unknown signal: ${v}`), { code: 'ERR_UNKNOWN_SIGNAL' });
+}
+function abortError(signal) {
+  const e = new Error('The operation was aborted', signal && signal.reason !== undefined ? { cause: signal.reason } : undefined);
+  e.name = 'AbortError'; e.code = 'ABORT_ERR';
+  return e;
+}
+
 // Node-shaped launch error: spawn ENOENT never throws synchronously in node —
 // it surfaces as an Error with .code/.syscall/.path/.spawnargs on an 'error'
 // event (async) or as spawnSync's `.error` field (sync). Build that shape from
@@ -206,6 +256,16 @@ function applyShell(file, args, opts) {
 
 function spawn(file, args = [], opts = {}) {
   if (!Array.isArray(args)) { opts = args || {}; args = []; }
+  opts = opts || {};
+  refuseOptions('child_process.spawn', opts);
+  refuseStdio('child_process.spawn', opts);
+  const killSignal = killSignalName(opts.killSignal);
+  const engineOpts = engineSpawnOptions('child_process.spawn', opts, globalThis.__tjs_spawn_options || [], ENGINE_ASYNC);
+  const abortSignal = opts.signal;
+  if (abortSignal !== undefined && abortSignal !== null
+      && (typeof abortSignal !== 'object' || typeof abortSignal.aborted !== 'boolean')) {
+    throw Object.assign(new TypeError('The "options.signal" property must be an instance of AbortSignal'), { code: 'ERR_INVALID_ARG_TYPE' });
+  }
   // Default the child's environment to the CURRENT env (tjs.env), not undefined.
   // Node inherits the live process.env — including mutations — when `env` is
   // omitted; tjs.env is the object process.env's set/deleteProperty traps write
@@ -225,7 +285,10 @@ function spawn(file, args = [], opts = {}) {
   try {
     proc = tjs.spawn([resolveExe(file, env || process.env), ...args], {
       cwd: opts.cwd, env, stdin: stdio.stdin, stdout: stdio.stdout, stderr: stdio.stderr,
-      windowsVerbatimArguments: winVerbatim,
+      uid: opts.uid, gid: opts.gid,
+      detached: !!engineOpts.detached, windowsHide: !!engineOpts.windowsHide,
+      windowsVerbatimArguments: winVerbatim || !!engineOpts.windowsVerbatimArguments,
+      ...(typeof engineOpts.argv0 === 'string' ? { argv0: engineOpts.argv0 } : {}),
     });
   } catch (err) {
     // DIVERGENCE A: tjs.spawn throws sync on ENOENT; node emits the failure
@@ -414,8 +477,26 @@ function spawn(file, args = [], opts = {}) {
     return w;
   };
   child.stdin = wrapWritable(proc.stdin);
-  child.kill = (sig) => { try { proc.kill(sig); return true; } catch { return false; } };
+  child.killed = false;
+  child.kill = (sig) => {
+    try { proc.kill(sig === undefined ? undefined : killSignalName(sig)); child.killed = true; return true; } catch { return false; }
+  };
   child.ref = () => {}; child.unref = () => {};
+  // node's timeout and signal: kill with killSignal; an abort also emits node's AbortError
+  let timeoutTimer = null;
+  if (typeof opts.timeout === 'number' && opts.timeout > 0) {
+    timeoutTimer = setTimeout(() => { timeoutTimer = null; child.kill(killSignal); }, opts.timeout);
+  }
+  let onAbort = null;
+  if (abortSignal) {
+    onAbort = () => { child.kill(killSignal); child.emit('error', abortError(abortSignal)); };
+    if (abortSignal.aborted) queueMicrotask(onAbort);
+    else abortSignal.addEventListener('abort', onAbort, { once: true });
+  }
+  const settleWatchers = () => {
+    if (timeoutTimer) { clearTimeout(timeoutTimer); timeoutTimer = null; }
+    if (onAbort && abortSignal && !abortSignal.aborted) abortSignal.removeEventListener('abort', onAbort);
+  };
   proc.wait().then(
     // A KILLED child is not a SUCCESSFUL child. tjs's wait() reports
     // {exit_status, term_signal} and sets exit_status=0 for a signal kill
@@ -436,6 +517,7 @@ function spawn(file, args = [], opts = {}) {
       trace('wait resolved', file, 'exit=', st.exit_status, 'signal=', signal);
       child.exitCode = code;
       child.signalCode = signal;
+      settleWatchers();
       child.emit('exit', code, signal);
       child.emit('close', code, signal);
       // The child is gone, but a FORKED grandchild can inherit and hold the stdio
@@ -477,8 +559,14 @@ function spawn(file, args = [], opts = {}) {
 // spawnSync: real synchronous spawn over the C primitive __tjs_spawn_sync
 // (posix_spawn + poll drain; DIVERGENCE B resolved on darwin — see header).
 // Node result shape; encoding/toString + PATH resolution + shell done here.
-function spawnSync(file, args = [], opts = {}) {
+function spawnSync(file, args = [], opts = {}, entry = 'child_process.spawnSync') {
   if (!Array.isArray(args)) { opts = args || {}; args = []; }
+  opts = opts || {};
+  refuseOptions(entry, opts);
+  refuseStdio(entry, opts);
+  const killSignal = killSignalName(opts.killSignal);
+  const syncSupported = (globalThis.__tjs_spawn_sync && globalThis.__tjs_spawn_sync.options) || [];
+  const engineOpts = engineSpawnOptions(entry, opts, syncSupported, ENGINE_SYNC);
   const shelled = applyShell(file, args, opts);
   file = shelled.file; args = shelled.args;
   const winVerbatim = !!shelled.__winVerbatim;
@@ -519,6 +607,11 @@ function spawnSync(file, args = [], opts = {}) {
       timeoutMs: typeof opts.timeout === 'number' ? opts.timeout : 0,
       // Match node's real spawnSync default (1 MiB) exactly — no divergence.
       maxBuffer: typeof opts.maxBuffer === 'number' ? opts.maxBuffer : (1024 * 1024),
+      // node's default killSignal is SIGTERM; an engine without the option kills with SIGKILL (as it always did)
+      ...(syncSupported.includes('killSignal') ? { killSignal: require('node:os').constants.signals[killSignal] } : {}),
+      ...(typeof engineOpts.argv0 === 'string' ? { argv0: engineOpts.argv0 } : {}),
+      ...(engineOpts.windowsHide ? { windowsHide: true } : {}),
+      ...((winVerbatim || engineOpts.windowsVerbatimArguments) ? { windowsVerbatimArguments: true } : {}),
     });
   } catch (err) {
     // DIVERGENCE: launch failure — the C op THROWS a coded Error; node's
@@ -585,20 +678,52 @@ function spawnSync(file, args = [], opts = {}) {
   return result;
 }
 
+// node's execFile: the spawn options it passes on (cwd, env, uid, gid, shell, signal, windows*), plus its own
+// timeout/killSignal (the child is killed and the error says so) and maxBuffer (1 MiB by default: past it the child
+// is killed and the error is ERR_CHILD_PROCESS_STDIO_MAXBUFFER), and encoding.
 function execFile(file, args, opts, cb) {
   if (typeof args === 'function') { cb = args; args = []; opts = {}; }
   else if (typeof opts === 'function') { cb = opts; opts = {}; }
-  const child = spawn(file, args || [], opts || {});
+  else if (args && !Array.isArray(args) && typeof args === 'object') { cb = opts; opts = args; args = []; }
+  opts = opts || {};
+  const entry = opts.__shimEntry || 'child_process.execFile';
+  refuseOptions(entry, opts);
+  const killSignal = killSignalName(opts.killSignal);
+  const maxBuffer = typeof opts.maxBuffer === 'number' ? opts.maxBuffer : 1024 * 1024;
+  const spawnOpts = { cwd: opts.cwd, env: opts.env, uid: opts.uid, gid: opts.gid, shell: opts.shell, signal: opts.signal,
+    windowsHide: opts.windowsHide, windowsVerbatimArguments: opts.windowsVerbatimArguments, killSignal };
+  const child = spawn(file, args || [], spawnOpts);
   let out = Buffer.alloc(0), err = Buffer.alloc(0);
-  if (child.stdout) child.stdout.on('data', (d) => { out = Buffer.concat([out, d]); });
-  if (child.stderr) child.stderr.on('data', (d) => { err = Buffer.concat([err, d]); });
-  child.on('exit', (code) => {
-    const enc = (opts && opts.encoding) || 'utf8';
-    const so = enc === 'buffer' ? out : out.toString(enc);
-    const se = enc === 'buffer' ? err : err.toString(enc);
-    if (cb) cb(code === 0 ? null : Object.assign(new Error(`Command failed: ${file}`), { code }), so, se);
+  let timedOut = false, overflow = null, done = false;
+  let timer = null;
+  if (typeof opts.timeout === 'number' && opts.timeout > 0) {
+    timer = setTimeout(() => { timer = null; timedOut = true; child.kill(killSignal); }, opts.timeout);
+  }
+  const take = (which) => (d) => {
+    if (which === 'stdout') out = Buffer.concat([out, d]); else err = Buffer.concat([err, d]);
+    if (!overflow && Number.isFinite(maxBuffer) && (which === 'stdout' ? out : err).length > maxBuffer) {
+      overflow = which;
+      if (which === 'stdout') out = out.subarray(0, maxBuffer); else err = err.subarray(0, maxBuffer);
+      child.kill(killSignal);
+    }
+  };
+  if (child.stdout) child.stdout.on('data', take('stdout'));
+  if (child.stderr) child.stderr.on('data', take('stderr'));
+  const enc = opts.encoding || 'utf8';
+  const text = (b) => (enc === 'buffer' ? b : b.toString(enc));
+  const cmd = [file, ...(args || [])].join(' ');
+  const finish = (e) => { if (done) return; done = true; if (timer) clearTimeout(timer); if (cb) cb(e, text(out), text(err)); };
+  child.on('close', (code, signal) => {
+    if (overflow) {
+      finish(Object.assign(new RangeError(`${overflow} maxBuffer length exceeded`), { code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER', cmd }));
+      return;
+    }
+    if (code === 0 && signal === null) { finish(null); return; }
+    const e = new Error(`Command failed: ${cmd}\n${text(err)}`);
+    e.code = code; e.killed = child.killed || timedOut; e.signal = signal; e.cmd = cmd;
+    finish(e);
   });
-  child.on('error', (e) => { if (cb) cb(e, '', ''); });
+  child.on('error', (e) => finish(e));
   return child;
 }
 
@@ -611,10 +736,10 @@ function execFile(file, args, opts, cb) {
 // build-tjs's runOut('cmake', ['--version']) with a bare `Command failed: cmake`, while
 // the line that said WHY (`Shared object "libcrypto.so.17" not found`) was captured into
 // a Buffer and dropped — on every leg that runs the build under tjs.
-function execFileSync(file, args, opts) {
+function execFileSync(file, args, opts, entry = 'child_process.execFileSync') {
   if (!Array.isArray(args)) { opts = args; args = []; }
   args = args || []; opts = opts || {};
-  const r = spawnSync(file, args, opts);
+  const r = spawnSync(file, args, opts, entry);
   // Exactly node's call: `if (inheritStderr && ret.stderr) process.stderr.write(ret.stderr)`.
   if (!opts.stdio && r.stderr) process.stderr.write(r.stderr);
   if (r.error) throw Object.assign(r.error, r);
@@ -631,12 +756,15 @@ function execFileSync(file, args, opts) {
 // through so applyShell runs ONCE inside spawn/spawnSync — pre-resolving here
 // and re-entering spawn drops the win __winVerbatim flag (cmd /c must stay
 // verbatim; a double applyShell re-quotes it).
+// exec/execSync run the command through a shell: the caller's `shell` (a path) when it names one, else node's default
 function exec(command, opts, cb) {
   if (typeof opts === 'function') { cb = opts; opts = {}; }
-  return execFile(command, [], { ...(opts || {}), shell: true }, cb);
+  opts = opts || {};
+  return execFile(command, [], { ...opts, shell: typeof opts.shell === 'string' ? opts.shell : true, __shimEntry: 'child_process.exec' }, cb);
 }
 function execSync(command, opts) {
-  return execFileSync(command, [], { ...(opts || {}), shell: true });
+  opts = opts || {};
+  return execFileSync(command, [], { ...opts, shell: typeof opts.shell === 'string' ? opts.shell : true }, 'child_process.execSync');
 }
 
 module.exports = { spawn, spawnSync, execFile, execFileSync, exec, execSync };

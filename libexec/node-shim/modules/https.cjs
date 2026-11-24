@@ -19,10 +19,12 @@ const http = require('node:http');
 class Agent extends http.Agent {
   constructor(options = {}) {
     super(options);
-    this.protocol = 'https:';
-    this.defaultPort = 443;
+    this.protocol = this.options.protocol || 'https:';
+    this.defaultPort = this.options.defaultPort || 443;
   }
 }
+// the options census's https.Agent table (internal/options.cjs), for this class and every subclass of it
+Object.defineProperty(Agent, '_shimHttps', { value: true });
 
 const globalAgent = new Agent();
 // Marked as global for the same reason http's is: node applies the proxy

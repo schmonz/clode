@@ -1,0 +1,160 @@
+{
+ "_recorded": "2026-11-23, native Claude Code 2.1.330 (Bun 1.4.4), darwin-arm64, preload of test/fixtures/options-census-bun-rows.cjs against test/fixtures/options-census-origin.cjs (host node 24.21.0); see the header of the rows file to re-record",
+ "fetch.methodHeadersBody": {
+  "method": "POST",
+  "xa": "b",
+  "body": "payload"
+ },
+ "fetch.redirect": {
+  "manual": {
+   "status": 302,
+   "location": "/redirect?n=1"
+  },
+  "error": {
+   "error": "TypeError"
+  },
+  "follow": {
+   "status": 200,
+   "text": "done"
+  }
+ },
+ "fetch.signal": {
+  "pre": {
+   "error": "AbortError"
+  },
+  "late": {
+   "error": "AbortError"
+  }
+ },
+ "fetch.timeout": {
+  "false": "ok",
+  "number": "ok",
+  "one": "ok"
+ },
+ "fetch.decompress": {
+  "rawText": "hello gzip",
+  "rawEncoding": null,
+  "defaultText": "hello gzip"
+ },
+ "fetch.compress": {
+  "on": {
+   "encoding": "gzip",
+   "body": "squeeze me"
+  },
+  "off": {
+   "encoding": null,
+   "body": "leave me"
+  }
+ },
+ "fetch.keepalive": {
+  "reuseAsked": false
+ },
+ "spawn.cwdEnv": "/\nbar\n",
+ "spawn.argv0": "zz\n",
+ "spawn.stdin": {
+  "bytes": "bytes-in",
+  "blob": "blob-in",
+  "response": "resp-in",
+  "pipe": "piped",
+  "string": "TypeError"
+ },
+ "spawn.stdout": {
+  "defaults": {
+   "stdin": "undefined",
+   "stdout": "r=1 x=\n",
+   "stderr": "undefined",
+   "code": 0
+  },
+  "ignore": {
+   "stdout": "undefined",
+   "stderr": "e\n"
+  },
+  "nulls": "undefined"
+ },
+ "spawn.stdio": {
+  "stdout": "o\n",
+  "stderr": "e\n"
+ },
+ "spawn.timeout": {
+  "default": {
+   "exited": 143,
+   "exitCode": null,
+   "signalCode": "SIGTERM",
+   "quick": true
+  },
+  "named": {
+   "exited": 130,
+   "exitCode": null,
+   "signalCode": "SIGINT",
+   "quick": true
+  },
+  "number": {
+   "exited": 137,
+   "exitCode": null,
+   "signalCode": "SIGKILL",
+   "quick": true
+  }
+ },
+ "spawn.signal": {
+  "late": {
+   "exited": 143,
+   "signalCode": "SIGTERM"
+  },
+  "pre": "AbortError"
+ },
+ "spawn.onExit": {
+  "same": true,
+  "code": 3,
+  "sig": null,
+  "err": "undefined"
+ },
+ "spawn.detached": {
+  "detached": true,
+  "attached": false
+ },
+ "spawn.uidGid": true,
+ "spawnSync.argvCwdEnv": "yy\n/\nbaz\n",
+ "spawnSync.stdin": {
+  "bytes": "sync-in",
+  "exitCode": 2,
+  "success": false,
+  "pipe": "|0"
+ },
+ "spawnSync.stdout": {
+  "defaults": {
+   "stdout": "o\n",
+   "stderr": "e\n"
+  },
+  "ignore": "undefined",
+  "stdio": {
+   "stdout": "o\n",
+   "stderr": "undefined"
+  }
+ },
+ "spawnSync.timeout": {
+  "exitCode": null,
+  "signalCode": "SIGTERM",
+  "success": false,
+  "exitedDueToTimeout": true,
+  "quick": true,
+  "killSignal": "SIGINT"
+ },
+ "spawnSync.onExit": "not called",
+ "ws.args": {
+  "headersProtocols": {
+   "xa": "b",
+   "offered": [
+    "p1",
+    "p2"
+   ],
+   "chosen": "p1"
+  },
+  "protocol": {
+   "xa": null,
+   "offered": [
+    "solo"
+   ],
+   "chosen": "solo"
+  }
+ }
+}

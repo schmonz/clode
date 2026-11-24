@@ -63,11 +63,19 @@ const { EventEmitter } = require('node:events');
 const { Readable } = require('node:stream');
 const { connectHost } = require('../internal/connect-multiple.cjs');
 
+// The keys node reads here are honoured, refused by name, or (the pool's, which this client does not have) exempt:
+// libexec/node-shim/internal/options.cjs, held to node's own list by test/options-census.test.cjs.
+const { refuseOptions } = require('../internal/options.cjs');
+
 class Agent extends EventEmitter {
   constructor(options = {}) {
     super();
     this.options = options || {};
-    this.protocol = 'http:';
+    refuseOptions(new.target && new.target._shimHttps ? 'https.Agent' : 'http.Agent', this.options);
+    // node's agent.defaultPort and agent.protocol: the port a request through it takes when it names none, and the
+    // one protocol it carries (a request for another is ERR_INVALID_PROTOCOL)
+    this.defaultPort = this.options.defaultPort || 80;
+    this.protocol = this.options.protocol || 'http:';
     this.maxSockets = this.options.maxSockets ?? Infinity;
     this.maxFreeSockets = this.options.maxFreeSockets ?? 256;
     this.maxTotalSockets = this.options.maxTotalSockets ?? Infinity;
@@ -1043,8 +1051,8 @@ class ClientSocket extends EventEmitter {
   address() { return { address: this.localAddress, family: String(this.localAddress || '').includes(':') ? 'IPv6' : 'IPv4', port: this.localPort }; }
 }
 
-// `family` is honoured (connect-multiple.cjs), as are autoSelectFamily and autoSelectFamilyAttemptTimeout.
-const UNSUPPORTED_REQUEST_OPTIONS = ['socketPath', 'createConnection', 'lookup', 'localAddress'];
+// `family` is honoured (connect-multiple.cjs), as are autoSelectFamily and autoSelectFamilyAttemptTimeout; the
+// request options this client cannot apply are refused by name (internal/options.cjs, 'http.request').
 
 // A connection option as node's Agent sees it: addRequest builds `{ ...requestOptions, ...agent.options }`, so an
 // option the AGENT was constructed with wins over the request's (measured: request `ca` X + `agent: new Agent({ ca: Y })`
@@ -1080,14 +1088,7 @@ function fromURL(u) {
 class ClientRequest extends EventEmitter {
   constructor(options, cb) {
     super();
-    for (const k of UNSUPPORTED_REQUEST_OPTIONS) {
-      if (options[k] !== undefined && options[k] !== null) {
-        throw shimError(
-          `node-shim: http.request option '${k}' is not supported (this client always connects with tjs.connect; `
-          + 'net.connect/createConnection remain unimplemented)',
-          'ERR_SHIM_HTTP_UNSUPPORTED_OPTION');
-      }
-    }
+    refuseOptions(options.protocol === 'https:' ? 'https.request' : 'http.request', options);
     const agentOpts = (options.agent && typeof options.agent === 'object' && options.agent.options) || {};
     for (const k of UNSUPPORTED_TLS_OPTIONS) {
       if (tlsOptionSet(k, options[k]) || tlsOptionSet(k, agentOpts[k])) throw refuseTlsOption(k);
@@ -1100,7 +1101,13 @@ class ClientRequest extends EventEmitter {
     // `host` may carry a port ("example.com:8080"); node's hostname wins.
     this.host = String(rawHost).replace(/:\d+$/, '');
     if (this.host.startsWith('[') && this.host.endsWith(']')) this.host = this.host.slice(1, -1);
-    this.port = Number(options.port || options.defaultPort || (this._tls ? 443 : 80));
+    const viaAgent = options.agent && typeof options.agent === 'object' ? options.agent : null;
+    // node: a request whose protocol is not its agent's is refused (the agent's protocol is the option it was built with)
+    if (viaAgent && typeof viaAgent.protocol === 'string' && viaAgent.protocol !== this.protocol) {
+      throw Object.assign(new TypeError(`Protocol "${this.protocol}" not supported. Expected "${viaAgent.protocol}"`),
+        { code: 'ERR_INVALID_PROTOCOL' });
+    }
+    this.port = Number(options.port || options.defaultPort || (viaAgent && viaAgent.defaultPort) || (this._tls ? 443 : 80));
     this.method = String(options.method || 'GET').toUpperCase();
     this.path = options.path || '/';
     this.finished = false;
@@ -1122,7 +1129,8 @@ class ClientRequest extends EventEmitter {
     // The origin's authority, spelled the way node spells it in BOTH the Host
     // header and the absolute-form request target it sends to a proxy: the port
     // is dropped when it is the scheme default, an IPv6 literal is bracketed.
-    const dfltPort = this._tls ? 443 : 80;
+    // node: the port is left out when it is the request's default port (options.defaultPort, else its agent's)
+    const dfltPort = Number(options.defaultPort || (viaAgent && viaAgent.defaultPort) || (this._tls ? 443 : 80));
     const hostHdr = this.host.includes(':') ? `[${this.host}]` : this.host;
     this._authority = this.port === dfltPort ? hostHdr : `${hostHdr}:${this.port}`;
     if (options.setHost !== false && !this._headers.has('host')) {
@@ -1170,6 +1178,23 @@ class ClientRequest extends EventEmitter {
     // The connection's TLS options, read and checked NOW: a certificate node would refuse is refused synchronously
     // from request(), as node's createSecureContext throws there, never after the socket exists.
     this._connOpts = this._connectOptions();
+    // node's signal: an abort destroys the request with an AbortError (already aborted: at once)
+    const signal = options.signal;
+    if (signal !== undefined && signal !== null) {
+      if (typeof signal !== 'object' || typeof signal.aborted !== 'boolean') {
+        throw Object.assign(new TypeError('The "options.signal" property must be an instance of AbortSignal'), { code: 'ERR_INVALID_ARG_TYPE' });
+      }
+      const onAbort = () => {
+        const e = new Error('The operation was aborted', signal.reason !== undefined ? { cause: signal.reason } : undefined);
+        e.name = 'AbortError'; e.code = 'ABORT_ERR';
+        this.destroy(e);
+      };
+      if (signal.aborted) queueMicrotask(onAbort);
+      else {
+        signal.addEventListener('abort', onAbort, { once: true });
+        this.once('close', () => signal.removeEventListener('abort', onAbort));
+      }
+    }
     this._connect();
     if (options.timeout !== undefined) this.setTimeout(options.timeout);
     // Expect: 100-continue means the caller will WAIT for the interim response
@@ -1236,7 +1261,7 @@ class ClientRequest extends EventEmitter {
     const ag = (agent && typeof agent === 'object' && agent.options) || {};
     const pick = (k) => fromAgentOrRequest(this._opts, ag, k);
     return { family: pick('family'), autoSelectFamily: pick('autoSelectFamily'),
-             autoSelectFamilyAttemptTimeout: pick('autoSelectFamilyAttemptTimeout') };
+             autoSelectFamilyAttemptTimeout: pick('autoSelectFamilyAttemptTimeout'), lookup: pick('lookup') };
   }
   _connectOptions() {
     const o = { noDelay: true };
@@ -1462,7 +1487,7 @@ function request(url, options, cb) {
   // port 443 (node throws ERR_INVALID_PROTOCOL here too).
   if (opts.protocol && opts.protocol !== 'http:') {
     throw Object.assign(
-      new Error(`Protocol "${opts.protocol}" not supported. Expected "http:"`),
+      new TypeError(`Protocol "${opts.protocol}" not supported. Expected "http:"`),
       { code: 'ERR_INVALID_PROTOCOL' });
   }
   return new ClientRequest(opts, done);

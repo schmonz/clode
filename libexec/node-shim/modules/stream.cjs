@@ -248,6 +248,10 @@ class Writable extends EventEmitter {
     if (typeof opts.write === 'function') this._write = opts.write;
     if (typeof opts.final === 'function') this._final = opts.final;
     if (typeof opts.destroy === 'function') this._destroy = opts.destroy;
+    // node: a string chunk is turned into bytes in its encoding (the write's, else defaultEncoding), unless
+    // decodeStrings is false, when _write gets the string and that encoding
+    this._defaultEncoding = opts.defaultEncoding || 'utf8';
+    this._decodeStrings = opts.decodeStrings !== false;
   }
   _write(chunk, enc, cb) { cb(); }
   // Node: destroy(err) runs _destroy(err, cb); cb's error (if any) is emitted, then 'close'.
@@ -262,10 +266,17 @@ class Writable extends EventEmitter {
     return this;
   }
   write(chunk, enc, cb) {
-    const b = Buffer.isBuffer(chunk) ? chunk
-      : (chunk instanceof Uint8Array ? Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength)
-        : Buffer.from(String(chunk)));
     if (typeof enc === 'function') { cb = enc; enc = undefined; }
+    let b;
+    if (typeof chunk === 'string') {
+      const e = typeof enc === 'string' && enc !== 'buffer' ? enc : (this._defaultEncoding || 'utf8');
+      if (this._decodeStrings === false) b = chunk, enc = e;
+      else b = Buffer.from(chunk, e), enc = 'buffer';
+    } else {
+      b = Buffer.isBuffer(chunk) ? chunk
+        : (chunk instanceof Uint8Array ? Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength)
+          : Buffer.from(String(chunk)));
+    }
     this._write(b, enc, (err) => { if (err) this.emit('error', err); if (cb) cb(err); });
     return true;
   }

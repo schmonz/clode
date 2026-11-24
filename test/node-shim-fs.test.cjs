@@ -310,18 +310,28 @@ test('fs.writeFileSync string honors latin1 encoding vs host node', (t) => {
   });
 });
 
-test('fs.writeFileSync string with an unimplemented encoding fails loud', (t) => {
+test('fs.writeFileSync/readFileSync: every encoding node takes, and an unknown one is node\'s ERR_INVALID_ARG_VALUE', (t) => {
   if (skipUnlessTjs(t)) return;
   const base = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-wenc-'));
   const f = path.join(base, 'wenc.cjs');
   fs.writeFileSync(f, `
 const fs = require('node:fs');
 const path = require('node:path');
-fs.writeFileSync(path.join(process.argv[2], 'x.bin'), 'zzz', 'ucs2');
+const out = {};
+const x = path.join(process.argv[2], 'x.bin');
+for (const enc of ['ucs2', 'utf16le', 'hex', 'base64', 'base64url', 'ascii', 'latin1']) {
+  fs.writeFileSync(x, enc === 'hex' ? '7a7a7a' : enc.startsWith('base64') ? 'enp6' : 'zzz', enc);
+  out[enc] = [fs.readFileSync(x).toString('hex'), fs.readFileSync(x, enc)];
+}
+try { fs.writeFileSync(x, 'zzz', 'klingon'); out.bad = 'NO THROW'; } catch (e) { out.bad = e.code; }
+try { fs.readFileSync(x, 'klingon'); out.badRead = 'NO THROW'; } catch (e) { out.badRead = e.code; }
+console.log(JSON.stringify(out));
 `);
+  const node = JSON.parse(require('node:child_process').execFileSync(process.execPath, [f, base], { encoding: 'utf8' }));
   const r = runLoader(f, [base]);
-  assert.notStrictEqual(r.status, 0);
-  assert.match(r.stderr, /node-shim: fs\.writeFileSync encoding 'ucs2' not implemented/);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.deepStrictEqual(JSON.parse(r.stdout), node);
+  assert.strictEqual(node.bad, 'ERR_INVALID_ARG_VALUE');
 });
 
 test('fs.readFileSync latin1 + Buffer.from latin1 round-trip vs host node', (t) => {

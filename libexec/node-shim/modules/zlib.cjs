@@ -37,12 +37,54 @@ constants.Z_MAX_CHUNK = Infinity;
 // DIVERGENCES, by name:
 //   - errors carry node's code and errno (Z_DATA_ERROR, -3) but the engine's message, not zlib's
 //     ("incorrect header check", ...); nothing in the bundle reads the message.
-//   - input that ends mid-stream is not an error here. node reports it ("unexpected end of file") only
-//     under the default finishFlush; the bundle's axios passes Z_SYNC_FLUSH, under which node does not.
-//   - flush/finishFlush/chunkSize options are accepted and ignored: output is delivered as decoded.
+//   - (none for truncation) input that ends mid-stream is node's "unexpected end of file" (Z_BUF_ERROR) under
+//     the default finishFlush (Z_FINISH), after the output decoded so far; under Z_SYNC_FLUSH (the bundle's
+//     axios passes it) it is not an error, as in node. The engine's inflater does not report a truncation, so
+//     under Z_FINISH the stream keeps its compressed input and, at the end, reads it once through the one-shot
+//     inflater (which does): a second pass, which the Z_SYNC_FLUSH path the bundle takes never pays.
+//   - flush: output is delivered as each write decodes it, which is what every flush mode gives an inflater.
+// The options node reads here are honoured or refused by name (internal/options.cjs, 'zlib.zlib').
 const { Transform } = require('stream');
+const { refuseOptions } = require('../internal/options.cjs');
+
+// node's chunkSize: a number of at least Z_MIN_CHUNK (64); the size no 'data' chunk of a stream exceeds
+function chunkSizeOpt(opts) {
+  const v = opts && opts.chunkSize !== undefined ? opts.chunkSize : constants.Z_DEFAULT_CHUNK;
+  if (typeof v !== 'number' || Number.isNaN(v)) {
+    throw Object.assign(new TypeError('The "options.chunkSize" property must be of type number'), { code: 'ERR_INVALID_ARG_TYPE' });
+  }
+  if (v < constants.Z_MIN_CHUNK) {
+    throw Object.assign(new RangeError(`The value of "options.chunkSize" is out of range. It must be >= ${constants.Z_MIN_CHUNK}. Received ${v}`),
+      { code: 'ERR_OUT_OF_RANGE' });
+  }
+  return Math.floor(v);
+}
+// node's maxOutputLength (the convenience methods only): a longer result is ERR_BUFFER_TOO_LARGE
+function maxOutputOpt(opts) {
+  const v = opts && opts.maxOutputLength !== undefined ? opts.maxOutputLength : undefined;
+  if (v === undefined) return Infinity;
+  if (typeof v !== 'number' || !Number.isInteger(v) || v < 1) {
+    throw Object.assign(new RangeError(`The value of "options.maxOutputLength" is out of range. It must be >= 1 and <= ${2 ** 53 - 1}. Received ${v}`),
+      { code: 'ERR_OUT_OF_RANGE' });
+  }
+  return v;
+}
+
+// node's zlib flush/finishFlush check: an integer from Z_NO_FLUSH to Z_BLOCK
+function flushOpt(opts, key, dflt) {
+  const v = opts && opts[key] !== undefined ? opts[key] : dflt;
+  if (typeof v !== 'number' || !Number.isInteger(v)) {
+    throw Object.assign(new TypeError(`The "options.${key}" property must be of type number`), { code: 'ERR_INVALID_ARG_TYPE' });
+  }
+  if (v < constants.Z_NO_FLUSH || v > constants.Z_BLOCK) {
+    throw Object.assign(new RangeError(`The value of "options.${key}" is out of range. It must be >= ${constants.Z_NO_FLUSH} and <= ${constants.Z_BLOCK}. Received ${v}`),
+      { code: 'ERR_OUT_OF_RANGE' });
+  }
+  return v;
+}
 
 function zlibError(e) {
+  if (e && typeof e.code === 'string' && e.code.startsWith('Z_')) return e;
   const err = new Error(e && e.message ? e.message : String(e));
   err.errno = constants.Z_DATA_ERROR;
   err.code = 'Z_DATA_ERROR';
@@ -53,7 +95,16 @@ function zlibError(e) {
 // as node's Unzip decides it: gzip magic 1f 8b, else zlib).
 class Decompressor extends Transform {
   constructor(format, opts) {
+    refuseOptions('zlib.zlib', opts);
+    const flush = flushOpt(opts, 'flush', constants.Z_NO_FLUSH);
+    const finishFlush = flushOpt(opts, 'finishFlush', constants.Z_FINISH);
+    const chunkSize = chunkSizeOpt(opts);
+    maxOutputOpt(opts);   // validated as node does; it limits the convenience methods only
     super(opts || {});
+    this._chunkSize = chunkSize;
+    this._flushMode = flush;
+    // Z_FINISH: truncated input is an error, so keep the compressed input for the end-of-stream check
+    this._kept = finishFlush === constants.Z_FINISH ? [] : null;
     this._format = format;
     this._head = null;     // unzip only: bytes held until the header can be read
     this._writer = null;
@@ -70,7 +121,12 @@ class Decompressor extends Transform {
       for (;;) {
         const { value, done } = await reader.read();
         if (done) return;
-        if (value && value.byteLength) this.push(Buffer.from(value.buffer, value.byteOffset, value.byteLength));
+        // no chunk larger than chunkSize, as node's; nothing is held back waiting to fill one (a stream's reader
+        // must see each piece as it is decoded)
+        if (value && value.byteLength) {
+          const b = Buffer.from(value.buffer, value.byteOffset, value.byteLength);
+          for (let i = 0; i < b.length; i += this._chunkSize) this.push(b.subarray(i, Math.min(b.length, i + this._chunkSize)));
+        }
       }
     })();
     this._drained.catch(() => {});  // its error surfaces through the write that caused it
@@ -99,15 +155,31 @@ class Decompressor extends Transform {
   }
   _transform(chunk, enc, cb) {
     this.bytesWritten += chunk.length;
+    if (this._kept) this._kept.push(Buffer.from(chunk));
     this._step(() => this._feed(chunk), cb);
   }
   _flush(cb) {
     this._step(async () => {
       if (this._head) { const h = this._head; this._head = null; this._open('deflate'); await this._writer.write(h); }
-      if (!this._writer) return;
-      await this._writer.close();
-      await this._drained;
+      if (this._writer) {
+        await this._writer.close();
+        await this._drained;
+      }
+      if (this._kept) this._checkComplete(Buffer.concat(this._kept));
     }, cb);
+  }
+  // Under Z_FINISH, the one-shot inflater reads the whole input once more: a truncation it reports is node's
+  // "unexpected end of file". (No input at all is node's truncation too.)
+  _checkComplete(input) {
+    if (typeof globalThis.__tjs_zlib_sync !== 'function') {
+      require('../internal/engine-floor-log.cjs').engineFloorLog('node-shim: zlib finishFlush Z_FINISH truncation check '
+        + 'skipped: this engine has no __tjs_zlib_sync (it predates txiki-zlib-sync.patch)');
+      return;
+    }
+    if (input.length === 0) throw truncated();
+    const u8 = new Uint8Array(input.buffer, input.byteOffset, input.byteLength);
+    const fn = { gzip: ONE_SHOT.gunzip, deflate: ONE_SHOT.inflate, 'deflate-raw': ONE_SHOT.inflateRaw, unzip: ONE_SHOT.unzip }[this._format];
+    try { fn(u8); } catch (e) { if (e && e.code === 'Z_BUF_ERROR') throw e; }
   }
   close(cb) { if (cb) queueMicrotask(cb); this.destroy(); }
 }
@@ -128,12 +200,13 @@ const DECOMPRESSORS = { Gunzip: 'gzip', Inflate: 'deflate', InflateRaw: 'deflate
 // DIVERGENCES, by name:
 //   - the compressed BYTES are miniz's, not zlib's: a valid stream that node (and this module) inflate to
 //     the same input, of a similar size. The zlib header (78 01/5e/9c/da by level) and the gzip header are
-//     node's own bytes. windowBits, memLevel and strategy are accepted and ignored (miniz has one window).
+//     node's own bytes. windowBits, memLevel and strategy are refused by name unless they ask for node's
+//     default (internal/options.cjs): miniz has one window.
 //   - a corrupt stream's message: node names the fault ("invalid block type", "invalid distance too far
 //     back"); miniz reports only that the data is bad, so the message here is "invalid compressed data". code
 //     and errno are node's (Z_DATA_ERROR, -3). The header, checksum, method and truncation errors are node's
 //     own words, checked here.
-//   - maxOutputLength, info and finishFlush are not honoured.
+//   - info is refused by name (internal/options.cjs); maxOutputLength is node's cap on the answer, checked after it.
 function engineZlib(caller) {
   if (typeof globalThis.__tjs_zlib_sync !== 'function') {
     const e = new Error('node-shim: this engine has no __tjs_zlib_sync (it predates txiki-zlib-sync.patch), so '
@@ -261,17 +334,30 @@ const ONE_SHOT = {
     : asBuffer(inflateOne(input, 'deflate', 'zlib.unzipSync').output)),
 };
 
+// One convenience call: options refused or validated first (chunkSize, maxOutputLength), then the work, then node's
+// output cap. (chunkSize shapes a stream's chunks; a one-shot answer is one buffer, so it is only validated.)
+function runOneShot(fn, buffer, opts) {
+  refuseOptions('zlib.zlib', opts);
+  chunkSizeOpt(opts);
+  const max = maxOutputOpt(opts);
+  const out = fn(inputBytes(buffer, 'buffer'), opts);
+  if (out.length > max) {
+    throw Object.assign(new RangeError(`Cannot create a Buffer larger than ${max} bytes`), { code: 'ERR_BUFFER_TOO_LARGE' });
+  }
+  return out;
+}
+
 function oneShot() {
   const api = {};
   for (const [name, fn] of Object.entries(ONE_SHOT)) {
-    api[`${name}Sync`] = function (buffer, opts) { return fn(inputBytes(buffer, 'buffer'), opts); };
+    api[`${name}Sync`] = function (buffer, opts) { return runOneShot(fn, buffer, opts); };
     Object.defineProperty(api[`${name}Sync`], 'name', { value: `syncBufferWrapper` });
     // node's asyncBufferWrapper: (buffer[, opts], callback); the answer (or the error) arrives on a later turn
     api[name] = function (buffer, opts, callback) {
       if (typeof opts === 'function') { callback = opts; opts = {}; }
       if (typeof callback !== 'function') throw invalidArgType('The "callback" argument must be of type function', callback);
       let result, error = null;
-      try { result = fn(inputBytes(buffer, 'buffer'), opts); } catch (e) { error = e; }
+      try { result = runOneShot(fn, buffer, opts); } catch (e) { error = e; }
       setImmediate(() => (error ? callback(error) : callback(null, result)));
     };
   }

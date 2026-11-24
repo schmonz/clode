@@ -68,12 +68,22 @@ function makeConnectMultiple(deps) {
     let timeout = policy.autoSelectFamilyAttemptTimeout === undefined ? state.attemptTimeout : Number(policy.autoSelectFamilyAttemptTimeout);
     if (!(timeout >= MIN_ATTEMPT_TIMEOUT)) timeout = MIN_ATTEMPT_TIMEOUT;
 
+    // node's `lookup` option (a request's or its agent's): the caller's dns.lookup-shaped resolver answers instead of
+    // the engine's, called as node calls it, (host, { family, all }, cb)
+    const resolve = typeof policy.lookup === 'function'
+      ? (h, o) => new Promise((res, rej) => {
+        policy.lookup(h, { family: o.family, all: o.all }, (err, address, fam) => {
+          if (err) rej(err);
+          else res(o.all ? (Array.isArray(address) ? address : [{ address, family: fam }]) : (typeof address === 'string' ? { address, family: fam } : address));
+        });
+      })
+      : lookup;
     let targets;
     if (family || !auto) {
-      const one = await lookup(host, { family, all: false });
+      const one = await resolve(host, { family, all: false });
       targets = one ? attemptOrder([one]) : [];
     } else {
-      targets = attemptOrder(await lookup(host, { family: 0, all: true }));
+      targets = attemptOrder(await resolve(host, { family: 0, all: true }));
     }
     if (!targets.length) {
       const e = new Error(`getaddrinfo ENOTFOUND ${host}`);
