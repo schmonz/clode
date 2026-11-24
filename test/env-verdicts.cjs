@@ -206,6 +206,7 @@ const VERDICTS = [
   { name: 'CLODE_SHIM_PROBE', verdict: 'env-only', because: SHIM_DIAG_BECAUSE },
   { name: 'CLODE_SHIM_TRACE', verdict: 'env-only', because: SHIM_DIAG_BECAUSE },
   { name: 'CLODE_SHIM_DEBUG', verdict: 'env-only', because: SHIM_DIAG_BECAUSE },
+  { name: 'CLODE_SHIM_REFUSAL_LOG', verdict: 'env-only', because: SHIM_DIAG_BECAUSE },
   { name: 'CLODE_SHIM_HANDLE_DUMP', verdict: 'env-only', because: SHIM_DIAG_BECAUSE },
   { name: 'CLODE_PROBE', verdict: 'env-only', because: SHIM_DIAG_BECAUSE },
   { name: 'CLODE_RG_DEBUG', verdict: 'env-only', because: SHIM_DIAG_BECAUSE },

@@ -272,6 +272,14 @@ const GUARD_EXCLUSIONS = [
       + 'positive control is the first test in the file: the verbatim red lines, each of which must be a finding.',
   },
   {
+    file: 'fetch-proxy.test.cjs',
+    because: 'a behavioural differential, not a scan: one rows program (test/fixtures/fetch-proxy-rows.cjs) runs '
+      + 'under the tjs loader through a recording proxy it starts, and its rows are compared with the SAME rows '
+      + 'recorded inside native Bun (test/fixtures/fetch-proxy-native.json, a measurement, not upstream bytes). '
+      + 'READS_ARTIFACT fires on REPO (the loader and libexec/bun-shim.cjs it executes) and on that recording; '
+      + 'PATTERN_MATCHES on assert.match over its own runs\' output and on the proxy log THOSE RUNS wrote.',
+  },
+  {
     file: 'node-shim-process-report.test.cjs',
     because: 'a behavioural differential, not a scan: it writes its own program into a mkdtemp, runs it under host '
       + 'node and under the tjs loader, and compares the process.report members and header THOSE RUNS printed. '
