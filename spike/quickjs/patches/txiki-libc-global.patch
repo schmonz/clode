@@ -1,0 +1,52 @@
+# LIBC-GLOBAL: __tjs_libc() -> { glibcVersionRuntime, glibcVersionCompiler } on a glibc build, {} on any other C library.
+#
+# WHY. node's process.report.getReport().header carries both fields, only under __GLIBC__ (node_report.cc:
+# gnu_get_libc_version() and __GLIBC__.__GLIBC_MINOR__). 2.1.330's linux carve reads glibcVersionRuntime (the agent
+# SDK's musl-or-glibc native binary choice), and the node-shim gates went red on linux when the shim-surface scan
+# began seeing the GLOBAL process (CI 45224603603: "NEW gaps: process.report"). clode's own scripts/platform-tag.cjs
+# and libexec/clode-update.cjs read the same header. Which C library a binary was linked against is a fact only its
+# C side knows; a JS guess (an ELF interpreter path, `ldd --version`) would be a hand-written platform table.
+# vm.c only, beside rusage-global's global; last in TXIKI_PATCH_ORDER, diffed against the fully patched tree.
+#
+diff --git a/src/vm.c b/src/vm.c
+--- a/src/vm.c
++++ b/src/vm.c
+@@ -338,6 +338,26 @@
+     return obj;
+ }
+ 
++/* CLODE: __tjs_libc() -> { glibcVersionRuntime, glibcVersionCompiler } on a glibc build, {} on any other C library:
++ * the two fields node's process.report.getReport().header carries (node_report.cc: gnu_get_libc_version() and
++ * __GLIBC__.__GLIBC_MINOR__, both only under __GLIBC__). They are facts about THIS binary's C library, which only the
++ * C side knows. 2.1.330's agent SDK reads glibcVersionRuntime to choose its musl or glibc native binary first, and
++ * clode's own scripts/platform-tag.cjs and libexec/clode-update.cjs read the same header: under tjs, with no
++ * process.report, a glibc-linked engine answered "musl". */
++#if defined(__GLIBC__)
++extern const char *gnu_get_libc_version(void);
++#endif
++static JSValue tjs__libc_global(JSContext *ctx, JSValue this_val, int argc, JSValue *argv) {
++    JSValue obj = JS_NewObjectProto(ctx, JS_NULL);
++#if defined(__GLIBC__)
++    char compiler[32];
++    snprintf(compiler, sizeof(compiler), "%d.%d", __GLIBC__, __GLIBC_MINOR__);
++    JS_DefinePropertyValueStr(ctx, obj, "glibcVersionRuntime", JS_NewString(ctx, gnu_get_libc_version()), JS_PROP_C_W_E);
++    JS_DefinePropertyValueStr(ctx, obj, "glibcVersionCompiler", JS_NewString(ctx, compiler), JS_PROP_C_W_E);
++#endif
++    return obj;
++}
++
+ static JSValue tjs__js_drain_microtasks(JSContext *ctx, JSValue this_val, int argc, JSValue *argv) {
+     TJSRuntime *qrt = TJS_GetRuntime(ctx);
+     CHECK_NOT_NULL(qrt);
+@@ -506,6 +526,11 @@
+                                   "__tjs_getrusage",
+                                   JS_NewCFunction(ctx, tjs__getrusage_global, "__tjs_getrusage", 0),
+                                   JS_PROP_C_W_E);
++        JS_DefinePropertyValueStr(ctx,
++                                  global,
++                                  "__tjs_libc",
++                                  JS_NewCFunction(ctx, tjs__libc_global, "__tjs_libc", 0),
++                                  JS_PROP_C_W_E);
+         JS_FreeValue(ctx, global);
+     }
+     JS_DefinePropertyValueStr(ctx,

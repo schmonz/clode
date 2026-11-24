@@ -179,6 +179,20 @@ const ENGINE_API_FLOOR = [
       + 'path that ever reaches it',
   },
   {
+    // Without it node-shim has no process.report: 2.1.330's linux agent SDK cannot tell glibc from musl, and
+    // platform-tag/clode-update under tjs took a glibc-linked engine for musl.
+    name: '__tjs_libc',
+    expr: 'globalThis.__tjs_libc',
+    kind: 'function',
+    from: 'txiki-libc-global.patch',
+    why: 'node-shim process.report.getReport().header: glibcVersionRuntime/glibcVersionCompiler, as node answers them '
+      + '(gnu_get_libc_version() and __GLIBC__.__GLIBC_MINOR__, absent on any other C library)',
+    buildHost: false,
+    notForBuildHost: 'the build DOES read process.report (scripts/platform-tag.cjs linuxGlibc(), on linux), but on an '
+      + 'engine without __tjs_libc node-shim answers process.report as undefined, exactly what every engine before '
+      + '2026-11-23 answered, and refuses nothing: platform-tag takes the branch it always took on the bootstrap engine',
+  },
+  {
     // Without it node-shim's zlib.*Sync cannot answer: 2.1.330 gzips every first-party event batch with
     // zlib.gzipSync (and Bun.gzipSync), so every batch failed to export and piled up on disk.
     name: '__tjs_zlib_sync',

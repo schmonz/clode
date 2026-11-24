@@ -634,6 +634,59 @@ function execve(execPath, args = [], env = module.exports.env) {
 }
 module.exports.execve = execve;
 
+// process.report, node's diagnostic-report object, with node's members in node's order (node 24 and 26 agree). Its
+// one reader in the carve is linux-only (Bun constant-folds the platform, so the darwin carve has none): the agent
+// SDK picks its musl or glibc native binary first from getReport().header.glibcVersionRuntime. clode's own
+// scripts/platform-tag.cjs and libexec/clode-update.cjs read the same header. Found 2026-11-23, when the shim-surface
+// scan began seeing the global process and CI's linux gate named it (run 45224603603).
+//
+// ONLY THE HEADER, AND ONLY WHAT IS KNOWN: getReport() answers { header } and no other section, and the header holds
+// the engine's facts: the C library's glibc versions from __tjs_libc (txiki-libc-global.patch; both absent on any
+// other C library, exactly as node's are), uname's from __tjs_uname. Nothing is guessed. writeReport() refuses by
+// name: a report file is not something quaude writes.
+//
+// AN ENGINE WITHOUT __tjs_libc READS undefined. An enumerable getter, as node's is, answering undefined on an older
+// engine: what it read before 2026-11-23, so every reader (`process.report?.getReport`, `process.report && ...`)
+// takes the path it always took and nothing is refused. That keeps the build host's behaviour unchanged
+// (platform-tag runs on the LAST release's engine). scripts/engine-api-floor.cjs holds every shipped engine to it.
+let reportObject;
+function makeReport() {
+  const settings = { directory: '', filename: '', compact: false, excludeNetwork: false, signal: 'SIGUSR2',
+    reportOnFatalError: false, reportOnSignal: false, reportOnUncaughtException: false, excludeEnv: false };
+  const report = {
+    writeReport() {
+      throw Object.assign(new Error('node-shim: process.report.writeReport() is not supported: quaude writes no '
+        + 'diagnostic report file (getReport() answers the header only)'), { code: 'ERR_CLODE_UNSUPPORTED' });
+    },
+    getReport(err) {
+      if (err !== undefined && (err === null || typeof err !== 'object')) {
+        throw require('../internal/node-errors.cjs').invalidArgType('The "err" argument must be of type object', err);
+      }
+      const header = { platform: module.exports.platform, arch: module.exports.arch };
+      if (typeof globalThis.__tjs_uname === 'function') {
+        const u = globalThis.__tjs_uname();
+        Object.assign(header, { osName: u.sysname, osRelease: u.release, osVersion: u.version, osMachine: u.machine });
+      }
+      Object.assign(header, globalThis.__tjs_libc());
+      return { header };
+    },
+  };
+  for (const k of Object.keys(settings)) {
+    Object.defineProperty(report, k, { get: () => settings[k], set: (v) => { settings[k] = v; }, enumerable: true, configurable: true });
+  }
+  Object.defineProperty(report.writeReport, 'length', { value: 2 });
+  return report;
+}
+Object.defineProperty(module.exports, 'report', {
+  get() {
+    if (typeof globalThis.__tjs_libc !== 'function') return undefined;
+    return (reportObject ||= makeReport());
+  },
+  set(v) { Object.defineProperty(module.exports, 'report', { value: v, writable: true, enumerable: true, configurable: true }); },
+  enumerable: true,
+  configurable: true,
+});
+
 // Object.prototype.toString.call(process) is "[object process]" under node (the tag sits on process's
 // prototype). axios decides whether its http adapter can run from exactly that (`kindOf(process) ===
 // 'process'`), and under the shim it read "[object Object]", so npm's axios refused adapter:'http'

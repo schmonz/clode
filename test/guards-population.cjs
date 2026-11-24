@@ -272,10 +272,18 @@ const GUARD_EXCLUSIONS = [
       + 'positive control is the first test in the file: the verbatim red lines, each of which must be a finding.',
   },
   {
+    file: 'node-shim-process-report.test.cjs',
+    because: 'a behavioural differential, not a scan: it writes its own program into a mkdtemp, runs it under host '
+      + 'node and under the tjs loader, and compares the process.report members and header THOSE RUNS printed. '
+      + 'READS_ARTIFACT fires on reading test/fixtures/stale-engine-prelude.js via REPO, which is prepended as code '
+      + '(the stale-engine stand-in), not scanned; PATTERN_MATCHES fires on `.includes(\'report\')`, which is text '
+      + 'INSIDE the program it writes, not a search of any bytes. No bytes it did not create are searched.',
+  },
+  {
     file: 'node-shim-execve.test.cjs',
     because: 'a behavioural differential, not a scan: every row writes its own program into a mkdtemp, runs it '
-      + 'under host node and under the tjs loader (some under a pty, one exec-ing a perl probe it also wrote), and '
-      + 'compares what THOSE RUNS printed. READS_ARTIFACT fires on CLODE_TJS/REPO (the engine and loader it '
+      + 'under host node and under the tjs loader, and compares what THOSE RUNS printed (its pty rows moved to '
+      + 'node-shim-tty-execve.test.cjs, 2026-11-23). READS_ARTIFACT fires on CLODE_TJS/REPO (the engine and loader it '
       + 'executes) and on reading test/fixtures/stale-engine-prelude.js, which is prepended as code, not scanned; '
       + 'PATTERN_MATCHES fires on assert.match over its own children\'s output. No bytes it did not create are searched.',
   },

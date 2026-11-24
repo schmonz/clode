@@ -117,9 +117,11 @@ test('every floor entry declares its build-host role, and every build-host exemp
   // __tjs_execve (2026-11-22): the same, for process.execve(), which no build step calls.
   // __tjs_spawn_sync.stdio (2026-11-22): the build DOES spawn with stdio 'inherit'; without it the shim keeps the
   // capture-and-replay route every build host already ran on (same bytes, not live), so it is not a refusal.
+  // __tjs_libc (2026-11-23): the build DOES read process.report (platform-tag on linux); without it the shim answers
+  // undefined, what every engine before it answered, so the bootstrap engine takes the branch it always took.
   assert.deepStrictEqual(ENGINE_API_FLOOR.filter((b) => !b.buildHost).map((b) => b.name),
     ['__tjs_fs_sync.stat identity', '__tjs_fs_sync.strerror', '__tjs_fs_sync.utime', '__tjs_fs_sync.openFlags', '__tjs_uname', '__tjs_set_default_ca', '__tjs_getrusage',
-      '__tjs_zlib_sync', '__tjs_execve', '__tjs_spawn_sync.stdio', '__tjs_timer_setref']);
+      '__tjs_libc', '__tjs_zlib_sync', '__tjs_execve', '__tjs_spawn_sync.stdio', '__tjs_timer_setref']);
   assert.deepStrictEqual(floorFor('build-host').map((b) => b.name), ['__tjs_fs_sync', '__tjs_spawn_sync', 'tjs.engine.moduleMeta']);
   assert.throws(() => floorFor('shipped'), /unknown role/);
 });
