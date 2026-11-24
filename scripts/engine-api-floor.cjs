@@ -297,6 +297,36 @@ const ENGINE_API_FLOOR = [
       + 'libexec/graph-meta.js log nothing, and the same stand-in logs an unref\'d timer in a three-line program',
   },
   {
+    // Without it a TLS stream's write() takes one record (~16 KiB) and drops the rest in silence: an https POST of
+    // 16 KiB or more never finishes (2.1.330's Datadog log flush timed out). node-shim's https client cuts its writes
+    // into 8 KiB pieces on such an engine, so it is a working route, and logs each cut.
+    name: '__tjs_tls_write_all',
+    expr: 'globalThis.__tjs_tls_write_all',
+    kind: 'boolean',
+    from: 'txiki-tls-write-all.patch',
+    why: 'node-shim https: a TLS write sends every byte it was given, as node\'s does (mbedtls_ssl_write looped to the end)',
+    buildHost: false,
+    notForBuildHost: 'nothing the build runs writes to a tjs.connect(\'tls\') socket: its downloads go through the '
+      + 'engine\'s fetch (libexec/clode-net.cjs, clode-build.cjs), which is lws, not mod_tls, and send no body. On an '
+      + 'engine without it node-shim\'s https client cuts each TLS write over 8 KiB into pieces one record holds and '
+      + 'appends that to CLODE_ENGINE_FLOOR_LOG, so the gates listed above refuse a build path that ever reaches it',
+  },
+  {
+    // Without it every process.env read of an unset name costs a thrown and caught engine Error (~18 us, node 0.35
+    // us); 2.1.330 makes thousands, and under load quaude's loop was held past axios's 5 s timers. node-shim keeps the
+    // slow read (still right) on such an engine.
+    name: '__tjs_getenv',
+    expr: 'globalThis.__tjs_getenv',
+    kind: 'function',
+    from: 'txiki-getenv-global.patch',
+    why: 'node-shim process.env reads: an unset name answers undefined without a thrown engine Error, at node\'s cost',
+    buildHost: false,
+    notForBuildHost: 'the build DOES read process.env, and on an engine without it node-shim reads through tjs.env, '
+      + 'the route every build host ran on before this patch: the same answers, only slower. A working route, not a '
+      + 'refusal, so it is not logged (the build host reads process.env on every run and would log on every leg); '
+      + 'test/node-shim-env-read-cost.test.cjs pins both routes\' answers',
+  },
+  {
     name: '__tjs_spawn_sync',
     expr: 'globalThis.__tjs_spawn_sync',
     kind: 'function',

@@ -48,6 +48,11 @@
   // And txiki-libc-global.patch (2026-11-23): node-shim's process.report reads undefined, as on every engine before it
   // (not a refusal: the build host's platform-tag reads it).
   delete globalThis.__tjs_libc;
+  // And txiki-tls-write-all.patch (2026-11-24): node-shim's https client cuts each TLS write over 8 KiB into pieces, and
+  // says so in CLODE_ENGINE_FLOOR_LOG.
+  delete globalThis.__tjs_tls_write_all;
+  // And txiki-getenv-global.patch (2026-11-24): node-shim's process.env reads through tjs.env (same answers, slower).
+  delete globalThis.__tjs_getenv;
   // And process.execve + the stdio-honoring spawner (txiki-sync-spawn.patch, 2026-11-22): its __tjs_spawn_sync has no
   // .stdio and pipes every slot whatever opts.stdio says, so node-shim replays an inherited child's bytes; its
   // missing __tjs_execve makes process.execve refuse, and say so in CLODE_ENGINE_FLOOR_LOG.

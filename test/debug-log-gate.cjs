@@ -55,12 +55,6 @@ const KNOWN = Object.freeze([
       + 'export never sends under quaude or naude: neither runtime has `Bun.FetchSession`"). naude logs it too, so a '
       + 'naude reference cancels it; native Bun sends, so against native it is quaude-only',
     example: '2026-11-23T13:25:21.281Z [ERROR] 1P event logging: 5 events failed to export (this runtime has no Bun.FetchSession)' },
-  { match: /Failed to flush logs to Datadog: AxiosError: timeout of (?:\d+|N)ms exceeded/,
-    reason: 'FOUND BY THIS GATE (2026-11-23), not yet root-caused: on a turn longer than ~15 s quaude\'s Datadog log '
-      + 'flush (axios POST to http-intake.logs.us5.datadoghq.com) times out where native\'s, on the same turn, logs '
-      + 'nothing (BACKLOG "quaude\'s Datadog log flush times out where native\'s does not"). KNOWN so the tool drivers '
-      + 'stay a ratchet for everything else; closing the backlog item removes this entry',
-    example: '2026-11-24T02:19:50.385Z [ERROR] Failed to flush logs to Datadog: AxiosError: timeout of 5000ms exceeded' },
   { match: /\[ERROR\] Failed to save config with lock: Error: ENOENT: no such file or directory, lstat '(?:[^']*\.claude\.json|<path>)'/,
     reason: 'the BUNDLE\'s first-run config race, on either runtime: naude logs it in one fresh home and not the next, '
       + 'so a differential read sees it on one side by chance (BACKLOG "The bundle\'s first-run config race logs `Failed '

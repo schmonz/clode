@@ -1,0 +1,60 @@
+# TLS-WRITE-ALL: a TLS stream's write() (tjs.connect('tls'), tjs.listen TLS) hands mbedtls every byte it was given.
+#
+# WHY. mod_tls.c's tjs_tls_write called mbedtls_ssl_write ONCE. mbedtls takes at most one record per call (about
+# 16 KiB: MBEDTLS_SSL_OUT_CONTENT_LEN, or less after a max_fragment_length/record_size_limit negotiation) and returns
+# how many bytes it took; the rest was dropped and write() still reported success. node-shim's https client writes a
+# request body in one piece, so every https POST of 16 KiB or more sent its head and one record, the server waited for
+# the rest of its Content-Length, and the caller's timer fired: 2.1.330's Datadog log flush (a 37 KB JSON body) logged
+# `AxiosError: timeout of 5000ms exceeded` under quaude on any turn long enough to batch that much, and Bedrock's
+# smithy client would have done the same with a large prompt. Measured 2026-11-24: a 16383-byte body arrives, a
+# 16384-byte one does not (test/node-shim-https-write-sizes.test.cjs). The fix loops until every byte is in bio_out;
+# tjs_tls_bio_send only buffers (never WANT_WRITE), so each call takes bytes or fails. The marker global
+# __tjs_tls_write_all = true lets node-shim tell a fixed engine from one it must cut writes for itself
+# (scripts/engine-api-floor.cjs floors it). mod_tls.c's write function and vm.c beside libc-global's global; last in
+# TXIKI_PATCH_ORDER, diffed against the fully patched tree. Upstream-txiki candidate.
+#
+diff --git a/src/mod_tls.c b/src/mod_tls.c
+index 9309014..7dd198b 100644
+--- a/src/mod_tls.c
++++ b/src/mod_tls.c
+@@ -778,7 +778,24 @@ static JSValue tjs_tls_write(JSContext *ctx, JSValue this_val, int argc, JSValue
+         return JS_EXCEPTION;
+     }
+ 
+-    int ret = mbedtls_ssl_write(&s->ssl, buf_ref.data, buf_ref.size);
++    /* CLODE (tls-write-all): mbedtls_ssl_write takes at most ONE record per call (MBEDTLS_SSL_OUT_CONTENT_LEN, or
++     * less after a max_fragment_length/record_size_limit negotiation) and returns how many bytes it took. Called
++     * once, every byte past the first record was dropped and the write still reported success: an https POST of
++     * 16 KiB or more sent its head and one record, the server waited for the rest of its Content-Length, and the
++     * caller timed out (2.1.330's Datadog log flush, a 37 KB body). So loop until every byte is in bio_out.
++     * tjs_tls_bio_send only buffers (it never answers WANT_WRITE), so each call either takes bytes or fails. */
++    int ret = 0;
++    size_t off = 0;
++    while (off < buf_ref.size) {
++        ret = mbedtls_ssl_write(&s->ssl, buf_ref.data + off, buf_ref.size - off);
++        if (ret <= 0) {
++            if (ret == 0) {
++                ret = MBEDTLS_ERR_SSL_INTERNAL_ERROR; /* took nothing: never loop forever */
++            }
++            break;
++        }
++        off += (size_t) ret;
++    }
+     tjs_buf_ref_release(ctx, &buf_ref);
+ 
+     if (ret < 0) {
+diff --git a/src/vm.c b/src/vm.c
+index 72a24ab..78b3450 100644
+--- a/src/vm.c
++++ b/src/vm.c
+@@ -531,6 +531,10 @@ static void tjs__bootstrap_core(JSContext *ctx, JSValue ns) {
+                                   "__tjs_libc",
+                                   JS_NewCFunction(ctx, tjs__libc_global, "__tjs_libc", 0),
+                                   JS_PROP_C_W_E);
++        /* CLODE (tls-write-all): a TLS stream's write() hands mbedtls EVERY byte it was given (mod_tls.c
++         * tjs_tls_write). Before, one mbedtls_ssl_write took at most one record (~16 KiB) and the rest was
++         * dropped without a word. node-shim reads this to know it need not cut its TLS writes itself. */
++        JS_DefinePropertyValueStr(ctx, global, "__tjs_tls_write_all", JS_TRUE, JS_PROP_C_W_E);
+         JS_FreeValue(ctx, global);
+     }
+     JS_DefinePropertyValueStr(ctx,

@@ -1,0 +1,76 @@
+# GETENV-GLOBAL: __tjs_getenv(name) -> the variable's value, or undefined when it is not set, WITHOUT throwing.
+#
+# WHY. tjs.env's get answers an unset name by throwing inside core.getenv (tjs_throw_errno builds an Error and its
+# backtrace) and catching it in env.js: ~18 us a read (23 us at depth 40) where node takes 0.35 us, 50-65x. 2.1.330
+# reads unset variables on nearly every path (every CLAUDE_CODE_* knob, through process.env), so a stretch of startup
+# that node runs in 3 ms took quaude 3.9 s, and `sample` of a stalled quaude found tjs_getenv -> tjs_throw_errno ->
+# build_backtrace under almost every main-thread sample. Under CPU load (the full suite) those stretches held the loop
+# 15-20 s, longer than axios's 5 s / 10 s timers, which fired before the sockets they guarded were ever read:
+# `[Bootstrap] fetch failed: AxiosError: timeout of 5000ms exceeded`, `Failed to fetch org fast mode status ...
+# timeout of 10000ms exceeded`, `Failed to fetch MCP registry: canceled` (measured 2026-11-24). node-shim's
+# process.env reads through this global; scripts/engine-api-floor.cjs floors it. vm.c only, beside
+# tls-write-all's global; last in TXIKI_PATCH_ORDER, diffed against the fully patched tree.
+#
+diff --git a/src/vm.c b/src/vm.c
+--- a/src/vm.c
++++ b/src/vm.c
+@@ -356,6 +356,47 @@
+     JS_DefinePropertyValueStr(ctx, obj, "glibcVersionCompiler", JS_NewString(ctx, compiler), JS_PROP_C_W_E);
+ #endif
+     return obj;
++}
++
++/* CLODE (getenv-global): __tjs_getenv(name) -> the variable's value, or undefined when it is not set (a non-string
++ * name: undefined, as node's process.env[symbol]). tjs.env's get answers an unset name by THROWING inside
++ * core.getenv (tjs_throw_errno: a new Error, its backtrace built) and catching it in env.js, ~18 us a read where node
++ * takes 0.35 us; 2.1.330 reads unset variables thousands of times on every start (every CLAUDE_CODE_* knob), so under
++ * CPU load quaude's loop did not turn for 15-20 s and axios's timers fired before its sockets were read (measured
++ * 2026-11-24, test/node-shim-env-read-cost.test.cjs). node-shim's process.env reads through this. */
++static JSValue tjs__getenv_global(JSContext *ctx, JSValue this_val, int argc, JSValue *argv) {
++    if (argc < 1 || !JS_IsString(argv[0])) {
++        return JS_UNDEFINED;
++    }
++    const char *name = JS_ToCString(ctx, argv[0]);
++    if (!name) {
++        return JS_EXCEPTION;
++    }
++    char buf[1024];
++    size_t size = sizeof(buf);
++    char *dbuf = buf;
++    int r = uv_os_getenv(name, dbuf, &size);
++    if (r == UV_ENOBUFS) {
++        dbuf = js_malloc(ctx, size);
++        if (!dbuf) {
++            JS_FreeCString(ctx, name);
++            return JS_EXCEPTION;
++        }
++        r = uv_os_getenv(name, dbuf, &size);
++    }
++    JS_FreeCString(ctx, name);
++    JSValue ret;
++    if (r == 0) {
++        ret = JS_NewStringLen(ctx, dbuf, size);
++    } else if (r == UV_ENOENT) {
++        ret = JS_UNDEFINED;
++    } else {
++        ret = tjs_throw_errno(ctx, r);
++    }
++    if (dbuf != buf) {
++        js_free(ctx, dbuf);
++    }
++    return ret;
+ }
+ 
+ static JSValue tjs__js_drain_microtasks(JSContext *ctx, JSValue this_val, int argc, JSValue *argv) {
+@@ -535,6 +576,11 @@
+          * tjs_tls_write). Before, one mbedtls_ssl_write took at most one record (~16 KiB) and the rest was
+          * dropped without a word. node-shim reads this to know it need not cut its TLS writes itself. */
+         JS_DefinePropertyValueStr(ctx, global, "__tjs_tls_write_all", JS_TRUE, JS_PROP_C_W_E);
++        JS_DefinePropertyValueStr(ctx,
++                                  global,
++                                  "__tjs_getenv",
++                                  JS_NewCFunction(ctx, tjs__getenv_global, "__tjs_getenv", 1),
++                                  JS_PROP_C_W_E);
+         JS_FreeValue(ctx, global);
+     }
+     JS_DefinePropertyValueStr(ctx,

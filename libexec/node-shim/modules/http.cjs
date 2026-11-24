@@ -924,6 +924,10 @@ function toBytes(chunk, enc) {
   return new Uint8Array(b.buffer, b.byteOffset, b.byteLength);
 }
 
+// The largest TLS write an engine without txiki-tls-write-all.patch sends whole: well under one record (16 KiB, less
+// the bytes mbedtls keeps for itself; 16383 measured whole, 16384 not), and we never negotiate a smaller fragment.
+const TLS_SAFE_WRITE = 8192;
+
 // The slice of net.Socket that node's HTTP client actually hands to callers:
 // the `req.socket` smithy pokes at (connecting/setKeepAlive/setTimeout), and
 // the raw duplex an 'upgrade'/'connect' listener takes over. NOT a general
@@ -957,6 +961,7 @@ class ClientSocket extends EventEmitter {
     const info = await sock.opened;
     this._sock = sock;
     this._writer = info.writable.getWriter();
+    this._cutTls = transport === 'tls' && globalThis.__tjs_tls_write_all !== true;
     this.connecting = false;
     this.remoteAddress = info.remoteAddress;
     this.remotePort = info.remotePort;
@@ -1024,6 +1029,15 @@ class ClientSocket extends EventEmitter {
     this._writeChain = this._writeChain.then(async () => {
       if (this.destroyed) return;
       if (!this._writer) throw shimError('node-shim: socket write before connect', 'ERR_SOCKET_CLOSED');
+      // An engine without txiki-tls-write-all.patch takes ONE TLS record per write and drops the rest in silence
+      // (an https POST of 16 KiB or more never finished: 2.1.330's Datadog flush timed out). On such an engine, cut
+      // the write into pieces every record holds, and say so in CLODE_ENGINE_FLOOR_LOG (scripts/engine-api-floor.cjs).
+      if (this._cutTls && bytes.length > TLS_SAFE_WRITE) {
+        require('../internal/engine-floor-log.cjs').engineFloorLog(
+          `node-shim: this engine has no __tjs_tls_write_all (txiki-tls-write-all.patch); a ${bytes.length}-byte TLS write is cut into ${TLS_SAFE_WRITE}-byte pieces`);
+        for (let o = 0; o < bytes.length; o += TLS_SAFE_WRITE) await this._writer.write(bytes.subarray(o, o + TLS_SAFE_WRITE));
+        return;
+      }
       await this._writer.write(bytes);
     }).then(() => { if (cb) cb(); }, (e) => {
       const err = shimError(`node-shim: socket write failed: ${(e && e.message) || e}`, (e && e.code) || 'EPIPE');

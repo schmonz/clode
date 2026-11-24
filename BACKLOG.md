@@ -8,27 +8,43 @@ Concrete clode-under-Node divergences from native Claude Code, to triage and fix
 That page is GENERATED from `scripts/build-graph.cjs` — the one declaration of the build — so it
 cannot drift from it; it is also where the honest answer to "does this need node?" lives.
 
-## quaude's Datadog log flush times out where native's does not (2026-11-23)
+## Under heavy CPU load quaude's startup still holds its loop past axios's 5 s timers; naude's does not (2026-11-24)
 
-Found by the debug-log gate (test/debug-log-gate.cjs) the first time it read the tool drivers' logs: every
-test/fidelity/tools-local.test.cjs mode turn logged `[ERROR] Failed to flush logs to Datadog: AxiosError: timeout of
-5000ms exceeded` (the interactive one twice, 12 s apart). Reproduced alone: a -p turn whose Bash call runs `sleep 20`,
-the carve under naude and under tjs + node-shim, each against a mock; quaude's log has the line, naude's has no Datadog
-line at all. The flush is the bundle's axios POST (its own redirect-following Writable, `Dt`, writing a gzip'd body)
-to https://http-intake.logs.us5.datadoghq.com/api/v2/logs with the bundle's DD-API-KEY. Telemetry only: no turn
-depends on it, which is why nothing visible failed.
+The full suite red `test/fidelity/slash-command-diff` and `agentic-sandbox-fail-closed` with quaude-only `[Bootstrap]
+fetch failed: AxiosError: timeout of 5000ms exceeded`, `Failed to fetch org fast mode status ... timeout of 10000ms
+exceeded` and `Failed to fetch MCP registry: canceled`. Reproduced alone with `-p /status` beside N `yes` processes
+(8 cores): a probe timing every https request and the loop's lag showed the requests' TLS connects arriving 10-37 s
+after request() while the loop did not turn for 15-20 s at a stretch, inside ONE microtask drain (`sample`: uv__run_timers
+-> tjs__drain_microtasks -> async function resumes). The dominant cost in it was the engine's env read: tjs.env answers
+an unset name by throwing and catching an Error (backtrace built), 18-23 us a read against node's 0.35 us, and 2.1.330
+reads unset knobs everywhere (a stretch node runs in 3 ms took quaude 3.9 s). FIXED for that cause by
+txiki-getenv-global.patch + node-shim's process.env (test/node-shim-env-read-cost.test.cjs, a same-process cost ratio).
+After it, at 16 `yes`, the longest post-boot stall fell from 3.3-19.9 s (2 of 3 runs timed out) to 1.0-1.4 s (none of 3); at 32 `yes` from 15.8-20.8 s to
+4.0-5.6 s, and 2 of 3 such runs still timed out (naude at 32: longest stall 1.3 s, no timeouts).
 
-Ruled out, each by a scratch probe under the same engine (all answered 403 for a dummy key in 100-400 ms, as node
-did): a raw https.request POST of a gzip'd body (end(body), write+end, two chunks); a Writable cut to `Dt`'s shape
-(_write forwards to the ClientRequest, _final ends it) doing axios's write(buffer)+end(); that POST made while a
-piped child runs; three POSTs 15 s apart through one keep-alive https.Agent. Not yet tried: the bundle's own axios
-instance outside the bundle, the flush's real body size, and whether native's flush is attempted at all (its log
-says nothing either way). test/debug-log-gate.cjs KNOWN names this line until it closes.
+What remains is interpreter cost, not one pathology: naude runs the same post-boot stretches 10-20x faster, so at
+enough oversubscription quaude's longest synchronous stretch outlasts a 5 s wall-clock budget that naude's does not.
+Measured hot spots left (sample, 32 `yes`, the patched engine): QuickJS's module resolution is QUADRATIC in loaded
+modules (js_host_resolve_imported_module -> js_find_loaded_module walks ctx->loaded_modules for every import: ~10 s of
+CPU during boot under that load), parsing/compiling the carve's modules, libc getenv's linear scan (__findenv_locked,
+~18% of one post-boot slice), and regexp backtracking.
 
-Measured: test/fidelity/tools-local.test.cjs under the gate, and scratch -p turns of the 2.1.330 carve under naude and quaude (2026-11-23)
+Also measured, not changed: node-shim's fs.promises forms that run on the sync core (stat, lstat, readdir, mkdir,
+access, realpath, ...) settle in the SAME macrotask, where node's settle on a later loop turn; deferring them to a
+setImmediate did not on its own remove the timeouts (1 of 3 runs at 32 `yes` still failed), so it was not kept.
 
-Unmeasured. The root cause; whether native's flush runs and succeeds on the same turn (a recording proxy, or the
-intake's answer captured under naude, would say).
+The Datadog half of the original finding (`Failed to flush logs to Datadog: AxiosError: timeout of 5000ms exceeded`
+on every turn longer than ~15 s, with no load) was a different, deterministic cause, now closed: the engine's TLS
+write took one ~16 KiB record and dropped the rest, so every https POST body of 16 KiB or more never arrived
+(txiki-tls-write-all.patch; test/node-shim-https-write-sizes.test.cjs). Its KNOWN entry is gone from
+test/debug-log-gate.cjs.
+
+Measured: scratch `-p /status` turns of the 2.1.330 carve under 8, 16 and 32 `yes` with a request/loop-lag probe and
+`sample`, quaude before and after, naude alongside; the -p `sleep 20` Bash turn for the Datadog flush (2026-11-24)
+
+Unmeasured. Whether native's Datadog flush is ever attempted on the same turn (naude's never was: no https.request
+to the intake in its probe log, where quaude made two); the full suite's actual load level relative to these `yes`
+counts; how much of the remaining gap the module-resolution and getenv-scan hot spots account for after boot.
 
 ## The bundle's first-run config race logs `Failed to save config with lock: ... ENOENT` on either runtime (2026-11-23)
 

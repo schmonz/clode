@@ -276,6 +276,16 @@ function getStdin() {
   return s;
 }
 
+// ONE ENV READ, AS CHEAP AS NODE'S. tjs.env answers an unset name by throwing inside the engine (an Error and its
+// backtrace) and catching it: ~18 us a read where node takes 0.35 us, and the bundle reads unset CLAUDE_CODE_* knobs
+// on nearly every path, so under CPU load quaude's loop was held for 15-20 s at a time and axios's timers fired before
+// its sockets were read ("[Bootstrap] fetch failed: AxiosError: timeout of 5000ms exceeded", 2026-11-24).
+// __tjs_getenv (txiki-getenv-global.patch) answers undefined without throwing. An engine without it keeps the slow
+// read through tjs.env: the same answers, slower. NOT logged to CLODE_ENGINE_FLOOR_LOG: the build host (the last
+// release's engine) reads process.env on every run, and a working route that only costs time is not a refusal
+// (scripts/engine-api-floor.cjs says so, and holds the shipped engine to it).
+const envGet = typeof globalThis.__tjs_getenv === 'function' ? globalThis.__tjs_getenv : (k) => tjs.env[k];
+
 module.exports = {
   argv: [],                                  // loader overwrites after load
   argv0: 'tjs',
@@ -306,12 +316,17 @@ module.exports = {
   // as compiled-module bytecode, which is always strict. Node stringifies on
   // write (String(v)); delete of a missing key is a no-op returning true.
   env: new Proxy({}, {
-    get: (_, k) => (typeof k === 'string' ? tjs.env[k] : undefined),
+    get: (_, k) => (typeof k === 'string' ? envGet(k) : undefined),
     set: (_, k, v) => { if (typeof k === 'string') { try { tjs.env[k] = String(v); } catch { /* setenv failure -> Node throws only on invalid names; swallow */ } } return true; },
     deleteProperty: (_, k) => { if (typeof k === 'string') { try { delete tjs.env[k]; } catch { /* ignore */ } } return true; },
-    has: (_, k) => typeof k === 'string' && k in tjs.env,
+    has: (_, k) => typeof k === 'string' && envGet(k) !== undefined,
     ownKeys: () => Reflect.ownKeys(tjs.env),
-    getOwnPropertyDescriptor: () => ({ enumerable: true, configurable: true, writable: true }),
+    // node: a descriptor for a SET name (its value), none for an unset one (Object.hasOwn(process.env, unset) is
+    // false); this used to answer a valueless descriptor for every name
+    getOwnPropertyDescriptor: (_, k) => {
+      const v = typeof k === 'string' ? envGet(k) : undefined;
+      return v === undefined ? undefined : { value: v, enumerable: true, configurable: true, writable: true };
+    },
   }),
   platform: detectPlatform(),
   __detectPlatform: detectPlatform,   // test hook (node-shim-platform.test.cjs)
