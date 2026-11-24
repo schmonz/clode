@@ -17,6 +17,13 @@ const HERE = path.dirname(fileURLToPath(import.meta.url)); // .../test
 const ROOT = path.dirname(HERE);                           // repo root
 process.chdir(ROOT);
 
+// The node CI runs (test/suite-node-pin.cjs says why): refused here, before anything else is made.
+{
+  const refusal = createRequire(import.meta.url)('./suite-node-pin.cjs').checkSuiteNode(ROOT);
+  if (refusal) { console.error(refusal); process.exit(2); }
+  if (process.env.CLODE_SUITE_NODE_BECAUSE) console.error(`run: on node ${process.version} because: ${process.env.CLODE_SUITE_NODE_BECAUSE}`);
+}
+
 // THE SUITE'S OWN HOME (ruling G33): HOME, USERPROFILE and CLAUDE_CONFIG_DIR point at a throwaway dir for this runner
 // and every child, the real values kept under one name (test/suite-home.cjs says why, and what the suite still takes
 // from the real home as explicit paths). FIRST, before anything below resolves a path off HOME.

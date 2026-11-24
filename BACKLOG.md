@@ -409,14 +409,21 @@ left-trimmed pointer. test/run-crashes.cjs now keeps such reports (and node's ow
 that dies of a signal, so the next one needs no luck, ON MACOS ONLY: on Linux and in CI a SIGSEGV leaves no node
 report (--report-on-fatalerror does not fire on a signal) and no core (ubuntu-latest's core_pattern pipes to apport;
 capturing one there means `sudo sysctl kernel.core_pattern=<dir>/core.%p`, `ulimit -c unlimited` in the suite step,
-and uploading a node core of hundreds of MB, not done: no Linux crash has been seen yet). Open: whether a newer node 24 fixes it (check the V8 log for
-ClearStaleLeftTrimmedPointerVisitor fixes), and if not, a minimal repro to file upstream.
+and uploading a node core of hundreds of MB, not done: no Linux crash has been seen yet). Whether a newer node 24 fixes it: answered below
+(2026-11-24).
 
 A third time on 2026-11-21, in the main pass of a full suite on the 2.1.330 pin branch (`not ok 311`, `signal:
 'SIGSEGV'`, 378 ms in, no test reported; run.mjs kept the TAP). 63 reruns right after were all green: 8 through the
 suite's own runner (`node --require ./test/file-watchdog-preload.cjs --test`), 25 the same way on this branch and 25
 on main's tree (an archive of main, so not this branch's code), and 30 under plain `node`. Still only under a full
 suite's load.
+
+Measured: test/procfs-linux-only.test.cjs alone, in a loop, darwin-arm64 (2026-11-24): node 24.21.0 crashed 1 in 40 with
+the same stack (node-2026-11-24-082126.ips), node 24.22.0 0 in 160. A fourth full-suite crash on 24.21.0 came the same
+day. .tool-versions had pinned 24.22.0 since fca2e9f, and every CI job sets node up from it; the local suites were the
+only runs on 24.21.0, because the command that ran them forced it. test/run.mjs now refuses a node other than
+.tool-versions' (test/suite-node-pin.cjs; CLODE_SUITE_NODE_BECAUSE=<why> to run anyway), so a local suite judges the node
+CI runs. Still open: nothing filed upstream, since 24.22.0 does not show it.
 
 ## The shipped macOS arm64 floor is 14.0, not the 11.0 it is labelled (2026-11-20)
 
