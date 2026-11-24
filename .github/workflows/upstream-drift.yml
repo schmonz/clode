@@ -306,3 +306,30 @@ jobs:
     with:
       tier: release
       only: linux-x64-musl
+
+  # THE GUEST PACKAGE CATALOGS. A different upstream than the Claude Code bundle, same failure
+  # shape: an engine leg installs guest OS packages named in scripts/tjs-legs.mjs, and a guest
+  # package manager can drop a name with no change in this repo. FreeBSD 15.x quarterly dropped
+  # the `cmake` metapackage (now `cmake-core`); ci run 45354661143's freebsd-amd64 leg died with
+  # "No packages available to install matching 'cmake'" after a 15-minute VM boot, and nothing
+  # had noticed. This fetches each leg's exact catalog over HTTPS (no VM) and checks every
+  # `guest-packages` name resolves the way that package manager resolves it, for BOTH tiers
+  # (release floor and ci-newest). A platform whose catalog cannot be read is printed as
+  # UNCHECKED with the reason, never skipped silently; a catalog fetch that fails fails the job.
+  # Red HERE means a guest repo moved: fix the leg's `guest-packages` (and the guest action's
+  # install step if it also names the package), before the next push runs a 15-minute VM to find out.
+  guest-packages:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20   # backstop; see ci.yml's PER-JOB timeout-minutes note
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version-file: .tool-versions
+      # The runner's own `xz` decodes DragonFly's packagesite.pkg (node has no xz); without it
+      # that leg reports UNCHECKED, loudly.
+      - name: Every guest-packages name resolves in its guest's live catalog
+        run: node scripts/guest-packages-check.mjs | tee -a "$GITHUB_STEP_SUMMARY"
