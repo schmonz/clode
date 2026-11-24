@@ -187,6 +187,11 @@ export function runGate(opts = {}) {
   // naude's. Not judged when the caller injected its own runners (a test's fakes write no log).
   const judgeLogs = !opts.runQuaude && !opts.runNaude;
   const debugFindings = [];
+  // ...and each model gets its OWN home, so both meet the same first run: in one shared fresh home the model run
+  // first alone logged the first-run config race (`Failed to save config with lock: ... ENOENT`), a finding of order.
+  const sideHome = (side) => { const h = path.join(home, `${side}-home`); mkdirSync(path.join(h, '.claude'), { recursive: true }); return h; };
+  const quaudeHome = judgeLogs ? sideHome('quaude') : home;
+  const naudeHome = judgeLogs ? sideHome('naude') : home;
 
   for (const item of corpus) {
     const session = item.args.includes('-p');
@@ -194,9 +199,9 @@ export function runGate(opts = {}) {
     const argsOf = (side) => (session ? [...item.args, ...debugGate.debugFileArgs(logOf(side))] : item.args);
     const q = runQuaude(staged.cli, argsOf('quaude'), {
       cwd: staged.dir, timeout: TIMEOUT,
-      env: { ...baseEnv, CLODE_SHIM_TRACE: '1', CLODE_SHIM_PROBE: '1' },
+      env: { ...baseEnv, HOME: quaudeHome, CLODE_SHIM_TRACE: '1', CLODE_SHIM_PROBE: '1' },
     });
-    const nEnv = { ...baseEnv };
+    const nEnv = { ...baseEnv, HOME: naudeHome };
     delete nEnv.CLODE_SHIM_TRACE;
     const n = runNaude(staged.cli, argsOf('naude'), { cwd: staged.dir, timeout: TIMEOUT, env: nEnv });
     if (session && judgeLogs) {

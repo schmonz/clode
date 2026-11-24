@@ -61,6 +61,11 @@ const KNOWN = Object.freeze([
       + 'nothing (BACKLOG "quaude\'s Datadog log flush times out where native\'s does not"). KNOWN so the tool drivers '
       + 'stay a ratchet for everything else; closing the backlog item removes this entry',
     example: '2026-11-24T02:19:50.385Z [ERROR] Failed to flush logs to Datadog: AxiosError: timeout of 5000ms exceeded' },
+  { match: /\[ERROR\] Failed to save config with lock: Error: ENOENT: no such file or directory, lstat '(?:[^']*\.claude\.json|<path>)'/,
+    reason: 'the BUNDLE\'s first-run config race, on either runtime: naude logs it in one fresh home and not the next, '
+      + 'so a differential read sees it on one side by chance (BACKLOG "The bundle\'s first-run config race logs `Failed '
+      + 'to save config with lock: ... ENOENT` on either runtime"). Not a shim divergence',
+    example: "2026-11-24T03:08:01.446Z [ERROR] Failed to save config with lock: Error: ENOENT: no such file or directory, lstat '/var/folders/y5/T/lockenoent-HnUhgE/quaude/.claude.json'" },
 ]);
 const isKnown = (line, known) => known.some((k) => k.match.test(line) || k.match.test(shape(line)));
 

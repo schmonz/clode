@@ -30,6 +30,20 @@ Measured: test/fidelity/tools-local.test.cjs under the gate, and scratch -p turn
 Unmeasured. The root cause; whether native's flush runs and succeeds on the same turn (a recording proxy, or the
 intake's answer captured under naude, would say).
 
+## The bundle's first-run config race logs `Failed to save config with lock: ... ENOENT` on either runtime (2026-11-23)
+
+On a session's first start in a fresh home, 2.1.330 sometimes logs `[ERROR] Failed to save config with lock: Error:
+ENOENT: no such file or directory, lstat '<home>/.claude.json'` before it creates the file, then carries on. It is the
+bundle's, not the shim's: a -p turn of the carve under naude logged it in one fresh home and not in the next, and
+under quaude likewise, so a differential read of quaude against naude (scripts/apicheck.mjs Axis 4) saw it on one side
+only and failed for the order of a race. test/debug-log-gate.cjs KNOWN names it, so the gate does not flake on it;
+the gate's tool drivers and pty sessions give each side its own fresh home, where either side may log it.
+
+Measured: scripts/apicheck.mjs Axis 4 (quaude only, twice) and a scratch -p turn of the carve per runtime, each in its own fresh home (naude logged it) (2026-11-23)
+
+Unmeasured. Whether native logs it as often (its single-binary start is faster, which may narrow the race), and what
+the bundle races against (a second writer of .claude.json during startup).
+
 ## TLS options: what the honour-or-refuse work (2026-11-23) left open
 
 Every TLS option a client is given is now honoured or refused by name (test/node-shim-tls-options.test.cjs, whose
