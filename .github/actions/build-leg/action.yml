@@ -1364,6 +1364,7 @@ runs:
         V=$(sed -n 's/^claude-code //p' UPSTREAM_PIN)
         echo "provider pin: @anthropic-ai/claude-code@$V (deliberately behind upstream — see UPSTREAM_PIN)"
         npm i -g @anthropic-ai/claude-code@"$V" 2>&1 | tail -3
+        node scripts/record-provider.mjs
         PROV="$(node scripts/stage-provider.mjs --out "$RUNNER_TEMP/qu-provider")" || exit 1
         echo "provider: $PROV"
         # The level-2.5 RESULT is still soft (qemu-user may not carry a full build, and
@@ -1396,6 +1397,7 @@ runs:
         V=$(sed -n 's/^claude-code //p' UPSTREAM_PIN)
         echo "provider pin: @anthropic-ai/claude-code@$V (deliberately behind upstream — see UPSTREAM_PIN)"
         npm i -g @anthropic-ai/claude-code@"$V" 2>&1 | tail -3
+        node scripts/record-provider.mjs
         PROV="$(node scripts/stage-provider.mjs)" || exit 1
         echo "provider: $PROV"
         mkdir -p .matrix/qemu-smoke
@@ -1445,6 +1447,7 @@ runs:
         V=$(sed -n 's/^claude-code //p' UPSTREAM_PIN)
         echo "provider pin: @anthropic-ai/claude-code@$V (deliberately behind upstream — see UPSTREAM_PIN)"
         npm i -g @anthropic-ai/claude-code@"$V" 2>&1 | tail -3
+        node scripts/record-provider.mjs
         PROV="$(node scripts/stage-provider.mjs)" || exit 1
         echo "provider: $PROV"
         mkdir -p .matrix

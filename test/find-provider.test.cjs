@@ -226,3 +226,29 @@ test('of two installed copies, the one at the wrapper\'s version wins over a big
   assert.strictEqual(r.status, 0, r.stderr);
   assert.match(slash(r.stdout.trim()), /\/@anthropic-ai\/claude-code\/node_modules\//);
 });
+
+// THE INSTRUMENT MUST NOT CHANGE UNDER US (CI 45354661143 / 45381323279): scripts/record-provider.mjs writes the
+// installed provider's path, size and SHA-256 to $GITHUB_ENV right after the pin's install; scripts/stage-provider.mjs
+// refuses a provider that no longer matches, by name, before it decodes anything.
+const RECORD = path.resolve(__dirname, '../scripts/record-provider.mjs');
+const STAGE = path.resolve(__dirname, '../scripts/stage-provider.mjs');
+
+test('record-provider writes what stage-provider checks, and a rewritten provider is refused by name', () => {
+  const dir = fixture({ [`@anthropic-ai/claude-code/node_modules/${pkg}/${exe}`]: BIG });
+  const ghEnv = path.join(dir, 'github-env');
+  fs.writeFileSync(ghEnv, '');
+  const env = { ...process.env, npm_config_prefix: dir, GITHUB_ENV: ghEnv };
+  const rec = spawnSync(process.execPath, [RECORD], { encoding: 'utf8', env });
+  assert.strictEqual(rec.status, 0, rec.stderr);
+  const vars = Object.fromEntries(fs.readFileSync(ghEnv, 'utf8').trim().split('\n').map((l) => l.split(/=(.*)/s).slice(0, 2)));
+  assert.match(vars.CLODE_PROVIDER_RECORDED_SHA256, /^[0-9a-f]{64}$/);
+  assert.strictEqual(vars.CLODE_PROVIDER_RECORDED_SIZE, String(BIG));
+  // Rewrite the provider after the record, as a mid-job self-update would.
+  fs.appendFileSync(vars.CLODE_PROVIDER_RECORDED_PATH, 'x');
+  const st = spawnSync(process.execPath, [STAGE, '--out', path.join(dir, 'out')], {
+    encoding: 'utf8', env: { ...env, GITHUB_ENV: '', ...vars },
+  });
+  assert.strictEqual(st.status, 1, `a changed provider must be refused:\n${st.stderr}`);
+  assert.match(st.stderr, /the provider changed since this job installed it/);
+  assert.ok(st.stderr.includes(vars.CLODE_PROVIDER_RECORDED_SHA256), 'the refusal names the recorded hash');
+});

@@ -265,7 +265,11 @@ async function runSide(side, bin, rules, opts, base) {
     const debugFile = path.join(base, `${side}-debug.log`);
     const runFlags = [...flags, ...debugFileArgs(debugFile)];
     const args = ['-p', opts.prompt || 'drive the tool', ...runFlags];
-    const env = { ...baseEnv(), ...home, ANTHROPIC_BASE_URL: mock.url, ANTHROPIC_API_KEY: 'sk-ant-mock', ...(opts.env || {}),
+    // DISABLE_AUTOUPDATER on both sides, as test/frame-oracle.cjs has always set it: an interactive native left to
+    // itself updates its own install mid-job (the suspect when linux-x64-pty's global provider no longer decoded an
+    // hour after it was installed, CI 45354661143 / 45381323279; scripts/record-provider.mjs now makes that a named
+    // refusal). One knob, both sides: what a turn is judged on is never the updater.
+    const env = { ...baseEnv(), ...home, ANTHROPIC_BASE_URL: mock.url, ANTHROPIC_API_KEY: 'sk-ant-mock', DISABLE_AUTOUPDATER: '1', ...(opts.env || {}),
       ...(opts.switches || {}) };
     const kc = shadowKeychain(base, side);
     env.PATH = [kc.dir, env.PATH || ''].join(path.delimiter);

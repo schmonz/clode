@@ -47,6 +47,7 @@ jobs:
           V=$(sed -n 's/^claude-code //p' UPSTREAM_PIN)
           echo "provider pin: @anthropic-ai/claude-code@$V (deliberately behind upstream — see UPSTREAM_PIN)"
           npm i -g @anthropic-ai/claude-code@"$V" 2>&1 | tail -3
+          node scripts/record-provider.mjs
       - name: Provision postject into deps/clode (the naude assembler needs it on disk)
         run: npm ci --prefix deps/clode 2>&1 | tail -3
       - name: Build the clode-main + naude-entry bundles
@@ -117,6 +118,7 @@ jobs:
           V=$(sed -n 's/^claude-code //p' UPSTREAM_PIN)
           echo "provider pin: @anthropic-ai/claude-code@$V (deliberately behind upstream — see UPSTREAM_PIN)"
           npm i -g @anthropic-ai/claude-code@"$V" 2>&1 | tail -3
+          node scripts/record-provider.mjs
       - name: Provision postject into deps/clode (the naude assembler needs it on disk)
         run: npm ci --prefix deps/clode 2>&1 | tail -3
       - name: Build the clode-main + naude-entry bundles
@@ -188,6 +190,7 @@ jobs:
           V=$(sed -n 's/^claude-code //p' UPSTREAM_PIN)
           echo "provider pin: @anthropic-ai/claude-code@$V (deliberately behind upstream — see UPSTREAM_PIN)"
           npm i -g @anthropic-ai/claude-code@"$V" 2>&1 | tail -3
+          node scripts/record-provider.mjs
       - name: Provision postject into deps/clode (the naude assembler needs it on disk)
         run: npm ci --prefix deps/clode 2>&1 | tail -3
       - name: Build the clode-main + naude-entry bundles
@@ -259,6 +262,7 @@ jobs:
           V=$(sed -n 's/^claude-code //p' UPSTREAM_PIN)
           echo "provider pin: @anthropic-ai/claude-code@$V (deliberately behind upstream — see UPSTREAM_PIN)"
           npm i -g @anthropic-ai/claude-code@"$V" 2>&1 | tail -3
+          node scripts/record-provider.mjs
       - name: Provision postject into deps/clode (the naude assembler needs it on disk)
         run: npm ci --prefix deps/clode 2>&1 | tail -3
       - name: Build the clode-main + naude-entry bundles

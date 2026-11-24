@@ -71,6 +71,7 @@ runs:
         V=$(sed -n 's/^claude-code //p' UPSTREAM_PIN)
         echo "provider pin: @anthropic-ai/claude-code@$V (deliberately behind upstream — see UPSTREAM_PIN)"
         npm i -g @anthropic-ai/claude-code@"$V" 2>&1 | tail -3
+        node scripts/record-provider.mjs
 
     - name: Full smoke — the builder builds the product (ephemeral, NEVER uploaded)
       shell: bash

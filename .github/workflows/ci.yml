@@ -314,6 +314,7 @@ jobs:
           V=$(sed -n 's/^claude-code //p' UPSTREAM_PIN)
           echo "provider pin: @anthropic-ai/claude-code@$V (deliberately behind upstream — see UPSTREAM_PIN)"
           npm i -g @anthropic-ai/claude-code@"$V" 2>&1 | tail -3
+          node scripts/record-provider.mjs
       - name: Install runtime deps (semver et al.) for the oracles
         id: deps
         run: npm ci --prefix deps/claude
@@ -419,6 +420,7 @@ jobs:
           V=$(sed -n 's/^claude-code //p' UPSTREAM_PIN)
           echo "provider pin: @anthropic-ai/claude-code@$V (deliberately behind upstream — see UPSTREAM_PIN)"
           npm i -g @anthropic-ai/claude-code@"$V" 2>&1 | tail -3
+          node scripts/record-provider.mjs
       - name: Install root runtime deps (render seed deps)
         id: deps
         run: npm ci --prefix deps/claude
@@ -513,6 +515,7 @@ jobs:
           V=$(sed -n 's/^claude-code //p' UPSTREAM_PIN)
           echo "provider pin: @anthropic-ai/claude-code@$V (deliberately behind upstream — see UPSTREAM_PIN)"
           npm i -g @anthropic-ai/claude-code@"$V" 2>&1 | tail -3
+          node scripts/record-provider.mjs
       - name: Install runtime deps (semver et al.) for the oracles
         id: deps
         run: npm ci --prefix deps/claude
@@ -741,6 +744,7 @@ jobs:
           V=$(sed -n 's/^claude-code //p' UPSTREAM_PIN)
           echo "provider pin: @anthropic-ai/claude-code@$V (deliberately behind upstream — see UPSTREAM_PIN)"
           npm i -g @anthropic-ai/claude-code@"$V" 2>&1 | tail -3
+          node scripts/record-provider.mjs
       # Live-network gate (regression guard): nothing else in CI makes a real
       # outbound connection — every API turn is opt-in and skips — which is how an
       # IPv6-first fetch-connect regression once shipped (f8f6e1d: connected to only
@@ -971,6 +975,7 @@ jobs:
           V=$(sed -n 's/^claude-code //p' UPSTREAM_PIN)
           echo "provider pin: @anthropic-ai/claude-code@$V (deliberately behind upstream — see UPSTREAM_PIN)"
           npm i -g @anthropic-ai/claude-code@"$V" 2>&1 | tail -3
+          node scripts/record-provider.mjs
       - name: mark the engine executable
         id: engineexec
         run: chmod +x "${{ runner.temp }}/tjs/tjs"
@@ -1269,6 +1274,7 @@ jobs:
           V=$(sed -n 's/^claude-code //p' UPSTREAM_PIN)
           echo "provider pin: @anthropic-ai/claude-code@$V (deliberately behind upstream — see UPSTREAM_PIN)"
           npm i -g @anthropic-ai/claude-code@"$V" 2>&1 | tail -3
+          node scripts/record-provider.mjs
       # THE TEXT ORACLE (CellSegmenter phase 3). libexec/unicode-text.cjs clusters, sizes and
       # slices text exactly as ONE native Bun does, and its generated header names that
       # native; every text gate SKIPS against any other version (ruling R11), so without
@@ -1720,6 +1726,7 @@ jobs:
           V=$(sed -n 's/^claude-code //p' UPSTREAM_PIN)
           echo "provider pin: @anthropic-ai/claude-code@$V (deliberately behind upstream — see UPSTREAM_PIN)"
           npm i -g @anthropic-ai/claude-code@"$V" 2>&1 | tail -3
+          node scripts/record-provider.mjs
       # Live-network gate (regression guard) — see the linux node-shim-oracle copy.
       # A credential-free HEAD proves the darwin engine can DNS + TLS-connect.
       - name: Live-connect smoke — the engine reaches the internet over TLS

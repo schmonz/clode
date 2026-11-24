@@ -104,6 +104,7 @@ jobs:
           V=$(sed -n 's/^claude-code //p' UPSTREAM_PIN)
           echo "provider pin: @anthropic-ai/claude-code@$V (deliberately behind upstream — see UPSTREAM_PIN)"
           npm i -g @anthropic-ai/claude-code@"$V" 2>&1 | tail -3
+          node scripts/record-provider.mjs
           PROV="$(node scripts/stage-provider.mjs)"
           echo "provider: $PROV"
           echo "CLODE_PROVIDER_BIN=$PROV" >> "$GITHUB_ENV"

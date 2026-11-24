@@ -72,6 +72,22 @@ if (!prov) {
 }
 if (!fs.existsSync(prov)) die(`find-provider returned a path that does not exist: ${prov}`);
 
+// The job recorded which provider it installed (scripts/record-provider.mjs, right after the pin's
+// `npm i -g`). A provider that is not that file any more, by path or by bytes, was changed by something
+// this job ran in between: refuse it by name rather than decode whatever is there now.
+if (process.env.CLODE_PROVIDER_RECORDED_SHA256) {
+  const { createHash } = await import('node:crypto');
+  const sha = createHash('sha256').update(fs.readFileSync(prov)).digest('hex');
+  const size = fs.statSync(prov).size;
+  const want = { path: process.env.CLODE_PROVIDER_RECORDED_PATH, size: process.env.CLODE_PROVIDER_RECORDED_SIZE,
+    sha: process.env.CLODE_PROVIDER_RECORDED_SHA256 };
+  if (prov !== want.path || sha !== want.sha) {
+    die(`the provider changed since this job installed it: recorded ${want.path} ${want.size} bytes sha256 ${want.sha}; `
+      + `now ${prov} ${size} bytes sha256 ${sha}. Something this job ran between the install and here rewrote the `
+      + 'global install (a native Claude Code auto-update is the first suspect: every driver must set DISABLE_AUTOUPDATER).');
+  }
+}
+
 const outDir = outArg || fs.mkdtempSync(path.join(os.tmpdir(), 'clode-provider-'));
 fs.mkdirSync(outDir, { recursive: true });
 const out = path.join(outDir, 'provider-min');
