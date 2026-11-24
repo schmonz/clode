@@ -26,7 +26,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { sandbox } = require('./e2e.cjs');
-const { captureFrame } = require('./e2e-pty.cjs');
+const { captureSession } = require('./e2e-pty.cjs');
 const { diff, describe: describeDiff, corrupt, rowText, cloneFrame } = require('./frame-diff.cjs');
 // The one PTY-harness check every frame test skips on (test/live-frame-gate.cjs).
 const { ptyHarnessSkipReason } = require('./live-frame-gate.cjs');
@@ -65,12 +65,12 @@ const P = {
 };
 
 let SBX = null; let DIR = null; let SKIP = null; const FRAMES = {};
-before(() => {
+before(async () => {
   SKIP = ptyHarnessSkipReason();
   if (SKIP) return;
   SBX = sandbox();
   DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'frame-diff-'));
-  const shoot = (name, payload) => {
+  const shoot = async (name, payload) => {
     // The printer is NODE, not /bin/sh: windows-latest has no /bin/sh, and there
     // ConPTY's CreateProcess fails inside the driver itself (no frame at all, ci
     // run 35727111476), where POSIX node-pty would fork and paint a blank one.
@@ -78,12 +78,22 @@ before(() => {
     // own timer with the full payload rendered, never on an early child exit.
     const script = path.join(DIR, `${name}.cjs`);
     fs.writeFileSync(script, `process.stdout.write(${JSON.stringify(payload)});\nsetTimeout(() => {}, 20000);\n`);
-    FRAMES[name] = captureFrame(SBX, { seconds: 1.2, rows: ROWS, cols: COLS, cmd: [process.execPath, script], env: DRIVER_ENV });
+    // The frame is the boot frame of a one-step session: taken once the payload has been HEARD and
+    // output has then been quiet for 300 ms, not after a fixed 1.2 s. The fixed window was a guess a
+    // loaded box outran: the full suite at 91e96b5 captured a blank frame for `skipped` (node had not
+    // painted yet) and two rows failed on it; alone they passed 3 in 3. The cap is a failure deadline.
+    const s = await captureSession(SBX, {
+      script: [{ label: 'after', wait: 1 }], bootSettleMs: 300, bootMaxMs: 30000,
+      rows: ROWS, cols: COLS, cmd: [process.execPath, script], env: DRIVER_ENV,
+    });
+    const boot = s.frames[0];
+    assert.ok(boot && boot.settled, `${name}: the payload never painted and settled within 30 s (${JSON.stringify(boot && { settled: boot.settled, ms: boot.ms })})`);
+    FRAMES[name] = boot.frame;
   };
-  for (const [name, payload] of Object.entries(P)) shoot(name, payload);
+  for (const [name, payload] of Object.entries(P)) await shoot(name, payload);
   // A second capture of the SAME payload, to show identity is reproducible and
   // not an artifact of comparing an object with itself.
-  shoot('base2', P.base);
+  await shoot('base2', P.base);
 });
 
 test('the capture observes what a text screen cannot: widths, attributes, links', (t) => {
