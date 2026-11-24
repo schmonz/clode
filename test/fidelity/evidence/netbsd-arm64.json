@@ -1,10 +1,10 @@
 {
   "run": "netbsd-arm64-vm",
   "engine": "netbsd-arm64",
-  "commit": "25d0abeb588e43236ac7c27c992d907025d71575",
+  "commit": "954fbbe08bd06a6638694f84cbe2365a53f7ac94",
   "date": "2026-11-24",
-  "when": "2026-11-24T07:48:09.485Z",
-  "attempts": 1,
+  "when": "2026-11-24T20:00:16.095Z",
+  "attempts": 2,
   "priorFailures": [],
   "host": {
     "platform": "netbsd",
@@ -13,7 +13,7 @@
     "node": "v24.18.0"
   },
   "quaude": {
-    "sha256": "eba444d3e5974e27b5ac8c7f52200c4abf2d80e55eddc254272ff34fc9813c44",
+    "sha256": "4e249b3bd3013d20c9e9bcd6cba398b7f7b65113fb3a14d7a3dc42ea27f913b2",
     "bytes": 110276129,
     "version": "2.1.330 (Claude Code)",
     "provider": "2.1.330",
@@ -25,33 +25,33 @@
   "inputs": {
     "engine": "f8ec641c54b90156f5e91c318e934b6739f53626d89ee40573793cd11179df8f",
     "quaude": "f289e18d311dd04ae0b371a4970cfcd82d8e6076194c88d89ba622759b9d522c",
-    "drivers": "e6aa99602c7743d10f2803dbc7f6f17cb3f6cdb043a20be1469dc2e5a239ccf5"
+    "drivers": "ddc203d6a7f90eaf89de79689b62ae5511afe8cb6dbbf45d6515274487e3aa8c"
   },
   "command": "node scripts/netbsd-arm64-evidence.mjs",
   "timeoutScale": 3,
-  "seconds": 364,
+  "seconds": 396,
   "steps": [
     {
       "name": "engine",
-      "seconds": 156,
+      "seconds": 183,
       "status": 0,
       "signal": null
     },
     {
       "name": "provider",
-      "seconds": 29,
+      "seconds": 26,
       "status": 0,
       "signal": null
     },
     {
       "name": "quaude",
-      "seconds": 68,
+      "seconds": 59,
       "status": 0,
       "signal": null
     },
     {
       "name": "harness",
-      "seconds": 8,
+      "seconds": 10,
       "status": 0,
       "signal": null
     },
@@ -72,7 +72,7 @@
       ],
       "status": 0,
       "signal": null,
-      "seconds": 34
+      "seconds": 44
     },
     {
       "lane": 1,
@@ -94,7 +94,7 @@
       ],
       "status": 0,
       "signal": null,
-      "seconds": 13
+      "seconds": 18
     },
     {
       "lane": 1,
@@ -113,7 +113,7 @@
       ],
       "status": 0,
       "signal": null,
-      "seconds": 56
+      "seconds": 72
     },
     {
       "lane": 2,
@@ -124,7 +124,7 @@
       ],
       "status": 0,
       "signal": null,
-      "seconds": 23
+      "seconds": 27
     },
     {
       "lane": 3,
@@ -135,7 +135,7 @@
       ],
       "status": 0,
       "signal": null,
-      "seconds": 57
+      "seconds": 71
     },
     {
       "lane": 3,
@@ -146,7 +146,7 @@
       ],
       "status": 0,
       "signal": null,
-      "seconds": 11
+      "seconds": 14
     },
     {
       "lane": 3,
@@ -157,7 +157,7 @@
       ],
       "status": 0,
       "signal": null,
-      "seconds": 13
+      "seconds": 15
     },
     {
       "lane": 4,
@@ -168,7 +168,7 @@
       ],
       "status": 0,
       "signal": null,
-      "seconds": 83
+      "seconds": 96
     },
     {
       "lane": 4,
@@ -179,7 +179,7 @@
       ],
       "status": 0,
       "signal": null,
-      "seconds": 10
+      "seconds": 11
     },
     {
       "lane": 4,
@@ -388,7 +388,7 @@
       "line": 963,
       "name": "native answers every Phase A call in interactive as recorded",
       "nesting": 0,
-      "skip": "no Claude provider found. Looked at: CLODE_PROVIDER_BIN, CLODE_CLAUDE_BIN, and UPSTREAM_PIN's pinned version (2.1.330) under /tmp/clode-evidence.ahcGoD/no-providers/2.1.330/ and /tmp/clode-evidence.ahcGoD/state/share/clode/providers/2.1.330/. Set CLODE_PROVIDER_BIN=<path to a claude binary> to run this, or run the suite through test/run.mjs, which fetches the pinned version once."
+      "skip": "no Claude provider found. Looked at: CLODE_PROVIDER_BIN, CLODE_CLAUDE_BIN, and UPSTREAM_PIN's pinned version (2.1.330) under /tmp/clode-evidence.Pky5PU/no-providers/2.1.330/ and /tmp/clode-evidence.Pky5PU/state/share/clode/providers/2.1.330/. Set CLODE_PROVIDER_BIN=<path to a claude binary> to run this, or run the suite through test/run.mjs, which fetches the pinned version once."
     },
     {
       "type": "test:pass",
@@ -396,7 +396,7 @@
       "line": 963,
       "name": "native answers every Phase A call in permission:acceptEdits as recorded",
       "nesting": 0,
-      "skip": "no Claude provider found. Looked at: CLODE_PROVIDER_BIN, CLODE_CLAUDE_BIN, and UPSTREAM_PIN's pinned version (2.1.330) under /tmp/clode-evidence.ahcGoD/no-providers/2.1.330/ and /tmp/clode-evidence.ahcGoD/state/share/clode/providers/2.1.330/. Set CLODE_PROVIDER_BIN=<path to a claude binary> to run this, or run the suite through test/run.mjs, which fetches the pinned version once."
+      "skip": "no Claude provider found. Looked at: CLODE_PROVIDER_BIN, CLODE_CLAUDE_BIN, and UPSTREAM_PIN's pinned version (2.1.330) under /tmp/clode-evidence.Pky5PU/no-providers/2.1.330/ and /tmp/clode-evidence.Pky5PU/state/share/clode/providers/2.1.330/. Set CLODE_PROVIDER_BIN=<path to a claude binary> to run this, or run the suite through test/run.mjs, which fetches the pinned version once."
     },
     {
       "type": "test:pass",
@@ -404,7 +404,7 @@
       "line": 963,
       "name": "native answers every Phase A call in permission:auto as recorded",
       "nesting": 0,
-      "skip": "no Claude provider found. Looked at: CLODE_PROVIDER_BIN, CLODE_CLAUDE_BIN, and UPSTREAM_PIN's pinned version (2.1.330) under /tmp/clode-evidence.ahcGoD/no-providers/2.1.330/ and /tmp/clode-evidence.ahcGoD/state/share/clode/providers/2.1.330/. Set CLODE_PROVIDER_BIN=<path to a claude binary> to run this, or run the suite through test/run.mjs, which fetches the pinned version once."
+      "skip": "no Claude provider found. Looked at: CLODE_PROVIDER_BIN, CLODE_CLAUDE_BIN, and UPSTREAM_PIN's pinned version (2.1.330) under /tmp/clode-evidence.Pky5PU/no-providers/2.1.330/ and /tmp/clode-evidence.Pky5PU/state/share/clode/providers/2.1.330/. Set CLODE_PROVIDER_BIN=<path to a claude binary> to run this, or run the suite through test/run.mjs, which fetches the pinned version once."
     },
     {
       "type": "test:pass",
@@ -412,7 +412,7 @@
       "line": 963,
       "name": "native answers every Phase A call in permission:bypassPermissions as recorded",
       "nesting": 0,
-      "skip": "no Claude provider found. Looked at: CLODE_PROVIDER_BIN, CLODE_CLAUDE_BIN, and UPSTREAM_PIN's pinned version (2.1.330) under /tmp/clode-evidence.ahcGoD/no-providers/2.1.330/ and /tmp/clode-evidence.ahcGoD/state/share/clode/providers/2.1.330/. Set CLODE_PROVIDER_BIN=<path to a claude binary> to run this, or run the suite through test/run.mjs, which fetches the pinned version once."
+      "skip": "no Claude provider found. Looked at: CLODE_PROVIDER_BIN, CLODE_CLAUDE_BIN, and UPSTREAM_PIN's pinned version (2.1.330) under /tmp/clode-evidence.Pky5PU/no-providers/2.1.330/ and /tmp/clode-evidence.Pky5PU/state/share/clode/providers/2.1.330/. Set CLODE_PROVIDER_BIN=<path to a claude binary> to run this, or run the suite through test/run.mjs, which fetches the pinned version once."
     },
     {
       "type": "test:pass",
@@ -420,7 +420,7 @@
       "line": 963,
       "name": "native answers every Phase A call in permission:dontAsk as recorded",
       "nesting": 0,
-      "skip": "no Claude provider found. Looked at: CLODE_PROVIDER_BIN, CLODE_CLAUDE_BIN, and UPSTREAM_PIN's pinned version (2.1.330) under /tmp/clode-evidence.ahcGoD/no-providers/2.1.330/ and /tmp/clode-evidence.ahcGoD/state/share/clode/providers/2.1.330/. Set CLODE_PROVIDER_BIN=<path to a claude binary> to run this, or run the suite through test/run.mjs, which fetches the pinned version once."
+      "skip": "no Claude provider found. Looked at: CLODE_PROVIDER_BIN, CLODE_CLAUDE_BIN, and UPSTREAM_PIN's pinned version (2.1.330) under /tmp/clode-evidence.Pky5PU/no-providers/2.1.330/ and /tmp/clode-evidence.Pky5PU/state/share/clode/providers/2.1.330/. Set CLODE_PROVIDER_BIN=<path to a claude binary> to run this, or run the suite through test/run.mjs, which fetches the pinned version once."
     },
     {
       "type": "test:pass",
@@ -428,7 +428,7 @@
       "line": 963,
       "name": "native answers every Phase A call in permission:plan as recorded",
       "nesting": 0,
-      "skip": "no Claude provider found. Looked at: CLODE_PROVIDER_BIN, CLODE_CLAUDE_BIN, and UPSTREAM_PIN's pinned version (2.1.330) under /tmp/clode-evidence.ahcGoD/no-providers/2.1.330/ and /tmp/clode-evidence.ahcGoD/state/share/clode/providers/2.1.330/. Set CLODE_PROVIDER_BIN=<path to a claude binary> to run this, or run the suite through test/run.mjs, which fetches the pinned version once."
+      "skip": "no Claude provider found. Looked at: CLODE_PROVIDER_BIN, CLODE_CLAUDE_BIN, and UPSTREAM_PIN's pinned version (2.1.330) under /tmp/clode-evidence.Pky5PU/no-providers/2.1.330/ and /tmp/clode-evidence.Pky5PU/state/share/clode/providers/2.1.330/. Set CLODE_PROVIDER_BIN=<path to a claude binary> to run this, or run the suite through test/run.mjs, which fetches the pinned version once."
     },
     {
       "type": "test:pass",
@@ -436,7 +436,7 @@
       "line": 963,
       "name": "native answers every Phase A call in print as recorded",
       "nesting": 0,
-      "skip": "no Claude provider found. Looked at: CLODE_PROVIDER_BIN, CLODE_CLAUDE_BIN, and UPSTREAM_PIN's pinned version (2.1.330) under /tmp/clode-evidence.ahcGoD/no-providers/2.1.330/ and /tmp/clode-evidence.ahcGoD/state/share/clode/providers/2.1.330/. Set CLODE_PROVIDER_BIN=<path to a claude binary> to run this, or run the suite through test/run.mjs, which fetches the pinned version once."
+      "skip": "no Claude provider found. Looked at: CLODE_PROVIDER_BIN, CLODE_CLAUDE_BIN, and UPSTREAM_PIN's pinned version (2.1.330) under /tmp/clode-evidence.Pky5PU/no-providers/2.1.330/ and /tmp/clode-evidence.Pky5PU/state/share/clode/providers/2.1.330/. Set CLODE_PROVIDER_BIN=<path to a claude binary> to run this, or run the suite through test/run.mjs, which fetches the pinned version once."
     },
     {
       "type": "test:pass",
@@ -444,7 +444,7 @@
       "line": 963,
       "name": "native answers every Phase A call in unlisted as recorded",
       "nesting": 0,
-      "skip": "no Claude provider found. Looked at: CLODE_PROVIDER_BIN, CLODE_CLAUDE_BIN, and UPSTREAM_PIN's pinned version (2.1.330) under /tmp/clode-evidence.ahcGoD/no-providers/2.1.330/ and /tmp/clode-evidence.ahcGoD/state/share/clode/providers/2.1.330/. Set CLODE_PROVIDER_BIN=<path to a claude binary> to run this, or run the suite through test/run.mjs, which fetches the pinned version once."
+      "skip": "no Claude provider found. Looked at: CLODE_PROVIDER_BIN, CLODE_CLAUDE_BIN, and UPSTREAM_PIN's pinned version (2.1.330) under /tmp/clode-evidence.Pky5PU/no-providers/2.1.330/ and /tmp/clode-evidence.Pky5PU/state/share/clode/providers/2.1.330/. Set CLODE_PROVIDER_BIN=<path to a claude binary> to run this, or run the suite through test/run.mjs, which fetches the pinned version once."
     },
     {
       "type": "test:pass",
@@ -452,7 +452,7 @@
       "line": 718,
       "name": "native answers the Task 5 script as T5_NATIVE records",
       "nesting": 0,
-      "skip": "no Claude provider found. Looked at: CLODE_PROVIDER_BIN, CLODE_CLAUDE_BIN, and UPSTREAM_PIN's pinned version (2.1.330) under /tmp/clode-evidence.ahcGoD/no-providers/2.1.330/ and /tmp/clode-evidence.ahcGoD/state/share/clode/providers/2.1.330/. Set CLODE_PROVIDER_BIN=<path to a claude binary> to run this, or run the suite through test/run.mjs, which fetches the pinned version once."
+      "skip": "no Claude provider found. Looked at: CLODE_PROVIDER_BIN, CLODE_CLAUDE_BIN, and UPSTREAM_PIN's pinned version (2.1.330) under /tmp/clode-evidence.Pky5PU/no-providers/2.1.330/ and /tmp/clode-evidence.Pky5PU/state/share/clode/providers/2.1.330/. Set CLODE_PROVIDER_BIN=<path to a claude binary> to run this, or run the suite through test/run.mjs, which fetches the pinned version once."
     },
     {
       "type": "test:pass",
@@ -460,7 +460,7 @@
       "line": 548,
       "name": "native answers the session script as SESSION_NATIVE records",
       "nesting": 0,
-      "skip": "no Claude provider found. Looked at: CLODE_PROVIDER_BIN, CLODE_CLAUDE_BIN, and UPSTREAM_PIN's pinned version (2.1.330) under /tmp/clode-evidence.ahcGoD/no-providers/2.1.330/ and /tmp/clode-evidence.ahcGoD/state/share/clode/providers/2.1.330/. Set CLODE_PROVIDER_BIN=<path to a claude binary> to run this, or run the suite through test/run.mjs, which fetches the pinned version once."
+      "skip": "no Claude provider found. Looked at: CLODE_PROVIDER_BIN, CLODE_CLAUDE_BIN, and UPSTREAM_PIN's pinned version (2.1.330) under /tmp/clode-evidence.Pky5PU/no-providers/2.1.330/ and /tmp/clode-evidence.Pky5PU/state/share/clode/providers/2.1.330/. Set CLODE_PROVIDER_BIN=<path to a claude binary> to run this, or run the suite through test/run.mjs, which fetches the pinned version once."
     },
     {
       "type": "test:pass",
@@ -468,7 +468,7 @@
       "line": 318,
       "name": "native answers the task script as TASK_NATIVE records",
       "nesting": 0,
-      "skip": "no Claude provider found. Looked at: CLODE_PROVIDER_BIN, CLODE_CLAUDE_BIN, and UPSTREAM_PIN's pinned version (2.1.330) under /tmp/clode-evidence.ahcGoD/no-providers/2.1.330/ and /tmp/clode-evidence.ahcGoD/state/share/clode/providers/2.1.330/. Set CLODE_PROVIDER_BIN=<path to a claude binary> to run this, or run the suite through test/run.mjs, which fetches the pinned version once."
+      "skip": "no Claude provider found. Looked at: CLODE_PROVIDER_BIN, CLODE_CLAUDE_BIN, and UPSTREAM_PIN's pinned version (2.1.330) under /tmp/clode-evidence.Pky5PU/no-providers/2.1.330/ and /tmp/clode-evidence.Pky5PU/state/share/clode/providers/2.1.330/. Set CLODE_PROVIDER_BIN=<path to a claude binary> to run this, or run the suite through test/run.mjs, which fetches the pinned version once."
     },
     {
       "type": "test:pass",
@@ -476,7 +476,7 @@
       "line": 366,
       "name": "native answers the zsh Bash turn as ZSH_DONE records",
       "nesting": 0,
-      "skip": "no Claude provider found. Looked at: CLODE_PROVIDER_BIN, CLODE_CLAUDE_BIN, and UPSTREAM_PIN's pinned version (2.1.330) under /tmp/clode-evidence.ahcGoD/no-providers/2.1.330/ and /tmp/clode-evidence.ahcGoD/state/share/clode/providers/2.1.330/. Set CLODE_PROVIDER_BIN=<path to a claude binary> to run this, or run the suite through test/run.mjs, which fetches the pinned version once."
+      "skip": "no Claude provider found. Looked at: CLODE_PROVIDER_BIN, CLODE_CLAUDE_BIN, and UPSTREAM_PIN's pinned version (2.1.330) under /tmp/clode-evidence.Pky5PU/no-providers/2.1.330/ and /tmp/clode-evidence.Pky5PU/state/share/clode/providers/2.1.330/. Set CLODE_PROVIDER_BIN=<path to a claude binary> to run this, or run the suite through test/run.mjs, which fetches the pinned version once."
     },
     {
       "type": "test:pass",
@@ -484,7 +484,7 @@
       "line": 145,
       "name": "native answers this script as NATIVE records",
       "nesting": 0,
-      "skip": "no Claude provider found. Looked at: CLODE_PROVIDER_BIN, CLODE_CLAUDE_BIN, and UPSTREAM_PIN's pinned version (2.1.330) under /tmp/clode-evidence.ahcGoD/no-providers/2.1.330/ and /tmp/clode-evidence.ahcGoD/state/share/clode/providers/2.1.330/. Set CLODE_PROVIDER_BIN=<path to a claude binary> to run this, or run the suite through test/run.mjs, which fetches the pinned version once."
+      "skip": "no Claude provider found. Looked at: CLODE_PROVIDER_BIN, CLODE_CLAUDE_BIN, and UPSTREAM_PIN's pinned version (2.1.330) under /tmp/clode-evidence.Pky5PU/no-providers/2.1.330/ and /tmp/clode-evidence.Pky5PU/state/share/clode/providers/2.1.330/. Set CLODE_PROVIDER_BIN=<path to a claude binary> to run this, or run the suite through test/run.mjs, which fetches the pinned version once."
     },
     {
       "type": "test:pass",
@@ -499,7 +499,7 @@
       "line": 126,
       "name": "native fetches the same page and answers as recorded",
       "nesting": 0,
-      "skip": "no Claude provider found. Looked at: CLODE_PROVIDER_BIN, CLODE_CLAUDE_BIN, and UPSTREAM_PIN's pinned version (2.1.330) under /tmp/clode-evidence.ahcGoD/no-providers/2.1.330/ and /tmp/clode-evidence.ahcGoD/state/share/clode/providers/2.1.330/. Set CLODE_PROVIDER_BIN=<path to a claude binary> to run this, or run the suite through test/run.mjs, which fetches the pinned version once."
+      "skip": "no Claude provider found. Looked at: CLODE_PROVIDER_BIN, CLODE_CLAUDE_BIN, and UPSTREAM_PIN's pinned version (2.1.330) under /tmp/clode-evidence.Pky5PU/no-providers/2.1.330/ and /tmp/clode-evidence.Pky5PU/state/share/clode/providers/2.1.330/. Set CLODE_PROVIDER_BIN=<path to a claude binary> to run this, or run the suite through test/run.mjs, which fetches the pinned version once."
     }
   ],
   "cells": [
