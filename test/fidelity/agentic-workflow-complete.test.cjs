@@ -17,6 +17,7 @@ const { spawn } = require('node:child_process');
 const { REPO, tjsPath, skipUnlessTjs, engineSpawn, LOADER } = require('../node-shim-helper.cjs');
 const { startMockAnthropic, cannedSSE, cannedToolUseSSE } = require('../mock-anthropic-helper.cjs');
 
+const { runScanned } = require('../debug-log-gate.cjs');
 function providerBin() { const p = process.env.CLODE_PROVIDER_BIN; return p && fs.existsSync(p) ? p : null; }
 const WF_ID = 'toolu_wf_complete_1';
 const MARKER = 'WF-COMPLETE-MARKER';
@@ -71,8 +72,11 @@ test('Workflow runs to completion under quaude (vm isolation)', async (t) => {
     CLAUDE_CONFIG_DIR: configDir,
     NODE_PATH: path.join(REPO, 'deps', 'claude', 'node_modules'),
   };
-  const [wcmd, wargv] = engineSpawn(['run', LOADER, cli, '-p', 'run the workflow', '--allowedTools', 'Workflow']);
-    const r = await run(wcmd, wargv, dir, env, 90000);
+  // quaude's debug log, READ (test/debug-log-gate.cjs): no naude runs this turn, so the absolute rules
+  const r = await runScanned(`${dir}-debug.log`, (dbg) => {
+    const [wcmd, wargv] = engineSpawn(['run', LOADER, cli, '-p', 'run the workflow', '--allowedTools', 'Workflow', ...dbg]);
+    return run(wcmd, wargv, dir, env, 90000);
+  }, { label: 'quaude (Workflow)' });
   await mock.close();
   await new Promise((res) => setTimeout(res, 3000)); // let the runner flush wf_<id>.json
 

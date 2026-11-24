@@ -23,6 +23,7 @@ const { builtQuaude } = require('./built-binary.cjs');
 const { rgOracle } = require('./provider-resolve.cjs');
 const { startMockAnthropic, cannedSSE, cannedToolUseSSE } = require('./mock-anthropic-helper.cjs');
 const { toolResultText, assertFailsOnMissingOutput } = require('../scripts/lib/tool-result.cjs');
+const { debugFileArgs, readLog, assertDebugLogClean } = require('./debug-log-gate.cjs');
 
 const SKIP = process.platform === 'win32' ? 'the per-uid dir is /tmp/claude-<uid>, a POSIX path' : false;
 const SHARED = () => `/tmp/claude-${process.getuid()}`;
@@ -40,8 +41,10 @@ async function turn(bin, withTmp) {
   try {
     const env = { ...process.env, ...home, ANTHROPIC_BASE_URL: mock.url, ANTHROPIC_API_KEY: 'sk-ant-mock' };
     if (!withTmp) delete env.CLAUDE_CODE_TMPDIR;
-    const r = await spawnCollect(bin, ['-p', 'probe', '--allowedTools', 'Bash'], { cwd: dir, env }, { timeoutMs: 180000 });
-    return { r, dir, home, mock, shared: turnEntries(SHARED(), dir), own: turnEntries(path.join(home.CLAUDE_CODE_TMPDIR, `claude-${process.getuid()}`), dir) };
+    // a debug log beside the turn (test/debug-log-gate.cjs); quaude's is read by the test
+    const debugFile = path.join(dir, 'turn-debug.log');
+    const r = await spawnCollect(bin, ['-p', 'probe', '--allowedTools', 'Bash', ...debugFileArgs(debugFile)], { cwd: dir, env }, { timeoutMs: 180000 });
+    return { r, dir, home, mock, debugLog: readLog(debugFile), shared: turnEntries(SHARED(), dir), own: turnEntries(path.join(home.CLAUDE_CODE_TMPDIR, `claude-${process.getuid()}`), dir) };
   } finally { await mock.close(); }
 }
 
@@ -60,6 +63,8 @@ test('a turn with throwawayHome\'s env leaves nothing in /tmp/claude-<uid>; with
       assert.ok(ran(fixed.mock), `${label}: the Bash tool ran: ${JSON.stringify(toolResultText(fixed.mock, BASH.id))}`);
       assert.deepStrictEqual(fixed.shared, [], `${label}: the turn left ${fixed.shared.join(', ')} in ${SHARED()}`);
       assert.strictEqual(fixed.own.length, 1, `${label}: the turn's dir is under the throwaway CLAUDE_CODE_TMPDIR`);
+      // quaude's --debug log, READ: the absolute rules (native's turn, when it runs, comes after it here)
+      if (label === 'quaude') assertDebugLogClean({ label: 'quaude (the CLAUDE_CODE_TMPDIR turn)', quaude: fixed.debugLog });
     } finally { fs.rmSync(fixed.dir, { recursive: true, force: true }); }
     // the control: the leak is real when CLAUDE_CODE_TMPDIR is not set (and what it leaves is removed at once)
     const leaky = await turn(bin, false);

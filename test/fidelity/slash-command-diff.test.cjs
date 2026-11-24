@@ -14,6 +14,7 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { REPO, tjsPath, skipUnlessTjs, LOADER } = require('../node-shim-helper.cjs');
 
+const { debugFileArgs, readLog, assertDebugLogClean } = require('../debug-log-gate.cjs');
 function providerBin() { const p = process.env.CLODE_PROVIDER_BIN; return p && fs.existsSync(p) ? p : null; }
 // THROUGH CLODE'S OWN STAGING (../oracle-models.cjs's stageCli), not the raw
 // extractor directly. The raw libexec/extract-claude-js.cjs emits the graph
@@ -36,8 +37,10 @@ function run(cmd, argv) {
   // 180 s, as the other quaude -p turns (agentic-workflow-complete's 90 s plus staging): quaude's /status takes ~25-48 s
   // here alone (naude ~10 s), and under the full suite's load it passed 60 s, came back EMPTY, and read as "quaude
   // printed nothing" (2026-11-21). A run that did not finish now says so instead of passing as an empty answer.
-  return spawnCollect(cmd, [...argv(cli), '-p', '/status'], { cwd: dir, env }, { timeoutMs: 180000 })
-    .then((r) => ({ status: r.status, signal: r.signal, timedOut: r.timedOut,
+  // a debug log beside the run (test/debug-log-gate.cjs): naude's is the reference quaude's is held to
+  const debugFile = `${dir}-debug.log`;
+  return spawnCollect(cmd, [...argv(cli), '-p', '/status', ...debugFileArgs(debugFile)], { cwd: dir, env }, { timeoutMs: 180000 })
+    .then((r) => ({ status: r.status, signal: r.signal, timedOut: r.timedOut, debugLog: readLog(debugFile),
       out: r.error ? String(r.error) : (r.stdout + r.stderr).replace(STRIP, '') }));
 }
 const line = (o) => (o.match(/\/status[^\n]*/) || [''])[0].trim();
@@ -53,4 +56,5 @@ test('slash-command dispatch (/status in -p) is identical under naude and quaude
   const nl = line(naude.out), ql = line(quaude.out);
   assert.ok(nl.length > 0, `naude produced no /status line:\n${naude.out.slice(-400)}`);
   assert.strictEqual(ql, nl, `quaude slash-command output must match naude\n  naude:  ${nl}\n  quaude: ${ql}`);
+  assertDebugLogClean({ label: 'quaude (-p /status)', quaude: quaude.debugLog, reference: naude.debugLog });
 });

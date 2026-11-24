@@ -15,6 +15,7 @@ const assert = require('node:assert');
 const { skipUnlessTjs } = require('./node-shim-helper.cjs');
 const { startMockAnthropic } = require('./mock-anthropic-helper.cjs');
 const { stageProviderCli, providerSkipReason, runQuaudeModelAsync } = require('./oracle-models.cjs');
+const { runScanned } = require('./debug-log-gate.cjs');
 
 function stage(t) {
   const staged = stageProviderCli();
@@ -45,7 +46,8 @@ test('mock round-trip under tjs: -p prints PONG, exit 0', async (t) => {
   const mock = await startMockAnthropic();
   const home = freshHome();
   try {
-    const r = await runQuaudeModelAsync(staged.cli, ['-p', 'say PONG'], {
+    // quaude's debug log, READ (test/debug-log-gate.cjs): the absolute rules, no reference here
+    const r = await runScanned(path.join(staged.dir, `roundtrip-debug-${process.hrtime.bigint()}.log`), (dbg) => runQuaudeModelAsync(staged.cli, ['-p', 'say PONG', ...dbg], {
       cwd: staged.dir,
       env: {
         ...process.env,
@@ -57,7 +59,7 @@ test('mock round-trip under tjs: -p prints PONG, exit 0', async (t) => {
         ANTHROPIC_API_KEY: 'sk-ant-mock',              // dummy; NOT a secret
       },
       timeout: 90000,
-    });
+    }), { label: 'quaude-model (-p say PONG)' });
     assert.strictEqual(r.status, 0, `stderr:\n${r.stderr}`);
     assert.match(r.stdout, /PONG/, `stdout:\n${r.stdout}`);
     assert.ok(mock.requests.some((q) => q.method === 'POST' && /\/messages$/.test(q.url.split('?')[0])), 'no messages POST recorded');
@@ -75,9 +77,9 @@ test('LIVE finale: -p against api.anthropic.com (opt-in)', async (t) => {
   if (!staged) return;
   const env = { ...process.env, ...freshBundleHome('roundtrip-live-') };   // the key comes from the env; the home is its own
   delete env.ANTHROPIC_BASE_URL;                        // real endpoint
-  const r = await runQuaudeModelAsync(staged.cli, ['-p', 'say PONG'], {
+  const r = await runScanned(path.join(staged.dir, 'roundtrip-live-debug.log'), (dbg) => runQuaudeModelAsync(staged.cli, ['-p', 'say PONG', ...dbg], {
     cwd: staged.dir, env, timeout: 120000,
-  });
+  }), { label: 'quaude-model LIVE (-p say PONG)' });
   assert.strictEqual(r.status, 0, `stderr:\n${r.stderr}`);
   assert.match(r.stdout, /PONG/i, `stdout:\n${r.stdout}`);
   // Timing only — no key, no headers echoed.

@@ -27,6 +27,7 @@ import os from 'node:os';
 const require = createRequire(import.meta.url);
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const models = require(path.join(REPO, 'test', 'oracle-models.cjs'));
+const debugGate = require(path.join(REPO, 'test', 'debug-log-gate.cjs'));
 const TIMEOUT = 60000;
 
 // Seed corpus. `deterministic` commands get strict stdout parity; `-p` model
@@ -182,15 +183,26 @@ export function runGate(opts = {}) {
   const allWalls = new Set();
   const allProbes = new Set();
   const divergences = [];
+  // Axis 4 (test/debug-log-gate.cjs): every -p item runs each model with a --debug-file, and quaude's log is held to
+  // naude's. Not judged when the caller injected its own runners (a test's fakes write no log).
+  const judgeLogs = !opts.runQuaude && !opts.runNaude;
+  const debugFindings = [];
 
   for (const item of corpus) {
-    const q = runQuaude(staged.cli, item.args, {
+    const session = item.args.includes('-p');
+    const logOf = (side) => path.join(home, `${item.id}-${side}-debug.log`);
+    const argsOf = (side) => (session ? [...item.args, ...debugGate.debugFileArgs(logOf(side))] : item.args);
+    const q = runQuaude(staged.cli, argsOf('quaude'), {
       cwd: staged.dir, timeout: TIMEOUT,
       env: { ...baseEnv, CLODE_SHIM_TRACE: '1', CLODE_SHIM_PROBE: '1' },
     });
     const nEnv = { ...baseEnv };
     delete nEnv.CLODE_SHIM_TRACE;
-    const n = runNaude(staged.cli, item.args, { cwd: staged.dir, timeout: TIMEOUT, env: nEnv });
+    const n = runNaude(staged.cli, argsOf('naude'), { cwd: staged.dir, timeout: TIMEOUT, env: nEnv });
+    if (session && judgeLogs) {
+      const j = debugGate.judgeDebugLog({ label: `quaude ${item.id}`, quaude: debugGate.readLog(logOf('quaude')), reference: debugGate.readLog(logOf('naude')) });
+      for (const f of j.findings) debugFindings.push(`${item.id}: ${f}`);
+    }
 
     const walls = wallsOf(q.stderr);
     walls.forEach((w) => allWalls.add(w));
@@ -223,12 +235,16 @@ export function runGate(opts = {}) {
     }
   }
 
+  log('\n## Axis 4 — quaude\'s --debug log against naude\'s (test/debug-log-gate.cjs), the -p items');
+  if (!judgeLogs) log('  (not judged: the runners were injected)');
+  else log(debugFindings.length ? debugFindings.map((d) => '  - ' + d).join('\n') : '  (none)');
+
   if (opts.versionDelta !== false) versionDelta(log);
   mock.stop();
   if (ownHome) rmSync(home, { recursive: true, force: true });
 
-  const failed = allWalls.size > 0 || divergences.length > 0 || newProbes.length > 0;
-  log(`\n${failed ? 'GATE: FAIL' : 'GATE: PASS'} (walls=${allWalls.size}, divergences=${divergences.length}, newProbes=${newProbes.length})`);
+  const failed = allWalls.size > 0 || divergences.length > 0 || newProbes.length > 0 || debugFindings.length > 0;
+  log(`\n${failed ? 'GATE: FAIL' : 'GATE: PASS'} (walls=${allWalls.size}, divergences=${divergences.length}, newProbes=${newProbes.length}, debugLog=${debugFindings.length})`);
   return failed ? 1 : 0;
 }
 

@@ -38,6 +38,7 @@ const { throwawayHome } = require('../throwaway-home.cjs');
 const { startMockAnthropic, cannedSSE, cannedToolUseSSE, cannedMessage } = require('../mock-anthropic-helper.cjs');
 const { toolResult, assertFailsOnMissingOutput } = require('../../scripts/lib/tool-result.cjs');
 const { shadowKeychain, keychainShadowFinding, CLASSIFIER_STOP, SCALE } = require('../tool-driver.cjs');
+const { debugFileArgs, readLog, judgeDebugLog } = require('../debug-log-gate.cjs');
 
 // THE TREE: <B>/work is the working directory, <B>/outside is added with --add-dir. Every file gets its own mtime
 // (T0 + dt): files_with_matches and Glob list newest first, and a tie would leave the order to the walk.
@@ -302,7 +303,9 @@ async function judge(bin, mode, perm = null) {
       const kc = shadowKeychain(t.base, 'turn');
       const env = { ...host, ...throwawayHome(t.base), PATH: `${kc.dir}${path.delimiter}${PATH}`, SHELL: bash,
         ANTHROPIC_BASE_URL: mock.url, ANTHROPIC_API_KEY: 'sk-ant-mock' };
-      const r = await runTurn(bin, t.work, env, 240000 * SCALE, perm ? PERMISSION_TURNS[perm] : []);   // CLODE_TIMEOUT_SCALE
+      // every turn writes a debug log (test/debug-log-gate.cjs); quaude's is judged below, native's is not a subject
+      const debugFile = path.join(t.base, 'turn-debug.log');
+      const r = await runTurn(bin, t.work, env, 240000 * SCALE, [...(perm ? PERMISSION_TURNS[perm] : []), ...debugFileArgs(debugFile)]);   // CLODE_TIMEOUT_SCALE
       const findings = [];
       if (perm) mode = `${mode}, ${perm}`;
       if (bin === providerBin(process.env)) {   // native: its lookup must have reached the stub, not the real Keychain
@@ -310,6 +313,8 @@ async function judge(bin, mode, perm = null) {
         if (unshadowed) findings.push(`${mode}: ${unshadowed}`);
       }
       if (r.status !== 0) findings.push(`${mode}: the turn exited ${r.status}${r.signal ? ` (${r.signal})` : ''}: ${r.stderr.slice(0, 800)}`);
+      // quaude's --debug log, READ: no native ran this turn (it is the opt-in instrument), so the absolute rules
+      if (bin !== providerBin(process.env)) for (const f of judgeDebugLog({ label: mode, quaude: readLog(debugFile) }).findings) findings.push(`${mode}: debug log: ${f}`);
       judged = { mode: perm ? PATH_MODES[0] : mode, base: t.base };
       const measured = {};
       for (const [USE, same] of verdicts(mock)) {

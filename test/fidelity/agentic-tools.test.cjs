@@ -17,6 +17,7 @@ const { REPO, tjsPath, skipUnlessTjs, engineSpawn, LOADER } = require('../node-s
 const { startMockAnthropic, cannedSSE, cannedToolUseSSE } = require('../mock-anthropic-helper.cjs');
 const { toolResult, toolResultText, assertFailsOnMissingOutput } = require('../../scripts/lib/tool-result.cjs');
 
+const { runScanned } = require('../debug-log-gate.cjs');
 function providerBin() { const p = process.env.CLODE_PROVIDER_BIN; return p && fs.existsSync(p) ? p : null; }
 // THROUGH CLODE'S OWN STAGING (../oracle-models.cjs's stageCli), not the raw
 // extractor directly. The raw libexec/extract-claude-js.cjs emits the graph
@@ -30,9 +31,14 @@ function stageBundle(bin) {
   const { cli } = require('../oracle-models.cjs').stageCli(bin, { dir });
   return { dir, cli };
 }
+// Every turn writes a debug log, READ after it (test/debug-log-gate.cjs): no naude runs beside it here, so the absolute
+// rules (shim faults, timeouts), and a finding fails the row with its lines.
+let debugRuns = 0;
 function bootP(cli, dir, args, env, timeoutMs) {
-  const [ecmd, eargv] = engineSpawn(['run', LOADER, cli, ...args]);
-  return spawnCollect(ecmd, eargv, { cwd: dir, env }, { timeoutMs });
+  return runScanned(`${dir}-debug-${++debugRuns}.log`, (dbg) => {
+    const [ecmd, eargv] = engineSpawn(['run', LOADER, cli, ...args, ...dbg]);
+    return spawnCollect(ecmd, eargv, { cwd: dir, env }, { timeoutMs });
+  }, { label: `quaude (${args.join(' ').slice(0, 80)})` });
 }
 function mockEnv(dir, url) {
   return { ...process.env, ...throwawayHome(`${dir}-home`), ANTHROPIC_BASE_URL: url, ANTHROPIC_API_KEY: 'sk-ant-mock', NODE_PATH: path.join(REPO, 'deps', 'claude', 'node_modules') };

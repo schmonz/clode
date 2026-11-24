@@ -22,6 +22,7 @@ const { startMockAnthropic, cannedSSE, cannedToolUseSSE } = require('./mock-anth
 const { toolResult, toolResultText, assertFailsOnMissingOutput } = require('../scripts/lib/tool-result.cjs');
 const { stageCli } = require('./oracle-models.cjs');
 
+const { runScanned } = require('./debug-log-gate.cjs');
 function providerBin() { const p = process.env.CLODE_PROVIDER_BIN; return p && fs.existsSync(p) ? p : null; }
 function stageBundle(bin) {
   // realpathSync.NATIVE, because os.tmpdir() on a GitHub runner is an 8.3 SHORT path:
@@ -58,9 +59,14 @@ function stageBundle(bin) {
   return { dir, cli };
 }
 // Async spawn (spawnSync would freeze the in-process mock — see node-shim-roundtrip.test.cjs).
+// Every turn writes a debug log, READ after it (test/debug-log-gate.cjs): no naude runs beside it here, so the absolute
+// rules (shim faults, timeouts), and a finding fails the row with its lines.
+let debugRuns = 0;
 function bootP(cli, dir, args, env, timeoutMs) {
-  const [ecmd, eargv] = engineSpawn(['run', LOADER, cli, ...args]);
-  return spawnCollect(ecmd, eargv, { cwd: dir, env }, { timeoutMs });
+  return runScanned(`${dir}-debug-${++debugRuns}.log`, (dbg) => {
+    const [ecmd, eargv] = engineSpawn(['run', LOADER, cli, ...args, ...dbg]);
+    return spawnCollect(ecmd, eargv, { cwd: dir, env }, { timeoutMs });
+  }, { label: `quaude (${args.join(' ').slice(0, 80)})` });
 }
 
 // Both rows judge the tool_result itself (scripts/lib/tool-result.cjs), never the follow-up

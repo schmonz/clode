@@ -20,6 +20,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { REPO, tjsPath, skipUnlessTjs, isApeFile, wantsTrampoline, LOADER } = require('../node-shim-helper.cjs');
+const { assertDebugLogClean } = require('../debug-log-gate.cjs');
 const { startMockAnthropic, cannedSSE, cannedToolUseSSE } = require('../mock-anthropic-helper.cjs');
 const { toolResult, toolResultText, assertFailsOnMissingOutput } = require('../../scripts/lib/tool-result.cjs');
 
@@ -151,4 +152,6 @@ test('subagent (Task) dispatch is identical under naude and quaude', async (t) =
   assert.match(quaude.stderr, DEBUG_LINE, 'quaude wrote no --debug-to-stderr log, so the check below would read nothing');
   const refused = quaude.stderr.split('\n').filter((l) => REGEXP_REFUSED.test(l));
   assert.deepStrictEqual(refused, [], 'quaude refused a RegExp native accepts, on this turn');
+  // the whole log, READ (test/debug-log-gate.cjs): quaude's held to naude's on the same turn
+  assertDebugLogClean({ label: 'quaude (Task dispatch)', quaude: quaude.stderr, reference: naude.stderr });
 });

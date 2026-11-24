@@ -16,6 +16,7 @@ const { startMockAnthropic, cannedSSE, cannedToolUseSSE } = require('../mock-ant
 const { toolResultText, assertFailsOnMissingOutput } = require('../../scripts/lib/tool-result.cjs');
 const { startMockMcpWs } = require('./mock-mcp-ws.cjs');
 
+const { runScanned } = require('../debug-log-gate.cjs');
 function providerBin() { const p = process.env.CLODE_PROVIDER_BIN; return p && fs.existsSync(p) ? p : null; }
 // THROUGH CLODE'S OWN STAGING (../oracle-models.cjs's stageCli), not the raw
 // extractor directly. The raw libexec/extract-claude-js.cjs emits the graph
@@ -28,9 +29,14 @@ function stageBundle(bin) {
   const { dir, cli } = require('../oracle-models.cjs').stageCli(bin);
   return { dir, cli };
 }
+// Every turn writes a debug log, READ after it (test/debug-log-gate.cjs): no naude runs beside it here, so the absolute
+// rules (shim faults, timeouts), and a finding fails the row with its lines.
+let debugRuns = 0;
 function bootP(cli, dir, args, env, timeoutMs) {
-  const [cmd, argv] = engineSpawn(['run', LOADER, cli, ...args]);
-  return spawnCollect(cmd, argv, { cwd: dir, env }, { timeoutMs });
+  return runScanned(`${dir}-debug-${++debugRuns}.log`, (dbg) => {
+    const [cmd, argv] = engineSpawn(['run', LOADER, cli, ...args, ...dbg]);
+    return spawnCollect(cmd, argv, { cwd: dir, env }, { timeoutMs });
+  }, { label: `quaude (${args.join(' ').slice(0, 80)})` });
 }
 const MCP_MARKER = 'MCP-WS-NEEDLE-8842';
 

@@ -18,6 +18,7 @@ const assert = require('node:assert');
 const { skipUnlessTjs } = require('./node-shim-helper.cjs');
 const { startMockAnthropic } = require('./mock-anthropic-helper.cjs');
 const { stageProviderCli, providerSkipReason, runNaudeModelAsync, runQuaudeModelAsync } = require('./oracle-models.cjs');
+const { runScanned, runReference } = require('./debug-log-gate.cjs');
 
 const TIMEOUT = 90000;
 
@@ -93,9 +94,10 @@ test('quaude-model (tjs + node-shim) matches the naude reference byte for byte',
   const naudeMock = await startMockAnthropic();
   let naude;
   try {
-    naude = await runNaudeModelAsync(staged.cli, ['-p', 'say PONG'], {
+    // each side writes a debug log (test/debug-log-gate.cjs); naude's is the reference quaude's is held to below
+    naude = await runReference(pathx.join(staged.dir, 'naude-debug.log'), (dbg) => runNaudeModelAsync(staged.cli, ['-p', 'say PONG', ...dbg], {
       cwd: staged.dir, env: mockEnv(naudeMock), timeout: TIMEOUT,
-    });
+    }));
   } finally {
     await naudeMock.close();
   }
@@ -104,9 +106,9 @@ test('quaude-model (tjs + node-shim) matches the naude reference byte for byte',
   const quaudeMock = await startMockAnthropic();
   let quaude;
   try {
-    quaude = await runQuaudeModelAsync(staged.cli, ['-p', 'say PONG'], {
+    quaude = await runScanned(pathx.join(staged.dir, 'quaude-debug.log'), (dbg) => runQuaudeModelAsync(staged.cli, ['-p', 'say PONG', ...dbg], {
       cwd: staged.dir, env: { ...mockEnv(quaudeMock), CLODE_SHIM_TRACE: '1' }, timeout: TIMEOUT,
-    });
+    }), { label: 'quaude-model (-p say PONG)', reference: naude.debugLog });
   } finally {
     await quaudeMock.close();
   }
