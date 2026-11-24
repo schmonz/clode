@@ -56,7 +56,11 @@ function walk(dir, out = [], depth = 0) {
   try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return out; }
   for (const e of entries) {
     const p = path.join(dir, e.name);
-    if (e.isDirectory()) walk(p, out, depth + 1);
+    // A dot-dir is never an installed package: npm reifies into, and retires a replaced copy to,
+    // `<scope>/.<name>-<random>` (CI 45354661143: the runner image's preinstalled Claude Code, bigger
+    // than the pinned 2.1.330, sat in @anthropic-ai/.claude-code-jDVXZWhW and won on size, and its
+    // half-moved binary could not be decoded). Only what npm finished installing is a provider.
+    if (e.isDirectory()) { if (!e.name.startsWith('.')) walk(p, out, depth + 1); }
     else if (e.isFile() && NAMES.has(e.name)) {
       let size = 0;
       try { size = fs.statSync(p).size; } catch { continue; }
@@ -98,7 +102,16 @@ function rank(f) {
   return 3;                                                      // wrong platform entirely
 }
 
-const found = walk(root).sort((a, b) => rank(a) - rank(b) || b.size - a.size);
+// THE INSTALLED VERSION, second: with two copies of the platform package on disk (a runner image's
+// own install beside the pinned one, nested and hoisted), the one whose package.json names the
+// version the wrapper says it installed is the provider; size only breaks a tie after that.
+function pkgVersion(dir) {
+  try { return JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8')).version || null; } catch { return null; }
+}
+const wrapperVersion = pkgVersion(path.join(root, '@anthropic-ai', 'claude-code'));
+const versionRank = (f) => (wrapperVersion && pkgVersion(path.dirname(f.path)) === wrapperVersion ? 0 : 1);
+
+const found = walk(root).sort((a, b) => rank(a) - rank(b) || versionRank(a) - versionRank(b) || b.size - a.size);
 const big = found.filter((f) => f.size >= MIN_BYTES && rank(f) < 3);
 
 if (!big.length) {

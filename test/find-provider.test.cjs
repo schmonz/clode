@@ -50,7 +50,7 @@ function fixture(files) {
   for (const [rel, size] of Object.entries(files)) {
     const p = path.join(root, rel);
     fs.mkdirSync(path.dirname(p), { recursive: true });
-    fs.writeFileSync(p, Buffer.alloc(size));
+    fs.writeFileSync(p, typeof size === 'string' ? size : Buffer.alloc(size));
   }
   return dir;
 }
@@ -193,4 +193,36 @@ test('the inspection exception names a reason, and the reason is about purpose',
       `${rel} is exempted from staging but no longer looks up a provider at all — `
       + 'drop it from INSPECTION_ONLY rather than leaving a stale exemption');
   }
+});
+
+// CI 45354661143 (linux-x64-pty): the runner image's own Claude Code, bigger than the pinned 2.1.330,
+// was left by `npm i -g @2.1.330` in npm's retire/staging dot-dir, and won on size; its binary could
+// not be decoded. The CLASS: more than one copy on disk, and the one npm did not finish installing (or
+// did not install for this pin) is picked. Two rules, each with its own row.
+const ver = (v) => JSON.stringify({ name: 'x', version: v });
+
+test('a copy in npm\'s staging dot-dir is never the provider, however big', () => {
+  const dir = fixture({
+    [`@anthropic-ai/.claude-code-jDVXZWhW/node_modules/${pkg}/${exe}`]: BIG + 9_000_000,
+    '@anthropic-ai/.claude-code-jDVXZWhW/package.json': ver('2.1.331'),
+    '@anthropic-ai/claude-code/package.json': ver('2.1.330'),
+    [`@anthropic-ai/claude-code/node_modules/${pkg}/${exe}`]: BIG,
+    [`@anthropic-ai/claude-code/node_modules/${pkg}/package.json`]: ver('2.1.330'),
+  });
+  const r = run(dir);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.match(slash(r.stdout.trim()), new RegExp(`/@anthropic-ai/claude-code/node_modules/${pkg.replace('/', '\\/')}/${exe}$`));
+});
+
+test('of two installed copies, the one at the wrapper\'s version wins over a bigger one', () => {
+  const dir = fixture({
+    '@anthropic-ai/claude-code/package.json': ver('2.1.330'),
+    [`${pkg}/${exe}`]: BIG + 9_000_000,
+    [`${pkg}/package.json`]: ver('2.1.331'),
+    [`@anthropic-ai/claude-code/node_modules/${pkg}/${exe}`]: BIG,
+    [`@anthropic-ai/claude-code/node_modules/${pkg}/package.json`]: ver('2.1.330'),
+  });
+  const r = run(dir);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.match(slash(r.stdout.trim()), /\/@anthropic-ai\/claude-code\/node_modules\//);
 });
