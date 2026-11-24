@@ -320,7 +320,38 @@ const VALUE_POST = {
 const PROC_SELF = {
   '': 'same', fd: 'own', fdinfo: 'own', io: 'own', stat: 'own', statm: 'own', status: 'own', smaps: 'own',
   smaps_rollup: 'own', sched: 'own', schedstat: 'own', task: 'own', auxv: 'own', exe: 'own', cmdline: 'own',
-  environ: 'own', limits: 'same', cgroup: 'same', mountinfo: 'same', mounts: 'same', ns: 'same', timerslack_ns: 'same',
+  environ: 'own', uid_map: 'same', limits: 'same', cgroup: 'same', mountinfo: 'same', mounts: 'same', ns: 'same', timerslack_ns: 'same',
 };
 
-module.exports = { READ_PATHS, STAT_PATHS, SAMPLES, KEY_SAMPLES, DRIVERS, UNCOVERED, VALUE_POST, PROC_SELF };
+// Every other absolute path a carve literal names: 'same' (a fixed fact of the machine, judged exactly) or 'volatile'
+// (changes between two reads moments apart, judged by type). Filled from what the carves plan; an unlisted path is a
+// plan finding.
+const ABS_PATHS = {
+  // The darwin and linux carves of 2.1.330, 2026-11-24. Facts of the machine, read twice moments apart: the same.
+  '/': 'same',
+  '/.dockerenv': 'same',
+  '/Applications': 'same',
+  '/dev/null': 'same',
+  '/etc/auto_master': 'same',
+  '/etc/localtime': 'same',
+  '/etc/machine-id': 'same',
+  '/etc/os-release': 'same',
+  '/etc/resolv.conf': 'same',
+  '/etc/ssh/ssh_config.d': 'same',
+  '/home': 'same',
+  '/Library/Developer/CommandLineTools': 'same',
+  '/mnt/c/Users': 'same',
+  '/net': 'same',
+  '/proc': 'same',
+  '/proc/sys/fs/binfmt_misc/WSLInterop': 'same',
+  '/proc/sys/kernel/overflowuid': 'same',
+  '/proc/version': 'same',
+  '/run/.containerenv': 'same',
+  '/sys/hypervisor/uuid': 'same',
+  '/Users': 'same',
+  '/var/db/xcode_select_link': 'same',
+  // The kernel's cumulative CPU and interrupt counters: they move between any two reads.
+  '/proc/stat': 'volatile',
+};
+
+module.exports = { READ_PATHS, STAT_PATHS, SAMPLES, KEY_SAMPLES, DRIVERS, UNCOVERED, VALUE_POST, PROC_SELF, ABS_PATHS };

@@ -120,13 +120,19 @@ function makePlan({ inventory, values, table = T, platform = process.platform })
     const plan1 = (args) => {
       const id = `${api}(${args.map(describe).join(', ')})`;
       // /proc/self/<entry> is the READER's: its own state is judged by what kind of answer (table.cjs PROC_SELF)
+      // Every other absolute path is classified too (table.cjs ABS_PATHS): one whose answer changes between two reads
+      // (an uptime, a load average) cannot be judged exactly any more than the reader's own state can.
       let own = false;
       for (const a of args) {
-        const m = a && typeof a.abs === 'string' && /^\/proc\/self(?:\/([^/]*))?/.exec(a.abs);
-        if (!m) continue;
-        const cls = table.PROC_SELF[m[1] || ''];
-        if (cls === 'own') own = true;
-        else if (cls !== 'same') findings.push(`${api}: the carve reads ${a.abs}, and /proc/self/${m[1]} is not classified (table.cjs PROC_SELF): is it the reader's own state, or the same for both sides?`);
+        if (!a || typeof a.abs !== 'string') continue;
+        const m = /^\/proc\/self(?:\/([^/]*))?/.exec(a.abs);
+        const cls = m ? table.PROC_SELF[m[1] || ''] : table.ABS_PATHS[a.abs];
+        if (cls === 'own' || cls === 'volatile') own = true;
+        else if (cls !== 'same') {
+          findings.push(m
+            ? `${api}: the carve reads ${a.abs}, and /proc/self/${m[1]} is not classified (table.cjs PROC_SELF): is it the reader's own state, or the same for both sides?`
+            : `${api}: the carve reads ${a.abs}, which is not classified (table.cjs ABS_PATHS): is its answer the same for two readers moments apart ('same'), or does it change ('volatile')?`);
+        }
       }
       return push({ id, api, style, args, post: own ? 'typeof' : driver.post, mutates: !!driver.mutates });
     };

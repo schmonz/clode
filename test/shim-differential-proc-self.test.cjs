@@ -25,3 +25,12 @@ test('an unclassified /proc/self entry is a plan finding naming it', () => {
   const plan = makePlan({ inventory: inv('/proc/self/oom_score'), values: {}, platform: 'linux' });
   assert.ok(plan.findings.some((f) => f.includes('/proc/self/oom_score') && f.includes('PROC_SELF')), plan.findings.join('\n'));
 });
+
+// The same rule for every other absolute path (table.cjs ABS_PATHS): a path whose answer moves between two reads is
+// judged by type, and a path nobody has classified is a finding, not an exact comparison that happens to pass today.
+test('every other absolute path is classified: volatile by type, unclassified a finding', () => {
+  const vol = makePlan({ inventory: inv('/proc/stat'), values: {}, platform: 'linux' });
+  assert.strictEqual(caseFor(vol, '/proc/stat').post, 'typeof');
+  const none = makePlan({ inventory: inv('/proc/uptime'), values: {}, platform: 'linux' });
+  assert.ok(none.findings.some((f) => f.includes('/proc/uptime') && f.includes('ABS_PATHS')), none.findings.join('\n'));
+});
