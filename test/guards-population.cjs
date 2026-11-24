@@ -272,6 +272,14 @@ const GUARD_EXCLUSIONS = [
       + 'positive control is the first test in the file: the verbatim red lines, each of which must be a finding.',
   },
   {
+    file: 'connect-family.test.cjs',
+    because: 'a behavioural differential, not a scan: one rows program (test/fixtures/family-rows.cjs) connects to '
+      + 'local servers it starts on one or both address families, under the tjs loader and under host node, and '
+      + 'its rows are compared with the SAME rows recorded inside native Bun (test/fixtures/connect-family-native.json, '
+      + 'a measurement, not upstream bytes). READS_ARTIFACT fires on REPO (the loader it executes) and on that '
+      + 'recording; the pattern matches are over what THOSE RUNS printed.',
+  },
+  {
     file: 'fetch-proxy.test.cjs',
     because: 'a behavioural differential, not a scan: one rows program (test/fixtures/fetch-proxy-rows.cjs) runs '
       + 'under the tjs loader through a recording proxy it starts, and its rows are compared with the SAME rows '
