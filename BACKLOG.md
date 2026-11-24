@@ -218,6 +218,11 @@ Still open:
 - **Linux and Windows rows** are unrecorded: the test skips win32 and skips wherever localhost does not resolve to both
   ::1 and 127.0.0.1; families are named by the host resolver's order so the darwin recording holds elsewhere.
 
+Measured: test/connect-family.test.cjs, 18 rows against test/fixtures/connect-family-native.json, darwin-arm64 (2026-11-24).
+
+Unmeasured. Native Bun against a blackholed first address, native's close-before-connect and DNS-failure wording, and
+linux/Windows rows: each needs a resolver or a host the oracle may not touch or does not have.
+
 ## TLS options: what the honour-or-refuse work (2026-11-23) left open
 
 Every TLS option a client is given is now honoured or refused by name (test/node-shim-tls-options.test.cjs, whose
