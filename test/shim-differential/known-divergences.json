@@ -973,105 +973,90 @@
   "r.closed": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.ctor": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.errno": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.message": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.name": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.path": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.syscall": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.ctor": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.errno": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.name": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.path": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -1080,105 +1065,90 @@
   "r.closed": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.ctor": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.errno": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.message": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.name": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.path": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.syscall": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.ctor": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.errno": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.name": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.path": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -1187,98 +1157,84 @@
   "r.closed": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.ctor": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.errno": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.message": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.name": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.syscall": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.ctor": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.errno": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.name": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.path": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -1287,98 +1243,84 @@
   "r.closed": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.ctor": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.errno": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.message": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.name": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.syscall": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.ctor": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.errno": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.name": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.path": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -1387,105 +1329,90 @@
   "r.closed": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.ctor": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.errno": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.message": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.name": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.path": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.syscall": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.ctor": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.errno": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.name": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.path": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -1494,105 +1421,90 @@
   "r.closed": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.ctor": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.errno": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.message": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.name": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.path": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.syscall": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.ctor": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.errno": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.name": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.path": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -1601,105 +1513,90 @@
   "r.closed": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.ctor": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.errno": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.message": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.name": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.path": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.syscall": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.ctor": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.errno": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.name": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.path": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -1708,105 +1605,90 @@
   "r.closed": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.ctor": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.errno": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.message": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.name": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.path": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.syscall": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.ctor": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.errno": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.name": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.path": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -1815,105 +1697,90 @@
   "r.closed": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.ctor": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.errno": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.message": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.name": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.path": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.syscall": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.ctor": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.errno": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.name": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.path": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -1922,105 +1789,90 @@
   "r.closed": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.ctor": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.errno": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.message": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.name": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.path": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.syscall": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.ctor": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.errno": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.name": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.path": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -2029,105 +1881,90 @@
   "r.closed": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.ctor": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.errno": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.message": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.name": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.path": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.syscall": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.ctor": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.errno": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.name": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.path": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -2136,105 +1973,90 @@
   "r.closed": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.ctor": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.errno": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.message": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.name": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.path": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.syscall": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.ctor": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.errno": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.name": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.path": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -2243,105 +2065,90 @@
   "r.closed": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.ctor": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.errno": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.message": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.name": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.path": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.syscall": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.ctor": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.errno": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.name": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.path": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -2350,105 +2157,90 @@
   "r.closed": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.ctor": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.errno": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.message": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.name": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.path": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.syscall": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.ctor": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.errno": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.name": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.path": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -2457,63 +2249,54 @@
   "after.file.data": {
    "cause": "DIFF-WRITESTREAM-FD",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "after.file.size": {
    "cause": "DIFF-WRITESTREAM-FD",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.ctor": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.errno": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.message": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.name": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.syscall": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -2522,63 +2305,54 @@
   "after.file.data": {
    "cause": "DIFF-WRITESTREAM-FD",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "after.file.size": {
    "cause": "DIFF-WRITESTREAM-FD",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.ctor": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.errno": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.message": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.name": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.syscall": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -2587,105 +2361,90 @@
   "r.closed": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.ctor": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.errno": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.message": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.name": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.path": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.syscall": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.ctor": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.errno": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.name": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.path": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -2694,105 +2453,90 @@
   "r.closed": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.ctor": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.errno": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.message": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.name": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.path": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.syscall": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.ctor": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.errno": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.name": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.path": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -2801,105 +2545,90 @@
   "r.closed": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.ctor": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.errno": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.message": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.name": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.path": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.syscall": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.ctor": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.errno": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.name": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.path": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -2908,105 +2637,90 @@
   "r.closed": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.ctor": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.errno": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.message": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.name": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.path": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.syscall": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.ctor": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.errno": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.name": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.path": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -3015,105 +2729,90 @@
   "r.closed": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.ctor": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.errno": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.message": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.name": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.path": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.syscall": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.ctor": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.errno": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.name": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.path": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -3122,98 +2821,84 @@
   "r.closed": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.ctor": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.errno": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.message": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.name": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.syscall": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.ctor": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.errno": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.name": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.path": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -3222,98 +2907,84 @@
   "r.closed": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.ctor": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.errno": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.message": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.name": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.syscall": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.ctor": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.errno": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.name": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.path": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -3322,105 +2993,90 @@
   "r.closed": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.ctor": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.errno": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.message": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.name": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.path": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.syscall": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.ctor": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.errno": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.name": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.path": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -3429,105 +3085,90 @@
   "r.closed": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.ctor": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.errno": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.message": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.name": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.path": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.syscall": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.ctor": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.errno": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.name": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.path": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -3536,105 +3177,90 @@
   "r.closed": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.ctor": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.errno": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.message": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.name": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.path": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.syscall": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.ctor": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.errno": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.name": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.path": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -3643,105 +3269,90 @@
   "r.closed": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.ctor": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.errno": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.message": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.name": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.path": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.syscall": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.ctor": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.errno": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.name": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.path": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -3750,105 +3361,90 @@
   "r.closed": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.ctor": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.errno": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.message": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.name": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.path": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.syscall": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.ctor": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.errno": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.name": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.path": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -3857,105 +3453,90 @@
   "r.closed": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.ctor": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.errno": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.message": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.name": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.path": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.syscall": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.ctor": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.errno": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.name": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.path": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -3964,105 +3545,90 @@
   "r.closed": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.ctor": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.errno": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.message": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.name": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.path": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.syscall": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.ctor": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.errno": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.name": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.path": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -4071,105 +3637,90 @@
   "r.closed": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.ctor": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.errno": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.message": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.name": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.path": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.syscall": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.ctor": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.errno": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.name": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.path": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -4178,105 +3729,90 @@
   "r.closed": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.ctor": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.errno": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.message": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.name": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.path": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.syscall": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.ctor": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.errno": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.name": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.path": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -4285,105 +3821,90 @@
   "r.closed": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.ctor": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.errno": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.message": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.name": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.path": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.syscall": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.ctor": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.errno": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.name": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.path": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -4392,91 +3913,78 @@
   "after.new.atimeMs": {
    "cause": "DIFF-WRITESTREAM-FD",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "after.new.data": {
    "cause": "DIFF-WRITESTREAM-FD",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "after.new.kind": {
    "cause": "DIFF-WRITESTREAM-FD",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "after.new.mode": {
    "cause": "DIFF-WRITESTREAM-FD",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "after.new.mtimeMs": {
    "cause": "DIFF-WRITESTREAM-FD",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "after.new.size": {
    "cause": "DIFF-WRITESTREAM-FD",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.ctor": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.errno": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.message": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.name": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.syscall": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -4485,91 +3993,78 @@
   "after.new.atimeMs": {
    "cause": "DIFF-WRITESTREAM-FD",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "after.new.data": {
    "cause": "DIFF-WRITESTREAM-FD",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "after.new.kind": {
    "cause": "DIFF-WRITESTREAM-FD",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "after.new.mode": {
    "cause": "DIFF-WRITESTREAM-FD",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "after.new.mtimeMs": {
    "cause": "DIFF-WRITESTREAM-FD",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "after.new.size": {
    "cause": "DIFF-WRITESTREAM-FD",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.code": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.ctor": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.errno": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.message": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.name": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.end.error.syscall": {
    "cause": "DIFF-WRITESTREAM-THROWS",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -5567,7 +5062,6 @@
   "r.error.code": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
@@ -5581,28 +5075,24 @@
   "r.error.errno": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.name": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -5611,7 +5101,6 @@
   "r.error.code": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
@@ -5625,28 +5114,24 @@
   "r.error.errno": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.name": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -5655,7 +5140,6 @@
   "r.error.code": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
@@ -5669,28 +5153,24 @@
   "r.error.errno": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.name": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -5699,7 +5179,6 @@
   "r.error.code": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
@@ -5713,28 +5192,24 @@
   "r.error.errno": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.name": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -5743,35 +5218,30 @@
   "after.emptydir.atimeMs": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "after.emptydir.kind": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "after.emptydir.mode": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "after.emptydir.mtimeMs": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.code": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
@@ -5785,42 +5255,36 @@
   "r.error.errno": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.name": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.path": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.undefined": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -5829,35 +5293,30 @@
   "after.emptydir.atimeMs": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "after.emptydir.kind": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "after.emptydir.mode": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "after.emptydir.mtimeMs": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.code": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
@@ -5871,42 +5330,36 @@
   "r.error.errno": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.name": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.path": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.undefined": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -5915,35 +5368,30 @@
   "after.emptydir.atimeMs": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "after.emptydir.kind": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "after.emptydir.mode": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "after.emptydir.mtimeMs": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.code": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
@@ -5957,42 +5405,36 @@
   "r.error.errno": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.name": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.path": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.undefined": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -6001,35 +5443,30 @@
   "after.emptydir.atimeMs": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "after.emptydir.kind": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "after.emptydir.mode": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "after.emptydir.mtimeMs": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.code": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
@@ -6043,42 +5480,36 @@
   "r.error.errno": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.name": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.path": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.undefined": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -8973,7 +8404,6 @@
   "r.error.code": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
@@ -8987,28 +8417,24 @@
   "r.error.errno": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.name": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -9017,7 +8443,6 @@
   "r.error.code": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
@@ -9031,28 +8456,24 @@
   "r.error.errno": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.name": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -9061,7 +8482,6 @@
   "r.error.code": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
@@ -9075,28 +8495,24 @@
   "r.error.errno": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.name": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -9105,35 +8521,30 @@
   "after.emptydir.atimeMs": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "after.emptydir.kind": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "after.emptydir.mode": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "after.emptydir.mtimeMs": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.code": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
@@ -9147,42 +8558,36 @@
   "r.error.errno": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.name": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.path": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.undefined": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -9191,35 +8596,30 @@
   "after.emptydir.atimeMs": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "after.emptydir.kind": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "after.emptydir.mode": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "after.emptydir.mtimeMs": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.code": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
@@ -9233,42 +8633,36 @@
   "r.error.errno": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.name": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.path": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.undefined": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   }
@@ -9277,35 +8671,30 @@
   "after.emptydir.atimeMs": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "after.emptydir.kind": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "after.emptydir.mode": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "after.emptydir.mtimeMs": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.code": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
@@ -9319,42 +8708,36 @@
   "r.error.errno": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.message": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.name": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.path": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.error.syscall": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   },
   "r.undefined": {
    "cause": "DIFF-RM",
    "on": [
-    "darwin",
     "linux"
    ]
   }

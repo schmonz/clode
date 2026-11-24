@@ -647,7 +647,10 @@ shapes cut to the driver's argument count.
 
 - DIFF-WRITESTREAM-THROWS: `fs.createWriteStream` on a directory or a missing parent throws at once; node returns
   the stream and emits 'error' (and then 'close', so r.closed is listed too: there is no stream to report it).
-- DIFF-WRITESTREAM-FD: `fs.createWriteStream(p, {fd})` ignores the fd and writes to the path.
+  FIXED 2026-11-23 by the options census (the open error is the stream's 'error'; no darwin pair left). Linux pairs
+  as DIFF-SCANDIR's.
+- DIFF-WRITESTREAM-FD: `fs.createWriteStream(p, {fd})` ignores the fd and writes to the path. FIXED 2026-11-23 (the
+  stream writes the fd; autoClose closes it; no darwin pair left). Linux pairs as DIFF-SCANDIR's.
 - DIFF-ASYNC-ERRORS: errors from tjs's async calls (fs.promises.readFile, link, utimes, lutimes, statfs; the
   callback readFile; a read stream's 'error') carry no errno, syscall or path, and their message lacks node's
   `, read`/`, link 'a' -> 'b'` tail.
@@ -669,7 +672,8 @@ shapes cut to the driver's argument count.
   2026-11-21 for realpathSync and the callback realpath (node's JS walk: lstat, or stat for a link); `.native` and
   fs.promises.realpath keep the realpath syscall, as node's do. Linux pairs as DIFF-SCANDIR's.
 - DIFF-RM: `rmSync(dir)` without recursive says ENOTEMPTY/rmdir where node says ERR_FS_EISDIR; `rmSync` with
-  force through a regular file throws ENOTDIR where node succeeds.
+  force through a regular file throws ENOTDIR where node succeeds. The ERR_FS_EISDIR half FIXED 2026-11-23 by the
+  options census (112 darwin fields gone); what darwin still lists is the rest. Linux pairs as DIFF-SCANDIR's.
 - DIFF-MKDTEMP-ERROR: mkdtemp's error names syscall `mkdir` and the random name; node says `mkdtemp` and
   `prefixXXXXXX`.
 - DIFF-COPYFILE: `fs.promises.copyFile` is a read and a write, so its errors are the read's (EISDIR `read`), never

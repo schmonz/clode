@@ -109,7 +109,9 @@ function surfacesProbe(rgs, args) {
       const s = cp.spawnSync(rg, ARGS, { encoding: 'utf8' });
       r.spawnSync = { status: s.status, out: txt(s.stdout), err: txt(s.stderr) || (s.error ? String(s.error.code) : '') };
       try {
-        const b = Bun.spawn([rg, ...ARGS]);
+        // stderr: 'pipe' asked for, as native Bun needs (its default is to INHERIT stderr, so b.stderr is undefined;
+        // bun-shim piped it until the options census matched native, test/fixtures/options-census-bun-rows.cjs)
+        const b = Bun.spawn([rg, ...ARGS], { stdout: 'pipe', stderr: 'pipe' });
         const [o, e] = await Promise.all([collect(b.stdout), collect(b.stderr)]);
         r['Bun.spawn'] = { status: await b.exited, out: o, err: e };
       } catch (e) { r['Bun.spawn'] = { status: null, out: '', err: String(e.message) }; }
