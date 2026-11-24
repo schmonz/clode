@@ -1321,6 +1321,20 @@ jobs:
         run: node test/harness-preflight.cjs
       # From here every gate runs whatever an earlier one concluded, needing only the setup it
       # uses (test/ci-step-chaining.test.cjs): a red TUI step must not hide the notify surface.
+      # node-shim's rows that need a real terminal (process.execve's replaced image, spawnSync stdio:'inherit'
+      # owning the tty, the /tui relaunch end to end): the node-shim oracles' glob leaves node-shim-tty-* out
+      # because the linux oracle container has no node-pty (CI 45224603603). This job has the harness and perl.
+      - name: node-shim pty rows — process.execve and stdio 'inherit' under a real terminal
+        if: ${{ !cancelled() && steps.harness.outcome == 'success' }}
+        env:
+          CLODE_TJS: ${{ runner.temp }}/tjs/tjs
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/cells"
+          node --require ./test/file-watchdog-preload.cjs --test --test-concurrency=1 \
+            --test-reporter=spec --test-reporter-destination=stdout \
+            --test-reporter=./test/cell-reporter.mjs --test-reporter-destination="$RUNNER_TEMP/cells/pty-node-shim.jsonl" \
+            test/node-shim-tty-execve.test.cjs
       - name: quaude-build + e2e-tui-tjs + e2e-ctrlz-tui + interactive-render/frame/resize-diff
         if: ${{ !cancelled() && steps.deps.outcome == 'success' && steps.harness.outcome == 'success' }}
         # Named explicitly rather than a glob, so a future reader can tell what
@@ -1730,6 +1744,10 @@ jobs:
           set -euo pipefail
           chmod +x "$CLODE_TJS"
           "$CLODE_TJS" eval 'console.log("darwin-arm64 tjs alive:", tjs.version)'
+          # test/node-shim-tty-execve.test.cjs (added to FILES below) runs under node-pty, whose prebuilt spawn-helper
+          # npm leaves without its +x bit here: every pty.spawn() failed "posix_spawnp failed" (CI 45224603603). The
+          # preflight restores it and proves a pty opens before anything needs one.
+          node test/harness-preflight.cjs
           # EXCLUDE only node-shim-tty (needs a controlling terminal, covered by
           # windows-amd64-tui + the POSIX e2e). Everything else runs here — including
           # child-process/core/bunshim (which the linux oracle excludes for portability)
@@ -1762,6 +1780,9 @@ jobs:
           # before this one) through node-shim's http client against a token-endpoint-shaped
           # server, judged against host node. It needs an engine and axios; this job has both.
           FILES="$FILES test/zlib-axios-oracle.test.cjs"
+          # test/node-shim-tty-execve.test.cjs: process.execve's replaced image and the /tui relaunch under a real
+          # terminal, the macOS half of what linux-x64-pty runs (node-pty, made spawnable by the preflight above).
+          FILES="$FILES test/node-shim-tty-execve.test.cjs"
           mkdir -p "$RUNNER_TEMP/cells"
           node --require ./test/file-watchdog-preload.cjs --test --test-concurrency=1 --test-reporter=spec --test-reporter-destination=stdout \
             --test-reporter=./test/cell-reporter.mjs --test-reporter-destination="$RUNNER_TEMP/cells/node-shim-oracle-darwin.jsonl" \

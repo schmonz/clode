@@ -213,6 +213,9 @@ const FILES = {
     'os.getPriority/setPriority under quaude answer as host node does, both under nice -n 5':
       'nice(1) is POSIX; the real-PowerShell row in the same file judges Windows',
   } },
+  // node-shim's pty rows for process.execve and spawnSync stdio:'inherit' (the /tui relaunch): out of the oracles'
+  // glob with node-shim-tty (ORACLE_EXCLUDE), run by name where node-pty is installed and preflighted.
+  'test/node-shim-tty-execve.test.cjs': { jobs: ['linux-x64-pty', 'node-shim-oracle-darwin'] },
   'test/node-shim-tty.test.cjs': { jobs: ['windows-amd64-tui'], skips: {
     'process.stdout emits resize with updated columns on SIGWINCH': 'SIGWINCH/resize N/A on Windows ConPTY (node emits none either)',
   } },
