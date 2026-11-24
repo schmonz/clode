@@ -39,6 +39,9 @@ const VERDICT_KINDS = ['absorbed', 'env-only', 'dead', 'phase4-engine'];
 // that parses its own argv (clode-main -> clode-build -> a spawned build/test worker). A
 // flag cannot do that — it would have to be re-typed at every spawn site — so making these
 // flags would be a regression, not an improvement.
+const PROVIDER_RECORD_BECAUSE = 'env-only by necessity: CI writes these to $GITHUB_ENV right after it installs the pinned '
+  + 'provider (scripts/record-provider.mjs) and scripts/stage-provider.mjs refuses a provider that no longer matches them; '
+  + 'they carry one job\'s record from one step to a later one, and no user sets them.';
 const PLUMBING_BECAUSE = 'env-only by necessity: the harness sets this once and it must '
   + 'survive three layers of spawn into a worker that parses its own argv; a CLI flag '
   + 'cannot survive that chain, so making this a flag would be a regression, not a feature.';
@@ -198,6 +201,9 @@ const VERDICTS = [
       + "env-only says it can't become a flag, not that it can't be documented as env.)" },
   { name: 'CLODE_DEPS', verdict: 'env-only', because: PLUMBING_BECAUSE },
   { name: 'CLODE_PROVIDERS', verdict: 'env-only', because: PLUMBING_BECAUSE },
+  { name: 'CLODE_PROVIDER_RECORDED_PATH', verdict: 'env-only', because: PROVIDER_RECORD_BECAUSE },
+  { name: 'CLODE_PROVIDER_RECORDED_SHA256', verdict: 'env-only', because: PROVIDER_RECORD_BECAUSE },
+  { name: 'CLODE_PROVIDER_RECORDED_SIZE', verdict: 'env-only', because: PROVIDER_RECORD_BECAUSE },
   { name: 'CLODE_NODES', verdict: 'env-only', because: PLUMBING_BECAUSE },
   { name: 'CLODE_TRACE_LOG', verdict: 'env-only', because: PLUMBING_BECAUSE },
   { name: 'CLODE_WATCH_DIR', verdict: 'env-only', because: PLUMBING_BECAUSE },
