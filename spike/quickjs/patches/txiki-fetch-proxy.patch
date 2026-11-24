@@ -298,21 +298,21 @@ diff --git a/src/httpclient.c b/src/httpclient.c
 +    JSValue host = JS_GetPropertyStr(ctx, argv[0], "host");
 +    JSValue port = JS_GetPropertyStr(ctx, argv[0], "port");
 +    JSValue hdrs = JS_GetPropertyStr(ctx, argv[0], "headers");
-+    const char *s_host = JS_ToCString(ctx, host);
++    const char *s_proxy_host = JS_ToCString(ctx, host);
 +    const char *s_hdrs = JS_IsUndefined(hdrs) ? NULL : JS_ToCString(ctx, hdrs);
 +    int32_t n_port = 0;
-+    int bad = !s_host || (!JS_IsUndefined(hdrs) && !s_hdrs) || JS_ToInt32(ctx, &n_port, port) || n_port <= 0 ||
++    int bad = !s_proxy_host || (!JS_IsUndefined(hdrs) && !s_hdrs) || JS_ToInt32(ctx, &n_port, port) || n_port <= 0 ||
 +              n_port > 65535;
 +
 +    if (!bad) {
-+        h->proxy_host = js_strdup(ctx, s_host);
++        h->proxy_host = js_strdup(ctx, s_proxy_host);
 +        h->proxy_headers = js_strdup(ctx, s_hdrs ? s_hdrs : "");
 +        h->proxy_port = n_port;
 +        h->proxy_kind = 2;
 +        bad = !h->proxy_host || !h->proxy_headers;
 +    }
 +
-+    JS_FreeCString(ctx, s_host);
++    JS_FreeCString(ctx, s_proxy_host);
 +    JS_FreeCString(ctx, s_hdrs);
 +    JS_FreeValue(ctx, host);
 +    JS_FreeValue(ctx, port);
@@ -354,13 +354,13 @@ diff --git a/src/ws.c b/src/ws.c
 +        JSValue phost = JS_GetPropertyStr(ctx, argv[4], "host");
 +        JSValue pport = JS_GetPropertyStr(ctx, argv[4], "port");
 +        JSValue phdrs = JS_GetPropertyStr(ctx, argv[4], "headers");
-+        const char *s_host = JS_ToCString(ctx, phost);
++        const char *s_proxy_host = JS_ToCString(ctx, phost);
 +        const char *s_hdrs = JS_IsUndefined(phdrs) ? "" : JS_ToCString(ctx, phdrs);
 +        int32_t n_port = 0;
-+        route_ok = s_host && s_hdrs && !JS_ToInt32(ctx, &n_port, pport) && n_port > 0 && n_port <= 65535;
-+        cci.vhost = route_ok ? tjs__lws_proxy_vhost(ctx, s_host, n_port, s_hdrs) : NULL;
++        route_ok = s_proxy_host && s_hdrs && !JS_ToInt32(ctx, &n_port, pport) && n_port > 0 && n_port <= 65535;
++        cci.vhost = route_ok ? tjs__lws_proxy_vhost(ctx, s_proxy_host, n_port, s_hdrs) : NULL;
 +        route_ok = route_ok && cci.vhost != NULL;
-+        JS_FreeCString(ctx, s_host);
++        JS_FreeCString(ctx, s_proxy_host);
 +        if (!JS_IsUndefined(phdrs)) {
 +            JS_FreeCString(ctx, s_hdrs);
 +        }

@@ -17,8 +17,6 @@ const ERR = '^r\\.error\\.(ctor|name|message|code|errno|syscall|path|dest)$';
 const CAUSES = [
   // r.closed: the shim's open throws before there is a stream, so there is no .closed to report (node's stream
   // errors, then closes)
-  { cause: 'DIFF-WRITESTREAM-THROWS', api: '^fs\\.createWriteStream$', leaf: '^r\\.(end(\\.error\\.\\w+)?|error\\.\\w+|closed)$' },
-  { cause: 'DIFF-WRITESTREAM-FD', api: '^fs\\.createWriteStream$', id: 'fd:fd:', leaf: '^after\\.' },
   { cause: 'DIFF-ASYNC-ERRORS', api: '^fs(/promises)?\\.(readFile|link|utimes|lutimes|statfs)$', id: '\\((<|")', leaf: '^r\\.error\\.(message|errno|syscall|path|dest)$' },
   { cause: 'DIFF-ASYNC-ERRORS', api: '^fs\\.createReadStream$', leaf: '^r\\.end\\.error\\.(message|errno|syscall|path)$' },
   { cause: 'DIFF-SCANDIR', api: '^fs(/promises)?\\.(readdirSync|readdir|opendir)$', leaf: '^r\\.error\\.(message|syscall)$' },
