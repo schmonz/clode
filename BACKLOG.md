@@ -8,6 +8,28 @@ Concrete clode-under-Node divergences from native Claude Code, to triage and fix
 That page is GENERATED from `scripts/build-graph.cjs` — the one declaration of the build — so it
 cannot drift from it; it is also where the honest answer to "does this need node?" lives.
 
+## quaude's Datadog log flush times out where native's does not (2026-11-23)
+
+Found by the debug-log gate (test/debug-log-gate.cjs) the first time it read the tool drivers' logs: every
+test/fidelity/tools-local.test.cjs mode turn logged `[ERROR] Failed to flush logs to Datadog: AxiosError: timeout of
+5000ms exceeded` (the interactive one twice, 12 s apart). Reproduced alone: a -p turn whose Bash call runs `sleep 20`,
+the carve under naude and under tjs + node-shim, each against a mock; quaude's log has the line, naude's has no Datadog
+line at all. The flush is the bundle's axios POST (its own redirect-following Writable, `Dt`, writing a gzip'd body)
+to https://http-intake.logs.us5.datadoghq.com/api/v2/logs with the bundle's DD-API-KEY. Telemetry only: no turn
+depends on it, which is why nothing visible failed.
+
+Ruled out, each by a scratch probe under the same engine (all answered 403 for a dummy key in 100-400 ms, as node
+did): a raw https.request POST of a gzip'd body (end(body), write+end, two chunks); a Writable cut to `Dt`'s shape
+(_write forwards to the ClientRequest, _final ends it) doing axios's write(buffer)+end(); that POST made while a
+piped child runs; three POSTs 15 s apart through one keep-alive https.Agent. Not yet tried: the bundle's own axios
+instance outside the bundle, the flush's real body size, and whether native's flush is attempted at all (its log
+says nothing either way). test/debug-log-gate.cjs KNOWN names this line until it closes.
+
+Measured: test/fidelity/tools-local.test.cjs under the gate, and scratch -p turns of the 2.1.330 carve under naude and quaude (2026-11-23)
+
+Unmeasured. The root cause; whether native's flush runs and succeeds on the same turn (a recording proxy, or the
+intake's answer captured under naude, would say).
+
 ## TLS options: what the honour-or-refuse work (2026-11-23) left open
 
 Every TLS option a client is given is now honoured or refused by name (test/node-shim-tls-options.test.cjs, whose

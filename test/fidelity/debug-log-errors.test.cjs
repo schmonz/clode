@@ -25,16 +25,11 @@ const { throwawayHome } = require('../throwaway-home.cjs');
 const { REPO, tjsPath, skipUnlessTjs, isApeFile, wantsTrampoline, LOADER } = require('../node-shim-helper.cjs');
 const { startMockAnthropic, cannedSSE } = require('../mock-anthropic-helper.cjs');
 const { findings, shape } = require('../debug-log-scan.cjs');
+const { KNOWN, judgeDebugLog, assertDebugLogClean } = require('../debug-log-gate.cjs');
 
 function providerBin() { const p = process.env.CLODE_PROVIDER_BIN; return p && fs.existsSync(p) ? p : null; }
 
-// Quaude-only [ERROR] shapes, each a RULED or FILED divergence with where it is written down. Adding one is a decision.
-const KNOWN = {
-  [shape('2026-11-23T13:29:30.313Z [ERROR] [uds-messaging] Failed to create server: Error: quaude does not support the sandbox yet: net.createServer')]:
-    'net.createServer is an honest throwing stub (USER ruling M1, 2026-11-18; test/shim-surface/golden.json, the '
-    + 'http.request/net.createServer note): quaude serves no UDS messaging socket',
-};
-
+// KNOWN, the RULED or FILED lines with their reasons, is test/debug-log-gate.cjs's: one list for every run the gate reads.
 // THE RED RUNS, verbatim. The first two are from a live NetBSD/arm64 quaude --debug-file log (2026-11-23); the
 // timeout lines are the Writable-without-_final hang as the bundle logged it; the connect line is this row's own
 // first run on darwin-arm64 (2026-11-23), before connect-multiple stopped abandoning slow TLS handshakes.
@@ -62,14 +57,32 @@ test('the debug-log scan finds every red line, and nothing in what naude also lo
     '2026-11-23T13:29:30.313Z [ERROR] [uds-messaging] Failed to create server: Error: quaude does not support the sandbox yet: net.createServer',
     '2026-11-23T13:29:30.899Z [ERROR] [Bootstrap] fetch failed: AxiosError: Request failed with status code 401',
   ].join('\n');
-  assert.deepStrictEqual(findings({ quaude: quaudeGreen, naude: NAUDE, known: KNOWN }), { shimFaults: [], timeouts: [], newErrors: [] });
-  const f = (line) => findings({ quaude: `${quaudeGreen}\n${line}`, naude: NAUDE, known: KNOWN });
+  assert.deepStrictEqual(judgeDebugLog({ quaude: quaudeGreen, reference: NAUDE }).findings, []);
+  const f = (line) => findings({ quaude: `${quaudeGreen}\n${line}`, naude: NAUDE });
   assert.deepStrictEqual(f(RED.zlib).shimFaults, [RED.zlib]);
   assert.deepStrictEqual(f(RED.x509).shimFaults, [RED.x509]);
   for (const k of ['bootstrap', 'axiosTimeout', 'catalog', 'connect']) assert.deepStrictEqual(f(RED[k]).timeouts, [RED[k]], k);
-  for (const k of ['zlib', 'x509', 'axiosTimeout', 'catalog', 'connect']) assert.strictEqual(f(RED[k]).newErrors.length, 1, k);
+  for (const k of ['zlib', 'x509', 'axiosTimeout', 'catalog', 'connect']) assert.strictEqual(f(RED[k]).newErrors.length, 2, k);   // + the uds line
+  // the gate, as every harness applies it: each red line is a finding, differential and absolute alike
+  for (const k of Object.keys(RED)) {
+    const q = `${quaudeGreen}\n${RED[k]}`;
+    assert.ok(judgeDebugLog({ quaude: q, reference: NAUDE }).findings.some((x) => x.includes(RED[k].slice(25))), `differential: ${k}`);
+    assert.ok(judgeDebugLog({ quaude: q, reachable: true }).findings.some((x) => x.includes(RED[k].slice(25))), `absolute: ${k}`);
+  }
+  // absolute, unreachable host: a timeout is not judged, and the result SAYS so (never silent)
+  const off = judgeDebugLog({ quaude: `${quaudeGreen}\n${RED.axiosTimeout}`, reachable: false });
+  assert.deepStrictEqual(off.findings, []);
+  assert.match(off.notes.join('\n'), /not reachable[\s\S]*NOT judged/);
   // the uds line is a finding unless KNOWN names it
-  assert.strictEqual(findings({ quaude: quaudeGreen, naude: NAUDE }).newErrors.length, 1);
+  assert.strictEqual(judgeDebugLog({ quaude: quaudeGreen, reference: NAUDE, known: [] }).findings.length, 1);
+  assert.ok(KNOWN.every((k) => k.match instanceof RegExp && /BACKLOG/.test(k.reason)), 'every KNOWN entry names its backlog item');
+  for (const k of KNOWN) {
+    assert.ok(k.match.test(k.example) && k.match.test(shape(k.example)), `KNOWN ${k.match} matches its example, raw and as a shape`);
+    assert.deepStrictEqual(judgeDebugLog({ quaude: k.example, reachable: true }).findings, [], `KNOWN ${k.match} exempts its example (absolute)`);
+    assert.deepStrictEqual(judgeDebugLog({ quaude: k.example, reference: NAUDE }).findings, [], `KNOWN ${k.match} exempts its example (differential)`);
+  }
+  // no log at all is a finding: the debug file was not honoured
+  assert.match(judgeDebugLog({ quaude: null }).findings[0], /wrote no debug log/);
   // a timeout naude logs too is the network's, not quaude's
   assert.deepStrictEqual(findings({ quaude: RED.axiosTimeout, naude: RED.axiosTimeout.replace('5000', '5000') }).timeouts, []);
 });
@@ -103,6 +116,5 @@ test('quaude\'s --debug log of a -p turn says nothing naude\'s does not', async 
   assert.match(quaude.stdout, /PONG/);
   assert.match(naude.stderr, DEBUG_LINE, 'naude wrote no debug log, so there is nothing to compare against');
   assert.match(quaude.stderr, DEBUG_LINE, 'quaude wrote no debug log, so the checks below would read nothing');
-  assert.deepStrictEqual(findings({ quaude: quaude.stderr, naude: naude.stderr, known: KNOWN }),
-    { shimFaults: [], timeouts: [], newErrors: [] });
+  assertDebugLogClean({ label: 'quaude (-p hi)', quaude: quaude.stderr, reference: naude.stderr });
 });

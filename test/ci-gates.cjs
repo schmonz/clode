@@ -184,6 +184,9 @@ const FILES = {
   'test/fidelity/regexp-capture-census.test.cjs': { jobs: ['node-shim-oracle'] },
   // quaude's --debug log read beside naude's (2026-11-23): needs the engine and the staged provider.
   'test/fidelity/debug-log-errors.test.cjs': { jobs: ['node-shim-oracle'] },
+  // quaude's --debug log of an interactive session (boot, a turn, /tui, /quit) beside native's: a pty, a built quaude
+  // and a native that runs, which these two jobs have.
+  'test/fidelity/debug-log-interactive.test.cjs': { jobs: ['linux-x64-pty', 'node-shim-oracle-darwin'] },
   'test/credential-store-attempted.test.cjs': { jobs: ['node-shim-oracle-darwin'] },
   // axios through node-shim's http client vs host node (the 2026-11-22 /login failure); needs an engine and the
   // test harness's axios, which node-shim-oracle-darwin installs before its oracle step.

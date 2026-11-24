@@ -48,6 +48,11 @@ require('./suite-home.cjs');   // the suite's own HOME, also for a standalone `n
 //   opts.prompt      the -p prompt ('drive the tool'), or what an interactive turn types.
 //   opts.interactive  true: no -p; the turn runs in a pty and the prompt is typed (interactiveTurn). Needs the PTY harness
 //                    (node-pty, test/tui-screen.cjs) and a POSIX host.
+//   opts.after       interactive only: what is typed AFTER the turn, in order, each { label, send: TEXT[, until: TEXT]
+//                    [, exits: true] } (a slash command and its Enter, say). `exits` marks the step the session ends
+//                    on by itself (/quit): only the last may say it, and the turn is unfinished unless the child did
+//                    exit there. SIDE.exit is how the session ended; SIDE.turn.after the labels typed (so no mode cell
+//                    is judged on a session that typed more than its turn).
 //   opts.env         extra environment for both sides (SHELL, say). It may not name HOME, USERPROFILE, or any CLAUDE* or
 //                    ANTHROPIC* key (CLAUDE_CONFIG_DIR, ANTHROPIC_BASE_URL among them): those are the sandbox and the
 //                    mock, and a driver that overrode one would quietly run against the developer's home or a real
@@ -68,7 +73,11 @@ require('./suite-home.cjs');   // the suite's own HOME, also for a standalone `n
 //   native treats { absent } as a precondition failure (skip by name, which a CI job then judges), never as the
 //   comparison passing.
 //   opts.timeoutMs   per side (240 s), times CLODE_TIMEOUT_SCALE on a slow host.
-// SIDE = { text, isError, result, results, raw, sent, status, signal, stdout, stderr, timedOut, home, keychain, turn, inspected }
+// SIDE = { text, isError, result, results, raw, sent, status, signal, stdout, stderr, timedOut, home, keychain, turn, inspected,
+//          debugLog }
+//   debugLog         the side's --debug-file, as text (null when it wrote none). EVERY side runs with one, and driveTool
+//                    holds quaude's to native's (test/debug-log-gate.cjs) and REJECTS with the offending lines on a
+//                    finding; the judgement is out.debugLog.
 //   turn             what the turn ran: { bin, args, allowedTools, scripted, interactive, switches, env (its keys), settings
 //                    (files setup wrote that are settings) }; modeTurnFinding judges it against MODE_TURNS.
 //   keychain         the `security` calls the side made, each its argv, answered by the stub (shadowKeychain).
@@ -94,6 +103,7 @@ const { spawnCollect } = require('./spawn-collect.cjs');
 const { throwawayHome } = require('./throwaway-home.cjs');
 const { startMockAnthropic, cannedSSE, cannedToolUseSSE, cannedMessage } = require('./mock-anthropic-helper.cjs');
 const { toolResult, toolResultText } = require('../scripts/lib/tool-result.cjs');
+const { debugFileArgs, readLog, assertDebugLogClean } = require('./debug-log-gate.cjs');
 
 const DONE = 'TOOL-DRIVER-DONE';
 // Keys opts.env may not set: the sandbox (HOME, USERPROFILE, CLAUDE*) and the mock (ANTHROPIC*).
@@ -224,7 +234,7 @@ async function runSide(side, bin, rules, opts, base) {
   const work = path.join(base, 'work');
   fs.rmSync(work, { recursive: true, force: true });
   fs.rmSync(path.join(base, side), { recursive: true, force: true });
-  for (const stale of [`${side}-bin`, `${side}-security.log`]) fs.rmSync(path.join(base, stale), { recursive: true, force: true });
+  for (const stale of [`${side}-bin`, `${side}-security.log`, `${side}-debug.log`]) fs.rmSync(path.join(base, stale), { recursive: true, force: true });
   fs.mkdirSync(work, { recursive: true });
   const laid = filesUnder(base);
   if (opts.setup) opts.setup(work, base);
@@ -250,12 +260,16 @@ async function runSide(side, bin, rules, opts, base) {
     const names = [...new Set(rules.map((r) => r.tool.name))];
     const allowed = opts.allowedTools === undefined ? names.join(',') : opts.allowedTools;
     const flags = [...(allowed === null ? [] : ['--allowedTools', allowed]), ...(opts.args || [])];
-    const args = ['-p', opts.prompt || 'drive the tool', ...flags];
+    // THE DEBUG LOG (test/debug-log-gate.cjs): every side writes one, beside its security log, and driveTool holds
+    // quaude's to native's. Not in SIDE.turn.args: it is the harness's, not the turn's, so no mode cell differs by it.
+    const debugFile = path.join(base, `${side}-debug.log`);
+    const runFlags = [...flags, ...debugFileArgs(debugFile)];
+    const args = ['-p', opts.prompt || 'drive the tool', ...runFlags];
     const env = { ...baseEnv(), ...home, ANTHROPIC_BASE_URL: mock.url, ANTHROPIC_API_KEY: 'sk-ant-mock', ...(opts.env || {}),
       ...(opts.switches || {}) };
     const kc = shadowKeychain(base, side);
     env.PATH = [kc.dir, env.PATH || ''].join(path.delimiter);
-    const r = opts.interactive ? await interactiveTurn(bin, flags, work, env, home, opts)
+    const r = opts.interactive ? await interactiveTurn(bin, runFlags, work, env, home, opts, afterSteps(opts))
       : await spawnCollect(bin, args, { cwd: work, env }, { timeoutMs: turnTimeout(opts) });
     // the log, and the side's own temp dir beside it (a check that judges a path under it reads it here, never from a
     // module-level variable: a synthetic control log has none, so such a check fails there)
@@ -266,8 +280,11 @@ async function runSide(side, bin, rules, opts, base) {
     return {
       text: toolResultText(raw, first), isError: !!(results[first] && results[first].isError), result: results[first], results,
       raw, sent, tmp, status: r.status, signal: r.signal, stdout: r.stdout, stderr: r.stderr, timedOut: r.timedOut, home,
+      exit: r.exit,
       keychain: fs.existsSync(kc.log) ? fs.readFileSync(kc.log, 'utf8').split('\n').filter(Boolean) : [],
+      debugLog: readLog(debugFile),
       turn: { bin, args: [...(opts.args || [])], allowedTools: allowed, scripted: names.join(','), interactive: !!opts.interactive,
+        after: afterSteps(opts).map((st) => st.label),
         switches: { ...(opts.switches || {}) }, env: Object.keys(opts.env || {}).sort(), settings },
       inspected: opts.inspect ? opts.inspect(work, base) : undefined,
     };
@@ -292,7 +309,22 @@ function seedInteractiveProfile(home, work) {
   // CLAUDE_CONFIG_DIR holds the profile when it is set (it is: throwawayHome); HOME's copy is for a target that ignores it
   for (const d of [home.CLAUDE_CONFIG_DIR, home.HOME]) fs.writeFileSync(path.join(d, '.claude.json'), JSON.stringify(profile));
 }
-async function interactiveTurn(bin, flags, work, env, home, opts) {
+// opts.after, validated: [] when there is none. Throws on a malformed step (driveTool calls it before running).
+function afterSteps(opts) {
+  if (opts.after === undefined) return [];
+  if (!opts.interactive) throw new Error('driveTool: after is what an interactive session types after its turn; give interactive: true');
+  if (!Array.isArray(opts.after)) throw new Error('driveTool: after must be an array of { label, send[, until][, exits] }');
+  const labels = new Set(['boot', 'type', 'send']);
+  opts.after.forEach((st, i) => {
+    if (!st || typeof st.label !== 'string' || !st.label || labels.has(st.label) || typeof st.send !== 'string'
+      || (st.until !== undefined && (typeof st.until !== 'string' || !st.until)) || (st.exits && i !== opts.after.length - 1)) {
+      throw new Error(`driveTool: after[${i}] must be { label (unique), send: TEXT[, until: TEXT][, exits: true, last only] }, got ${JSON.stringify(st)}`);
+    }
+    labels.add(st.label);
+  });
+  return opts.after;
+}
+async function interactiveTurn(bin, flags, work, env, home, opts, after = []) {
   if (process.platform === 'win32') throw new Error('driveTool: an interactive turn needs a POSIX pty here');
   seedInteractiveProfile(home, work);
   const { captureSession } = require('./e2e-pty.cjs');
@@ -301,16 +333,21 @@ async function interactiveTurn(bin, flags, work, env, home, opts) {
   try {
     const s = await captureSession({ env }, {
       cmd: ['/bin/sh', '-c', 'cd "$1" && shift && exec "$@"', 'sh', work, bin, ...flags],
-      script: [{ label: 'type', send: hex(prompt), until: prompt }, { label: 'send', send: hex('\r'), until: DONE }],
+      script: [{ label: 'type', send: hex(prompt), until: prompt }, { label: 'send', send: hex('\r'), until: DONE },
+        ...after.map((st) => ({ label: st.label, send: hex(st.send), ...(st.until ? { until: st.until } : {}) }))],
       rows: 50, cols: 200, ...interactiveLimits(opts),
     });
-    const unsettled = s.frames.filter((f) => !f.settled).map((f) => f.label);
-    const done = s.frames.length === 3 && !unsettled.length;
+    // the step the session ends on by itself (/quit) cannot settle (its child is gone): it is done when it exited THERE
+    const quit = after.length && after[after.length - 1].exits ? after[after.length - 1].label : null;
+    const quitOk = !quit || (s.exit && s.exit.during === quit);
+    const unsettled = s.frames.filter((f) => !f.settled && !(quitOk && f.label === quit)).map((f) => f.label);
+    if (!quitOk) unsettled.push(`${quit} (the session did not exit there: ${JSON.stringify(s.exit)})`);
+    const done = s.frames.length === 3 + after.length && !unsettled.length;
     // stdout: the last screen, as text (what a -p turn would print), for diagnostics
     const { rowText } = require('./frame-diff.cjs');
     const last = s.frames.length ? s.frames[s.frames.length - 1].frame : null;
     const screen = last ? Array.from({ length: last.rows }, (_, y) => rowText(last, y).replace(/\s+$/, '')).join('\n').replace(/\n+$/, '') : '';
-    return { status: done ? 0 : 1, signal: null, stdout: screen, timedOut: !done,
+    return { status: done ? 0 : 1, signal: null, stdout: screen, timedOut: !done, exit: s.exit,
       stderr: done ? '' : `the interactive turn did not finish: ${unsettled.length ? `unsettled ${unsettled.join(', ')}` : `${s.frames.length} frame(s)`}` };
   } catch (e) {
     return { status: 1, signal: null, stdout: '', stderr: `the interactive turn could not run: ${e.message.slice(0, 1200)}`, timedOut: false };
@@ -370,6 +407,7 @@ function modeTurnFindingFor(label, side, mode, wantBin) {
   const wantAllowed = want.allowedTools === null ? null : t.scripted;
   if (t.allowedTools !== wantAllowed) diff.push(`--allowedTools ${JSON.stringify(t.allowedTools)}, not ${JSON.stringify(wantAllowed)}`);
   if (t.interactive !== !!want.interactive) diff.push(`interactive ${t.interactive}, not ${!!want.interactive}`);
+  if (t.after && t.after.length) diff.push(`typed after the turn: ${t.after.join(', ')}`);
   if (Object.keys(t.switches).length) diff.push(`switches ${JSON.stringify(t.switches)}`);
   if (t.env.length) diff.push(`env ${t.env.join(', ')}`);
   if (t.settings.length) diff.push(`setup wrote settings ${t.settings.join(', ')}`);
@@ -395,6 +433,7 @@ function driveTool(opts = {}) {
     throw new Error(`driveTool: switches may set only ${Object.keys(TOOL_SWITCHES).join(', ')} (TOOL_SWITCHES, each with `
       + `its reason), not ${unlisted.join(', ')}`);
   }
+  afterSteps(opts);
   if (opts.base !== undefined && !(typeof opts.base === 'string' && path.isAbsolute(opts.base))) {
     throw new Error(`driveTool: base must be an absolute temp dir, got ${JSON.stringify(opts.base)}`);
   }
@@ -409,6 +448,12 @@ function driveTool(opts = {}) {
       }
       const unshadowed = out.native.keychain && keychainShadowFinding('native', out.native.keychain);
       if (unshadowed) throw new Error(`driveTool: ${unshadowed}`);
+      // quaude's --debug log, READ (test/debug-log-gate.cjs): held to native's when native ran this turn, else to the
+      // absolute rules. A finding fails the driver's test here, with the lines, whatever its own check says.
+      if (out.quaude.debugLog !== undefined) {
+        out.debugLog = assertDebugLogClean({ label: 'driveTool: quaude', quaude: out.quaude.debugLog,
+          reference: out.native.debugLog });
+      }
       return out;
     } finally { if (own) fs.rmSync(base, { recursive: true, force: true }); }
   })();

@@ -26,6 +26,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { sandbox } = require('./e2e.cjs');
 const { captureFrameAsync, captureSession, seedClaudeProfile } = require('./e2e-pty.cjs');
+const { debugFileArgs, readLog, assertDebugLogClean } = require('./debug-log-gate.cjs');
 const { diff, describe } = require('./frame-diff.cjs');
 const { startMockAnthropic } = require('./mock-anthropic-helper.cjs');
 
@@ -54,7 +55,7 @@ function parse(argv) {
 // turn spun forever without the mock ever seeing a request (measured 2026-09-25).
 async function captureFrames(o) {
   const opts = { seconds: o.seconds, rows: o.rows, cols: o.cols, sendHex: o.sendHex, thenHex: o.thenHex || [] };
-  return inScene(o, (sbx, env, bin) => captureFrameAsync(sbx, { ...opts, env, cmd: [bin] }));
+  return inScene(o, (sbx, env, cmd) => captureFrameAsync(sbx, { ...opts, env, cmd }));
 }
 
 // The same two-sided capture for a SCRIPTED SESSION (tui-screen.cjs --script): a frame
@@ -65,13 +66,17 @@ async function captureFrames(o) {
 async function captureSessions(o) {
   const opts = { script: o.script, settleMs: o.settleMs, maxSettleMs: o.maxSettleMs,
     bootSettleMs: o.bootSettleMs, bootMaxMs: o.bootMaxMs, rows: o.rows, cols: o.cols };
-  return inScene(o, (sbx, env, bin) => captureSession(sbx, { ...opts, env, cmd: [bin] }));
+  return inScene(o, (sbx, env, cmd) => captureSession(sbx, { ...opts, env, cmd }));
 }
 
 // THE SCENE both captures run in, stated once: one canned mock for both sides, the same
 // environment and settings, a fresh identically seeded HOME per side, the reference first
 // and then the subject (sequential, so the two never compete for the machine).
-// capture(sbx, env, bin) takes one side's shot; a shot that throws is reported and null.
+// capture(sbx, env, cmd) takes one side's shot; a shot that throws is reported and null.
+//
+// THE DEBUG LOG (test/debug-log-gate.cjs): each side runs with a --debug-file in its own sandbox, and once both shots
+// are taken the SUBJECT's log is held to the reference's. A finding throws, with the lines, so every frame and session
+// gate built on this fails on what quaude logged, not only on what it painted. The judgement is the result's debugLog.
 async function inScene(o, capture) {
   const mock = await startMockAnthropic({ text: o.mockText || 'PONG' });
   const out = o.out || null;
@@ -96,26 +101,33 @@ async function inScene(o, capture) {
   // therefore compares the reference's fullscreen frame against the subject's
   // classic-renderer frame — measured here on 2026-09-22, and it made a
   // native-vs-native run differ in 1431 cells. Same seed, separate state.
+  const logs = {};
   const shoot = async (label, bin) => {
     const sbx = sandbox();
+    const debugFile = path.join(sbx.dir, `${label}-debug.log`);
     try {
       seedClaudeProfile(sbx.home, { cwd: process.cwd(), apiKey: 'sk-ant-mock-0000000000000000000000' });
       if (o.settings) {
         fs.mkdirSync(path.join(sbx.home, '.claude'), { recursive: true });
         fs.writeFileSync(path.join(sbx.home, '.claude', 'settings.json'), JSON.stringify(o.settings));
       }
-      const f = await capture(sbx, env, bin);
+      const f = await capture(sbx, env, [bin, ...debugFileArgs(debugFile)]);
       if (out) fs.writeFileSync(path.join(out, `${label}.json`), JSON.stringify(f));
       return f;
     } catch (e) {
       process.stderr.write(`frame-oracle: ${label} (${bin}) produced no frame: ${e.message}\n`);
       return null;
     } finally {
+      logs[label] = readLog(debugFile);
       try { fs.rmSync(sbx.dir, { recursive: true, force: true }); } catch { /* best effort */ }
     }
   };
   try {
-    return { ref: await shoot('ref', o.ref), sub: await shoot('sub', o.sub) };
+    const ref = await shoot('ref', o.ref);
+    const sub = await shoot('sub', o.sub);
+    // a side that produced no frame is the caller's finding already; its log is judged only when it painted
+    const debugLog = sub ? assertDebugLogClean({ label: `frame-oracle: subject ${o.sub}`, quaude: logs.sub, reference: ref ? logs.ref : null }) : null;
+    return { ref, sub, debugLog };
   } finally {
     await mock.close();
   }

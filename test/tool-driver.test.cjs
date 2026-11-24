@@ -42,6 +42,10 @@ function parse(sse) {
   }
   return { uses: uses.map((u) => ({ id: u.id, name: u.name, input: JSON.parse(u.json || '{}') })), text };
 }
+// --debug-file, as the product honours it: a debug line, and FAKE_DEBUG_LINE (quaude only), the line under test
+const dfi = args.indexOf('--debug-file');
+if (dfi >= 0) fs.writeFileSync(args[dfi + 1], new Date().toISOString() + ' [DEBUG] fake ' + LABEL + ' started\\n'
+  + (process.env.FAKE_DEBUG_LINE && (LABEL === 'quaude' || process.env.FAKE_DEBUG_BOTH) ? new Date().toISOString() + ' ' + process.env.FAKE_DEBUG_LINE + '\\n' : ''));
 (async () => {
   const interactive = !args.includes('-p');
   if (interactive) process.stdout.write('fake> ');   // a TUI paints at boot (the boot frame waits for output)
@@ -367,4 +371,33 @@ test('interactiveLimits: every settle limit of the interactive turn is on the CL
   }
   // ... and no native boot cap is below what a native boot measured (22.5-23.4 s) times the scale
   assert.ok(slow.bootMaxMs >= 20 * SCRIPT_DEFAULTS.bootMaxMs);
+});
+
+// THE DEBUG-LOG GATE at the choke point (test/debug-log-gate.cjs): every side runs with --debug-file, and a quaude whose
+// log names a shim fault, or a timeout native's log lacks, fails driveTool itself, whatever the driver's own check says.
+test('driveTool reads quaude\'s --debug log and rejects a shim fault or a timeout native does not log', { skip: SKIP }, async () => {
+  const f = fakes();
+  const zlib = '[ERROR] 1P event logging: 9 events failed to export (node-shim: zlib.gzipSync not implemented)';
+  const tmo = '[ERROR] [Bootstrap] fetch failed: AxiosError: timeout of 5000ms exceeded';
+  try {
+    const ok = await driveTool({ tool: FAKE, quaude: f.quaude, native: f.native });
+    assert.strictEqual(ok.debugLog.mode, 'differential');
+    assert.match(ok.quaude.debugLog, /fake quaude started/);
+    assert.ok(!ok.quaude.turn.args.includes('--debug-file'), 'the debug file is the harness\'s, not the turn\'s');
+    await assert.rejects(driveTool({ tool: FAKE, quaude: f.quaude, native: f.native, env: { FAKE_DEBUG_LINE: zlib } }),
+      /shim fault: .*zlib\.gzipSync not implemented/);
+    await assert.rejects(driveTool({ tool: FAKE, quaude: f.quaude, native: f.native, env: { FAKE_DEBUG_LINE: tmo } }),
+      /timeout the reference does not log: .*timeout of 5000ms exceeded/);
+    // the same timeout in native's log is the network's, not quaude's
+    const both = await driveTool({ tool: FAKE, quaude: f.quaude, native: f.native, env: { FAKE_DEBUG_LINE: tmo, FAKE_DEBUG_BOTH: '1' } });
+    assert.deepStrictEqual(both.debugLog.findings, []);
+    // no native: the absolute rules (a shim fault still fails)
+    await assert.rejects(driveTool({ tool: FAKE, quaude: f.quaude, nativeSkip: 'judged alone', env: { FAKE_DEBUG_LINE: zlib } }),
+      /\(absolute\)[\s\S]*shim fault/);
+    // the interactive turn carries it too
+    if (!ptyHarnessMissing()) {
+      await assert.rejects(driveTool({ tool: FAKE, quaude: f.quaude, nativeSkip: 'fakes', interactive: true, prompt: 'type me',
+        timeoutMs: 30000, env: { FAKE_DEBUG_LINE: zlib } }), /shim fault/);
+    }
+  } finally { fs.rmSync(f.dir, { recursive: true, force: true }); }
 });

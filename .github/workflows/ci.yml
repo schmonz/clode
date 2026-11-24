@@ -1531,6 +1531,9 @@ jobs:
       #                       left) equal to native's recorded answer; its native tests run this native against the
       #                       same answers. This is the one job with both a built quaude
       #                       and a native that RUNS, so it drives those tools' print cell on linux-x64-musl.
+      #   debug-log-interactive  a built quaude's interactive session (boot, a turn, /tui fullscreen, /quit) in a pty, its
+      #                       --debug log held to native's on the same session (test/debug-log-gate.cjs). Every driver
+      #                       here reads quaude's debug log the same way, through test/tool-driver.cjs.
       #   webfetch            WebFetch's print cell: one -p turn to a local TLS 1.2, rsa_pss_rsae_sha256 target (the
       #                       shape that made WebFetch answer "Network Error" on a NetBSD release candidate), in a built
       #                       quaude and in native, each answered by the mock with the fetched page's own token.
@@ -1577,6 +1580,7 @@ jobs:
               test/fidelity/agentic-grep-glob.test.cjs \
               test/fidelity/tools-local.test.cjs \
               test/fidelity/webfetch.test.cjs \
+              test/fidelity/debug-log-interactive.test.cjs \
               test/tjs-tls-trust.test.cjs \
               test/build-gates/rg-regex-gates.test.cjs \
               test/build-gates/rg-types-gates.test.cjs \
@@ -1842,7 +1846,7 @@ jobs:
               --test-reporter=spec --test-reporter-destination=stdout \
               --test-reporter=./test/cell-reporter.mjs --test-reporter-destination="$RUNNER_TEMP/cells/darwin-tools-local.jsonl" \
               test/fidelity/tools-local.test.cjs test/fidelity/agentic-grep-glob.test.cjs test/fidelity/webfetch.test.cjs \
-              test/tjs-tls-trust.test.cjs
+              test/fidelity/debug-log-interactive.test.cjs test/tjs-tls-trust.test.cjs
       # THE CELLS this job drives (test/build-gates/tool-coverage-gates.test.cjs, CELL_JOBS): every test that runs a
       # claimed driver's control PASSED above, on this engine, as test/cell-reporter.mjs recorded it. A skip, a failure or
       # a test that never ran means the tool x mode cell ran nowhere, and this step names it (observability plan Task 1).
