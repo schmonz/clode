@@ -44,10 +44,18 @@ function walk(root, { ignore = [], fsm = realFs } = {}) {
       out.set(rel || '.', `UNREADABLE|${e && e.code}`);
       return;
     }
+    const skipped = (r) => skip.some(({ normalized: s, wildcard }) => r === s || r.startsWith(s + path.sep)
+      || (wildcard && r.startsWith(s)));
     for (const e of entries) {
       const childRel = rel ? path.join(rel, e.name) : e.name;
-      if (skip.some(({ normalized: s, wildcard }) => childRel === s || childRel.startsWith(s + path.sep)
-        || (wildcard && childRel.startsWith(s)))) continue;
+      if (skipped(childRel)) continue;
+      // An AppleDouble sidecar `._X` is the FILESYSTEM's shadow of `X` (macOS writes one
+      // beside anything carrying xattrs on a volume without native xattrs: NFS, SMB, FAT),
+      // not a second thing a test wrote. It rides the allow-list entry of the path it
+      // shadows: allowed exactly when `X` is. A sidecar of a guarded path stays guarded.
+      // Without this, the first suite run after a version bump on such a volume fails on
+      // `build/._clode-<new-version>-…` (cut of 0.20261125.1, 2026-11-25).
+      if (e.name.startsWith('._') && e.name.length > 2 && skipped(rel ? path.join(rel, e.name.slice(2)) : e.name.slice(2))) continue;
       const childAbs = path.join(abs, e.name);
       if (e.isDirectory()) { visit(childAbs, childRel); continue; }
       let st;

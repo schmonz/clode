@@ -151,6 +151,19 @@ test('a trailing "*" ignore entry matches any name with that prefix (Finding 3: 
     'build/toolchain must still be reported — a wildcard on clode-* must not swallow it');
 });
 
+test('an AppleDouble sidecar rides the allow-list entry of the path it shadows, and only that', () => {
+  const root = tmp();
+  fs.mkdirSync(path.join(root, 'build', 'clode-0.1-macos-arm64'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'build', '._clode-0.1-macos-arm64'), 'x');
+  fs.writeFileSync(path.join(root, 'build', 'clode-0.1-macos-arm64', '._deps.tar'), 'x');
+  fs.writeFileSync(path.join(root, 'build', '._toolchain'), 'x');
+  fs.writeFileSync(path.join(root, '._README.md'), 'x');
+  fs.writeFileSync(path.join(root, '._'), 'x');
+  const keys = [...G.walk(root, { ignore: ['build/clode-*'] }).keys()].sort();
+  assert.deepStrictEqual(keys, ['._', '._README.md', path.join('build', '._toolchain')],
+    'the sidecar of an allowed artifact dir is the filesystem, not a test; a sidecar of a guarded path is still guarded');
+});
+
 test('a trailing "*" ignore entry does not match an unrelated sibling with a similar prefix', () => {
   const root = tmp();
   fs.mkdirSync(path.join(root, 'build', 'clode-native-something-else'), { recursive: true });
