@@ -61,7 +61,7 @@
 #            saw: a built-in plugin's hooks module taking upstream's dev-tree branch, which
 #            painted "agents-md: hooks module did not load" into every quaude TUI.
 #
-#   2.1.330  THE PIN since 2026-11-21, upstream's `latest` and `next` that day
+#   2.1.330  THE PIN from 2026-11-21 to 2026-11-25, upstream's `latest` and `next` that day
 #            (`npm view @anthropic-ai/claude-code dist-tags`: stable 2.1.323, latest
 #            2.1.330, next 2.1.330). CARVES (darwin-arm64 and linux-x64 from npm pack, real
 #            engine): 3574 staged modules, merged groups 2/49/4; its Bun is 1.4.4. Its text
@@ -79,6 +79,23 @@
 #            darwin-arm64): tool fidelity rows against native 2.1.330, every-tool-driven,
 #            Bun.ant review, the rg tables (new embedded rg revision), the node-shim
 #            differential, rg --text/--max-count, and more, each named in that entry.
+#
+#   2.1.332  THE PIN since 2026-11-25, upstream's `latest` and `next` that day (stable
+#            2.1.326). Bumped two versions after 2.1.330, on the day drift went red (the user:
+#            "Easier to stay current if we do it more often"). CARVES (darwin-arm64 from npm
+#            pack, real engine): 3684 modules, merged groups 2/49/4; its Bun is 1.4.6
+#            (358d8293c), which also moved the embedded rg revision. Absorbing it took: node's
+#            util/types (2.1.332 imports `util/types` and calls isRegExp, so three of the four
+#            builtin plugins' hooks modules died "not a function"); the dep-closure and API
+#            gates reading `o.import("x")` as a dynamic import (a false ApplicationServices
+#            external); the rg tables re-generated for the new revision, the Grep builder's one
+#            `-C` push and the Glob builder's appended `--sort=modified`; the text-probe gate's
+#            wrap-caller shape; the auto-mode classifier's new request forms (a `</block>` fast
+#            stage and a stop-less graded stage, which the mocks answered as a tool turn, so
+#            native refused every Agent call); a local wrapper of the rg runner the resolution
+#            gate must read; path argument checks as node's; fs/promises.constants and
+#            Bun.shrink; and two new MCP task tools, exempted with their peer. Two node APIs it
+#            reaches for are still absent (BACKLOG, "2.1.332 reaches for two node APIs").
 #
 # WHAT ACTUALLY BREAKS, measured 2026-09-21 on this box with a real engine, because
 # "QuickJS rejects the merged file" was true and told nobody where to look. The merged
@@ -123,10 +140,10 @@
 # context for a reader; the OUTCOME is what is compared. Grammar:
 #     carve-probe <version> carves
 #     carve-probe <version> blocked <stage> <reason substring>
-# The record below was measured on 2.1.330 before the pin moved to it (above). With the pin
-# at 2.1.330, which was also `next` that day, the probe SKIPS by name ("not newer than the
+# The record below was measured on 2.1.332 when the pin moved to it (above). With the pin
+# at 2.1.332, which was also `next` that day, the probe SKIPS by name ("not newer than the
 # pin") until upstream publishes past it, then compares that carve with this.
-carve-probe 2.1.330 carves
+carve-probe 2.1.332 carves
 #
 # Bump or drop the pin by editing the version below — one line, one file.
-claude-code 2.1.330
+claude-code 2.1.332

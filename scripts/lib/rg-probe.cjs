@@ -146,10 +146,12 @@ function grepArgv(p, target) {
   a.push(mode === 'content' ? '--json' : '--null');
   if (mode === 'content') a.push('-n');
   if (p.o && mode === 'content') a.push('-o');
+  // 2.1.332's context rule, as its builder writes it: `let c=context||(C??context)`, -C when c is defined, and -B/-A
+  // whenever c is falsy (so `context: 0` writes -C 0 AND any -B/-A). 2.1.330's was context ?? C, -B/-A only without it.
   if (mode === 'content') {
-    if (p.context !== undefined) a.push('-C', String(p.context));
-    else if (p.C !== undefined) a.push('-C', String(p.C));
-    else { if (p.B !== undefined) a.push('-B', String(p.B)); if (p.A !== undefined) a.push('-A', String(p.A)); }
+    const c = p.context || (p.C ?? p.context);
+    if (c !== undefined) a.push('-C', String(c));
+    if (!c) { if (p.B !== undefined) a.push('-B', String(p.B)); if (p.A !== undefined) a.push('-A', String(p.A)); }
   }
   if (p.pattern.startsWith('-')) a.push('-e', p.pattern); else a.push(p.pattern);
   if (p.type) a.push('--type', p.type);
@@ -164,13 +166,16 @@ function grepArgv(p, target) {
   a.push(target);
   return a;
 }
-// The Glob tool's argv, as 2.1.330's builder (`C8r`) writes it with its defaults
+// The Glob tool's argv, as 2.1.332's builder (`sJr`) writes it with its defaults
 // (CLAUDE_CODE_GLOB_NO_IGNORE and CLAUDE_CODE_GLOB_HIDDEN both default to true). Compared with
-// the carve's the same way. 2.1.330 appends `...HEr(y)?["--no-follow"]:[]`, and that test is
-// `function HEr(e){return!1}` in both the darwin-arm64 and linux-x64 carves (built-out, so
-// constant false): `noFollow` models it, false as the carve has it.
-const globArgv = (pattern, target, noFollow = false) => ['--files', '--null', '--glob', pattern, '--sort=modified', '--no-ignore', '--hidden',
-  ...noFollow ? ['--no-follow'] : [], target];
+// the carve's the same way. It appends `...eLo(y)?["--no-follow"]:[]`, and that test is
+// `function eLo(e){return!1}` (built-out, so constant false): `noFollow` models it, false as the
+// carve has it. 2.1.332 moved --sort=modified from after the pattern to the END (`Ce=[...ie,
+// "--sort=modified"]`), and runs WITHOUT it, sorting by mtime in JS instead, only when `NNn(e)`
+// holds: windows, the embedded rg, a directory, and enough threads. No leg this matrix runs on
+// takes that branch.
+const globArgv = (pattern, target, noFollow = false) => ['--files', '--null', '--glob', pattern, '--no-ignore', '--hidden',
+  ...noFollow ? ['--no-follow'] : [], '--sort=modified', target];
 
 // The flag literals of a builder's source text, in order: every quoted string that is a flag
 // (starts with -) or a number. The ONE reading both sides of the comparison below go through.
@@ -183,8 +188,9 @@ function flagLiterals(src) {
 //   Grep (`_In` in 2.1.283): from the `["--hidden"` that starts the argv (`["--hidden"]` to
 //        2.1.283, `["--hidden","--no-follow"]` at 2.1.330) to its first `"--iglob"` push,
 //        anchored on the one `"-U","--multiline-dotall"` push;
-//   Glob (`eIn`): from the array that starts `"--files","--null","--glob"` to its first
-//        `"--iglob"` push (exclusive: globArgv models no deny rules).
+//   Glob (`eIn`; `sJr` at 2.1.332): from the array that starts `"--files","--null","--glob"` to its
+//        first `"--iglob"` push (exclusive: globArgv models no deny rules), then the flags a later
+//        `[...<that array>,"--sort=modified"]` copy appends (2.1.332).
 // Returns { grep, glob }, each { literals } or { missing: why }.
 const GREP_ANCHOR = '"-U","--multiline-dotall"';
 const GLOB_ANCHOR = '"--files","--null","--glob"';
@@ -200,9 +206,15 @@ function builderFlagLiterals(text) {
       : { literals: flagLiterals(t.slice(gStart, gEnd + '"--iglob"'.length)) };
   const f = once(GLOB_ANCHOR);
   const fEnd = f === -1 ? -1 : t.indexOf('"--iglob"', f);
+  // 2.1.332 appends the sort to a COPY of the argv after the deny rules: `ie=["--files",...];...Ce=[...ie,
+  // "--sort=modified"]`. That copy's literal tail belongs to the argv, so it is read too: the array's own binding,
+  // then the first `[...<binding>,"--x"...]` after it.
+  const bind = f === -1 ? null : /([A-Za-z_$][\w$]*)=\[$/.exec(t.slice(Math.max(0, f - 40), f));
+  const tailRe = bind ? new RegExp(`\\[\\.\\.\\.${bind[1].replace(/\$/g, '\\$')},((?:"-[^"]*",?)+)\\]`) : null;
+  const tail = tailRe && fEnd !== -1 ? tailRe.exec(t.slice(fEnd, fEnd + 4000)) : null;
   out.glob = f === -1 ? { missing: `${GLOB_ANCHOR} is not in the carve exactly once` }
     : fEnd === -1 ? { missing: 'the Glob builder has no --iglob after its argv' }
-      : { literals: flagLiterals(t.slice(f, fEnd)) };
+      : { literals: [...flagLiterals(t.slice(f, fEnd)), ...(tail ? flagLiterals(tail[1]) : [])] };
   return out;
 }
 
@@ -632,6 +644,27 @@ function prependedFlag(t, i, local, f) {
   const defs = [...t.slice(Math.max(0, i - 20000), i).matchAll(new RegExp(`(?<![\\w$.])${esc(m[1])}="(-[\\w-]+)"`, 'g'))];
   return defs.length ? defs[defs.length - 1][1] : null;
 }
+// 2.1.332's Glob tool: `Se=(Et)=>xie(Et,e.target,...)`, a local arrow handing its parameter to the runner, then
+// `Se(Le?ie:Ce)` and `Se(Ce)` with `Ce=[...ie,"--sort=modified"]`. The call reads as a forward only when the arrow is
+// bound to a name right there and EVERY call of that name in the next 4000 bytes (the enclosing body) hands it an argv
+// runnerCallArgv reads: a bound array, an array literal, or `C?A:B` with both A and B such. { name, calls }, or null.
+function localWrapper(t, i, local) {
+  const esc = (n) => n.replace(/\$/g, '\\$');
+  const m = new RegExp(`(?<![\\w$.])(${ID})=\\((${ID})\\)=>$`).exec(t.slice(Math.max(0, i - 80), i));
+  if (!m || !t.startsWith(`${local}(${m[2]},`, i)) return null;
+  const W = m[1];
+  let calls = 0;
+  for (const c of t.slice(i, i + 4000).matchAll(new RegExp(`(?<![\\w$.])${esc(W)}\\(`, 'g'))) {
+    const at = i + c.index;
+    const cond = new RegExp(`^${esc(W)}\\(${ID}\\?(${ID}):(${ID})\\)`).exec(t.slice(at, at + 200));
+    const ok = cond
+      ? [cond[1], cond[2]].every((X) => runnerCallArgv(`${t.slice(0, at)}${W}(${X})`, at, W))
+      : runnerCallArgv(t, at, W);
+    if (!ok) return null;
+    calls++;
+  }
+  return calls ? { name: W, calls } : null;
+}
 // Every call of a found runner: [{ at, runner, kind }], kind 'shape' | 'forward' | null.
 function rgRunnerCalls(text) {
   const t = String(text), runners = carveRunners(t), chunks = carveChunks(t);
@@ -647,6 +680,10 @@ function rgRunnerCalls(text) {
           // (`rre([De,...e],n,r,o)`, De="--no-messages"); read as that runner's argv with the flag prepended
           const pre = f && f.first && runners.has(f.name) ? prependedFlag(t, i, local, f) : null;
           if (!kind && pre) kind = `forward with ${pre} first (${f.name} retries its argv)`;
+        }
+        if (!kind) {
+          const w = localWrapper(t, i, local);
+          if (w) kind = `forward through the local wrapper ${w.name}, every call of which hands it a read argv (${w.calls} call(s))`;
         }
         calls.push({ at: i, runner: name, local, kind, context: around(t, i) });
       }

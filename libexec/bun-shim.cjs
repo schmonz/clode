@@ -1649,6 +1649,10 @@ const Bun = {
   hash, which, spawn, semver, JSONL, YAML, gzipSync, SHA256,
   deepEquals: (a,b)=> require('util').isDeepStrictEqual(a,b),
   gc: ()=> { if (global.gc) global.gc(); },
+  // Bun.shrink() asks JSC to return free heap to the OS; it answers undefined. 2.1.332 calls it, unguarded, from an
+  // idle loop that keeps it only when heapUsed fell. The nearest thing either target has is a collection: the same as
+  // gc() above (global.gc under node --expose-gc or the engine, else nothing), and undefined as Bun answers.
+  shrink: ()=> { if (global.gc) global.gc(); },
   // The bundle calls this as generateHeapSnapshot("v8","arraybuffer") and hands the
   // result STRAIGHT to writeFileSync, so it must be bytes. v8.getHeapSnapshot() is a
   // Readable, which made /heapdump fail on node with "The \"data\" argument must be of

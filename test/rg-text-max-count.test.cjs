@@ -4,7 +4,7 @@
 // 2.1.330 passes both in production: the hybrid-organization scan (`--text --fixed-strings --glob *.jsonl*`) and
 // the model-family environment listing (`--max-count 20 --only-matching --null`); rg-carve-argv-answered found
 // quaude's rg refusing them. Every row below is native's answer, VERBATIM, measured 2026-11-21 against the pinned
-// 2.1.330 darwin-arm64 provider's embedded rg (ripgrep 14.1.1 rev 6634fc3b5b) over the files built here; the last
+// 2.1.330 darwin-arm64 provider's embedded rg (ripgrep 14.1.1 at the revision libexec/rg-types.cjs records in version.head) over the files built here; the last
 // test re-measures them against native wherever the oracle resolves, so a row that stops being native's fails there.
 // What they pin (libexec/rg-native.cjs states each rule):
 //   RG-FIXED-STRINGS  -F: the pattern is a literal, every metacharacter escaped; -i still folds; --no-fixed-strings undoes it.

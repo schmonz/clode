@@ -40,11 +40,24 @@ const MODULES_DIR = path.join(REPO, 'libexec/node-shim/modules');
 // means a newly added shim module is measured the day it lands.
 // `._*` are AppleDouble sidecars this repo's mount creates; they are not modules
 // (see memory: git gc fails on them too).
-function shimModuleNames() {
-  return fs.readdirSync(MODULES_DIR)
-    .filter((f) => f.endsWith('.cjs') && !f.startsWith('._'))
-    .map((f) => f.replace(/\.cjs$/, ''))
-    .sort();
+//
+// AND EVERY SUBPATH THE LOADER SERVES FROM ONE OF THEM. libexec/node-shim/loader.cjs answers
+// `<base>/<sub>` (util/types, fs/promises, stream/promises...) with <base>.cjs's `.<sub>` export,
+// for each name in its KNOWN list. Until 2.1.332 this map measured only the files, so a subpath's
+// members were never compared: 2.1.332's `import*as A from"util/types"` then `A.isRegExp(o)` met a
+// util.types holding only isDate and isProxy, and three of four builtin plugins' hooks modules
+// failed to load with QuickJS's nameless "not a function", in every quaude turn, while this map
+// stayed green. KNOWN is read from the loader's own text (one array literal), not copied here.
+const LOADER_SRC = path.join(REPO, 'libexec/node-shim/loader.cjs');
+function loaderKnown(src = fs.readFileSync(LOADER_SRC, 'utf8')) {
+  const m = /^const KNOWN = \[([^\]]*)\];$/m.exec(src);
+  if (!m) throw new Error('libexec/node-shim/loader.cjs: no one-line `const KNOWN = [...]`; re-derive loaderKnown');
+  return [...m[1].matchAll(/'([^']+)'/g)].map((x) => x[1]);
+}
+function shimModuleNames({ files = fs.readdirSync(MODULES_DIR), known = loaderKnown() } = {}) {
+  const bases = files.filter((f) => f.endsWith('.cjs') && !f.startsWith('._')).map((f) => f.replace(/\.cjs$/, ''));
+  const subs = known.filter((n) => n.includes('/') && bases.includes(n.slice(0, n.indexOf('/'))));
+  return [...new Set([...bases, ...subs])].sort();
 }
 
 // THE SHIM AS SHIPPED, NOT AS A BARE CHECKOUT HAS IT. node-shim takes some modules from
@@ -150,6 +163,6 @@ function layer1Gaps({ text, index, bunProps, bunBuiltins }) {
 
 module.exports = {
   REPO, ENTRY, LOADER, MODULES_DIR,
-  shimModuleNames, enumerateUnderNode, enumerateUnderTjs,
+  shimModuleNames, loaderKnown, enumerateUnderNode, enumerateUnderTjs,
   layer1Gaps, layer2Gaps, shimExtDeps, missingExtDeps,
 };

@@ -1846,6 +1846,8 @@ const LOCAL = 'deferred, no plan yet: it runs on this machine, so a canned-mock 
   + 'judges its tool_result';
 // The tools 2.1.330 added (USER REVIEW: their phase follows their peers' here; BACKLOG, the 2.1.330 entry).
 const PIN_330 = '2026-11-21';
+// The tools 2.1.332 added, reviewed the same way (their phase follows McpTaskResumePolling's, their MCP peer).
+const PIN_332 = '2026-11-25';
 const GOAL = (what) => `deferred, no plan yet: ${what}; off in every non-interactive (-p) session and in a remote `
   + 'workspace, and behind the GrowthBook flag tengu_propose_goal (default off)';
 const INTERACTIVE = 'deferred, no plan yet: disabled in a non-interactive (-p) session without a permission-prompt tool, '
@@ -1998,6 +2000,10 @@ const EXEMPTIONS = [
   { tool: 'ReadWidgetContext', reason: MCP('it reads the state an MCP App view shared'), date: PIN_330, until: UNTIL_PHASE_C },
   { tool: 'McpTaskResumePolling', reason: MCP('it resumes tracking a background MCP task (allow_mcp_task_worker_wake)'),
     date: PIN_330, until: UNTIL_PHASE_C },
+  { tool: 'McpTaskCheck', reason: MCP('it checks on a background MCP task; isEnabled is behind the GrowthBook flag '
+    + 'tengu_fuzzy_teapot (default off)'), date: PIN_332, until: UNTIL_PHASE_C },
+  { tool: 'McpTaskShowQuestion', reason: MCP("it shows the user a background MCP task's question; isEnabled is behind the "
+    + 'GrowthBook flag tengu_quirky_goblet (default off) and off in a remote workspace'), date: PIN_332, until: UNTIL_PHASE_C },
   // Off by default behind a GrowthBook flag.
   { tool: 'GetTask', reason: FLAG_OFF('tengu_violin_rosin', 'a local tool (it checks on a background shell)'),
     date: RECORDED, until: UNTIL_PHASE_B },

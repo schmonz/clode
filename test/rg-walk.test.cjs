@@ -535,17 +535,19 @@ test('RG-STDERR-ORDER: on one thread the walk\'s messages and the search\'s erro
 
 // ---- RG-VERSION, RG-VERSION-SIMD, RG-TYPE-LIST ------------------------------------------------------------------------
 // native's own text: darwin-arm64 (this Mac) and linux-x64 (a node:24.21.0-bookworm container on a Xeon E5-1650 v2,
-// which has SSSE3 and no AVX2), measured 2026-10-04. The rev moved at the 2.1.330 pin (7c1d0ed28a -> 6634fc3b5b, the
-// same ripgrep 14.1.1): read 2026-11-21 by running darwin-arm64 native's rg (scripts/gen-rg-types.cjs, every other
-// line unchanged), and from the linux-x64 2.1.330 binary, which holds 6634fc3b5b and not 7c1d0ed28a.
+// which has SSSE3 and no AVX2), measured 2026-10-04. The FIRST LINE (`ripgrep 14.1.1 (rev …)`) is read from the
+// generated table, which rg-types-fresh holds to the pinned native's own rg: the rev moved at 2.1.330 (7c1d0ed28a ->
+// 6634fc3b5b) and at 2.1.332 (-> 358d8293c2), every other line unchanged both times, and each move was a hand edit of
+// five literals in four files until this read it. Everything after the first line stays pinned here.
+const HEAD = rgTypes.RG_TYPES_DATA.version.head;
 const VERSION_NATIVE = {
-  arm64: 'ripgrep 14.1.1 (rev 6634fc3b5b)\n\nfeatures:+pcre2\nsimd(compile):+NEON\nsimd(runtime):+NEON\n\nPCRE2 10.45 is available (JIT is available)\n',
-  x64: 'ripgrep 14.1.1 (rev 6634fc3b5b)\n\nfeatures:+pcre2\nsimd(compile):+SSE2,+SSSE3,-AVX2\nsimd(runtime):+SSE2,+SSSE3,-AVX2\n\nPCRE2 10.45 is available (JIT is available)\n',
+  arm64: `${HEAD}\n\nfeatures:+pcre2\nsimd(compile):+NEON\nsimd(runtime):+NEON\n\nPCRE2 10.45 is available (JIT is available)\n`,
+  x64: `${HEAD}\n\nfeatures:+pcre2\nsimd(compile):+SSE2,+SSSE3,-AVX2\nsimd(runtime):+SSE2,+SSSE3,-AVX2\n\nPCRE2 10.45 is available (JIT is available)\n`,
 };
-const VERSION_SHORT = 'ripgrep 14.1.1 (rev 6634fc3b5b)\n';
+const VERSION_SHORT = `${HEAD}\n`;
 test('RG-VERSION-SIMD: --version for each architecture is native\'s (aarch64 and x86_64 measured; elsewhere rg prints no simd lines)', () => {
   for (const [arch, want] of Object.entries(VERSION_NATIVE)) assert.strictEqual(rgTypes.versionText({ arch }), want, arch);
-  assert.strictEqual(rgTypes.versionText({ arch: 'ppc' }), 'ripgrep 14.1.1 (rev 6634fc3b5b)\n\nfeatures:+pcre2\n\nPCRE2 10.45 is available (JIT is available)\n');
+  assert.strictEqual(rgTypes.versionText({ arch: 'ppc' }), `${HEAD}\n\nfeatures:+pcre2\n\nPCRE2 10.45 is available (JIT is available)\n`);
   assert.strictEqual(rgTypes.versionText({ short: true }), VERSION_SHORT);
 });
 test('RG-VERSION: rg --version, -V and a search argv holding --version answer as native, and /doctor\'s probe passes', async () => {

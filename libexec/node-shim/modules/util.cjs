@@ -395,6 +395,91 @@ function getSystemErrorName(err) {
   return new UvError(err).code;
 }
 
+// util.types — node's whole predicate set, each a BRAND check where the language has one (a builtin method or
+// getter that throws, or answers undefined, on anything without the internal slot), never `instanceof` or a
+// toStringTag, which a prototype swap or a Symbol.toStringTag spoofs. Until 2.1.332 this held only isDate and isProxy;
+// 2.1.332's `import*as A from"util/types"` then `A.isRegExp(o)` threw QuickJS's nameless "not a function" and three
+// of four builtin plugins' hooks modules failed to load in every quaude turn. test/node-shim-util-types.test.cjs
+// holds every predicate to host node's answer over one value matrix; test/shim-surface.test.cjs now measures this
+// subpath's members (it measured only module files before).
+//
+// Where QuickJS offers no brand check the predicate says what it does instead:
+//   isProxy        false: no way to detect a Proxy from JS (node reads a V8 internal). Every caller we can see uses it
+//                  to avoid touching a value during inspection; "not a proxy" takes the ordinary path.
+//   isPromise      a native promise or one whose prototype chain holds Promise.prototype. No slot check exists that
+//                  does not attach a reaction (which could raise an unhandled rejection), so Object.create(
+//                  Promise.prototype) answers true here and false under node.
+//   isMapIterator / isSetIterator / isGeneratorObject: the prototype chain holds the intrinsic iterator / generator
+//                  prototype. A swapped prototype answers otherwise than node's slot check.
+//   isModuleNamespaceObject: null prototype, a non-writable Symbol.toStringTag of 'Module', not extensible.
+//   isExternal     false: an External is a native addon's wrapper; quaude loads no addons.
+//   isKeyObject / isCryptoKey: false. The shim's crypto makes no KeyObject or CryptoKey a caller could hold.
+const _brand = (fn) => (v) => { try { fn(v); return true; } catch { return false; } };
+const _getter = (proto, name) => Object.getOwnPropertyDescriptor(proto, name).get;
+const _taTag = _getter(Object.getPrototypeOf(Uint8Array.prototype), Symbol.toStringTag);
+const _abLen = _getter(ArrayBuffer.prototype, 'byteLength');
+const _sabLen = typeof SharedArrayBuffer === 'function' ? _getter(SharedArrayBuffer.prototype, 'byteLength') : null;
+const _reGlobal = _getter(RegExp.prototype, 'global');
+const _mapSize = _getter(Map.prototype, 'size');
+const _setSize = _getter(Set.prototype, 'size');
+const _protoOf = (v) => (v !== null && (typeof v === 'object' || typeof v === 'function') ? Object.getPrototypeOf(v) : null);
+const _chainHas = (v, proto) => { for (let p = _protoOf(v); p; p = Object.getPrototypeOf(p)) if (p === proto) return true; return false; };
+const _MAP_ITER = Object.getPrototypeOf(new Map().entries());
+const _SET_ITER = Object.getPrototypeOf(new Set().values());
+const _GEN = Object.getPrototypeOf(Object.getPrototypeOf((function* () {})()));
+const _ASYNC_GEN = Object.getPrototypeOf(Object.getPrototypeOf((async function* () {})()));
+const _fnTag = (v) => (typeof v === 'function' ? Object.prototype.toString.call(v) : '');
+const _ta = (name) => (v) => _taTag.call(v) === name;
+const isNumberObject = (v) => typeof v === 'object' && v !== null && _brand((x) => Number.prototype.valueOf.call(x))(v);
+const isStringObject = (v) => typeof v === 'object' && v !== null && _brand((x) => String.prototype.valueOf.call(x))(v);
+const isBooleanObject = (v) => typeof v === 'object' && v !== null && _brand((x) => Boolean.prototype.valueOf.call(x))(v);
+const isBigIntObject = (v) => typeof v === 'object' && v !== null && _brand((x) => BigInt.prototype.valueOf.call(x))(v);
+const isSymbolObject = (v) => typeof v === 'object' && v !== null && _brand((x) => Symbol.prototype.valueOf.call(x))(v);
+const isArrayBuffer = _brand((v) => _abLen.call(v));
+const isSharedArrayBuffer = (v) => _sabLen !== null && _brand((x) => _sabLen.call(x))(v);
+const types = {
+  isArgumentsObject: (v) => typeof v === 'object' && v !== null && Object.prototype.toString.call(v) === '[object Arguments]'
+    && !(Symbol.toStringTag in Object(v)),
+  isArrayBuffer,
+  isAsyncFunction: (v) => /^\[object Async(?:Generator)?Function\]$/.test(_fnTag(v)),
+  isBigIntObject,
+  isBooleanObject,
+  isDate: (v) => typeof v === 'object' && v !== null && _brand((x) => Date.prototype.getTime.call(x))(v),
+  isExternal: () => false,
+  isGeneratorFunction: (v) => /^\[object (?:Async)?GeneratorFunction\]$/.test(_fnTag(v)),
+  isGeneratorObject: (v) => typeof v === 'object' && (_chainHas(v, _GEN) || _chainHas(v, _ASYNC_GEN)),
+  isMap: _brand((v) => _mapSize.call(v)),
+  isMapIterator: (v) => typeof v === 'object' && _chainHas(v, _MAP_ITER),
+  isModuleNamespaceObject: (v) => {
+    if (v === null || typeof v !== 'object' || Object.getPrototypeOf(v) !== null || Object.isExtensible(v)) return false;
+    const d = Object.getOwnPropertyDescriptor(v, Symbol.toStringTag);
+    return !!d && d.value === 'Module' && d.writable === false;
+  },
+  isNativeError: (v) => Error.isError(v),
+  isNumberObject,
+  isPromise: (v) => v !== null && typeof v === 'object' && _chainHas(v, Promise.prototype),
+  isProxy: () => false,
+  isRegExp: (v) => v !== null && typeof v === 'object' && _brand((x) => { if (typeof _reGlobal.call(x) !== 'boolean') throw 0; })(v),
+  isSet: _brand((v) => _setSize.call(v)),
+  isSetIterator: (v) => typeof v === 'object' && _chainHas(v, _SET_ITER),
+  isSharedArrayBuffer,
+  isStringObject,
+  isSymbolObject,
+  isWeakMap: _brand((v) => WeakMap.prototype.has.call(v, {})),
+  isWeakSet: _brand((v) => WeakSet.prototype.has.call(v, {})),
+  isAnyArrayBuffer: (v) => isArrayBuffer(v) || isSharedArrayBuffer(v),
+  isBoxedPrimitive: (v) => isNumberObject(v) || isStringObject(v) || isBooleanObject(v) || isBigIntObject(v) || isSymbolObject(v),
+  isArrayBufferView: (v) => ArrayBuffer.isView(v),
+  isDataView: _brand((v) => _getter(DataView.prototype, 'byteLength').call(v)),
+  isTypedArray: (v) => _taTag.call(v) !== undefined,
+  isUint8Array: _ta('Uint8Array'), isUint8ClampedArray: _ta('Uint8ClampedArray'), isUint16Array: _ta('Uint16Array'),
+  isUint32Array: _ta('Uint32Array'), isInt8Array: _ta('Int8Array'), isInt16Array: _ta('Int16Array'),
+  isInt32Array: _ta('Int32Array'), isFloat16Array: _ta('Float16Array'), isFloat32Array: _ta('Float32Array'),
+  isFloat64Array: _ta('Float64Array'), isBigInt64Array: _ta('BigInt64Array'), isBigUint64Array: _ta('BigUint64Array'),
+  isKeyObject: () => false,
+  isCryptoKey: () => false,
+};
+
 module.exports = {
   format, formatWithOptions, promisify, callbackify, inherits, inspect, isDeepStrictEqual,
   debuglog, debug: debuglog, deprecate, stripVTControlCharacters, getSystemErrorName,
@@ -405,6 +490,6 @@ module.exports = {
   // "not a proxy" makes them take the ordinary path. A throwing stub would break
   // rendering for merely asking. If a caller ever needs a true answer this becomes a
   // real wall, and it should fail loudly then rather than lie more elaborately.
-  types: { isDate: (v) => v instanceof Date, isProxy: () => false },
+  types,
   TextEncoder: globalThis.TextEncoder, TextDecoder: globalThis.TextDecoder,
 };

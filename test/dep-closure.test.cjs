@@ -312,6 +312,15 @@ test('scanBareSpecifiers: finds require()/__require()/import() bare specifiers',
   } finally { fs.rmSync(path.dirname(file), { recursive: true, force: true }); }
 });
 
+// 2.1.330 and 2.1.332 carry JXA scripts as text (`ObjC.import('ApplicationServices')`): a member call named
+// `import` is a property, never the dynamic-import keyword, so no framework name is a package.
+test('scanBareSpecifiers: a member call o.import("x") is not a dynamic import', () => {
+  const file = fakeSrcFile("var s=`ObjC.import('ApplicationServices');ObjC.import('Cocoa');`;x=await import(\"undici\");y=$.import('z')");
+  try {
+    assert.deepStrictEqual([...scanBareSpecifiers(file)], ['undici']);
+  } finally { fs.rmSync(path.dirname(file), { recursive: true, force: true }); }
+});
+
 test('scanBareSpecifiers: skips relative/absolute paths and node builtins (bare and node:-prefixed forms)', () => {
   const file = fakeSrcFile(
     'require("./local");'

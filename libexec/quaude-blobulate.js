@@ -159,6 +159,11 @@ const { Reporter } = loadLibexecCjs(
   dec.decode(await mustRead(path.join(libexecDir, 'build-report.cjs'), 'the step reporter')),
   'build-report.cjs');
 const report = new Reporter({ emit: (line) => { console.log(line); } });
+// Each carved module's import.meta.dirname and .dir, derived from its graph name exactly as the runner derives them
+// (libexec/module-meta.cjs). The engine derives only the url from the name, so a compiled module had no dirname.
+const { moduleMetaAssignments } = loadLibexecCjs(
+  dec.decode(await mustRead(path.join(libexecDir, 'module-meta.cjs'), 'the module-meta derivation')),
+  'module-meta.cjs');
 
 // ---- 1) members ------------------------------------------------------------
 // The extras file (written by clode-build.cjs) names the payload ROLE:
@@ -234,7 +239,7 @@ if (role === 'builder') {
   // above — never require()'d from this materialized dir, only carried so a
   // self-blobulated clode-native can re-blobulate targets. The quaude-product role below
   // deliberately omits it: no runtime provision() consumer on that side.
-  for (const f of ['bun-shim.cjs', 'extract-claude-js.cjs', 'quaude-blobulate.js', 'quaude-bootstrap.mjs', 'host-provision.cjs', 'target-update-check.cjs', 'bun-graph-plan.cjs', 'scc-merge.cjs', 'build-report.cjs', 'graph-scc-merge.cjs', 'graph-meta.js']) {
+  for (const f of ['bun-shim.cjs', 'extract-claude-js.cjs', 'module-meta.cjs', 'quaude-blobulate.js', 'quaude-bootstrap.mjs', 'host-provision.cjs', 'target-update-check.cjs', 'bun-graph-plan.cjs', 'scc-merge.cjs', 'build-report.cjs', 'graph-scc-merge.cjs', 'graph-meta.js']) {
     members.push({ name: `libexec/${f}`, data: await mustRead(path.join(libexecDir, f), `libexec member ${f}`) });
   }
   // target-env.cjs member name is BARE (no libexec/ prefix), matching how
@@ -391,7 +396,8 @@ if (role === 'builder') {
       if (typeof src !== 'string') throw new Error(`quaude-blobulate: staged graph has no source for ${name}`);
       let bc;
       try {
-        bc = tjs.engine.serialize(tjs.engine.compile(enc.encode(src), name));
+        // the assignments go on the source's FIRST line (no newline), so every stack line number stays the graph's
+        bc = tjs.engine.serialize(tjs.engine.compile(enc.encode(moduleMetaAssignments(name, { url: false }) + src), name));
       } catch (e) {
         throw new Error(`quaude-blobulate: compiling ${name} failed: ${e.message}\n`
           + '  A "could not load" here usually means the staged order is not topological.');

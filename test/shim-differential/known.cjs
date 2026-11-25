@@ -30,7 +30,9 @@ const CAUSES = [
   { cause: 'DIFF-STATFS-CLASS', api: '^fs/promises\\.statfs$', leaf: '^r\\.ctor$' },
   // an argument truly MISSING: no arguments, an undefined/null/number where a path or options object
   // is required, or writeFileSync with a path and no data
-  { cause: 'DIFF-ARG-VALIDATION', api: '^(fs/promises\\.(unlink|readFile)|path\\.(dirname|basename|join|resolve)|util\\.formatWithOptions)$',
+  // (path left this cause at the 2.1.332 bump, 2026-11-25: modules/path.cjs checks its arguments as node does, and
+  // test/node-shim-path.test.cjs holds it there; a path divergence here again is a regression, not a tolerated pair)
+  { cause: 'DIFF-ARG-VALIDATION', api: '^(fs/promises\\.(unlink|readFile)|util\\.formatWithOptions)$',
     id: '\\((undefined|null|42)?[,)]', leaf: `(${ERR}|^r$)` },
   { cause: 'DIFF-ARG-VALIDATION', api: '^fs\\.writeFileSync$', id: '^fs\\.writeFileSync\\(<[^>]*>\\)$', leaf: '^r\\.error\\.(message|code)$' },
   { cause: 'DIFF-MISSING-MEMBERS', api: '^(fs\\.promises|fs/promises\\.constants|path\\.(win32|posix)|util\\.types|zlib\\.constants)$', leaf: '^r\\.(keys\\.\\w+|[A-Z][A-Z0-9_]*|undefined)$' },

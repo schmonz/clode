@@ -50,8 +50,12 @@ const MARKER = /\/\/ @bun\b[^\n]*@bun-cjs\n\(function\(exports, require, module,
 const BUN_API = /\bBun\.([A-Za-z_$][A-Za-z0-9_$]*)/g;
 // Python `\s` on bytes == ASCII whitespace only; JS `\s` matches Unicode (e.g.
 // 0xa0 in a latin1 string), so spell out the ASCII class for byte-parity.
-const BUN_MOD = /(?:require|import)\([ \t\n\r\x0b\x0c]*["'](bun:[\w./-]+)["']/g;
-const REQ_ANY = /(?:require|import)\([ \t\n\r\x0b\x0c]*["']([^"']+)["']/g;
+// `import(` only where it can be the dynamic-import keyword: never a member call `o.import(...)`. 2.1.330 and 2.1.332
+// carry JXA scripts as text (`ObjC.import('Cocoa')`, `ObjC.import('ApplicationServices')`), macOS frameworks named to
+// osascript's bridge, and each one read as a missing external until a hand acceptance. libexec/clode-build.cjs's
+// SPECIFIER_PATTERNS draws the same line.
+const BUN_MOD = /(?:require|(?<![.\w$])import)\([ \t\n\r\x0b\x0c]*["'](bun:[\w./-]+)["']/g;
+const REQ_ANY = /(?:require|(?<![.\w$])import)\([ \t\n\r\x0b\x0c]*["']([^"']+)["']/g;
 const ASSET = /[\w./$-]{3,90}\.(?:node|wasm)\x00/g;
 const JSON_TXT = /[\w./$-]{3,90}\.(?:json|txt)\x00/g;
 
@@ -97,6 +101,10 @@ const KNOWN_BUN = new Set([
   // rewrite three committed golden --json shas for no behavioural gain. It is
   // accepted by name in ACCEPTED_UNRECOGNIZED_BUN instead, with the same review.
   'sliceAnsi', 'unsafe', 'zstdDecompress', 'zstdDecompressSync',
+  // Reviewed 2026-11-25 against the 2.1.332 carve: shrink (Bun.shrink(), return free heap to the OS), called unguarded
+  // from an idle loop gated on feature flags. IMPLEMENTED in bun-shim as gc() is: a collection where the runtime has
+  // one, undefined as Bun answers.
+  'shrink',
   // Reviewed 2026-09-24: secrets (Bun.secrets, the OS credential store). A
   // PER-CARVE member, like Bun.ant's (see the union note below): measured with
   // extract-claude-js + grep, 22 `Bun.secrets` + 2 `Bun?.secrets` in the
@@ -777,10 +785,8 @@ const ACCEPTED_MISSING_EXTERNALS = new Set([
   // rather than code. The bundle can never require it. Same shape as esbuild,
   // playwright and react above.
   'ts-morph',
-  // Cocoa, CoreGraphics (new in 2.1.330): `ObjC.import('Cocoa');ObjC.import('CoreGraphics')` inside a JXA script
-  // TEMPLATE LITERAL that computer-use hands to osascript (chunk-6vxdmxtw.js). Frameworks named to the JXA bridge
-  // in another process, never required by the bundle (libexec/clode-build.cjs KNOWN_UNREACHABLE says the same).
-  'Cocoa', 'CoreGraphics',
+  // (2.1.330's Cocoa and CoreGraphics were accepted here by name: JXA framework names in a member call
+  // `ObjC.import(...)`, which REQ_ANY no longer reads as an import at all.)
 ]);
 
 const ACCEPTED_STUBBED_BUN = new Set(['serve', 'listen', 'file', 'write', 'Terminal', 'Transpiler',

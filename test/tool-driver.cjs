@@ -129,6 +129,21 @@ const isToolUse = (u) => !!u && typeof u.name === 'string' && !!u.name && typeof
 // The rules the mock walks, each { tool }: opts.script, or opts itself for a single opts.tool.
 // The auto-mode safety classifier's requests stop at its closing tag (2.1.283, measured 2026-11-20).
 const CLASSIFIER_STOP = '"stop_sequences":["</severity>"]';
+// THE CLASSIFIER, ANSWERED IN THE FORM IT ASKED FOR. 2.1.283 asked one way: stop at `</severity>`, answer `<severity>N`.
+// 2.1.332 asks two ways, neither with that stop: a fast stage that stops at `</block>` and reads `<block>no` as an allow,
+// and a graded stage with no stop sequence that requires the whole `<severity>N</severity>` and nothing else. Keyed on
+// the old stop, the mock answered both with the turn's next tool_use, and native refused every Agent call in plan, auto
+// and interactive as "claude-opus-5-5 is temporarily unavailable". What every form shares is the request itself: the
+// transcript under review, sent as a text block that opens `<transcript>`. A request carrying it is the classifier's;
+// the form of the answer follows the request's own stop sequence. One function, for every mock that answers it.
+const CLASSIFIER_TRANSCRIPT = '"text":"<transcript>\\n"';
+function classifierAnswer(body, severity) {
+  const isClassifier = body.includes(CLASSIFIER_STOP) || body.includes(CLASSIFIER_TRANSCRIPT);
+  if (!isClassifier || severity === undefined) return null;
+  if (body.includes(CLASSIFIER_STOP)) return cannedMessage(`<severity>${severity}`, '</severity>');
+  if (body.includes('"stop_sequences":["</block>"]')) return cannedMessage(severity < 50 ? '<block>no' : '<block>yes', '</block>');
+  return cannedMessage(`<severity>${severity}</severity>`);
+}
 // A rule's waitForLog: poll the side's debug log until it matches, or until the bound; resolves either way (the check
 // on the tool_result is the verdict, and a log that never matched shows there with the log itself).
 const WAIT_FOR_LOG_MS = 60000;
@@ -285,8 +300,9 @@ async function runSide(side, bin, rules, opts, base) {
   const debugFile = path.join(base, `${side}-debug.log`);
   const mock = await startMockAnthropic({
     respond: (seen) => {
-      const classifier = seen.includes(CLASSIFIER_STOP);
-      if (classifier && opts.autoModeSeverity !== undefined) return cannedMessage(`<severity>${opts.autoModeSeverity}`, '</severity>');
+      const classifier = seen.includes(CLASSIFIER_STOP) || seen.includes(CLASSIFIER_TRANSCRIPT);
+      const verdict = classifierAnswer(seen, opts.autoModeSeverity);
+      if (verdict) return verdict;
       const sub = !classifier && rules.find((r) => r.subagent && seen.includes(r.subagent.prompt) && !seen.includes(r.tool.id));
       if (sub) return cannedSSE(typeof sub.subagent.reply === 'function' ? String(sub.subagent.reply(seen)) : sub.subagent.reply);
       const rule = rules.find((r) => !seen.includes(r.tool.id));
@@ -511,4 +527,4 @@ function ptyHarnessMissing() {
   } catch (e) { return `no PTY harness here (node-pty): ${e.message.split('\n')[0]}`; }
 }
 
-module.exports = { waitForLog, WAIT_FOR_LOG_MS, driveTool, sideEnv, DONE, TOOL_SWITCHES, MODE_TURNS, modeTurnFinding, modeTurnFindingFor, shadowKeychain, keychainShadowFinding, CLASSIFIER_STOP, ptyHarnessMissing, SCALE, interactiveLimits };
+module.exports = { waitForLog, WAIT_FOR_LOG_MS, driveTool, sideEnv, DONE, TOOL_SWITCHES, MODE_TURNS, modeTurnFinding, modeTurnFindingFor, shadowKeychain, keychainShadowFinding, CLASSIFIER_STOP, classifierAnswer, ptyHarnessMissing, SCALE, interactiveLimits };

@@ -117,6 +117,9 @@ const KEY_SAMPLES = {
   breakLength: { v: 80 },
   maxStringLength: { v: 100 },
   maxArrayLength: { v: 10 },
+  // 2.1.332: a hook decision object ({decision, reason}) reaches path.dirname at one site (a minified name the
+  // inventory reads as path's); the sample makes the call a node ERR_INVALID_ARG_TYPE to compare
+  reason: { v: 'why' },
 };
 
 const D = (args, more = {}) => ({ args, ...more });
@@ -151,6 +154,8 @@ const DRIVERS = {
   'fs.rmdirSync': D(['path', 'opts'], { mutates: true }),
   'fs.rmSync': D(['path', 'opts'], { mutates: true }),
   'fs.statSync': D(['statpath', 'opts']),
+  // 2.1.332 (re-measured at the pin bump, 2026-11-25): target, then the link to create
+  'fs.symlinkSync': D(['statpath', 'newpath'], { mutates: true }),
   'fs.unlinkSync': D(['path'], { mutates: true }),
   'fs.writeFileSync': D(['newpath', 'data', 'opts'], { mutates: true }),
   'fs.writeSync': D(['fdw', 'data', 'position'], { mutates: true }),
@@ -249,6 +254,8 @@ const DRIVERS = {
   'zlib.gzipSync': D(['data', 'opts'], { post: 'gzip' }),
   'zlib.deflateSync': D(['data', 'opts'], { post: 'deflate' }),
   'zlib.deflateRawSync': D(['data', 'opts'], { post: 'deflateraw' }),
+  // 2.1.332: reached as Bun.hash.crc32 (libexec/bun-shim.cjs hands it to zlib.crc32)
+  'zlib.crc32': D(['data']),
   'zlib.inflateRawSync': D(['data', 'opts'], { extra: [[{ buf: '4b494c4ae40200' }]] }),
 };
 
@@ -274,6 +281,7 @@ const UNCOVERED = {
   'stream.pipeline': 'needs streams; a scenario driver is not written yet',
   'stream.Readable': 'a class; a scenario driver is not written yet (node-shim-stream.test.cjs judges it by hand)',
   'stream.Transform': 'a class; a scenario driver is not written yet',
+  'stream.Writable': 'a class; a scenario driver is not written yet (2.1.332 subclasses it once; node-shim-stream.test.cjs judges it by hand)',
   'tty.ReadStream': 'needs a terminal; node-shim-tty.test.cjs judges it under a pty',
   'util.deprecate': 'its warning is process-global; a scenario driver is not written yet',
   'util.inherits': 'a class wiring helper; a scenario driver is not written yet',

@@ -51,7 +51,7 @@ const P10_FILES_NATIVE = [
   ["RG-FILES",".",["--files","."],0,"./c.tsx\n./bin.dat\n./private/p.txt\n./private/in/q.txt\n./a.txt\n./sub/e.txt\n./sub/deep/g.TXT\n./sub/deep/f.txt\n./code/{b}.ts\n./versions/2.0/keep.txt\n./versions/1.0/orphan.txt\n./other/private\n./b.ts\n./d.js\n./empty.txt\n",""],
   // The one rg call 2.1.330 makes at startup (test/shim-surface/rg-calls-golden.json: `rg --files --hidden <PATH>`,
   // the file-count estimate), ignore files honoured. Measured 2026-11-21 from 2.1.330's darwin-arm64 embedded rg
-  // (ripgrep 14.1.1 rev 6634fc3b5b), over this tree.
+  // (ripgrep 14.1.1 at the revision libexec/rg-types.cjs records in version.head), over this tree.
   ["RG-FILES",".",["--files","--hidden","."],0,"./d.js\n./empty.txt\n./a.txt\n./c.tsx\n./bin.dat\n./.gitignore\n./.hidden.txt\n./.git/HEAD\n./b.ts\n./sub/e.txt\n./code/{b}.ts\n./sub/deep/g.TXT\n./sub/deep/f.txt\n./private/p.txt\n./versions/2.0/keep.txt\n./other/private\n./versions/1.0/orphan.txt\n./private/in/q.txt\n",""],
   ["RG-FILES",".",["--files","--hidden","<ROOT>"],0,"<ROOT>/c.tsx\n<ROOT>/.git/HEAD\n<ROOT>/.hidden.txt\n<ROOT>/bin.dat\n<ROOT>/private/p.txt\n<ROOT>/private/in/q.txt\n<ROOT>/.gitignore\n<ROOT>/a.txt\n<ROOT>/sub/e.txt\n<ROOT>/sub/deep/g.TXT\n<ROOT>/sub/deep/f.txt\n<ROOT>/code/{b}.ts\n<ROOT>/versions/2.0/keep.txt\n<ROOT>/versions/1.0/orphan.txt\n<ROOT>/other/private\n<ROOT>/b.ts\n<ROOT>/d.js\n<ROOT>/empty.txt\n",""],
   ["RG-FILES",".",["--files","--null","--glob","*.ts","--sort=modified","a.txt"],0,"a.txt\u0000",""],

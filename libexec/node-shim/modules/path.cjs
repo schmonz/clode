@@ -286,7 +286,26 @@ const win32 = {
   parse: win32Parse,
 };
 
-const posix = { toNamespacedPath: (p) => p, sep, delimiter, isAbsolute, normalize, join, resolve, dirname, basename, extname, relative, parse, posix: null, win32 };
+// ARGUMENTS ARE CHECKED AS NODE CHECKS THEM, for both flavours, in one place. Nothing here checked any: a non-string
+// fell into the string code and died with whatever it hit first. 2.1.332's node-shim differential drove
+// path.dirname({decision:"allow"}) from a carve call site and node answered ERR_INVALID_ARG_TYPE where the shim answered
+// QuickJS's nameless "not a function" (p.startsWith). Node's rule, measured on 24.22.3 (posix and win32 alike): every
+// path argument is "path", resolve's are "paths[i]", relative's "from" and "to", basename's optional second "suffix";
+// toNamespacedPath checks nothing. test/node-shim-path.test.cjs holds each against host node.
+const { invalidArgType } = require('../internal/node-errors.cjs');
+const mustBeString = (v, name) => { if (typeof v !== 'string') throw invalidArgType(`The "${name}" argument must be of type string`, v); };
+function checked(flavour) {
+  const one = (f) => (p, ...rest) => { mustBeString(p, 'path'); return f(p, ...rest); };
+  for (const k of ['isAbsolute', 'normalize', 'dirname', 'extname', 'parse']) flavour[k] = one(flavour[k]);
+  const { basename: b, join: j, resolve: r, relative: rel } = flavour;
+  flavour.basename = (p, suffix) => { mustBeString(p, 'path'); if (suffix !== undefined) mustBeString(suffix, 'suffix'); return b(p, suffix); };
+  flavour.join = (...a) => { a.forEach((x) => mustBeString(x, 'path')); return j(...a); };
+  flavour.resolve = (...a) => { a.forEach((x, i) => mustBeString(x, `paths[${i}]`)); return r(...a); };
+  flavour.relative = (from, to) => { mustBeString(from, 'from'); mustBeString(to, 'to'); return rel(from, to); };
+  return flavour;
+}
+checked(win32);
+const posix = checked({ toNamespacedPath: (p) => p, sep, delimiter, isAbsolute, normalize, join, resolve, dirname, basename, extname, relative, parse, posix: null, win32 });
 posix.posix = posix;
 win32.win32 = win32;
 win32.posix = posix;

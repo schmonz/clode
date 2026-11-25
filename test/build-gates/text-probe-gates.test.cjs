@@ -367,8 +367,16 @@ function splitTopArgs(argstr) {
 }
 
 // 2.1.330 respells the guard `if(a.search(V)===-1)` and adds a fourth parameter with a default (`r=!0`, its own
-// recursion's flag; never options): both spellings are this shape, nothing else is.
-const DIRECT_WRAP_CALLER = /function (\w+)\((\w+),(\w+),(\w+)(?:,\w+=![01])?\)\{if\((?:!(\w+)\.test\(\2\)|\2\.search\((\w+)\)===-1)\)return Bun\.wrapAnsi\(\2,\3,\4\);/;
+// recursion's flag; never options): both spellings are this shape, nothing else is. 2.1.332 moves the search into a
+// helper, `if(!H(a))` with `function H(e){return e.search(V)!==-1}`; that spelling counts only when the helper beside
+// it is exactly that (directWrapCaller checks), so any other predicate is still not this shape.
+const DIRECT_WRAP_CALLER = /function (\w+)\((\w+),(\w+),(\w+)(?:,\w+=![01])?\)\{if\((?:!(\w+)\.test\(\2\)|\2\.search\((\w+)\)===-1|!(\w+)\(\2\))\)return Bun\.wrapAnsi\(\2,\3,\4\);/;
+function directWrapCaller(mod) {
+  const dm = DIRECT_WRAP_CALLER.exec(mod);
+  if (!dm || dm[7] === undefined) return dm;
+  const h = dm[7].replace(/\$/g, '\\$');
+  return new RegExp(`function ${h}\\((\\w+)\\)\\{return \\1\\.search\\(\\w+\\)!==-1\\}`).test(mod) ? dm : null;
+}
 
 // { xname, wrapperName, callSites: [ [arg0Text, arg1Text, arg2Text], ... ] }. xname/wrapperName
 // null means the shape this scan expects was not found at all (the caller reads that as
@@ -377,7 +385,7 @@ function findWrapCallSites(bundle) {
   const mods = splitModules(bundle);
   let xname = null; let defModule = null;
   for (const mod of mods) {
-    const dm = DIRECT_WRAP_CALLER.exec(mod);
+    const dm = directWrapCaller(mod);
     if (dm) { xname = dm[1]; defModule = mod; break; }
   }
   if (xname === null) return { xname: null, wrapperName: null, callSites: [] };

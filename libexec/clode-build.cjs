@@ -213,10 +213,15 @@ function assertClosureMatchesLockfile(closureVersions, lockfilePath) {
 // AND assets alike:
 //   require("x") / __require("x")  — Bun's/esbuild's CJS require, the ONLY form
 //     that actually resolves a module at runtime in this bundle.
-//   import("x")                    — dynamic import, also a real runtime call.
+//   import("x")                    — dynamic import, also a real runtime call. NOT a MEMBER call
+//     `o.import("x")`: there `import` is a property name, never the keyword. Each of 2.1.330 and 2.1.332 carried a
+//     JXA script as text, `ObjC.import('Cocoa')`, `ObjC.import('ApplicationServices')` (macOS frameworks named to
+//     osascript's bridge, in another process), and the old `\bimport\(` read each framework as a package the
+//     closure lacked, so every `clode build` refused 2.1.332 until a hand allowlist entry. The lookbehind ends the
+//     class: no framework name needs an entry again.
 const SPECIFIER_PATTERNS = [
   /(?:require|__require)\(["']([a-zA-Z0-9_/:@.-]+)["']\)/g,
-  /\bimport\(["']([a-zA-Z0-9_/:@.-]+)["']\)/g,
+  /(?<![.\w$])import\(["']([a-zA-Z0-9_/:@.-]+)["']\)/g,
 ];
 
 // Static `import x from "y"` / `export {x} from "y"` — TASK-11 FIX ROUND 1
@@ -522,14 +527,10 @@ const KNOWN_UNREACHABLE = {
   // own process executes (a package cannot resolve its own name as a dependency of
   // itself). Same doc/guidance-text shape as every other entry in this block.
   'claude-code': 'guidance TEXT (a `.d.ts`-generation help string) telling a developer to `import type {...} from "claude-code"` in their OWN generated TypeScript file — quoting the package\'s own name back at the reader, never a require()/import() cli.cjs itself executes',
-  // 2.1.330 (2026-11-21), all three inside string literals, traced by module:
-  // /$bunfs/root/chunk-6vxdmxtw.js holds a JXA (JavaScript for Automation) script as a template literal
-  // (`var Yr=\`ObjC.import('Cocoa');ObjC.import('CoreGraphics');ObjC.bindFunction('CGWindowListCopyWindowInfo',...`)
-  // that the computer-use feature hands to osascript: ObjC.import names macOS frameworks to the JXA bridge, in
-  // another process. /$bunfs/root/chunk-mk44m07h.js is vendored TypeScript's diagnostic table, whose message 1202
-  // reads "Consider using 'import * as ns from \"mod\"'": an example module name in an error string.
-  Cocoa: "a macOS framework named by `ObjC.import('Cocoa')` inside a JXA script TEMPLATE LITERAL the computer-use feature passes to osascript; JXA's bridge, another process, never a require()/import() cli.cjs runs",
-  CoreGraphics: "same JXA script TEMPLATE LITERAL as Cocoa above (`ObjC.import('CoreGraphics')`, for CGWindowListCopyWindowInfo)",
+  // 2.1.330 (2026-11-21), inside a string literal: /$bunfs/root/chunk-mk44m07h.js is vendored TypeScript's
+  // diagnostic table, whose message 1202 reads "Consider using 'import * as ns from \"mod\"'": an example module
+  // name in an error string. (2.1.330's two JXA framework names, Cocoa and CoreGraphics, had entries here too; a
+  // member call `ObjC.import(...)` is no longer read as a dynamic import at all: SPECIFIER_PATTERNS.)
   mod: "an example module name inside vendored TypeScript's diagnostic 1202 STRING (\"Consider using 'import * as ns from \\\"mod\\\"'...\"); message text, never a require()/import() cli.cjs runs",
 };
 

@@ -19,13 +19,19 @@
 // copied into a test.
 //
 // FLOOR: 3 (the Grep builder, the Glob builder and the usage-error regex, each found once).
-// CONTROL: the 2.1.330 builders verbatim, with ONE more flag pushed beside -U.
+// CONTROL: the 2.1.332 builders verbatim, with ONE more flag pushed beside -U.
 //
 // 2.1.330 (re-pinned 2026-11-21): the Grep builder starts `["--hidden","--no-follow"]`; the Glob
 // builder appends `...HEr(y)?["--no-follow"]:[]` behind a test that is `return!1` in both carves;
 // the consumer's usage-error regex gained `|the literal|pattern contains`, and before throwing it
 // now retries once with `--no-messages` first and requires `<stderr>.search(<re>)===0`, so a
 // refusal must match at offset 0 (refusalDrift checks that when the carve requires it).
+//
+// 2.1.332 (re-pinned 2026-11-25): the Grep builder pushes `-C` once (`p.context||p.C`), not in two branches; the
+// Glob builder no longer carries `--sort=modified` in its array but appends it as `[...<argv>,"--sort=modified"]`
+// (it first tries an unsorted run on Windows); and both builders now append `--glob !<dir>/**` for each orphaned
+// Claude version directory under the search root (YHe/XHe), after their --iglob pushes. Those exclusions are
+// path-dependent, not flags of the builder; the matrix reads up to the first --iglob, as before.
 const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -77,14 +83,20 @@ function readCarve() {
 // VERBATIM from the 2.1.330 darwin-arm64 binary (test/fixtures/rg-builders-2.1.330.js, sliced 2026-11-21 and joined
 // with ';' as above): the Grep builder, the Glob builder, the regex and the class it throws, and the guarded throw.
 const CARVE_2_1_330 = fs.readFileSync(path.join(REPO, 'test', 'fixtures', 'rg-builders-2.1.330.js'), 'latin1');
+// VERBATIM from the 2.1.332 darwin-arm64 carve (test/fixtures/rg-builders-2.1.332.js, sliced 2026-11-25 from the decoded
+// graph and joined with ';'): the Grep builder through its orphaned-version --glob loop, the Glob builder likewise, its
+// `[...ie,"--sort=modified"]` tail, the regex and the class it throws, and the guarded throw.
+const CARVE_2_1_332 = fs.readFileSync(path.join(REPO, 'test', 'fixtures', 'rg-builders-2.1.332.js'), 'latin1');
 
-// The 2.1.283 fixture with 2.1.330's two builder changes (its consumer shape kept), for the tests of that shape.
-const as330Builders = (t) => {
-  const out = t.replace('Me=["--hidden"]', 'Me=["--hidden","--no-follow"]').replace('...W?["--hidden"]:[]]', '...W?["--hidden"]:[],...H(y)?["--no-follow"]:[]]');
-  assert.strictEqual((out.match(/--no-follow/g) || []).length, 2);
-  return out;
+// An older consumer shape behind the current builders: the 2.1.332 builders, then the fixture's consumer (from its
+// regex binding on), for the tests of that shape.
+const withCurrentBuilders = (t, regexBinding) => {
+  const builders = CARVE_2_1_332.slice(0, CARVE_2_1_332.indexOf('var et='));
+  const at = t.indexOf(`var ${regexBinding}=`);
+  assert.ok(at > 0, `the fixture binds ${regexBinding}`);
+  return builders + t.slice(at);
 };
-const controlText = () => CARVE_2_1_330.replace('Xe.push("-U","--multiline-dotall")', 'Xe.push("-U","--multiline-dotall","--crlf")');
+const controlText = () => CARVE_2_1_332.replace('Ze.push("-U","--multiline-dotall")', 'Ze.push("-U","--multiline-dotall","--crlf")');
 
 guardTests(defineGuard({
   name: 'rg-matrix-from-carve',
@@ -94,59 +106,67 @@ guardTests(defineGuard({
   control: () => ({ text: controlText(), what: 'synthetic control' }),
 }));
 
-test('the verbatim 2.1.330 builders agree with the matrix (the fixture the control edits is clean)', () => {
-  const r = scanBuilders({ text: CARVE_2_1_330, what: 'the 2.1.330 fixture' });
+test('the verbatim 2.1.332 builders agree with the matrix (the fixture the control edits is clean)', () => {
+  const r = scanBuilders({ text: CARVE_2_1_332, what: 'the 2.1.332 fixture' });
   assert.deepStrictEqual(r.findings, []);
   assert.strictEqual(r.examined, 3);
 });
 
-// The drift this gate exists for, as it really happened: the 2.1.283 builders are read whole (start anchor
-// `["--hidden"` takes both spellings) and differ from the 2.1.330 matrix by exactly the two --no-follow literals.
-test('the 2.1.283 builders are now drift: each finding names the missing --no-follow, the old consumer shape still reads', () => {
-  const r = scanBuilders({ text: CARVE_2_1_283, what: 'the 2.1.283 fixture' });
-  assert.strictEqual(r.examined, 3);
-  assert.strictEqual(r.findings.length, 2, r.findings.join('\n'));
-  assert.match(r.findings[0], /^grep: the carve's builder writes \["--hidden","--glob",/);
-  assert.match(r.findings[1], /^glob: the carve's builder writes \[.*"--hidden"\], /);
-  assert.deepStrictEqual(scanBuilders({ text: as330Builders(CARVE_2_1_283), what: 'x' }).findings, []);
+// The drift this gate exists for, as it really happened at two bumps: the 2.1.330 builders differ from the 2.1.332
+// matrix by the second -C push and the --sort position; the 2.1.283 builders, read whole (start anchor `["--hidden"`
+// takes both spellings), also lack the two --no-follow literals. Each old consumer shape still reads.
+test('the 2.1.330 and 2.1.283 builders are now drift, one finding per builder, and each old consumer shape still reads', () => {
+  const r330 = scanBuilders({ text: CARVE_2_1_330, what: 'the 2.1.330 fixture' });
+  assert.strictEqual(r330.examined, 3);
+  assert.strictEqual(r330.findings.length, 2, r330.findings.join('\n'));
+  assert.match(r330.findings[0], /^grep: the carve's builder writes \[.*"-C","-C",/);
+  assert.match(r330.findings[1], /^glob: the carve's builder writes \["--files","--null","--glob","--sort=modified",/);
+  const r283 = scanBuilders({ text: CARVE_2_1_283, what: 'the 2.1.283 fixture' });
+  assert.strictEqual(r283.examined, 3);
+  assert.strictEqual(r283.findings.length, 2, r283.findings.join('\n'));
+  assert.match(r283.findings[0], /^grep: the carve's builder writes \["--hidden","--glob",/);
+  assert.match(r283.findings[1], /^glob: the carve's builder writes \[.*"--hidden"\], /);
+  for (const [t, re] of [[CARVE_2_1_330, 'ke'], [CARVE_2_1_283, 'TQ']]) {
+    assert.deepStrictEqual(scanBuilders({ text: withCurrentBuilders(t, re), what: 'x' }).findings, []);
+  }
 });
 
 test('the control differs from the fixture by exactly the one planted flag, and the finding names the Grep builder', () => {
-  assert.notStrictEqual(controlText(), CARVE_2_1_330);
+  assert.notStrictEqual(controlText(), CARVE_2_1_332);
   const r = scanBuilders({ text: controlText(), what: 'control' });
   assert.strictEqual(r.findings.length, 1);
   assert.match(r.findings[0], /^grep: the carve's builder writes .*"--multiline-dotall","--crlf"/);
 });
 
 test('a builder that is not in the carve is a finding and is not counted as examined', () => {
-  const r = scanBuilders({ text: CARVE_2_1_330.replace('"--files","--null","--glob"', '"--files","--glob"'), what: 'no Glob' });
+  const r = scanBuilders({ text: CARVE_2_1_332.replace('"--files","--null","--glob"', '"--files","--glob"'), what: 'no Glob' });
   assert.strictEqual(r.examined, 2);
   assert.match(r.findings.join('\n'), /^glob: .* is not in the carve exactly once/m);
 });
 
 test('a builder found twice is not trusted: it is a finding, not a pick', () => {
-  const r = scanBuilders({ text: CARVE_2_1_330 + ';' + CARVE_2_1_330, what: 'twice' });
+  const r = scanBuilders({ text: CARVE_2_1_332 + ';' + CARVE_2_1_332, what: 'twice' });
   assert.strictEqual(r.examined, 0);
   assert.strictEqual(r.findings.length, 3);
 });
 
 test('the consumer\'s usage-error regex is found in the fixture by structure, and quaude\'s refusal passes it', () => {
-  const r = scanBuilders({ text: CARVE_2_1_330, what: 'the 2.1.330 fixture' });
+  const r = scanBuilders({ text: CARVE_2_1_332, what: 'the 2.1.332 fixture' });
   assert.strictEqual(r.examined, 3);
   assert.deepStrictEqual(r.findings, []);
-  const u = P.consumerUsageErrorRegex(CARVE_2_1_330);
-  assert.strictEqual(u.atStart, true, '2.1.330 requires the match at offset 0');
+  const u = P.consumerUsageErrorRegex(CARVE_2_1_332);
+  assert.strictEqual(u.atStart, true, '2.1.330 and 2.1.332 require the match at offset 0');
   assert.strictEqual(P.consumerUsageErrorRegex(CARVE_2_1_283).atStart, false);
 });
 
 test('a usage-error regex that no longer passes quaude\'s refusal is a finding (the model would read "no results")', () => {
-  const r = scanBuilders({ text: CARVE_2_1_330.replace('|error parsing flag|', '|'), what: 'narrowed' });
+  const r = scanBuilders({ text: CARVE_2_1_332.replace('|error parsing flag|', '|'), what: 'narrowed' });
   assert.strictEqual(r.examined, 3);
   assert.strictEqual(r.findings.length, 2, r.findings.join('\n'));
   for (const f of r.findings) assert.match(f, /^usage-error regex: the carve's .* does not pass quaude's refusal/);
 });
 
-// 2.1.330 throws only when the match is at offset 0 (`v.search(ke)===0`): a regex that would match the refusal
+// 2.1.330 and 2.1.332 throw only when the match is at offset 0 (`v.search(ke)===0`, `h.search(et)===0`): a regex that would match the refusal
 // somewhere later, but not at its start, reads as "no results" there. (Dropping the m flag and the ^ anchor
 // moves nothing for a one-line refusal; requiring a leading prefix does.)
 test('a refusal the regex matches only past offset 0 is a finding where the consumer requires offset 0', () => {
@@ -156,12 +176,12 @@ test('a refusal the regex matches only past offset 0 is a finding where the cons
     assert.notStrictEqual(out, t);
     return out;
   };
-  const r = scanBuilders({ text: shift(CARVE_2_1_330, 'ke'), what: 'shifted' });
+  const r = scanBuilders({ text: shift(CARVE_2_1_332, 'et'), what: 'shifted' });
   assert.strictEqual(r.examined, 3);
   assert.strictEqual(r.findings.length, 2, r.findings.join('\n'));
   for (const f of r.findings) assert.match(f, /^usage-error regex: the carve's .* does not pass quaude's refusal/);
   // the same regex under the 2.1.283 consumer (no offset-0 rule) passes
-  const old = scanBuilders({ text: as330Builders(shift(CARVE_2_1_283, 'TQ')), what: 'old consumer' });
+  const old = scanBuilders({ text: withCurrentBuilders(shift(CARVE_2_1_283, 'TQ'), 'TQ'), what: 'old consumer' });
   assert.deepStrictEqual(old.findings, []);
 });
 
@@ -178,7 +198,7 @@ test('a consumer whose usage-error test cannot be found is a finding and is not 
 const HDR = (name) => `\nimport.meta.require = globalThis.__quaudeRequire; import.meta.url = "file://${name}";\n`;
 test('the usage-error regex is the binding in the consumer\'s own module when the name is bound in another too (linux-x64 2.1.283)', () => {
   const other = `${HDR('/$bunfs/root/chunk-blob.js')}var a=new Set(["x"]),TQ=/^\\/?_blob\\/[0-9a-f]{32}$/;function f(){}`;
-  const consumer = `${HDR('/$bunfs/root/chunk-grep.js')}${as330Builders(CARVE_2_1_283)}`;
+  const consumer = `${HDR('/$bunfs/root/chunk-grep.js')}${withCurrentBuilders(CARVE_2_1_283, 'TQ')}`;
   for (const text of [other + consumer, consumer + other]) {
     const r = scanBuilders({ text, what: 'two modules' });
     assert.strictEqual(r.examined, 3, r.findings.join('\n'));

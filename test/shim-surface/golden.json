@@ -5,8 +5,8 @@
     "Regenerate with UPDATE_GOLDEN=1, and add a note below for anything new.",
     "Measured against the EXTRACTED cli.cjs (~21MB), never the 255MB Bun binary."
   ],
-  "_measured_against_bundle": "2.1.330",
-  "_measured_on": "2026-11-21",
+  "_measured_against_bundle": "2.1.332",
+  "_measured_on": "2026-11-25",
   "layer1_bun_props_missing": [
     "Bun.Image",
     "Bun.Archive",
@@ -23,41 +23,43 @@
     "bun:sqlite"
   ],
   "layer2_node_apis_missing": [
+    "process.getgid",
     "fs.statfsSync",
     "crypto.createSign",
     "crypto.createVerify",
+    "process.geteuid",
     "crypto.createPrivateKey",
     "crypto.pbkdf2Sync",
     "crypto.pbkdf2",
+    "process.getegid",
+    "zlib.createBrotliDecompress",
+    "process._getActiveHandles",
+    "process._getActiveRequests",
+    "process.dlopen",
     "crypto.createPublicKey",
     "crypto.verify",
     "fs.ftruncateSync",
     "crypto.sign",
     "fs.exists",
+    "crypto.createCipheriv",
+    "crypto.createDecipheriv",
     "crypto.generateKeyPairSync",
     "crypto.KeyObject",
     "crypto.subtle",
     "fs.fchmod",
     "zlib.createZstdDecompress",
-    "zlib.createBrotliDecompress",
-    "crypto.createCipheriv",
-    "crypto.createDecipheriv",
     "crypto.scrypt",
     "crypto.scryptSync",
     "dns.ADDRCONFIG",
+    "dns/promises.Resolver",
     "fs.fchown",
+    "fs/promises.glob",
     "http.maxHeaderSize",
     "perf_hooks.monitorEventLoopDelay",
-    "v8.getHeapSpaceStatistics",
-    "v8.getHeapStatistics",
-    "process.getgid",
-    "process.geteuid",
-    "process.getegid",
     "process.getgroups",
-    "process._getActiveHandles",
-    "process._getActiveRequests",
-    "process.dlopen",
-    "process.threadCpuUsage"
+    "process.threadCpuUsage",
+    "v8.getHeapSpaceStatistics",
+    "v8.getHeapStatistics"
   ],
   "unenumerable_allowed": [
     "intl"
@@ -111,6 +113,8 @@
     "process._getActiveHandles / _getActiveRequests": "The heap-dump diagnostics (chunk-g0392cxd.js, beside v8.getHeapStatistics above): called UNGUARDED, so that diagnostic throws here, the same path v8.getHeapStatistics already marks as unsupported. Not on the -p or interactive turn routes.",
     "process.dlopen": "A native-addon loader via /proc/self/fd (chunk-vw137skj.js), inside try/catch: a node addon cannot load into quaude at all, so its throw is the honest answer and is caught.",
     "process.title": "IMPLEMENTED 2026-11-22 (kept as history): newly seen by the global-process scan; node-shim now answers the executable's path, as Bun 1.4.4 does under 2.1.330, and stores assignments (no OS process rename).",
-    "process.threadCpuUsage": "FEATURE-DETECTED (`process.threadCpuUsage?.()??process.cpuUsage()`): falls back to cpuUsage, which node-shim answers from the engine's rusage."
+    "process.threadCpuUsage": "FEATURE-DETECTED (`process.threadCpuUsage?.()??process.cpuUsage()`): falls back to cpuUsage, which node-shim answers from the engine's rusage.",
+    "fs/promises.glob": "NEW 2026-11-25 (2.1.332; first measurable once subpath modules were enumerated): the SDK agent toolset's glob tool binds `Kt=w.glob` (import*as w from \"fs/promises\") and iterates Kt(pattern,{cwd,withFileTypes:true,exclude}). Absent in the shim, so that tool fails \"not a function\" under quaude; the CLI's own Glob tool does not use it. A real gap, not tolerated as harmless: BACKLOG.md, '2.1.332 reaches for two node APIs the shim lacks'.",
+    "dns/promises.Resolver": "NEW 2026-11-25 (2.1.332): the Datadog sender's offline check, `new Resolver({timeout:1000,tries:1}).resolve4(host)` in try/catch, offline only on code ENOTFOUND. Absent, the constructor throws and the check reads ONLINE, so telemetry is attempted as on a connected box. Harmless until offline: BACKLOG.md, '2.1.332 reaches for two node APIs the shim lacks'."
   }
 }

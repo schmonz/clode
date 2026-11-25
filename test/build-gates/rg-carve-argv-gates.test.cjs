@@ -287,3 +287,22 @@ test('2.1.330: a runner that opens with a call, the Windows embedded-mode tests 
   const unbound = SNIPPETS_2_1_330.replace('var De="--no-messages";', '');
   assert.ok(P.rgRunnerCalls(unbound).some((c) => c.local === 'rre' && c.kind === null));
 });
+
+// 2.1.332's Glob tool (darwin-arm64, chunk __clode-scc-1, the call verbatim and its context cut to what the scan
+// reads): a local arrow hands its parameter to the runner, and is called with the builder's array or that array with
+// `--sort=modified` appended (unsorted first on Windows). rg-resolution-accounted named it a finding until the call
+// was read as a forward through the wrapper, which requires every call of the wrapper to hand it a read argv.
+const SNIPPET_2_1_332_GLOB = SNIPPETS_2_1_330
+  + ';async function Gl(e,n,h,L,Y,Q,_e){let ie=["--files","--null","--glob",n,...Q?["--no-ignore"]:[],..._e?["--hidden"]:[]];'
+  + 'for(let Et of Y)ie.push("--iglob",Et);let Se=(Et)=>rre(Et,e.target,h,{rawLines:!0}),Ce=[...ie,"--sort=modified"],Le=NNn(e);'
+  + 'let Ze=await Se(Le?ie:Ce).then((Et)=>{if(!Le)return Et;return Le=!1,Se(Ce)})}';
+test('2.1.332: a local wrapper of the runner is a forward only when every call of it hands it a read argv', () => {
+  const kinds = P.rgRunnerCalls(SNIPPET_2_1_332_GLOB).filter((c) => c.context.includes('Se=')).map((c) => c.kind);
+  assert.deepStrictEqual(kinds, ['forward through the local wrapper Se, every call of which hands it a read argv (2 call(s))']);
+  // one call computed (not a bound array, a literal, or a conditional of two): the runner call is not accounted
+  const computed = SNIPPET_2_1_332_GLOB.replace('Se(Ce)})', 'Se(mk(ie))})');
+  assert.deepStrictEqual(P.rgRunnerCalls(computed).filter((c) => c.context.includes('Se=')).map((c) => c.kind), [null]);
+  // a conditional with one side unbound: likewise
+  const half = SNIPPET_2_1_332_GLOB.replace('Se(Le?ie:Ce)', 'Se(Le?ie:Zq)');
+  assert.deepStrictEqual(P.rgRunnerCalls(half).filter((c) => c.context.includes('Se=')).map((c) => c.kind), [null]);
+});

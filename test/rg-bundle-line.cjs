@@ -29,7 +29,7 @@ function bundleLine(n = 5000000) {
 // native 2.1.330's --json over that line (2.1.283's rg, rev 7c1d0ed28a, answered every row identically; re-measured 2026-11-21): [pattern, submatches, sha256(JSON [[start,end]...]) prefix]. Re-proven
 // against native by `node test/rg-bundle-line.cjs --native BIN --check` and by the rg-bundle-line-fresh guard
 // (test/build-gates/rg-regex-gates.test.cjs), which runs it whenever the pinned provider runs here.
-const NATIVE_BUNDLE_RG = 'ripgrep 14.1.1 (rev 6634fc3b5b)';
+const NATIVE_BUNDLE_RG = 'ripgrep 14.1.1 (rev 358d8293c2)';
 const NATIVE_BUNDLE_LINE = [
   ['\\w+Error', 64660, '23ef86fe587776a79663'], ['import.*from', 1, '4a958576355f9660d9cf'], ['"[^"]*"', 70013, 'e4349df8f56b6d30a9d2'],
   ['[a-zA-Z_]\\w*\\(', 43715, '245bb4e298716816e51b'], ['\\w+', 711795, '46a3c478b8a8ab6af1aa'], ['x|', 4894633, '6959e2ed75bd3b0b2e9d'],

@@ -37,7 +37,7 @@ const { providerBin, skipReason } = require('../provider-resolve.cjs');
 const { throwawayHome } = require('../throwaway-home.cjs');
 const { startMockAnthropic, cannedSSE, cannedToolUseSSE, cannedMessage } = require('../mock-anthropic-helper.cjs');
 const { toolResult, assertFailsOnMissingOutput } = require('../../scripts/lib/tool-result.cjs');
-const { shadowKeychain, keychainShadowFinding, CLASSIFIER_STOP, SCALE } = require('../tool-driver.cjs');
+const { shadowKeychain, keychainShadowFinding, classifierAnswer, SCALE } = require('../tool-driver.cjs');
 const { debugFileArgs, readLog, judgeDebugLog } = require('../debug-log-gate.cjs');
 
 // THE TREE: <B>/work is the working directory, <B>/outside is added with --add-dir. Every file gets its own mtime
@@ -294,7 +294,8 @@ async function judge(bin, mode, perm = null) {
     const mock = await startMockAnthropic({
       respond: (body) => {
         // plan and auto ask the auto-mode classifier about each Bash rg call: an allow (test/tool-driver.cjs autoModeSeverity)
-        if (body.includes(CLASSIFIER_STOP)) return cannedMessage('<severity>10', '</severity>');
+        const verdict = classifierAnswer(body, 10);
+        if (verdict) return verdict;
         const next = SCRIPT.find((s) => !body.includes(s.use.id)); return next ? next.emit() : cannedSSE('E2E-DONE');
       },
     });

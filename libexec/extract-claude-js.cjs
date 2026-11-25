@@ -9,6 +9,7 @@
 
 const fs = require('node:fs');
 const { carveBlocks } = require('./bundle-carve.cjs');
+const { moduleMetaAssignments } = require('./module-meta.cjs');
 
 // __doc__ equivalent: reproduced verbatim from the Python module docstring so the
 // usage/error path prints identical text.
@@ -1595,8 +1596,6 @@ function extractGraphToFile(binpath, out) {
 function moduleWithMeta(name, src) {
   // The URL a Bun-built module would report. modules.c derives the same string from the
   // module name; deriving it here from the SAME name keeps the two in agreement.
-  const abs = /^[/\\]/.test(name) || /^[A-Za-z]:/.test(name);
-  const url = abs ? 'file://' + (name[0] === '/' ? '' : '/') + name.replace(/\\/g, '/') : null;
   // ASSIGNED, NOT DEFAULTED, and that is the whole point of doing it here. `??=` left
   // each host to win where it already had an opinion, and their opinions differ: tjs
   // reports file:///$bunfs/root/chunk-x.js (what Bun reports, which is what upstream
@@ -1614,11 +1613,8 @@ function moduleWithMeta(name, src) {
   // undefined, so the runner under node answered `-p` with nothing and exit 0 -- its command
   // loading never settled, after HEAD /api/hello and no POST -- and so did every naude built
   // from them. (tjs's shim path.join accepts undefined, which is why quaude did not notice.)
-  const cut = abs ? name.search(/[/\\][^/\\]*$/) : -1;          // the last separator, either kind
-  const dir = cut > 0 ? name.slice(0, cut) : (cut === 0 ? name[0] : null);
-  return 'import.meta.require = globalThis.__quaudeRequire;'
-    + (url ? ' import.meta.url = ' + JSON.stringify(url) + ';' : '')
-    + (dir ? ' import.meta.dirname = import.meta.dir = ' + JSON.stringify(dir) + ';' : '')
+  // The derivation lives in libexec/module-meta.cjs, shared with quaude's blob (which had no dirname until 2026-11-25).
+  return 'import.meta.require = globalThis.__quaudeRequire;' + moduleMetaAssignments(name)
     + '\n' + src;
 }
 

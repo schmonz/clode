@@ -419,3 +419,18 @@ test('waitForLog holds a scripted call until the side\'s debug log matches, and 
     assert.ok(Date.now() - t0 >= 250, 'gives up at the bound, does not hang the turn');
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+// The auto-mode classifier is answered in the form its request asks for (2.1.283's `</severity>` stop; 2.1.332's
+// `</block>` fast stage and its stop-less graded stage), and nothing else is mistaken for it.
+test('classifierAnswer: each classifier form gets its own answer; another request gets none', () => {
+  const { classifierAnswer } = require('./tool-driver.cjs');
+  const T = '"content":[{"type":"text","text":"<transcript>\\n"}]';
+  const text = (r) => r.json.content[0].text;
+  assert.strictEqual(text(classifierAnswer('{"stop_sequences":["</severity>"]}', 10)), '<severity>10');
+  assert.deepStrictEqual([text(classifierAnswer(`{${T},"stop_sequences":["</block>"]}`, 10)), classifierAnswer(`{${T},"stop_sequences":["</block>"]}`, 10).json.stop_sequence],
+    ['<block>no', '</block>']);
+  assert.strictEqual(text(classifierAnswer(`{${T},"stop_sequences":["</block>"]}`, 90)), '<block>yes');
+  assert.strictEqual(text(classifierAnswer(`{${T}}`, 10)), '<severity>10</severity>');
+  assert.strictEqual(classifierAnswer(`{${T}}`, undefined), null, 'no severity asked for: no answer');
+  assert.strictEqual(classifierAnswer('{"messages":[{"role":"user","content":"say PONG"}]}', 10), null);
+});

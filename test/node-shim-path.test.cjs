@@ -230,3 +230,24 @@ test('os.tmpdir root-edge (TMPDIR=/) matches host node', (t) => {
   const tjsOut = JSON.parse(r.stdout.trim());
   assert.deepStrictEqual(tjsOut, nodeOut);
 });
+
+// Arguments checked as node checks them (libexec/node-shim/modules/path.cjs `checked`): 2.1.332's differential drove
+// path.dirname({decision:"allow"}) and the shim answered "not a function" where node answers ERR_INVALID_ARG_TYPE.
+test('path (posix and win32): a non-string argument is node\'s ERR_INVALID_ARG_TYPE, word for word', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'path-args-'));
+  try {
+    const prog = path.join(dir, 'p.cjs');
+    fs.writeFileSync(prog, `const cases = [['isAbsolute',[1]],['normalize',[null]],['dirname',[{decision:'allow'}]],['extname',[1]],
+      ['parse',[[]]],['basename',[1]],['basename',['a',1]],['basename',['a.js',undefined]],['join',['a',1]],['resolve',['/a',1]],
+      ['relative',[1,'a']],['relative',['a',1]],['toNamespacedPath',[1]],['dirname',['/a/b']]];
+const out = [];
+for (const k of ['posix','win32']) for (const [f,a] of cases) { const p = require('path')[k];
+  try { out.push([k,f,'ok',p[f](...a)]); } catch (e) { out.push([k,f,e.code,e.message]); } }
+process.stdout.write(JSON.stringify(out));`);
+    const node = JSON.parse(require('node:child_process').execFileSync(process.execPath, [prog], { encoding: 'utf8' }));
+    const r = runLoader(prog);
+    assert.strictEqual(r.status, 0, r.stderr);
+    assert.deepStrictEqual(JSON.parse(r.stdout), node);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});

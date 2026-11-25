@@ -1558,6 +1558,10 @@ fsMod.realpathSync.native = (p) => FSS.realpath(p);
 // caller is the async/promises path above, and a wrong sync answer would be
 // worse than a missing one. Revisit if a probe ever shows statfsSync reached.
 promises.cp = async (src, dest, opts, entry = 'fs.promises.cp') => cpAsync(src, dest, opts, entry);
+// node's fs/promises exports the same constants object as fs. Missing until 2.1.332's re-measure, the first to look at
+// subpath members (test/shim-surface/collect.cjs): four modules `import{access as X,constants as Y}from"fs/promises"`
+// and then read Y.F_OK / Y.X_OK, which here read a property of undefined.
+promises.constants = constants;
 fsMod.promises = promises;
 
 // Node's callback fs APIs take an optional options arg before the callback; the

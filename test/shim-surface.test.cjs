@@ -269,7 +269,16 @@ if (process.env.UPDATE_GOLDEN === '1') {
     const inp = inputs();
     if (inp.skip) { t.skip(inp.skip); return; }
     const prev = fs.existsSync(GOLDEN_PATH) ? JSON.parse(fs.readFileSync(GOLDEN_PATH, 'utf8')) : {};
-    fs.writeFileSync(GOLDEN_PATH, `${JSON.stringify({ ...prev, ...actualOf(measure(inp.cli)) }, null, 2)}\n`);
+    // Written as the gate reads it: the reviewed deferrals stay out of the main list (scanShimSurface subtracts them
+    // before diffing, so a deferred member written here would read as GONE), and the stamps name what was measured.
+    // Both were hand edits after every re-measure until 2.1.332, when this wrote 2.1.330's stamp over a 2.1.332 map.
+    const actual = actualOf(measure(inp.cli));
+    const deferred = new Set(prev.layer1_bun_props_missing_deferred || []);
+    actual.layer1_bun_props_missing = actual.layer1_bun_props_missing.filter((x) => !deferred.has(x));
+    const graph = path.join(path.dirname(inp.cli), 'graph.json');
+    const version = bundleVersionOf(fs.readFileSync(fs.existsSync(graph) ? graph : inp.cli, 'utf8'));
+    const stamps = { _measured_against_bundle: version || prev._measured_against_bundle, _measured_on: new Date().toISOString().slice(0, 10) };
+    fs.writeFileSync(GOLDEN_PATH, `${JSON.stringify({ ...prev, ...stamps, ...actual }, null, 2)}\n`);
     t.diagnostic('golden regenerated (UPDATE_GOLDEN=1)');
   });
 }

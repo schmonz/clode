@@ -8,6 +8,25 @@ Concrete clode-under-Node divergences from native Claude Code, to triage and fix
 That page is GENERATED from `scripts/build-graph.cjs` — the one declaration of the build — so it
 cannot drift from it; it is also where the honest answer to "does this need node?" lives.
 
+## 2.1.332 reaches for two node APIs the shim lacks: `fs/promises.glob` and `dns/promises.Resolver` (2026-11-25)
+
+Found by the shim-surface map once it enumerated subpath modules (test/shim-surface/collect.cjs reads loader.cjs's
+KNOWN list; before 2026-11-25 no `x/y` module was measured at all). Both are in test/shim-surface/golden.json with a note.
+
+- `fs/promises.glob`: the SDK agent toolset's glob tool (chunk-e92g7wvg, betaAgentToolset) binds `Kt=w.glob` from
+  `import*as w from"fs/promises"` and runs `for await (const a of Kt(pattern, {cwd, withFileTypes:true, exclude}))`.
+  Under quaude `Kt` is undefined, so that tool's every call fails "not a function". Reached only through the agent
+  toolset (an SDK AgentToolContext), not the CLI's own Glob tool. TO DO: node's fs.promises.glob (an async
+  iterator; withFileTypes gives Dirents with parentPath; exclude takes a Dirent) over the shim's own walk, held to
+  host node by a differential, or refused by name. Until then, a quaude agent-toolset glob is a wall.
+- `dns/promises.Resolver`: the Datadog sender's offline check (chunk-8hn4ym54) does
+  `new Resolver({timeout:1000,tries:1}).resolve4(host)` inside try/catch and reads only `code==="ENOTFOUND"` as
+  offline. Absent, the constructor throws, the code is not ENOTFOUND, and the check reads ONLINE: telemetry is tried
+  as on a connected box (what native does online). Harmless until a box is offline. TO DO: a Resolver over the shim's
+  dns.lookup (resolve4 as node's: ENOTFOUND, ETIMEOUT), or leave it and say so.
+
+Measured: test/shim-surface.test.cjs against the 2.1.332 darwin-arm64 carve, and both call sites read in its decoded graph (2026-11-25); neither path was driven in a turn
+
 ## Under heavy CPU load quaude's startup still holds its loop past axios's 5 s timers; naude's does not (2026-11-24)
 
 The full suite red `test/fidelity/slash-command-diff` and `agentic-sandbox-fail-closed` with quaude-only `[Bootstrap]
@@ -738,7 +757,7 @@ whatever they answered, among them every `fs.promises.unlink(<path>)`; a no-op u
 control row).
 
 NOT JUDGED, said on every run and listed here: 35 APIs the carve calls that the table does not drive yet, each
-with its reason in test/shim-differential/table.cjs UNCOVERED: `buffer.SlowBuffer`, `child_process.exec`, `child_process.execFile`, `child_process.execFileSync`, `child_process.execSync`, `child_process.spawn`, `child_process.spawnSync`, `events.once`, `events.setMaxListeners`, `fs.watch`, `fs.watchFile`, `fs.unwatchFile`, `net.connect`, `net.createConnection`, `os.setPriority`, `process.exit`, `stream.finished`, `stream.PassThrough`, `stream.pipeline`, `stream.Readable`, `stream.Transform`, `tty.ReadStream`, `util.debuglog`, `util.deprecate`, `util.inherits`, `util.promisify`, `util.TextDecoder`, `zlib.createBrotliDecompress`, `zlib.createGunzip`, `zlib.createGzip`, `zlib.createInflate`, `zlib.createUnzip`, `zlib.createZstdDecompress`, `zlib.deflate`, `zlib.gzip`. Also printed on every run: the cases the
+with its reason in test/shim-differential/table.cjs UNCOVERED: `buffer.SlowBuffer`, `child_process.exec`, `child_process.execFile`, `child_process.execFileSync`, `child_process.execSync`, `child_process.spawn`, `child_process.spawnSync`, `events.once`, `events.setMaxListeners`, `fs.watch`, `fs.watchFile`, `fs.unwatchFile`, `net.connect`, `net.createConnection`, `os.setPriority`, `process.exit`, `stream.finished`, `stream.PassThrough`, `stream.pipeline`, `stream.Readable`, `stream.Transform`, `stream.Writable`, `tty.ReadStream`, `util.debuglog`, `util.deprecate`, `util.inherits`, `util.promisify`, `util.TextDecoder`, `zlib.createBrotliDecompress`, `zlib.createGunzip`, `zlib.createGzip`, `zlib.createInflate`, `zlib.createUnzip`, `zlib.createZstdDecompress`, `zlib.deflate`, `zlib.gzip`. Also printed on every run: the cases the
 per-API cap leaves out (path.join, path.resolve, path.basename, the open and writeFile families) and the carve
 shapes cut to the driver's argument count.
 
@@ -772,9 +791,8 @@ shapes cut to the driver's argument count.
   node's `copyfile 'a' -> 'b'`, and a directory symlink source says EISDIR where node says ENOTSUP.
 - DIFF-STATFS-CLASS: `fs.promises.statfs` answers a plain object; node a StatFs.
 - DIFF-ARG-VALIDATION: a missing argument (`fs.promises.unlink()`, `fs.promises.readFile()`, `writeFileSync(p)`
-  with no data, `path.dirname(undefined)`, `path.basename(42)`, `path.join(undefined, "x")`,
-  `path.resolve(undefined, "..")`, `util.formatWithOptions(undefined, ...)`) fails late with the engine's words or
-  not at all; node throws ERR_INVALID_ARG_TYPE. Only calls with an argument truly missing are listed.
+  with no data, `util.formatWithOptions(undefined, ...)`) fails late with the engine's words or not at all; node
+  throws ERR_INVALID_ARG_TYPE. (path's calls left this cause 2026-11-25: modules/path.cjs now checks as node does.) Only calls with an argument truly missing are listed.
 - DIFF-MISSING-MEMBERS: `fs.promises` lacks chown, constants, glob, lchmod, lchown, mkdtempDisposable;
   `fs/promises.constants` is absent; `path.win32`/`path.posix` lack format, matchesGlob, toNamespacedPath,
   _makeLong; `util.types` has 2 of node's predicates.
