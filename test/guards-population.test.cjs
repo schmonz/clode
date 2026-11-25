@@ -716,6 +716,7 @@ test('the controlled set is EXACTLY the modules a guard was deliberately written
     'scripts/oracle-native-version.cjs',
     'scripts/record-provider.mjs',  // ADDED 2026-11-24: --verify refuses a recorded native that changed mid-job (a gate since it judged every instrument, not only stage-provider's; born controlled by record-provider-gates)
     'scripts/render-build-graph.cjs',
+    'scripts/renovate-health.mjs',  // ADDED 2026-11-25: Renovate can run here (config compiles, datasources answer, no Action Required issue; new gate, born controlled by renovate-config-gates)
   ].sort(),
   'the set of production modules counted as CONTROLLED changed. If a successor phase wrote '
   + 'a new guard, add its module here and lower UNCONTROLLED_GATE_BASELINE. If a guard '

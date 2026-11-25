@@ -37,6 +37,32 @@ env:
   DISABLE_AUTOUPDATER: '1'
 
 jobs:
+  # CAN RENOVATE RUN HERE (scripts/renovate-health.mjs says why): its config compiles, every custom datasource answers
+  # with releases, and it has no "Action Required" issue open. From 2026-10-22 Renovate refused our config at init, said
+  # so only in issue #74, and three update PRs froze for a month. jsonata is installed here only, pinned, scripts off:
+  # it evaluates our transforms the way Renovate does, and is no dependency of clode.
+  renovate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10   # backstop; see ci.yml's PER-JOB timeout-minutes note
+    permissions:
+      contents: read
+      issues: read
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version-file: .tool-versions
+      - name: Renovate can run here — config compiles, datasources answer, no Action Required issue
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          npm i --no-save --ignore-scripts --prefix "$RUNNER_TEMP/jsonata" jsonata@2.0.6 2>&1 | tail -1
+          node scripts/renovate-health.mjs --jsonata "$RUNNER_TEMP/jsonata/node_modules/jsonata"
+
   anchors:
     runs-on: ubuntu-latest
     timeout-minutes: 15   # backstop; see ci.yml's PER-JOB timeout-minutes note

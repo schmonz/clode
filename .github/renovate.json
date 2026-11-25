@@ -75,7 +75,7 @@
       "defaultRegistryUrlTemplate": "https://api.github.com/repos/cross-platform-actions/freebsd-builder/releases?per_page=1",
       "format": "json",
       "transformTemplates": [
-        "{ \"releases\": $[0].assets.name[$contains($, \"-x86-64.qcow2\")] ~> $map(function($n) {{ \"version\": $match($n, /freebsd-(.+)-x86-64/).groups[0] }}) }"
+        "{ \"releases\": $[0].assets.name[$contains($, \"-x86-64.qcow2\")] ~> $map(function($n) { { \"version\": $match($n, /freebsd-(.+)-x86-64/).groups[0] } }) }"
       ]
     },
     "cpa-netbsd-x86-64": {
@@ -83,7 +83,7 @@
       "defaultRegistryUrlTemplate": "https://api.github.com/repos/cross-platform-actions/netbsd-builder/releases?per_page=1",
       "format": "json",
       "transformTemplates": [
-        "{ \"releases\": $[0].assets.name[$contains($, \"-x86-64.qcow2\")] ~> $map(function($n) {{ \"version\": $match($n, /netbsd-(.+)-x86-64/).groups[0] }}) }"
+        "{ \"releases\": $[0].assets.name[$contains($, /-x86-64\\.(qcow2|tar\\.zst)$/)] ~> $map(function($n) { { \"version\": $match($n, /netbsd-(.+)-x86-64/).groups[0] } }) }"
       ]
     },
     "cpa-omnios-x86-64": {
@@ -91,7 +91,7 @@
       "defaultRegistryUrlTemplate": "https://api.github.com/repos/cross-platform-actions/omnios-builder/releases?per_page=1",
       "format": "json",
       "transformTemplates": [
-        "{ \"releases\": $[0].assets.name[$contains($, \"-x86-64.qcow2\")] ~> $map(function($n) {{ \"version\": $match($n, /omnios-(.+)-x86-64/).groups[0] }}) }"
+        "{ \"releases\": $[0].assets.name[$contains($, \"-x86-64.qcow2\")] ~> $map(function($n) { { \"version\": $match($n, /omnios-(.+)-x86-64/).groups[0] } }) }"
       ]
     },
     "vmactions-solaris": {
@@ -99,7 +99,7 @@
       "defaultRegistryUrlTemplate": "https://api.github.com/repos/vmactions/solaris-vm/contents/conf",
       "format": "json",
       "transformTemplates": [
-        "{ \"releases\": $[name ~> /\\.conf$/ and name != \"default.release.conf\"].name ~> $map(function($n) {{ \"version\": $replace($n, \".conf\", \"\") }}) }"
+        "{ \"releases\": $[name ~> /\\.conf$/ and name != \"default.release.conf\"].name ~> $map(function($n) { { \"version\": $replace($n, \".conf\", \"\") } }) }"
       ]
     }
   }
