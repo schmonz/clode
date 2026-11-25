@@ -18,6 +18,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { tjsBin } = require('../scripts/platform-tag.cjs');
 const { updaterOff } = require('./updater-off.cjs');
+const { spawnCollect } = require('./spawn-collect.cjs');
 
 const REPO = path.resolve(__dirname, '..');
 const LOADER = path.join(REPO, 'libexec/node-shim/loader.cjs');
@@ -64,22 +65,11 @@ function dispatchSync({ cmd, argv }, opts) {
 // (Repros with a bare http server + a spawnSync'd client — it is an event-loop
 // property, not a bundle bug.) stdin is 'ignore' so `-p` does not block on it.
 function dispatchAsync({ cmd, argv }, opts) {
-  const spawn = opts.spawn || require('node:child_process').spawn;
-  return new Promise((resolve) => {
-    const t0 = Date.now();
-    const child = spawn(cmd, argv, {
-      cwd: opts.cwd,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: modelEnv(opts),
-    });
-    let stdout = '', stderr = '';
-    child.stdout.on('data', (d) => { stdout += d; });
-    child.stderr.on('data', (d) => { stderr += d; });
-    const to = opts.timeout ? setTimeout(() => child.kill('SIGKILL'), opts.timeout) : null;
-    const done = (status, signal) => { if (to) clearTimeout(to); resolve({ status, signal: signal ?? null, stdout, stderr, ms: Date.now() - t0 }); };
-    child.on('close', (status, signal) => done(status, signal));   // 'close': stdio drained (test/spawn-collect.cjs)
-    child.on('error', (e) => { stderr += String(e); done(null, null); });
-  });
+  const t0 = Date.now();
+  // spawn-collect: resolves on 'close', and a timeout kill is written into stderr (CI 45646543044 hung with none).
+  return spawnCollect(cmd, argv, { cwd: opts.cwd, env: modelEnv(opts) },
+    { timeoutMs: opts.timeout || 0, ...(opts.spawn ? { spawn: opts.spawn } : {}) })
+    .then((r) => ({ status: r.status, signal: r.signal ?? null, stdout: r.stdout, stderr: r.stderr, timedOut: r.timedOut, ms: Date.now() - t0 }));
 }
 
 // naude-model — what a naude binary does: run the baked cli.cjs under node.

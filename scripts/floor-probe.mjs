@@ -120,7 +120,7 @@ function sshRun(script) {
     // for Git Bash (the 8.3 path dodges the space in "Program Files").
     const c = spawn(parts[0], parts.slice(1), { stdio: ['pipe', 'pipe', 'pipe'] });
     try { c.stdin.write(script); c.stdin.end(); } catch { /* closed early */ }
-    const timer = setTimeout(() => { try { c.kill('SIGKILL'); } catch { /* */ } }, TIMEOUT);
+    const timer = setTimeout(() => { err += `\n[floor-probe] KILLED_BY_TIMEOUT: no exit within ${TIMEOUT} ms\n`; try { c.kill('SIGKILL'); } catch { /* */ } }, TIMEOUT); // spawn-watchdog: says so in err
     c.stdout.on('data', (d) => { out += d; });
     c.stderr.on('data', (d) => { err += d; });
     c.on('exit', (code, sig) => { clearTimeout(timer); resolve({ code, sig, out, err }); });
@@ -169,7 +169,7 @@ function runLocal(bin, args, { home, cwd, extraEnv }) {
     delete env.NODE_PATH;
     let out = '', err = '';
     const c = spawn(bin, args, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
-    const timer = setTimeout(() => { try { c.kill('SIGKILL'); } catch { /* */ } }, TIMEOUT);
+    const timer = setTimeout(() => { err += `\n[floor-probe] KILLED_BY_TIMEOUT: no exit within ${TIMEOUT} ms\n`; try { c.kill('SIGKILL'); } catch { /* */ } }, TIMEOUT); // spawn-watchdog: says so in err
     c.stdout.on('data', (d) => { out += d; });
     c.stderr.on('data', (d) => { err += d; });
     c.on('exit', (code, sig) => { clearTimeout(timer); resolve({ code, sig, out, err }); });

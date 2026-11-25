@@ -55,7 +55,7 @@ test('async models build the SAME argv as their sync twins', async () => {
   const fakeSpawn = (cmd, args) => {
     seen.push({ cmd, args });
     return {
-      stdout: { on() {} }, stderr: { on() {} },
+      stdout: { setEncoding() {}, on() {} }, stderr: { setEncoding() {}, on() {} },
       on: (ev, cb) => { if (ev === 'exit' || ev === 'close') setImmediate(() => cb(0, null)); }, // node emits both; the model settles on close
       kill() {},
     };
@@ -71,8 +71,8 @@ test('async models collect output and resolve on close', async () => {
   const r = await runNaudeModelAsync('/x/cli.cjs', [], {
     node: '/n/node',
     spawn: () => ({
-      stdout: { on: (e, cb) => { if (e === 'data') cb('PONG'); } },
-      stderr: { on: (e, cb) => { if (e === 'data') cb('warn'); } },
+      stdout: { setEncoding() {}, on: (e, cb) => { if (e === 'data') cb('PONG'); } },
+      stderr: { setEncoding() {}, on: (e, cb) => { if (e === 'data') cb('warn'); } },
       on: (ev, cb) => { if (ev === 'exit' || ev === 'close') setImmediate(() => cb(0, null)); }, // node emits both; the model settles on close
       kill() {},
     }),
@@ -97,14 +97,24 @@ test('async models keep the output that arrives after exit (they settle on close
         setImmediate(() => { h.data('TAIL'); h.close(0, null); });
       });
       return {
-        stdout: { on: (e, cb) => { if (e === 'data') h.data = cb; } },
-        stderr: { on() {} },
+        stdout: { setEncoding() {}, on: (e, cb) => { if (e === 'data') h.data = cb; } },
+        stderr: { setEncoding() {}, on() {} },
         on: (ev, cb) => { h[ev] = cb; },
         kill() {},
       };
     },
   });
   assert.strictEqual(r.stdout, 'head TAIL');
+});
+
+// CI 45646543044: naude hung, the watchdog SIGKILLed it, and the failure read "stderr: (empty) / null !== 0".
+test('an async model the timeout kills says so in its stderr', async () => {
+  const { runNaudeModelAsync } = require('./oracle-models.cjs');
+  const { KILLED_BY_TIMEOUT } = require('./spawn-collect.cjs');
+  const r = await runNaudeModelAsync('-e', ['setTimeout(() => {}, 60000)'], { timeout: 200 });
+  assert.strictEqual(r.status, null);
+  assert.strictEqual(r.timedOut, true);
+  assert.ok(r.stderr.includes(`${KILLED_BY_TIMEOUT}: no exit within 200 ms`), r.stderr);
 });
 
 test('caller env is preserved and NODE_PATH is prepended, not clobbered', () => {

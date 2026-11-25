@@ -24,8 +24,9 @@ const os = require('node:os');
 const path = require('node:path');
 const https = require('node:https');
 const crypto = require('node:crypto');
-const { spawn, spawnSync } = require('node:child_process');
+const { spawnSync } = require('node:child_process');
 const { selfSignedCert } = require('./self-signed-cert.cjs');
+const { spawnCollect } = require('./spawn-collect.cjs');
 const { skipUnlessTjs, engineSpawn, LOADER } = require('./node-shim-helper.cjs');
 const { makeStaleHost, refusals, mkdtemp } = require('./stale-build-host.cjs');
 
@@ -44,16 +45,8 @@ function origin(cert, key) {
 }
 
 function run(cmd, args, env) {
-  return new Promise((resolve) => {
-    const c = spawn(cmd, args, { env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
-    let out = '', err = '';
-    c.stdout.on('data', (d) => { out += d; });
-    c.stderr.on('data', (d) => { err += d; });
-    const kill = setTimeout(() => c.kill('SIGKILL'), 180000);
-    c.on('close', (code) => {
-      clearTimeout(kill);
-      try { resolve(JSON.parse(out)); } catch { resolve({ failed: `exit ${code}; stdout ${out.slice(-300)}; stderr ${err.slice(-1500)}` }); }
-    });
+  return spawnCollect(cmd, args, { env: { ...process.env, ...env } }, { timeoutMs: 180000 }).then(({ status, stdout: out, stderr: err }) => {
+    try { return JSON.parse(out); } catch { return { failed: `exit ${status}; stdout ${out.slice(-300)}; stderr ${err.slice(-1500)}` }; }
   });
 }
 

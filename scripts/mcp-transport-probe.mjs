@@ -121,7 +121,7 @@ function runClient(env) {
       if (passAt === null && kase.expect.test(mock.wire())) passAt = Date.now();
       if (passAt !== null && Date.now() - passAt >= SETTLE_MS) { stoppedOnPass = true; try { child.kill(); } catch { /* */ } }
     }, 100);
-    const kill = setTimeout(() => { timedOut = true; try { child.kill(); } catch { /* */ } }, DEADLINE_MS);
+    const kill = setTimeout(() => { timedOut = true; try { child.kill(); } catch { /* */ } }, DEADLINE_MS); // spawn-watchdog: timedOut is printed ("stopped at the deadline")
     child.on('error', (e) => finish(null, null, e));
     // 'exit', not 'close': a grandchild still holding the client's stderr must not stretch the verdict past the
     // client's own end (stderr already read is kept; the rest is dropped).

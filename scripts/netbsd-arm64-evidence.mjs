@@ -165,7 +165,7 @@ async function inGuest(dir) {
       '--test-reporter=spec', `--test-reporter-destination=${path.join(dir, 'logs', `lane-${r.id}.log`)}`,
       '--test-reporter=./test/cell-reporter.mjs', `--test-reporter-destination=${path.join(dir, 'cells', `${r.id}.jsonl`)}`, ...runArgs(r)];
     const c = spawn(node, args, { cwd: repo, env: laneEnv, stdio: 'ignore' });
-    const kill = setTimeout(() => c.kill('SIGKILL'), 40 * MIN);
+    const kill = setTimeout(() => c.kill('SIGKILL'), 40 * MIN); // spawn-watchdog: the run line prints the SIGKILL and its seconds
     c.on('close', (status, signal) => {
       clearTimeout(kill);
       const rec = { lane, id: r.id, status, signal, seconds: Math.round((Date.now() - s) / 1000) };

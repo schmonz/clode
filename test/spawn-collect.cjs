@@ -12,7 +12,13 @@
 // timedOut }>. A spawn failure resolves with `error` (and status null). At `timeoutMs` the child is SIGKILLed; if its
 // stdio still has not closed GRACE_MS later (a grandchild holding the pipe), it resolves anyway, with timedOut true,
 // rather than hanging the suite. `onSpawn(child)` gets the child (to write its stdin, say) before anything is awaited.
+//
+// A KILL SAYS SO, IN STDERR. The naude model on node-shim-oracle-darwin (CI 45646543044) hung twice, and both failures read
+// "stderr: (empty) / null !== 0": the timeout had SIGKILLed it, and nothing on the page said a watchdog fired, or when. A
+// caller that prints stderr on failure (nearly all do) now prints `KILLED_BY_TIMEOUT` and the limit too.
+// test/spawn-watchdog-gate.test.cjs refuses a hand-rolled kill-on-timeout under test/, which is how that one hid.
 const GRACE_MS = 5000;
+const KILLED_BY_TIMEOUT = '[spawn-collect] KILLED_BY_TIMEOUT';
 
 function spawnCollect(cmd, args, spawnOpts = {}, { timeoutMs = 0, onSpawn = null, spawn = require('node:child_process').spawn } = {}) {
   return new Promise((resolve) => {
@@ -36,6 +42,7 @@ function spawnCollect(cmd, args, spawnOpts = {}, { timeoutMs = 0, onSpawn = null
     if (timeoutMs) {
       to = setTimeout(() => {
         timedOut = true;
+        stderr += `${stderr && !stderr.endsWith('\n') ? '\n' : ''}${KILLED_BY_TIMEOUT}: no exit within ${timeoutMs} ms, so it was SIGKILLed\n`;
         try { child.kill('SIGKILL'); } catch { /* gone */ }
         grace = setTimeout(() => finish({ status: null, signal: 'SIGKILL' }), GRACE_MS);
       }, timeoutMs);
@@ -44,4 +51,4 @@ function spawnCollect(cmd, args, spawnOpts = {}, { timeoutMs = 0, onSpawn = null
   });
 }
 
-module.exports = { spawnCollect, GRACE_MS };
+module.exports = { spawnCollect, GRACE_MS, KILLED_BY_TIMEOUT };

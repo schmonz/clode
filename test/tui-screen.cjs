@@ -303,7 +303,7 @@ async function main() {
     return;
   }
   for (const [delay, bytes] of sends) setTimeout(() => { try { child.write(bytes); } catch { /* */ } }, delay * 1000);
-  for (const [delay, name] of signals) setTimeout(() => { try { child.kill(name); } catch { /* exited */ } }, delay * 1000);
+  for (const [delay, name] of signals) setTimeout(() => { try { child.kill(name); } catch { /* exited */ } }, delay * 1000); // spawn-watchdog: scripted signals, the scenario itself
   for (const [delay, c, r] of resizes) setTimeout(() => {
     try { child.resize(c, r); term.resize(c, r); } catch { /* closing */ }
   }, delay * 1000);

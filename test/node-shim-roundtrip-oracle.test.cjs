@@ -74,7 +74,8 @@ test('naude-model (node reference): -p prints the mock response, exit 0', async 
     const r = await runNaudeModelAsync(staged.cli, ['-p', 'say PONG'], {
       cwd: staged.dir, env: mockEnv(mock), timeout: TIMEOUT,
     });
-    assert.strictEqual(r.status, 0, `stderr:\n${r.stderr}`);
+    // the mock's log says how far a hung run got (CI 45646543044: killed at the timeout, nothing else on the page)
+    assert.strictEqual(r.status, 0, `stderr:\n${r.stderr}\nthe mock saw: ${JSON.stringify(mock.requests.map((q) => q.method + ' ' + q.url))}`);
     assert.match(r.stdout, /PONG/, `stdout was:\n${r.stdout}`);
     assert.ok(postedMessages(mock),
       `bundle never POSTed the messages endpoint; hit: ${JSON.stringify(mock.requests.map((q) => q.method + ' ' + q.url))}`);

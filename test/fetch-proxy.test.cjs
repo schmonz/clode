@@ -40,7 +40,7 @@ function start(script, args = [], env = {}) {
   proc.stderr.on('data', (d) => { err += d; });
   return new Promise((resolve, reject) => {
     let buf = '';
-    const timer = setTimeout(() => { proc.kill(); reject(new Error(`${script} printed no PORT line: ${err}`)); }, 15000);
+    const timer = setTimeout(() => { proc.kill(); reject(new Error(`${script} printed no PORT line: ${err}`)); }, 15000); // spawn-watchdog: the rejection names it
     proc.stdout.on('data', (d) => { buf += d; const m = /PORT (\d+)/.exec(buf); if (m) { clearTimeout(timer); resolve({ proc, port: Number(m[1]) }); } });
     proc.on('close', (code) => { clearTimeout(timer); reject(new Error(`${script} exited (${code}): ${err}`)); });
   });

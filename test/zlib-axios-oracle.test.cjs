@@ -23,7 +23,7 @@ const os = require('node:os');
 const path = require('node:path');
 const http = require('node:http');
 const zlib = require('node:zlib');
-const { spawn } = require('node:child_process');
+const { spawnCollect } = require('./spawn-collect.cjs');
 const { tjsPath, engineSpawn, LOADER } = require('./node-shim-helper.cjs');
 
 function axiosPath() {
@@ -116,18 +116,10 @@ axios.post(process.argv[3], { grant_type: 'authorization_code', code: 'garbage',
 `;
 
 function run(cmd, args) {
-  return new Promise((resolve) => {
-    const c = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'] });
-    let out = ''; let err = '';
-    const timer = setTimeout(() => c.kill('SIGKILL'), 60000);
-    c.stdout.on('data', (d) => { out += d; });
-    c.stderr.on('data', (d) => { err += d; });
-    c.on('close', (code) => {
-      clearTimeout(timer);
-      const line = out.trim().split('\n').pop();
-      let parsed = null; try { parsed = JSON.parse(line); } catch { /* reported below */ }
-      resolve({ code, out, err, parsed });
-    });
+  return spawnCollect(cmd, args, {}, { timeoutMs: 60000 }).then(({ status: code, stdout: out, stderr: err }) => {
+    const line = out.trim().split('\n').pop();
+    let parsed = null; try { parsed = JSON.parse(line); } catch { /* reported below */ }
+    return { code, out, err, parsed };
   });
 }
 

@@ -3,7 +3,7 @@
 // child that outlives its timeout.
 const test = require('node:test');
 const assert = require('node:assert');
-const { spawnCollect } = require('./spawn-collect.cjs');
+const { spawnCollect, KILLED_BY_TIMEOUT } = require('./spawn-collect.cjs');
 
 test('spawnCollect: the whole of stdout and stderr, with the status, once stdio has closed', async () => {
   // A large tail written just before exit: the bytes 'exit' could precede.
@@ -27,6 +27,7 @@ test('spawnCollect: a child past its timeout is killed and reported as timed out
   assert.strictEqual(r.timedOut, true);
   assert.strictEqual(r.status, null);
   assert.strictEqual(r.signal, 'SIGKILL');
+  assert.ok(r.stderr.includes(`${KILLED_BY_TIMEOUT}: no exit within 200 ms`), `the kill is on the page: ${r.stderr}`);
 });
 test('spawnCollect: onSpawn gets the child, to feed its stdin', async () => {
   const r = await spawnCollect(process.execPath, ['-e', 'process.stdin.pipe(process.stdout)'], { stdio: ['pipe', 'pipe', 'pipe'] },
