@@ -460,6 +460,22 @@ function missingReason(required) {
 }
 
 
+test('a --shim whose probe fails is an error naming why, never a report without coverage (2026-11-25)', (t) => {
+  // Before: the failure read as "no --shim given" — --json omitted `coverage` and exited 0, --strict said
+  // "requires --shim". The only trace of a probe killed by its timeout in a loaded suite was an assert's "falsy".
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'insp-probe-'));
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  const bundle = path.join(tmp, 'cli.js');
+  fs.writeFileSync(bundle, '#!/usr/bin/env node\nconsole.log(1)\n');
+  const shim = path.join(tmp, 'shim.cjs');
+  fs.writeFileSync(shim, "process.stderr.write('shim-broke-here'); process.exit(7);\n");
+  for (const flags of [['--json'], ['--strict'], ['--coverage']]) {
+    const r = spawnSync(NODE, [SCRIPT, bundle, '--shim', shim, '--node', NODE, ...flags], { encoding: 'utf8' });
+    assert.strictEqual(r.status, 2, `${flags}: ${r.stdout}${r.stderr}`);
+    assert.match(r.stderr, /no coverage could be measured: the shim probe .* exited 7 .*shim-broke-here/, String(flags));
+  }
+});
+
 test('coverage report runs and is machine-readable',
   { skip: skipReason() || missingReason({ 'libexec/bun-shim.cjs (SHIM)': SHIM }) }, () => {
     const r = spawnSync(NODE, [SCRIPT, BIN, '--shim', SHIM, '--node', NODE, '--json'],

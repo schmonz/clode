@@ -716,7 +716,7 @@ for (const s of specs) {
 }
 process.stdout.write(JSON.stringify({ keys, stubs, modules }));
 `;
-  try {
+  {
     // NODE_PATH at the ext-dep closure, because that is what a quaude actually IS.
     // Without it this probe reports the world as if deps/claude were not installed:
     // Bun.semver, stripANSI and YAML come back "stubbed — throws when used" (all three
@@ -730,15 +730,31 @@ process.stdout.write(JSON.stringify({ keys, stubs, modules }));
     if (fs.existsSync(depsMods)) {
       env.NODE_PATH = env.NODE_PATH ? `${depsMods}${path.delimiter}${env.NODE_PATH}` : depsMods;
     }
+    // A probe that was ASKED FOR and failed is an error with its reason, never `null`: null means "no --shim given",
+    // and reading a failure as that dropped `coverage` from --json with exit 0, and made --strict claim "requires
+    // --shim" though one was given. Seen 2026-11-25: under a loaded full suite the probe ran past a 30 s timeout and
+    // the only trace was test/inspect.test.cjs's "falsy". The timeout is a backstop against a wedged probe, not a
+    // budget: it is generous, and it says so when it fires.
+    const started = Date.now();
     const out = spawnSync(node, ['-e', code, path.resolve(shimPath), JSON.stringify(specifiers)],
-      { encoding: 'utf8', timeout: 30000, maxBuffer: 64 * 1024 * 1024, env });
-    if (out.error) return null;
-    if (out.status !== 0) return null;
-    return JSON.parse(out.stdout);
-  } catch (_) {
-    return null;
+      { encoding: 'utf8', timeout: PROBE_TIMEOUT_MS, maxBuffer: 64 * 1024 * 1024, env });
+    const took = `after ${Date.now() - started} ms`;
+    if (out.error) {
+      throw new Error(out.error.code === 'ETIMEDOUT'
+        ? `the shim probe (${node}) ran past its ${PROBE_TIMEOUT_MS} ms backstop and was killed`
+        : `the shim probe (${node}) could not run ${took}: ${out.error.message}`);
+    }
+    if (out.status !== 0) {
+      throw new Error(`the shim probe (${node}) exited ${out.status}${out.signal ? ` (${out.signal})` : ''} ${took}: `
+        + `${String(out.stderr || '').trim().slice(-2000) || '(no stderr)'}`);
+    }
+    try { return JSON.parse(out.stdout); } catch (e) {
+      throw new Error(`the shim probe (${node}) printed no JSON ${took}: ${e.message}; stdout began `
+        + JSON.stringify(String(out.stdout).slice(0, 200)));
+    }
   }
 }
+const PROBE_TIMEOUT_MS = 180000;
 
 const HANDLED_BUN_MODULES = new Set(['bun:ffi']);
 
@@ -1094,7 +1110,12 @@ function main() {
 
   const r = inspect(args[0]);
   const node = opt('--node') || process.env.CLODE_NODE || which('node') || 'node';
-  const shim = probeShim(opt('--shim'), node, Object.keys(r.external_modules));
+  let shim;
+  try { shim = probeShim(opt('--shim'), node, Object.keys(r.external_modules)); } catch (e) {
+    process.stderr.write(`inspect-claude-bundle: --shim ${opt('--shim')} was given, but no coverage could be measured: `
+      + `${e.message}\n`);
+    process.exit(2);
+  }
   const cov = shim !== null ? coverage(r, shim) : null;
 
   if (asJson) {
