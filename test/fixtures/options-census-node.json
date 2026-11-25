@@ -1,6 +1,6 @@
 {
- "_recorded": "2026-11-24, node v24.21.0 (test/fixtures/options-census-node-derive.cjs)",
- "node": "v24.21.0",
+ "_recorded": "2026-11-25, node v24.22.3 (test/fixtures/options-census-node-derive.cjs)",
+ "node": "v24.22.3",
  "entries": {
   "child_process.spawn": [
    "argv0",
@@ -203,12 +203,14 @@
    "ALPNProtocols",
    "agent",
    "allowHalfOpen",
+   "allowPartialTrustChain",
    "auth",
    "autoSelectFamily",
    "autoSelectFamilyAttemptTimeout",
    "blockList",
    "ca",
    "cert",
+   "certificateCompression",
    "checkServerIdentity",
    "ciphers",
    "clientCertEngine",
