@@ -722,7 +722,12 @@ test('native answers the Task 5 script as T5_NATIVE records', { skip: SKIP }, as
   const r = await driveTool({ script: T5_SCRIPT, native, inspect: readWorkflow, quaudeSkip: 'quaude is judged by the test above' });
   const got = t5Findings('native', r.native);
   if (got.length) t.diagnostic(`measured:\n${JSON.stringify(r.native.results, null, 1)}`);
-  assert.deepStrictEqual(got, [], `native moved:\n${got.join('\n')}`);
+  // Native's ListAgents answer depends on its UDS peer-messaging server having started (the note above T5_NATIVE).
+  // Seen once under a loaded full suite (2026-11-25): native answered quaude's "No reachable agents." alone, with
+  // nothing kept to say whether its server failed, came up late, or was never started. Its own debug log says which.
+  const uds = String(r.native.debugLog || '').split('\n').filter((l) => /uds-messaging|ListAgents/i.test(l));
+  assert.deepStrictEqual(got, [], `native moved:\n${got.join('\n')}\nnative's debug log, uds-messaging/ListAgents lines `
+    + `(${uds.length}):\n${uds.slice(0, 20).join('\n') || '(none — native logged nothing about its messaging server)'}`);
 });
 
 // ==========================================================================
