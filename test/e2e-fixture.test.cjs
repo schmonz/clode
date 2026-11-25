@@ -4,6 +4,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const { execFileSync, spawnSync } = require('node:child_process');
 const { sandbox, mkProvider, REPO, NODE } = require('./e2e.cjs');
+const { updaterOff } = require('./updater-off.cjs');
 
 // Port of test_fixture.bats. NOT a runClode test: it drives mkfixture.cjs +
 // libexec/extract-claude-js.cjs and boots the carved cli.cjs directly under Node,
@@ -31,7 +32,7 @@ test('extractor carves fixture and Node boots it to the label', (t) => {
   for (const c of ['rg-walk.cjs', 'rg-types.cjs', 'rg-entry.cjs']) fs.copyFileSync(path.join(REPO, 'libexec', c), path.join(sbx.dir, c));
 
   // run "$CLODE_NODE" "$TMP/cli.cjs"
-  const r = spawnSync(NODE, [cli], { encoding: 'utf8', env: sbx.env });
+  const r = spawnSync(NODE, [cli], { encoding: 'utf8', env: updaterOff(sbx.env) });
   const output = (r.stdout || '') + (r.stderr || '');
 
   // [[ "$output" == *"CLODE-FIXTURE hello"* ]]

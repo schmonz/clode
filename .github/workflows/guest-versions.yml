@@ -18,6 +18,12 @@ on:
 permissions:
   contents: read
 
+# NO CLAUDE CODE IN THIS WORKFLOW UPDATES ITS OWN INSTALL (test/updater-off.cjs): the outermost ambient default, so
+# every process every job starts inherits it, scripts outside the test runner included. A test that exercises the
+# updater removes it by name (updaterOff(env, because)); test/autoupdater-off-gate.test.cjs holds every workflow to it.
+env:
+  DISABLE_AUTOUPDATER: '1'
+
 jobs:
   check:
     runs-on: ubuntu-latest

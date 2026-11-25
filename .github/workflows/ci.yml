@@ -42,6 +42,12 @@ concurrency:
   # creating no run at all, silently — the opposite of `changes`'s derived, fail-open
   # default. See BACKLOG.md; if this bites, that entry is where the trade gets re-opened.
   cancel-in-progress: true
+# NO CLAUDE CODE IN THIS WORKFLOW UPDATES ITS OWN INSTALL (test/updater-off.cjs): the outermost ambient default, so
+# every process every job starts inherits it, scripts outside the test runner included. A test that exercises the
+# updater removes it by name (updaterOff(env, because)); test/autoupdater-off-gate.test.cjs holds every workflow to it.
+env:
+  DISABLE_AUTOUPDATER: '1'
+
 jobs:
   # PER-JOB timeout-minutes: the BACKSTOP behind test/file-watchdog.cjs's per-file limit. Without it a hang the
   # watchdog cannot see (a step outside node --test, a runner wedge) burns GitHub's 6-hour default. Each value is about

@@ -75,6 +75,12 @@ concurrency:
   group: repro-${{ github.ref }}
   cancel-in-progress: false
 
+# NO CLAUDE CODE IN THIS WORKFLOW UPDATES ITS OWN INSTALL (test/updater-off.cjs): the outermost ambient default, so
+# every process every job starts inherits it, scripts outside the test runner included. A test that exercises the
+# updater removes it by name (updaterOff(env, because)); test/autoupdater-off-gate.test.cjs holds every workflow to it.
+env:
+  DISABLE_AUTOUPDATER: '1'
+
 jobs:
   # The matrix is DERIVED from test/repro-verdicts.cjs's `cadence` field, joined
   # against the CI tier of scripts/tjs-legs.mjs for the runner image — the same

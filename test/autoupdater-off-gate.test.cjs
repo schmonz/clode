@@ -56,8 +56,35 @@ function read() {
     { where: 'test/updater-off.cjs ambient', env: U.ambient({ ...parent }) },
   ];
   // tui-screen refuses before it loads node-pty or spawns anything, so this needs no harness and runs nothing.
+  const tripForms = [];
   const ts = spawnSync(process.execPath, [path.join(__dirname, 'tui-screen.cjs'), '1', '--', process.execPath, '-e', '0'],
     { encoding: 'utf8', env: parent, timeout: 30000 });
+  // Every form a Claude Code is started in (2026-11-25: the first tripwire saw only `claude` through four functions).
+  const forms = [
+    ['spawnSync', ['/x/quaude-macos-arm64', ['-p', 'hi']], 'a built quaude'],
+    ['spawnSync', [process.execPath, ['--no-warnings', '/s/cli.cjs', '-p']], 'naude: node running the extracted bundle'],
+    ['spawn', ['claude -p hi', [], {}], 'spawn with shell: true', true],
+    ['execSync', ['cd /w && claude --version'], 'execSync of a shell string'],
+    ['exec', ['FOO=1 timeout 30 /opt/bin/claude -p x'], 'exec through assignments and a wrapper'],
+    ['fork', ['/s/cli.cjs', []], 'fork of the bundle'],
+  ];
+  for (const [fn, a, what, shell] of forms) {
+    const cp = { [fn]: () => ({ status: 0 }) };
+    U.installSpawnTripwire(cp, { PATH: '/usr/bin' });
+    const args = a.slice();
+    const opts = { env: { HOME: '/h' }, ...(shell ? { shell: true } : {}) };
+    if (fn === 'exec' || fn === 'execSync') args.splice(1, 0, opts); else args.length >= 2 ? args.splice(2, 1, opts) : args.push([], opts);
+    let refused = false;
+    try { cp[fn](...args); } catch (e) { refused = /refusing to spawn/.test(e.message); }
+    tripForms.push({ where: `child_process tripwire refuses ${what} (${fn})`, refused });
+  }
+  // ...and the outermost ambient default: every workflow sets the knob for every job (scripts outside the runner too).
+  const wfDir = path.join(REPO, '.github', 'workflows');
+  for (const f of fs.readdirSync(wfDir).filter((n) => !n.startsWith('.') && /\.ya?ml$/.test(n)).sort()) {
+    const text = fs.readFileSync(path.join(wfDir, f), 'utf8');
+    tripForms.push({ where: `.github/workflows/${f} sets DISABLE_AUTOUPDATER: '1' at the top level`,
+      refused: /^env:\n(?:[ ]{2}.*\n)*?[ ]{2}DISABLE_AUTOUPDATER: '1'\s*$/m.test(text) });
+  }
   const preload = fs.readFileSync(path.join(__dirname, 'file-watchdog-preload.cjs'), 'utf8');
   const runMjs = fs.readFileSync(path.join(__dirname, 'run.mjs'), 'utf8');
   const refusals = [
@@ -67,6 +94,7 @@ function read() {
     { where: 'test/file-watchdog-preload.cjs installs the ambient knob and the tripwire',
       refused: /\.ambient\(process\.env\)/.test(preload) && /\.installSpawnTripwire\(\)/.test(preload) },
     { where: 'test/run.mjs sets the ambient knob', refused: /updater-off\.cjs'\)\.ambient\(process\.env\)/.test(runMjs) },
+    ...tripForms,
   ];
   return { envs, refusals };
 }
@@ -85,7 +113,7 @@ function scan({ envs, refusals }) {
 
 guardTests(defineGuard({
   name: 'autoupdater-off',
-  floor: 9,
+  floor: 25,
   read,
   scan,
   control() {
@@ -119,6 +147,16 @@ test('updater-off tripwire: what it refuses and what it passes over', () => {
   const cp = { spawnSync: () => ({ status: 0 }) };
   U.installSpawnTripwire(cp, { CLODE_PROVIDER_BIN: '/s/provider-min' });
   assert.throws(() => cp.spawnSync('/s/provider-min', [], { env: { HOME: '/h' } }), /refusing to spawn/);
+  // A shell string: the command words, not any word; an inline knob passes; something else named claude-ish does not trip.
+  assert.strictEqual(U.shellStartsClaude('DISABLE_AUTOUPDATER=1 claude -p x', {}), 'off');
+  assert.strictEqual(U.shellStartsClaude('echo claude', {}), false, 'an argument, not a command');
+  assert.strictEqual(U.shellStartsClaude('command -v claude', {}), false, '`command -v` looks it up, it does not run it');
+  assert.strictEqual(U.shellStartsClaude('ls | env -i HOME=/h claude --version', {}), true);
+  assert.strictEqual(U.isClaudeCode(process.execPath, ['test/x.cjs'], {}), false, 'node running anything else');
+  assert.strictEqual(U.isClaudeCode('/e/tjs', ['run', '/b/cli.cjs'], {}), true, 'the engine running the bundle unbuilt');
+  assert.strictEqual(U.isClaudeCode('/e/tjs', ['run', '/l/loader.js', '/b/cli.cjs'], {}), true, 'through quaude\'s loader');
+  assert.strictEqual(U.isClaudeCode(process.execPath, ['/x/extract-claude-js.cjs', '/p/claude', '/o/cli.cjs'], {}), false,
+    'node writing a cli.cjs is not node running one');
   // No options: the child inherits the parent's env, which is what is judged.
   const cp2 = { execFileSync: () => '' };
   U.installSpawnTripwire(cp2, { PATH: '/usr/bin' });

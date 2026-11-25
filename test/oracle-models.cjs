@@ -17,6 +17,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { tjsBin } = require('../scripts/platform-tag.cjs');
+const { updaterOff } = require('./updater-off.cjs');
 
 const REPO = path.resolve(__dirname, '..');
 const LOADER = path.join(REPO, 'libexec/node-shim/loader.cjs');
@@ -27,8 +28,9 @@ const DEPS = path.join(REPO, 'deps', 'claude', 'node_modules');
 
 // NODE_PATH := our ext-deps, ahead of anything the caller already had. Never
 // carries CLODE_ENGINE through: the models ARE the engine choice.
+// The updater is off for both models (test/updater-off.cjs): this env is built for the child, so it inherits nothing.
 function modelEnv(opts) {
-  const env = { ...(opts.env || {}) };
+  const env = updaterOff(opts.env || {});
   env.NODE_PATH = env.NODE_PATH ? DEPS + path.delimiter + env.NODE_PATH : DEPS;
   delete env.CLODE_ENGINE;
   return env;
