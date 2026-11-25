@@ -24,6 +24,12 @@ process.chdir(ROOT);
   if (process.env.CLODE_SUITE_NODE_BECAUSE) console.error(`run: on node ${process.version} because: ${process.env.CLODE_SUITE_NODE_BECAUSE}`);
 }
 
+// On a release cut (VERSION untagged) the suite judges what the release will (test/release-cut.cjs says why).
+{
+  const line = createRequire(import.meta.url)('./release-cut.cjs').applyReleaseCut(ROOT);
+  if (line) console.error(line);
+}
+
 // THE SUITE'S OWN HOME (ruling G33): HOME, USERPROFILE and CLAUDE_CONFIG_DIR point at a throwaway dir for this runner
 // and every child, the real values kept under one name (test/suite-home.cjs says why, and what the suite still takes
 // from the real home as explicit paths). FIRST, before anything below resolves a path off HOME.

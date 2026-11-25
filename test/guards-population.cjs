@@ -256,6 +256,13 @@ function discoverTestFiles(dir) {
 // convention for `skip` reasons, which this mirrors).
 const GUARD_EXCLUSIONS = [
   {
+    file: 'release-cut.test.cjs',
+    because: 'unit tests of a pure function (pendingCut: VERSION text + tag list -> pending version) and of '
+      + 'applyReleaseCut over a mkdtemp VERSION file, plus ONE wiring check that test/run.mjs calls it before it '
+      + 'discovers tests. READS_ARTIFACT fires on reading run.mjs for that wiring check: it locates one call, it '
+      + 'searches the source for no class of finding, so there is nothing for a guard to examine or a control to fail.',
+  },
+  {
     file: 'node-shim-x509.test.cjs',
     because: 'a behavioural differential, not a scan: one program it writes constructs X509Certificate from each '
       + 'certificate (host node\'s tls.rootCertificates, node-shim\'s own roots, certificates openssl mints in a '
