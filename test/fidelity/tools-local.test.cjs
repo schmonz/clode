@@ -590,7 +590,9 @@ const A_LIST = { name: 'ListAgents', input: {}, id: 'toolu_a5_list' };
 const A_AGENT = { name: 'Agent', input: { description: 'delegate', prompt: 'answer with AGENT-TOKEN-5', subagent_type: 'general-purpose',
   run_in_background: false }, id: 'toolu_g5_agent' };
 const T5_SCRIPT = [{ tool: R_NONE }, { tool: R_ONE }, { tool: R_BAD }, { tool: F_NONE }, { tool: F_NAME }, { tool: F_RUN },
-  { tool: A_LIST }, { tool: A_AGENT, subagent: { prompt: 'AGENT-TOKEN-5', reply: 'AGENT-ANSWER-5' } }];
+  // native answers ListAgents with its session's name only once its messaging server is listening, which a -p turn does
+  // not await (test/tool-driver.cjs waitForLog); quaude's server fails at once and says so.
+  { tool: A_LIST, waitForLog: /\[uds-messaging\] (?:Listening:|Failed to create server)/ }, { tool: A_AGENT, subagent: { prompt: 'AGENT-TOKEN-5', reply: 'AGENT-ANSWER-5' } }];
 const EM = String.fromCodePoint(0x2014);
 const T5_NATIVE = {
   toolu_r5_none: { text: 'No findings reported.', isError: false },

@@ -87,7 +87,17 @@ function startMockAnthropic(opts = {}) {
       // keying the reply off the request content; default stays the single
       // canned text turn.
       if (req.method === 'POST' && /\/messages$/.test(req.url.split('?')[0])) {
-        const reply = opts.respond ? opts.respond(body) : cannedSSE(text);
+        // opts.respond may return a Promise: a reply that waits on the client's own state (test/tool-driver.cjs
+        // waitForLog) before it is sent.
+        Promise.resolve(opts.respond ? opts.respond(body) : cannedSSE(text)).then((reply) => send(reply),
+          (e) => { res.writeHead(500, { 'content-type': 'text/plain' }); res.end(String(e && e.stack || e)); });
+        return;
+      }
+      // Any other request (model list, config probe the wall-walk may reveal):
+      // answer benignly so a preflight GET doesn't wall the boot. Recorded above.
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end('{}');
+      function send(reply) {
         if (reply && typeof reply === 'object' && reply.json) {
           res.writeHead(200, { 'content-type': 'application/json' });
           res.end(JSON.stringify(reply.json));
@@ -95,12 +105,7 @@ function startMockAnthropic(opts = {}) {
         }
         res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
         res.end(reply);
-        return;
       }
-      // Any other request (model list, config probe the wall-walk may reveal):
-      // answer benignly so a preflight GET doesn't wall the boot. Recorded above.
-      res.writeHead(200, { 'content-type': 'application/json' });
-      res.end('{}');
     });
   };
   const tls = opts.tls ? selfSigned() : null;

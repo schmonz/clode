@@ -401,3 +401,21 @@ test('driveTool reads quaude\'s --debug log and rejects a shim fault or a timeou
     }
   } finally { fs.rmSync(f.dir, { recursive: true, force: true }); }
 });
+
+test('waitForLog holds a scripted call until the side\'s debug log matches, and never past its bound', async () => {
+  const { waitForLog } = require('./tool-driver.cjs');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wait-for-log-'));
+  try {
+    const log = path.join(dir, 'native-debug.log');
+    let done = false;
+    const p = waitForLog(log, /\[uds-messaging\] Listening:/, 5000).then(() => { done = true; });
+    await new Promise((r) => setTimeout(r, 200));
+    assert.strictEqual(done, false, 'no log yet: still holding');
+    fs.writeFileSync(log, 'x [uds-messaging] Listening: /tmp/cc-socks-1/2.sock\n');
+    await p;
+    assert.strictEqual(done, true);
+    const t0 = Date.now();
+    await waitForLog(path.join(dir, 'never.log'), /never/, 300);
+    assert.ok(Date.now() - t0 >= 250, 'gives up at the bound, does not hang the turn');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});

@@ -23,6 +23,12 @@ require('./suite-home.cjs');   // the suite's own HOME, also for a standalone `n
 //                    (the turn's earlier tool_results, read with toolResultText), for a call that names what an earlier
 //                    call made at run time (TaskStop names the id a background Bash answered with). The rule's
 //                    tool.input stays what the control is given; SIDE.sent records what was sent.
+//                    A rule may add `waitForLog: RegExp`: the mock holds that call until the side's own --debug-file
+//                    matches (bounded by WAIT_FOR_LOG_MS, then it is sent anyway and the check judges what came back),
+//                    for a call whose answer depends on startup work the turn does not wait for. ListAgents names the
+//                    session only once native's UDS messaging server is listening, which a -p turn does not await:
+//                    under a loaded suite (2026-11-25) native answered before it was, read from the 2.1.330 carve
+//                    (CLAUDE_CODE_MESSAGING_SOCKET is set after listen).
 //                    An Agent rule may add `subagent: { prompt, reply }`: the subagent's own conversation (a request
 //                    that spells `prompt`, the token the Agent input hands it, and not yet the Agent call's id) is
 //                    answered with the text `reply`, never with the next scripted call (agentic-subagent-diff's shape).
@@ -123,6 +129,22 @@ const isToolUse = (u) => !!u && typeof u.name === 'string' && !!u.name && typeof
 // The rules the mock walks, each { tool }: opts.script, or opts itself for a single opts.tool.
 // The auto-mode safety classifier's requests stop at its closing tag (2.1.283, measured 2026-11-20).
 const CLASSIFIER_STOP = '"stop_sequences":["</severity>"]';
+// A rule's waitForLog: poll the side's debug log until it matches, or until the bound; resolves either way (the check
+// on the tool_result is the verdict, and a log that never matched shows there with the log itself).
+const WAIT_FOR_LOG_MS = 60000;
+function waitForLog(file, re, limitMs = WAIT_FOR_LOG_MS) {
+  const until = Date.now() + limitMs;
+  return new Promise((resolve) => {
+    const tick = () => {
+      let text = '';
+      try { text = fs.readFileSync(file, 'utf8'); } catch { /* not written yet */ }
+      if (re.test(text) || Date.now() >= until) { resolve(); return; }
+      setTimeout(tick, 50);
+    };
+    tick();
+  });
+}
+
 function rulesOf(opts) {
   if (opts.autoModeSeverity !== undefined && !(Number.isInteger(opts.autoModeSeverity) && opts.autoModeSeverity >= 0 && opts.autoModeSeverity <= 100)) {
     throw new Error('driveTool: autoModeSeverity must be an integer 0-100');
@@ -132,6 +154,9 @@ function rulesOf(opts) {
   for (const rule of rules) {
     if (!rule || !isToolUse(rule.tool)) {
       throw new Error(`driveTool: each call must be a tool_use { name, input, id }, got ${JSON.stringify(rule && rule.tool)}`);
+    }
+    if (rule.waitForLog !== undefined && !(rule.waitForLog instanceof RegExp)) {
+      throw new Error(`driveTool: waitForLog (${rule.tool.id}) must be a RegExp over the side's debug log`);
     }
     if (rule.inputFrom !== undefined && typeof rule.inputFrom !== 'function') {
       throw new Error(`driveTool: inputFrom (${rule.tool.id}) must be a function of the request log`);
@@ -255,6 +280,9 @@ async function runSide(side, bin, rules, opts, base) {
   // Claude Code's per-uid temp dir (background task output, among others): throwawayHome's CLAUDE_CODE_TMPDIR.
   const tmp = home.CLAUDE_CODE_TMPDIR;
   const sent = {};
+  // THE DEBUG LOG (test/debug-log-gate.cjs): every side writes one, beside its security log, and driveTool holds
+  // quaude's to native's. Named here, before the mock, because a rule's waitForLog reads it.
+  const debugFile = path.join(base, `${side}-debug.log`);
   const mock = await startMockAnthropic({
     respond: (seen) => {
       const classifier = seen.includes(CLASSIFIER_STOP);
@@ -263,18 +291,19 @@ async function runSide(side, bin, rules, opts, base) {
       if (sub) return cannedSSE(typeof sub.subagent.reply === 'function' ? String(sub.subagent.reply(seen)) : sub.subagent.reply);
       const rule = rules.find((r) => !seen.includes(r.tool.id));
       if (!rule) return cannedSSE(DONE);
-      const input = rule.inputFrom ? rule.inputFrom({ requests: mock.requests.slice() }) : rule.tool.input;
-      sent[rule.tool.id] = input;
-      return cannedToolUseSSE(rule.tool.name, input, rule.tool.id);
+      const reply = () => {
+        const input = rule.inputFrom ? rule.inputFrom({ requests: mock.requests.slice() }) : rule.tool.input;
+        sent[rule.tool.id] = input;
+        return cannedToolUseSSE(rule.tool.name, input, rule.tool.id);
+      };
+      return rule.waitForLog ? waitForLog(debugFile, rule.waitForLog).then(reply) : reply();
     },
   });
   try {
     const names = [...new Set(rules.map((r) => r.tool.name))];
     const allowed = opts.allowedTools === undefined ? names.join(',') : opts.allowedTools;
     const flags = [...(allowed === null ? [] : ['--allowedTools', allowed]), ...(opts.args || [])];
-    // THE DEBUG LOG (test/debug-log-gate.cjs): every side writes one, beside its security log, and driveTool holds
-    // quaude's to native's. Not in SIDE.turn.args: it is the harness's, not the turn's, so no mode cell differs by it.
-    const debugFile = path.join(base, `${side}-debug.log`);
+    // The debug log is not in SIDE.turn.args: it is the harness's, not the turn's, so no mode cell differs by it.
     const runFlags = [...flags, ...debugFileArgs(debugFile)];
     const args = ['-p', opts.prompt || 'drive the tool', ...runFlags];
     const env = sideEnv({ home, mockUrl: mock.url, opts });
@@ -482,4 +511,4 @@ function ptyHarnessMissing() {
   } catch (e) { return `no PTY harness here (node-pty): ${e.message.split('\n')[0]}`; }
 }
 
-module.exports = { driveTool, sideEnv, DONE, TOOL_SWITCHES, MODE_TURNS, modeTurnFinding, modeTurnFindingFor, shadowKeychain, keychainShadowFinding, CLASSIFIER_STOP, ptyHarnessMissing, SCALE, interactiveLimits };
+module.exports = { waitForLog, WAIT_FOR_LOG_MS, driveTool, sideEnv, DONE, TOOL_SWITCHES, MODE_TURNS, modeTurnFinding, modeTurnFindingFor, shadowKeychain, keychainShadowFinding, CLASSIFIER_STOP, ptyHarnessMissing, SCALE, interactiveLimits };
