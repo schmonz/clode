@@ -149,3 +149,10 @@ jobs:
           netbsd-sysroot: ${{ matrix.netbsd-sysroot || 'full' }}
           attest: ${{ matrix.publish && 'true' || 'false' }}
           publish: ${{ matrix.publish && 'true' || 'false' }}
+      # THE INSTRUMENTS STILL ARE WHAT THIS JOB INSTALLED: every native it recorded (scripts/record-provider.mjs) is the
+      # same file, byte for byte, at the job's end. A changed one is refused by name, so a mid-job self-update
+      # (CI 45354661143) is a named red here. Whatever happened above, and LAST: nothing after it runs a native
+      # (test/build-gates/record-provider-gates.test.cjs, per job).
+      - name: Instruments unchanged — every native this job installed is still the file it recorded
+        if: ${{ !cancelled() }}
+        run: node scripts/record-provider.mjs --verify

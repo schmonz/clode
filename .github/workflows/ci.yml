@@ -270,6 +270,13 @@ jobs:
       - uses: ./.github/actions/full-smoke
         with:
           asset: ${{ steps.name.outputs.asset }}
+      # THE INSTRUMENTS STILL ARE WHAT THIS JOB INSTALLED: every native it recorded (scripts/record-provider.mjs) is the
+      # same file, byte for byte, at the job's end. A changed one is refused by name, so a mid-job self-update
+      # (CI 45354661143) is a named red here. Whatever happened above, and LAST: nothing after it runs a native
+      # (test/build-gates/record-provider-gates.test.cjs, per job).
+      - name: Instruments unchanged — every native this job installed is still the file it recorded
+        if: ${{ !cancelled() }}
+        run: node scripts/record-provider.mjs --verify
   # Windows shim + sync-primitive coverage (windows-tjs-port spec). Windows is
   # the ONE platform whose shim + sync-primitive layer diverges from POSIX
   # (CRLF, cmd.exe/PATHEXT, drive paths, O_BINARY, the Win32 C sync primitives
@@ -369,6 +376,13 @@ jobs:
           path: ${{ runner.temp }}/gates
           if-no-files-found: warn
           overwrite: true   # a re-run attempt replaces its own list (artifacts are run-scoped and immutable)
+      # THE INSTRUMENTS STILL ARE WHAT THIS JOB INSTALLED: every native it recorded (scripts/record-provider.mjs) is the
+      # same file, byte for byte, at the job's end. A changed one is refused by name, so a mid-job self-update
+      # (CI 45354661143) is a named red here. Whatever happened above, and LAST: nothing after it runs a native
+      # (test/build-gates/record-provider-gates.test.cjs, per job).
+      - name: Instruments unchanged — every native this job installed is still the file it recorded
+        if: ${{ !cancelled() }}
+        run: node scripts/record-provider.mjs --verify
 
   # Windows ConPTY TUI render (windows-tjs-port spec, sub-project D). The FIRST
   # CI PTY harness on any platform: build a real quaude (`clode build`) and drive
@@ -478,6 +492,13 @@ jobs:
           path: ${{ runner.temp }}/gates
           if-no-files-found: warn
           overwrite: true   # a re-run attempt replaces its own list (artifacts are run-scoped and immutable)
+      # THE INSTRUMENTS STILL ARE WHAT THIS JOB INSTALLED: every native it recorded (scripts/record-provider.mjs) is the
+      # same file, byte for byte, at the job's end. A changed one is refused by name, so a mid-job self-update
+      # (CI 45354661143) is a named red here. Whatever happened above, and LAST: nothing after it runs a native
+      # (test/build-gates/record-provider-gates.test.cjs, per job).
+      - name: Instruments unchanged — every native this job installed is still the file it recorded
+        if: ${{ !cancelled() }}
+        run: node scripts/record-provider.mjs --verify
 
   # Windows shim + sync-primitive coverage on the ARM64 kernel — the same
   # rationale as windows-amd64-tests, exercised against the windows-arm64 leg's
@@ -569,6 +590,13 @@ jobs:
           path: ${{ runner.temp }}/gates
           if-no-files-found: warn
           overwrite: true   # a re-run attempt replaces its own list (artifacts are run-scoped and immutable)
+      # THE INSTRUMENTS STILL ARE WHAT THIS JOB INSTALLED: every native it recorded (scripts/record-provider.mjs) is the
+      # same file, byte for byte, at the job's end. A changed one is refused by name, so a mid-job self-update
+      # (CI 45354661143) is a named red here. Whatever happened above, and LAST: nothing after it runs a native
+      # (test/build-gates/record-provider-gates.test.cjs, per job).
+      - name: Instruments unchanged — every native this job installed is still the file it recorded
+        if: ${{ !cancelled() }}
+        run: node scripts/record-provider.mjs --verify
 
   # templates-drift MOVED OUT OF ci.yml (2026-08-24).
   #
@@ -922,6 +950,13 @@ jobs:
           path: ${{ runner.temp }}/gates-ran
           if-no-files-found: warn
           overwrite: true   # a re-run attempt replaces its own list (artifacts are run-scoped and immutable)
+      # THE INSTRUMENTS STILL ARE WHAT THIS JOB INSTALLED: every native it recorded (scripts/record-provider.mjs) is the
+      # same file, byte for byte, at the job's end. A changed one is refused by name, so a mid-job self-update
+      # (CI 45354661143) is a named red here. Whatever happened above, and LAST: nothing after it runs a native
+      # (test/build-gates/record-provider-gates.test.cjs, per job).
+      - name: Instruments unchanged — every native this job installed is still the file it recorded
+        if: ${{ !cancelled() }}
+        run: node scripts/record-provider.mjs --verify
 
   # The BUILDER and the PACKAGED TARGETS — on glibc, on purpose.
   #
@@ -1181,6 +1216,13 @@ jobs:
           MSG='native-builder-oracle failed, but NOT at the build or the full-binary oracle step (checkout, an artifact download, a provider/dep install, the cache action, the shim-boundary step, or the cells check) -- so this job could not verify the shipped artifact this run, which is a DIFFERENT condition from proving it broken. Could be a real regression in this job'"'"'s own plumbing, or infrastructure flake (a registry timeout, a transient fetch failure). Look at which step actually failed above before assuming either.'
           echo "::warning title=native-builder-oracle: could not verify the shipped artifact::$MSG"
           { echo '### :warning: native-builder-oracle: could not verify the shipped artifact'; echo "$MSG"; } >> "$GITHUB_STEP_SUMMARY"
+      # THE INSTRUMENTS STILL ARE WHAT THIS JOB INSTALLED: every native it recorded (scripts/record-provider.mjs) is the
+      # same file, byte for byte, at the job's end. A changed one is refused by name, so a mid-job self-update
+      # (CI 45354661143) is a named red here. Whatever happened above, and LAST: nothing after it runs a native
+      # (test/build-gates/record-provider-gates.test.cjs, per job).
+      - name: Instruments unchanged — every native this job installed is still the file it recorded
+        if: ${{ !cancelled() }}
+        run: node scripts/record-provider.mjs --verify
 
   # Linux PTY / live-render coverage — the FIRST CI run of these files on any
   # POSIX platform. test/live-render-helper.cjs's CLODE_LIVE_RENDER gate used to
@@ -1672,14 +1714,6 @@ jobs:
             --test-reporter=./test/cell-reporter.mjs --test-reporter-destination="$RUNNER_TEMP/gates/cells-check.jsonl" \
             --test-name-pattern=cells-ran-in-ci-job test/build-gates/tool-coverage-gates.test.cjs
 
-      # THE INSTRUMENTS STILL ARE WHAT THIS JOB INSTALLED: every native it recorded (scripts/record-provider.mjs: the
-      # provider, and each oracle installed on its own) is the same file, byte for byte, after every gate above ran
-      # it. A changed one is refused by name, so a mid-job self-update (CI 45354661143) is a named red here, not a
-      # decode failure an hour later. Whatever happened above, like the gate-list upload below.
-      - name: Instruments unchanged — every native this job installed is still the file it recorded
-        if: ${{ !cancelled() }}
-        run: node scripts/record-provider.mjs --verify
-
       # THIS JOB'S GATE LIST (observability plan Task 5): every record test/cell-reporter.mjs wrote above, for ci.yml's
       # gates-ran-in-ci job to hold against test/ci-gates.cjs. Uploaded whatever happened above: a red job's list still
       # says which gates ran, and a job that uploads none is itself a finding there.
@@ -1697,6 +1731,13 @@ jobs:
           path: ${{ runner.temp }}/gates-ran
           if-no-files-found: warn
           overwrite: true   # a re-run attempt replaces its own list (artifacts are run-scoped and immutable)
+      # THE INSTRUMENTS STILL ARE WHAT THIS JOB INSTALLED: every native it recorded (scripts/record-provider.mjs) is the
+      # same file, byte for byte, at the job's end. A changed one is refused by name, so a mid-job self-update
+      # (CI 45354661143) is a named red here. Whatever happened above, and LAST: nothing after it runs a native
+      # (test/build-gates/record-provider-gates.test.cjs, per job).
+      - name: Instruments unchanged — every native this job installed is still the file it recorded
+        if: ${{ !cancelled() }}
+        run: node scripts/record-provider.mjs --verify
 
   # node-shim oracle on DARWIN — the same node-vs-tjs behavioral diff as
   # node-shim-oracle above, but on macOS against a real darwin tjs.
@@ -1954,14 +1995,6 @@ jobs:
             node scripts/stage0.mjs build --target linux-x64 --out "${{ runner.temp }}/quaude-linux-graph-check/quaude"
           test -s "${{ runner.temp }}/quaude-linux-graph-check/quaude"
 
-      # THE INSTRUMENTS STILL ARE WHAT THIS JOB INSTALLED: every native it recorded (scripts/record-provider.mjs: the
-      # provider, and each oracle installed on its own) is the same file, byte for byte, after every gate above ran
-      # it. A changed one is refused by name, so a mid-job self-update (CI 45354661143) is a named red here, not a
-      # decode failure an hour later. Whatever happened above, like the gate-list upload below.
-      - name: Instruments unchanged — every native this job installed is still the file it recorded
-        if: ${{ !cancelled() }}
-        run: node scripts/record-provider.mjs --verify
-
       # THIS JOB'S GATE LIST (observability plan Task 5): every record test/cell-reporter.mjs wrote above, for ci.yml's
       # gates-ran-in-ci job to hold against test/ci-gates.cjs. Uploaded whatever happened above: a red job's list still
       # says which gates ran, and a job that uploads none is itself a finding there.
@@ -1979,6 +2012,13 @@ jobs:
           path: ${{ runner.temp }}/gates-ran
           if-no-files-found: warn
           overwrite: true   # a re-run attempt replaces its own list (artifacts are run-scoped and immutable)
+      # THE INSTRUMENTS STILL ARE WHAT THIS JOB INSTALLED: every native it recorded (scripts/record-provider.mjs) is the
+      # same file, byte for byte, at the job's end. A changed one is refused by name, so a mid-job self-update
+      # (CI 45354661143) is a named red here. Whatever happened above, and LAST: nothing after it runs a native
+      # (test/build-gates/record-provider-gates.test.cjs, per job).
+      - name: Instruments unchanged — every native this job installed is still the file it recorded
+        if: ${{ !cancelled() }}
+        run: node scripts/record-provider.mjs --verify
 
   # THE GATE LISTS, JUDGED (observability plan Task 5; user doctrine 2026-10-05: "Job 0 is always to be able to observe
   # our current state more accurately than yesterday"). Every job above that runs a gate uploads what

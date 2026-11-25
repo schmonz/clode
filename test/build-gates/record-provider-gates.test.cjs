@@ -24,6 +24,7 @@ const INSTALL = /npm (?:i|install)\b(?=.*@anthropic-ai\/claude-code)(?=.*(?:\s-g
 function listYml(dir) {
   const out = [];
   for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (e.name.startsWith('.')) continue;   // AppleDouble `._x.yml` sidecars on a non-xattr volume are not workflows
     const p = path.join(dir, e.name);
     if (e.isDirectory()) out.push(...listYml(p));
     else if (/\.ya?ml$/.test(e.name)) out.push(p);
@@ -64,7 +65,66 @@ function scan(files, known = RECORDED_INSTRUMENTS) {
       findings.push(`${rel}: records an instrument with --as but never runs \`node scripts/record-provider.mjs --verify\``);
     }
   }
-  return { findings, examined, note: `${files.length} workflow/action files` };
+  const jobFindings = scanJobs(files);
+  return { findings: [...findings, ...jobFindings.findings], examined: examined + jobFindings.examined,
+    note: `${files.length} workflow/action files, ${jobFindings.examined} recording job(s)` };
+}
+
+// PER JOB (2026-11-25): a record nothing holds the job to is only half the instrument. 13 jobs recorded the provider
+// and never verified it, so a rewrite after the last stage-provider read went unseen. Every job that records (a
+// `record-provider.mjs` line, or a `uses: ./.github/actions/<x>` whose action.yml records) runs a bare
+// `node scripts/record-provider.mjs --verify` in a step with `if: ${{ !cancelled() }}` (a red step above must not skip
+// it), after its last record, and no step after it runs node, npm or claude (it judges the whole job).
+const RECORD = /record-provider\.mjs(?!\s+--verify)/;
+const VERIFY = /record-provider\.mjs --verify\s*$/m;
+const AFTER_VERIFY = /^\s*(?:run:.*|\S.*)?\b(?:node|npm|npx|claude)\b/m;
+function jobsOf(text) {
+  const L = text.split('\n');
+  const at = L.findIndex((l) => /^jobs:\s*$/.test(l));
+  if (at < 0) return [];
+  const out = [];
+  let cur = null;
+  for (let k = at + 1; k < L.length; k++) {
+    const l = L[k];
+    if (/^\S/.test(l)) break;
+    const m = /^  ([A-Za-z0-9_-]+):\s*$/.exec(l);
+    if (m) { cur = { id: m[1], line: k + 1, lines: [] }; out.push(cur); continue; }
+    if (cur) cur.lines.push(l);
+  }
+  return out;
+}
+function stepsOf(lines) {
+  const out = [];
+  let cur = null;
+  for (const l of lines) {
+    if (/^      - /.test(l)) { cur = [l]; out.push(cur); } else if (cur && !/^\s*#/.test(l)) cur.push(l);
+  }
+  return out.map((s) => s.join('\n'));
+}
+function scanJobs(files) {
+  const actionRecords = new Set(files.filter(({ rel, text }) => /\.github\/actions\/[^/]+\/action\.ya?ml$/.test(rel) && RECORD.test(text))
+    .map(({ rel }) => rel.split('/').slice(-2, -1)[0]));
+  const findings = [];
+  let examined = 0;
+  for (const { rel, text } of files) {
+    for (const job of jobsOf(text)) {
+      const steps = stepsOf(job.lines);
+      const records = steps.map((s, i) => {
+        const uses = /uses:\s*\.\/\.github\/actions\/([\w-]+)/.exec(s);
+        return RECORD.test(s) || (uses && actionRecords.has(uses[1])) ? i : -1;
+      }).filter((i) => i >= 0);
+      if (!records.length) continue;
+      examined++;
+      const where = `${rel} job ${job.id} (line ${job.line})`;
+      const v = steps.findIndex((s) => VERIFY.test(s));
+      if (v < 0) { findings.push(`${where}: records a native and never runs a bare \`node scripts/record-provider.mjs --verify\``); continue; }
+      if (v < records[records.length - 1]) findings.push(`${where}: its --verify step comes before its last record`);
+      if (!/if:\s*\$\{\{\s*!cancelled\(\)\s*\}\}/.test(steps[v])) findings.push(`${where}: its --verify step lacks \`if: \${{ !cancelled() }}\`, so a red step above skips it`);
+      const later = steps.slice(v + 1).filter((s) => AFTER_VERIFY.test(s.split('\n').filter((l) => /^\s*(?:run:|  +\S)/.test(l) && !/^\s*(?:name|if|uses|with|path|name):/.test(l)).join('\n')));
+      if (later.length) findings.push(`${where}: ${later.length} step(s) after its --verify still run node/npm/claude, unjudged`);
+    }
+  }
+  return { findings, examined };
 }
 
 guardTests(defineGuard({
@@ -102,4 +162,19 @@ test('record-provider census: what it passes over and what it names', () => {
   assert.strictEqual(ok('npm i --prefix "$D" @anthropic-ai/claude-code-linux-x64@1\nnode scripts/record-provider.mjs --as NEW_ONE "$N"\nnode scripts/record-provider.mjs --verify').length, 1, 'an --as NAME with no verdicts');
   assert.strictEqual(ok('npm i -g @anthropic-ai/claude-code@1\nnode scripts/record-provider.mjs --verify').length, 1, 'a verify is not a record');
   assert.deepStrictEqual(ok('npm ci --prefix deps/claude\nnpm pack "@anthropic-ai/claude-code-linux-x64@1"'), [], 'not an install of a native');
+});
+
+test('record-provider census, per job: every recording job verifies at its end, whatever happened above', () => {
+  const job = (...steps) => `jobs:\n  j:\n    runs-on: x\n    steps:\n${steps.map((s) => `      - ${s}`).join('\n')}\n`;
+  const rec = 'run: node scripts/record-provider.mjs';
+  const ver = 'name: v\n        if: ${{ !cancelled() }}\n        run: node scripts/record-provider.mjs --verify';
+  const f = (text, extra = []) => scanJobs([{ rel: '.github/workflows/w.yml', text }, ...extra]).findings;
+  assert.deepStrictEqual(f(job(rec, 'run: node test/x.cjs', ver, 'uses: actions/upload-artifact@v4\n        with:\n          path: x')), []);
+  assert.match(f(job(rec, 'run: node test/x.cjs')).join(), /never runs a bare/, 'the 13 jobs as they were');
+  assert.match(f(job(rec, 'name: v\n        run: node scripts/record-provider.mjs --verify')).join(), /lacks/);
+  assert.match(f(job(ver, rec)).join(), /before its last record/);
+  assert.match(f(job(rec, ver, 'run: node test/late.cjs')).join(), /after its --verify/);
+  const action = { rel: '.github/actions/leg/action.yml', text: 'runs:\n  steps:\n    - run: node scripts/record-provider.mjs\n' };
+  assert.match(f(job('uses: ./.github/actions/leg'), [action]).join(), /never runs a bare/, 'a record inside a local composite action');
+  assert.deepStrictEqual(f(job('uses: ./.github/actions/other'), [action]), [], 'an action that records nothing');
 });

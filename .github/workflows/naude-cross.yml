@@ -77,6 +77,13 @@ jobs:
           name: naude-darwin
           path: ${{ runner.temp }}/naude-darwin
           if-no-files-found: error
+      # THE INSTRUMENTS STILL ARE WHAT THIS JOB INSTALLED: every native it recorded (scripts/record-provider.mjs) is the
+      # same file, byte for byte, at the job's end. A changed one is refused by name, so a mid-job self-update
+      # (CI 45354661143) is a named red here. Whatever happened above, and LAST: nothing after it runs a native
+      # (test/build-gates/record-provider-gates.test.cjs, per job).
+      - name: Instruments unchanged — every native this job installed is still the file it recorded
+        if: ${{ !cancelled() }}
+        run: node scripts/record-provider.mjs --verify
 
   # macos-14 (Apple Silicon) downloads the ubuntu-built binary and runs it for
   # real. THIS is the definitive proof: an artifact assembled on a Linux
@@ -148,6 +155,13 @@ jobs:
           name: naude-darwin-x64
           path: ${{ runner.temp }}/naude-darwin-x64
           if-no-files-found: error
+      # THE INSTRUMENTS STILL ARE WHAT THIS JOB INSTALLED: every native it recorded (scripts/record-provider.mjs) is the
+      # same file, byte for byte, at the job's end. A changed one is refused by name, so a mid-job self-update
+      # (CI 45354661143) is a named red here. Whatever happened above, and LAST: nothing after it runs a native
+      # (test/build-gates/record-provider-gates.test.cjs, per job).
+      - name: Instruments unchanged — every native this job installed is still the file it recorded
+        if: ${{ !cancelled() }}
+        run: node scripts/record-provider.mjs --verify
 
   # macos-14 (Apple Silicon) boots the arm64-Linux-built darwin-X64 binary under
   # Rosetta — proving the reverse cross end-to-end (an x64 Mach-O, cross-built on
@@ -220,6 +234,13 @@ jobs:
           name: naude-win-x64
           path: ${{ runner.temp }}/naude-win-x64
           if-no-files-found: error
+      # THE INSTRUMENTS STILL ARE WHAT THIS JOB INSTALLED: every native it recorded (scripts/record-provider.mjs) is the
+      # same file, byte for byte, at the job's end. A changed one is refused by name, so a mid-job self-update
+      # (CI 45354661143) is a named red here. Whatever happened above, and LAST: nothing after it runs a native
+      # (test/build-gates/record-provider-gates.test.cjs, per job).
+      - name: Instruments unchanged — every native this job installed is still the file it recorded
+        if: ${{ !cancelled() }}
+        run: node scripts/record-provider.mjs --verify
 
   # windows-latest downloads the ubuntu-built win32-x64 binary and runs it for
   # real. THIS answers the open spike question: does an unsigned, Linux-cross-
@@ -292,6 +313,13 @@ jobs:
           name: naude-win-arm64
           path: ${{ runner.temp }}/naude-win-arm64
           if-no-files-found: error
+      # THE INSTRUMENTS STILL ARE WHAT THIS JOB INSTALLED: every native it recorded (scripts/record-provider.mjs) is the
+      # same file, byte for byte, at the job's end. A changed one is refused by name, so a mid-job self-update
+      # (CI 45354661143) is a named red here. Whatever happened above, and LAST: nothing after it runs a native
+      # (test/build-gates/record-provider-gates.test.cjs, per job).
+      - name: Instruments unchanged — every native this job installed is still the file it recorded
+        if: ${{ !cancelled() }}
+        run: node scripts/record-provider.mjs --verify
 
   # windows-11-arm boots the Linux-built win32-arm64 binary — the arm64 half
   # of the same open spike question (`run-win-x64`'s comment applies here too).
