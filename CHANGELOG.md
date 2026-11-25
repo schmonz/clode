@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.20261125.1
 
 The command line names what it acts on. Five spellings are **gone** — each is now a usage
 error with the help under it, not a silent translation:
