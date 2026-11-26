@@ -714,7 +714,7 @@ function runStageRequest(reqPath, stderr = process.stderr) {
   return res.ok ? 0 : 1;
 }
 
-async function stageUpstreamCli({ env, libexec, verbose, prefix, log }) {
+async function stageUpstreamCli({ env, libexec, verbose, prefix, log, notice }) {
   let bin = resolve.resolveClaudeBin({ env });
   if (bin == null || !resolve.pathExists(bin)) {
     return {
@@ -727,8 +727,11 @@ async function stageUpstreamCli({ env, libexec, verbose, prefix, log }) {
   const key = resolve.cacheKey(bin);
   const stageDir = path.join(clodeCacheDir(env), key);
   if (log) log(`clode: ${prefix}: staging bundle ${key} ...`);
+  // said BEFORE the long extraction, unconditionally (not verbose-only): the reader should know now, not in 5 minutes
+  const skew = versionSkew(builtForUpstream(libexec), key);
+  if (skew && notice) notice(`clode: ${prefix}: ${skew}`);
   const staged = await stageInChild({ bin, cacheDir: stageDir, libexec, verbose, key }, env);
-  if (staged.error) return { error: `${prefix}: extraction failed: ${staged.error}` };
+  if (staged.error) return { error: `${prefix}: extraction failed: ${staged.error}${skew ? `\nclode: ${prefix}: ${skew}` : ''}` };
   // WHICH PLATFORM THIS CARVE IS FOR, read from the provider's container bytes. Bun folds
   // process.platform at carve time, so a graph is per-platform: a darwin target blobulated from a
   // linux carve is missing upstream's whole macOS credential store, which is how the
@@ -739,7 +742,7 @@ async function stageUpstreamCli({ env, libexec, verbose, prefix, log }) {
   // stores its bundle as bytecode, so `strings` answers nothing, and a cross-built target
   // cannot be run to ask it.
   return { stageDir, key, providerPlatform: extract.providerPlatformOf(bin),
-           cliPath: path.join(stageDir, 'cli.cjs'), scanned: staged.scanned };
+           cliPath: path.join(stageDir, 'cli.cjs'), scanned: staged.scanned, skew };
 }
 
 // A minimal in-process stand-in for the Anthropic Messages API, answering every
@@ -1026,6 +1029,10 @@ function makePhaseSpinner(stderr, active, getTotals) {
       if (active && label) stderr.write('\r\x1b[K');
       label = '';
     },
+    // a whole line ABOVE the spinner, which then redraws under it (a bare write would be painted over)
+    say(line) {
+      if (active && label) { stderr.write(`\r\x1b[K${line}\n`); draw(); } else stderr.write(`${line}\n`);
+    },
   };
 }
 
@@ -1205,6 +1212,28 @@ function thisEngineRecipe(env, opts) {
   } catch { return null; }
 }
 
+// THE UPSTREAM VERSION THIS CLODE WAS RELEASED WITH (UPSTREAM_PIN), baked into a built clode at build time
+// (scripts/build-clode-main.mjs), read from the checkout otherwise. null when neither knows.
+function builtForUpstream(libexecDir) {
+  if (typeof __CLODE_BAKED_UPSTREAM_PIN__ !== 'undefined' && __CLODE_BAKED_UPSTREAM_PIN__) return __CLODE_BAKED_UPSTREAM_PIN__;
+  return require('./upstream-pin.cjs').upstreamPin(path.resolve(libexecDir || __dirname, '..'));
+}
+
+// A BUILDER MEETING AN UPSTREAM NEWER THAN IT WAS RELEASED WITH says so, before the long extraction and again
+// beside any failure. 2026-11-25: a NetBSD user's clode 0.20261125.1 (released with 2.1.330) met the 2.1.332 that
+// `clode fetch claude` had just fetched, ran five minutes, and died on an internal dep-closure message with no hint
+// that the cause was the version gap. PURE: two version strings in, one sentence or null out (null when either is
+// unknown or not x.y.z, or when building is not newer).
+function versionSkew(builtFor, building) {
+  const parse = (v) => (/^(\d+)\.(\d+)\.(\d+)$/.exec(String(v || '')) || []).slice(1).map(Number);
+  const a = parse(builtFor), b = parse(building);
+  if (a.length !== 3 || b.length !== 3) return null;
+  const newer = b[0] - a[0] || b[1] - a[1] || b[2] - a[2];
+  if (newer <= 0) return null;
+  return `this clode was released with Claude Code ${builtFor}; ${building} is newer than it has been tested with. `
+    + `If the build fails, a newer clode may build it, or 'clode fetch claude ${builtFor}' gets the version this one knows.`;
+}
+
 function thisTjsPin(env, opts) {
   if (env.CLODE_TJS_PIN) return env.CLODE_TJS_PIN;
   // Baked into the bundle from PINS.md at build time (esbuild define), so a blobulated
@@ -1356,7 +1385,15 @@ async function clodeBuildIn(args, opts) {
   // declared a real total, the spinner shows real counts, not a fake percentage
   // for whatever label happens to be on screen.
   const spin = makePhaseSpinner(stderr, !!stderr.isTTY && !verbose, () => composer.totals());
-  const fail = (m) => { spin.done(); stderr.write('clode: ' + m + '\n'); return 1; };
+  // a failure after staging an upstream newer than this clode was released with repeats that, beside the failure
+  let skewHint = null;
+  const fail = (m) => {
+    spin.done();
+    stderr.write('clode: ' + m + '\n');
+    if (skewHint && !String(m).includes(skewHint)) stderr.write(`clode: build: ${skewHint}\n`);
+    return 1;
+  };
+  const notice = (m) => spin.say(m);
   const SCALE = timeoutScale(env);
 
   // -- argv: parsed ONCE for the whole subcommand, before either branch below
@@ -1516,9 +1553,10 @@ async function clodeBuildIn(args, opts) {
       // missing one must fail before any network), but AFTER the pin-table check above,
       // which is cheaper still and can rule the whole build out.
       const staged = await stageUpstreamCli({
-        env, libexec: effLibexec, verbose, prefix: 'build naude', log: clodeLog,
+        env, libexec: effLibexec, verbose, prefix: 'build naude', log: clodeLog, notice,
       });
       if (staged.error) return fail(staged.error);
+      skewHint = staged.skew;
       const { stageDir, cliPath } = staged;
 
       // -- the pinned Node naude embeds. clode carries NO Node, ever (not baked,
@@ -1995,8 +2033,9 @@ async function clodeBuildIn(args, opts) {
       // Upstream bundle: resolve + extract + hook via the existing machinery —
       // `libexec` here is the possibly-materialized one (a blobulated builder rebinds
       // it above), which is why stageUpstreamCli takes it as an argument.
-      const staged = await stageUpstreamCli({ env, libexec, verbose, prefix: 'build', log: clodeLog });
+      const staged = await stageUpstreamCli({ env, libexec, verbose, prefix: 'build', log: clodeLog, notice });
       if (staged.error) return fail(staged.error);
+      skewHint = staged.skew;
       key = staged.key;
       bundleVersion = key;
       stageDir = staged.stageDir;
@@ -2377,7 +2416,7 @@ async function clodeBuildIn(args, opts) {
 }
 
 module.exports = {
-  clodeBuild, carveVerdict, parseBuildArgs, resolveBuildOut, makePhaseSpinner, startPongMock, cannedSSE, smokeTarget, buildSmokeHome, attestTarget, timeoutScale, codesignAdHoc, thinToHostSlice, describeExit,
+  clodeBuild, carveVerdict, versionSkew, builtForUpstream, parseBuildArgs, resolveBuildOut, makePhaseSpinner, startPongMock, cannedSSE, smokeTarget, buildSmokeHome, attestTarget, timeoutScale, codesignAdHoc, thinToHostSlice, describeExit,
   readDirectDeps, computeDepClosure, assertClosureMatchesLockfile,
   scanBareSpecifiers, scannableTexts, specifierPackageName, isBuiltinSpecifier, shimProvidedModules,
   assertNoUnknownBareSpecifiers, KNOWN_UNREACHABLE, resolveClaudeNmDir,

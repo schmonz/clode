@@ -61,6 +61,14 @@ test('build-clode-main.mjs also pre-builds naude-entry.bundle.cjs', () => {
       'naude-entry.bundle.cjs must not contain a /Users/ host path');
     assert.ok(!contents.includes(REPO),
       'naude-entry.bundle.cjs must not contain this repo\'s own absolute path');
+
+    // clode-main.bundle.cjs, by contrast, BAKES the upstream version this clode is released with, so a blobulated
+    // clode with no UPSTREAM_PIN beside it can still say "this clode was released with Claude Code X" when it meets
+    // a newer upstream (libexec/clode-build.cjs versionSkew; the 2026-11-25 NetBSD report).
+    const main = fs.readFileSync(path.join(BUILD_DIR, 'bundle', 'clode-main.bundle.cjs'), 'utf8');
+    const pin = require('../libexec/upstream-pin.cjs').upstreamPin();
+    assert.ok(!main.includes('__CLODE_BAKED_UPSTREAM_PIN__'), 'the define must be substituted, not left as a free name');
+    assert.ok(main.includes(JSON.stringify(pin)), `clode-main.bundle.cjs must carry the pin ${pin}`);
   } finally {
     if (!buildPreexisted) fs.rmSync(BUILD_DIR, { recursive: true, force: true });
   }

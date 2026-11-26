@@ -193,3 +193,52 @@ test('a stray CLODE_STAGE_REQUEST is refused by name, and nothing is written bes
     fs.rmSync(ours, { recursive: true, force: true });
   }
 });
+
+// A BUILDER MEETING A NEWER UPSTREAM SAYS SO (libexec/clode-build.cjs versionSkew): before the extraction, and beside
+// the failure. 2026-11-25: clode 0.20261125.1 (released with 2.1.330) met a fetched 2.1.332, ran five minutes on NetBSD
+// and died on an internal dep-closure message that never mentioned the version gap.
+test('versionSkew: newer x.y.z only; unknown, equal, older or not-a-version says nothing', () => {
+  const { versionSkew } = require('../libexec/clode-build.cjs');
+  assert.match(versionSkew('2.1.330', '2.1.332'), /released with Claude Code 2\.1\.330; 2\.1\.332 is newer .*'clode fetch claude 2\.1\.330'/);
+  assert.match(versionSkew('2.1.330', '2.2.0'), /2\.2\.0 is newer/);
+  for (const [a, b] of [['2.1.332', '2.1.332'], ['2.1.332', '2.1.330'], ['2.1.330', 'claude-1a2b'], [null, '2.1.332'], ['2.1.330', undefined]]) {
+    assert.strictEqual(versionSkew(a, b), null, `${a} vs ${b}`);
+  }
+});
+
+test('clode build of an upstream newer than its pin says so before extracting, and beside the failure', (t) => {
+  const tjs = tjsPath();
+  if (!tjs) { t.skip('no tjs binary (CLODE_TJS or build/tjs/tjs): the build refuses before staging without one'); return; }
+  const { builtForUpstream } = require('../libexec/clode-build.cjs');
+  const pin = builtForUpstream();
+  const newer = pin.replace(/\d+$/, (n) => String(Number(n) + 1));
+  for (const [version, expectNotice] of [[newer, true], [pin, false]]) {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'stage-skew-'));
+    try {
+      const dir = path.join(tmp, 'providers', version, 'linux-amd64');
+      fs.mkdirSync(dir, { recursive: true });
+      const provider = path.join(dir, 'claude');
+      fs.writeFileSync(provider, 'not a provider\n', { mode: 0o755 });
+      const r = spawnSync(process.execPath, [ENTRY, 'build', '--out', path.join(tmp, 'q')], {
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          HOME: tmp, CLODE_STATE_ROOT: tmp, CLODE_CACHE: path.join(tmp, 'cache'), CLODE_DEPS: path.join(tmp, 'deps'),
+          CLODE_WATCH_DIR: path.join(tmp, 'watch'), CLODE_OFFLINE: '1', CLODE_TJS: tjs, CLODE_CLAUDE_BIN: provider,
+          CLODE_STAGE_REQUEST: '', DYLD_INSERT_LIBRARIES: '',
+        },
+      });
+      assert.strictEqual(r.status, 1, r.stderr);
+      const said = r.stderr.split('\n');
+      const notice = said.findIndex((l) => l.includes(`released with Claude Code ${pin}; ${version} is newer`));
+      const failed = said.findIndex((l) => /extraction failed/.test(l));
+      assert.ok(failed >= 0, r.stderr);
+      if (expectNotice) {
+        assert.ok(notice >= 0 && notice < failed, `the notice must come BEFORE the extraction's failure:\n${r.stderr}`);
+        assert.ok(said.slice(failed).some((l) => l.includes(`'clode fetch claude ${pin}'`)), `and again beside the failure:\n${r.stderr}`);
+      } else {
+        assert.ok(!/is newer than it has been tested with/.test(r.stderr), `the pinned version is not "newer":\n${r.stderr}`);
+      }
+    } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  }
+});

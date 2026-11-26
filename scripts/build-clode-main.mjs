@@ -158,6 +158,8 @@ function esbuildBundle() {
     define: {
       __CLODE_BUNDLE_VERSION__: JSON.stringify(repoVersion()),
       __CLODE_BAKED_TJS_PIN__: JSON.stringify(bakedTjsPin()),
+      // the upstream version this clode is released with: libexec/clode-build.cjs versionSkew
+      __CLODE_BAKED_UPSTREAM_PIN__: JSON.stringify(require('../libexec/upstream-pin.cjs').upstreamPin(REPO) || ''),
       __CLODE_BAKED_ENGINE_RECIPE__: JSON.stringify(bakedEngineRecipe()),
     },
     outfile: bundle,
