@@ -3,8 +3,9 @@
   "extends": [
     "config:recommended"
   ],
-  "description": "Dependency doctrine (2026-07-14): pin versions (rangeStrategy pin), pin the behaviors we rely on with tests, then bump as eagerly as possible \u2014 behind GREEN CI, so we are always first to know when something breaks. automerge waits for tests by DEFAULT: there is deliberately NO global ignoreTests (it previously merged BEFORE CI, inverting the doctrine \u2014 breakage landed on main instead of being caught in the PR). The one exception to eagerness is npm supply chain (see the npm rule): tests cannot catch a malicious publish, so time is the guard.",
+  "description": "Dependency doctrine (2026-07-14): pin versions (rangeStrategy pin), pin the behaviors we rely on with tests, then bump as eagerly as possible \u2014 behind GREEN CI, so we are always first to know when something breaks. automerge waits for tests by DEFAULT: there is deliberately NO global ignoreTests (it previously merged BEFORE CI, inverting the doctrine \u2014 breakage landed on main instead of being caught in the PR). The one exception to eagerness is npm supply chain (see the npm rule): tests cannot catch a malicious publish, so time is the guard. rebaseWhen conflicted (2026-11-26): rebasing every open PR on each main push re-ran ~8 full CI runs per push and starved main's own CI for hours (853b7a6e queued 6h); a PR is now rebased only when it conflicts, and automerge still waits for its CI.",
   "automerge": true,
+  "rebaseWhen": "conflicted",
   "rangeStrategy": "pin",
   "dependencyDashboard": true,
   "packageRules": [
