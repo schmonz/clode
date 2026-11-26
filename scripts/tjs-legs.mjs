@@ -368,7 +368,7 @@ const LEGS = [
     // would need a 10.0 floor; dropped as marginal vs. a tidy uniform 10.1.)
     'guest-version': '10.1',
     // renovate: datasource=custom.cpa-netbsd-x86-64 depName=netbsd-x86-64-guest versioning=loose
-    'ci-guest-version': '10.1',
+    'ci-guest-version': '10.2',
     'guest-packages': 'cmake gmake nodejs git-base bash', floor: '10.1',
     // MEASURED: GUEST_JOB_MINUTES (above) holds this leg's numbers and the derivation.
     // It carried the 90-minute default, and on 2026-08-26 netbsd-amd64 HUNG for 54+
