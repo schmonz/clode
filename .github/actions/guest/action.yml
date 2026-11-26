@@ -472,7 +472,7 @@ runs:
 
     - name: Run the guest script (vmactions openindiana VM)
       if: inputs.platform == 'openindiana'
-      uses: vmactions/openindiana-vm@v1.1.9
+      uses: vmactions/openindiana-vm@v1.2.0
       with:
         release: ${{ inputs.version }}
         usesh: true
