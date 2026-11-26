@@ -140,7 +140,7 @@ async function inGuest(dir) {
   const tjs = path.join(dir, 'eng', `tjs${EXE}`);
   if (!fs.existsSync(tjs)) throw new Error(`the engine build left no ${tjs}`);
   // 2. the pinned provider, into its own store (the lanes' store stays empty, so native resolves nowhere and skips)
-  const pin = /^claude-code (\S+)$/m.exec(fs.readFileSync(path.join(repo, 'UPSTREAM_PIN'), 'utf8'))[1];
+  const pin = createRequire(import.meta.url)(path.join(repo, 'libexec', 'upstream-pin.cjs')).upstreamPin(repo);
   step('provider', node, ['scripts/stage0.mjs', 'fetch', 'claude', pin], { timeout: 30 * MIN, env: { CLODE_STATE_ROOT: path.join(dir, 'fetch-state') } });
   const provRoot = path.join(dir, 'fetch-state', 'share', 'clode', 'providers', pin);
   const prov = fs.existsSync(provRoot) ? fs.readdirSync(provRoot).map((p) => path.join(provRoot, p, PROVIDER_FILE)).find((f) => fs.existsSync(f)) : null;

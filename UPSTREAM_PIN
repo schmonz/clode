@@ -145,5 +145,7 @@
 # pin") until upstream publishes past it, then compares that carve with this.
 carve-probe 2.1.332 carves
 #
-# Bump or drop the pin by editing the version below — one line, one file.
+# Bump or drop the pin by editing the version below — one line, one file. Before bumping, run
+# `node scripts/every-carve.mjs --version <new>`: it carves every platform upstream publishes, and a member only one
+# platform reaches (2.1.332's win32-only windowsPolicyValue) is otherwise seen only by that platform's CI, after the push.
 claude-code 2.1.332

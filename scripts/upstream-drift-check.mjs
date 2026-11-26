@@ -260,7 +260,7 @@ if (!broken.length) {
   // …and what that green does NOT cover. See scripts/lib/carve-gap-note.mjs.
   let pin = null;
   try {
-    pin = (/^claude-code (\S+)/m.exec(fs.readFileSync(path.join(REPO, 'UPSTREAM_PIN'), 'utf8')) || [])[1] || null;
+    pin = createRequire(import.meta.url)('../libexec/upstream-pin.cjs').upstreamPin(REPO);
   } catch { pin = null; }
   process.stdout.write(carveGapNote({ pin, checked: process.argv[3] || null }));
   process.exit(0);

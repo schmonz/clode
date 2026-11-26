@@ -279,6 +279,29 @@ jobs:
           node scripts/upstream-release-notes.mjs --from "0.0.0-no-last-green-recorded" \
             ${{ steps.upstream.outputs.version && format('--to "{0}"', steps.upstream.outputs.version) || '' }}
 
+  # DOES ANY PLATFORM'S CARVE REACH A Bun.ant MEMBER THE SHIM DOES NOT ACCOUNT FOR? The surface is per
+  # platform, and each CI build gate carves only its own runner's provider: 2.1.332's windowsPolicyValue lived only in
+  # the win32 carves, so it surfaced on Windows CI after the pin had already moved (2026-11-26). This carves all eight
+  # platforms of `next` and of the pin, every day, before anyone bumps (scripts/every-carve.mjs). A download that fails
+  # is reported NOT MEASURED and fails the job: an unmeasured platform is never read as clean.
+  every-carve:
+    name: does any platform's carve reach an unaccounted Bun.ant member?
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version-file: .tool-versions
+      - name: The pin, every platform
+        run: node scripts/every-carve.mjs --version pin --cache "$RUNNER_TEMP/upstream-carves"
+      - name: "`next`, every platform"
+        if: success() || failure()
+        run: node scripts/every-carve.mjs --version "$(npm view @anthropic-ai/claude-code@next version)" --cache "$RUNNER_TEMP/upstream-carves"
+
   # THE SECOND DAILY QUESTION: does a quaude built from the PINNED bundle still BOOT?
   #
   # READ THIS BEFORE TRUSTING THIS JOB'S GREEN (corrected 2026-09-12). It used to say
