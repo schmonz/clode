@@ -230,9 +230,9 @@ const KNOWN_BUN_ANT = new Map([
   ['windowsSandboxDeniesArg', 'MEASURED on the darwin-arm64 2.1.330 carve (2026-11-21), not inferred: `x()==="windows"&&typeof '
     + 'Bun<"u"?Bun.ant?.windowsSandboxDeniesArg?.():void 0`, then `if(typeof e!=="string")return;`: no denies '
     + 'helper is built. Windows-only, and gated.'],
-  // The three below exist ONLY in the win32 carves of 2.1.330 (absent from darwin-arm64 and
-  // linux-x64), so the darwin-carve review above could not see them. Reviewed from the
-  // win32-x64 2.1.330 carve: @anthropic-ai/claude-code-win32-x64@2.1.330's claude.exe.
+  // The ones below exist ONLY in the win32 carves (absent from darwin-arm64 and linux-x64), so
+  // the darwin-carve review above could not see them. Reviewed from the win32-x64 carve's
+  // claude.exe: of 2.1.330, and of 2.1.332 for windowsPolicyValue (new there).
   ['windowsFsAt', 'MEASURED on the win32-x64 2.1.330 carve (2026-11-21), not inferred: the Windows twin of posixFsAt. One '
     + 'call site, `function tQl(){...try{T=y(Bun.ant.windowsFsAt),...}catch(e){t(`anchor: no Windows backend, '
     + 'Bun.ant.windowsFsAt unavailable (...)`,{level:"warn"}),T=null}return T}` (y() throws "not in this runtime" '
@@ -244,6 +244,11 @@ const KNOWN_BUN_ANT = new Map([
     + 'the use redirects the open, rename or delete outside the tree. Native refuses that; quaude on Windows (and '
     + 'macOS) does not. An NT handle-relative file API (NtCreateFile/rename/delete-by-handle) is a new C primitive; '
     + 'not now. BACKLOG.md: "posixFsAt and windowsFsAt are absent".'],
+  ['windowsPolicyValue', 'MEASURED on the win32-x64 2.1.332 carve (2026-11-26), not inferred: the managed-settings policy read. '
+    + '`function c(e){...try{s=Bun.ant.windowsPolicyValue(e,...)}catch{return}if(s===null)return;...}` and its one '
+    + 'caller `let t=c("machine"),s=c("user");if(t&&s)return{plistStdouts:null,hklmStdout:t.stdout,...}`. Absent, c() '
+    + 'answers undefined and the reader falls through to the `reg.exe query <key> /v <value>` path every release '
+    + 'before 2.1.332 took (HKLM and HKCU, same stdout shape). Same answer, one child process more. Windows-only.'],
   ['windowsProcessPin', 'MEASURED on the win32-x64 2.1.330 carve (2026-11-21), not inferred: one call site, the Windows '
     + 'killProcessTree: `r.id=typeof Bun<"u"&&typeof Bun.ant?.windowsProcessPin==="function"?Bun.ant.windowsProcessPin(e)'
     + ':null;` and then `taskkill.exe /PID e /T /F` runs either way. Absent, the pin is null and taskkill kills the '
