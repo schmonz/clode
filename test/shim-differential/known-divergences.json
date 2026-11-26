@@ -2588,20 +2588,6 @@
    ]
   }
  },
- "fs/promises.constants (value)": {
-  "r.O_DIRECT": {
-   "cause": "DIFF-MISSING-MEMBERS",
-   "on": [
-    "linux"
-   ]
-  },
-  "r.O_NOATIME": {
-   "cause": "DIFF-MISSING-MEMBERS",
-   "on": [
-    "linux"
-   ]
-  }
- },
  "fs/promises.copyFile(<dangling>, <file>)": {
   "r.error.dest": {
    "cause": "DIFF-COPYFILE",
