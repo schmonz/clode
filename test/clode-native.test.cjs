@@ -250,7 +250,7 @@ test('acceptance 1c: a shipped clode refuses bootstrap, naming the checkout', as
   assert.match(r.stderr, /scripts\/stage0\.mjs bootstrap/);
 });
 
-test('acceptance 1b: BARE invocation is a clean usage error, not a wall stack (v0.1.2 field report)', async (t) => {
+test('acceptance 1b: BARE invocation is brief usage, not a wall stack (v0.1.2 field report)', async (t) => {
   if (SKIP) { t.skip(SKIP); return; }
   // The exact first-user scenario: download the builder, run it with no
   // arguments. v0.1.2 shipped a crash here — clode-main's isSea() probed
@@ -259,13 +259,13 @@ test('acceptance 1b: BARE invocation is a clean usage error, not a wall stack (v
   // stack (which carries no `Error: message` header) printed bare. Contract
   // now (task 5, "delete the runner"): clode never runs Claude Code at all —
   // there is no launch path left to fail controlled INTO, so a bare
-  // invocation is just an unrecognized command: print the usage error and
-  // exit 2, never a bare QuickJS stack.
+  // invocation prints brief usage on stdout and exits 0 (2026-11-25: it used to be
+  // "unknown command ''" plus the whole --help, exit 2), never a bare QuickJS stack.
   const env = { PATH: EMPTY_PATH, HOME: DIR };
   const r = await runNative(NATIVE, [], env, 60000);
-  assert.strictEqual(r.status, 2);
-  assert.doesNotMatch(r.stderr, /not implemented|at isSea/);
-  assert.match(r.stderr, /unknown command/);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.doesNotMatch(r.stdout + r.stderr, /not implemented|at isSea|unknown command/);
+  assert.match(r.stdout, /clode --help/);
 });
 
 test('acceptance 2: the native builder BUILDS THE PRODUCT (quaude blobulate + PONG + attest), node-free AND template-free', async (t) => {

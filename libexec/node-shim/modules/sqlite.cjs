@@ -1,4 +1,5 @@
 'use strict';
+const { Root, callable } = require('../internal/callable.cjs');
 // node:sqlite backed by tjs:sqlite — the Node->tjs layer. Under real Node,
 // node:sqlite is native and this file is never used; under tjs the node-shim
 // resolves require('node:sqlite') here. bun-shim's Bun->Node layer targets
@@ -27,8 +28,8 @@ function backend() {
   return b.Database;
 }
 
-class StatementSync {
-  constructor(tjsStmt, db) { this._s = tjsStmt; this._db = db; }
+class StatementSync extends Root {
+  constructor(tjsStmt, db) { super(); this._s = tjsStmt; this._db = db; }
   all(...params) { return this._s.all(...params); }
   get(...params) { const rows = this._s.all(...params); return rows.length ? rows[0] : undefined; }
   run(...params) {
@@ -40,11 +41,12 @@ class StatementSync {
   }
 }
 
-class DatabaseSync {
-  constructor(path) { this._db = new (backend())(path); }
+class DatabaseSync extends Root {
+  constructor(path) { super(); this._db = new (backend())(path); }
   prepare(sql) { return new StatementSync(this._db.prepare(sql), this._db); }
   exec(sql) { this._db.exec(sql); }
   close() { this._db.close(); }
 }
 
+DatabaseSync = callable(DatabaseSync); StatementSync = callable(StatementSync);   // internal/callable.cjs
 module.exports = { DatabaseSync, StatementSync };

@@ -1,4 +1,5 @@
 'use strict';
+const { callable } = require('../internal/callable.cjs');
 // node:http — the -p bundle's proxy-agent stack (`agent-base`,
 // `http-proxy-agent`) defines `class X extends require('http').Agent` at load,
 // so http.Agent must be a REAL constructor (subclassable + instantiable). On the
@@ -1533,6 +1534,9 @@ function get(url, options, cb) {
   return req;
 }
 
+// ES5 subclasses call these, as node lets them: internal/callable.cjs
+Agent = callable(Agent); IncomingMessage = callable(IncomingMessage); ServerResponse = callable(ServerResponse);
+Server = callable(Server); ClientRequest = callable(ClientRequest);
 module.exports = {
   Agent, globalAgent, STATUS_CODES, METHODS,
   Server, IncomingMessage, ServerResponse, createServer,

@@ -261,3 +261,38 @@ test('a legacy entry whose container is unreadable is left alone, not mis-keyed'
   assert.ok(fs.existsSync(path.join(store, V, 'claude')),
     'but it is not deleted either -- the user\'s bytes are the user\'s');
 });
+
+// --- 4. the builder reads the entry the fetcher wrote, for EVERY host ---------
+//
+// 2026-11-25, on a real NetBSD/amd64 box: `clode fetch claude` said "no upstream provider for netbsd-x64; carving
+// linux-x64" and stored providers/2.1.332/linux-amd64/claude, and `clode build quaude` then said "no Claude Code
+// binary found", because the reading side restated the fetch policy without its OS fallback: it refused to cross the
+// OS boundary that the fetch policy crosses, on purpose, for every OS upstream does not carve. Every netbsd, freebsd,
+// openbsd, illumos and haiku user hit it on first use; the NetBSD evidence did not, because it hands the binary in by
+// CLODE_CLAUDE_BIN. So: for every platform node names and every arch, the key `clode fetch claude` writes (providerFor
+// against upstream's real platform list, then providerKeyFor) is the one the store resolves on that host, with other
+// OSes' entries beside it. And where upstream DOES carve the OS, no other OS's entry is ever taken.
+const UPSTREAM_PLATFORMS = ['darwin-arm64', 'darwin-x64', 'linux-arm64', 'linux-x64', 'linux-arm64-musl', 'linux-x64-musl', 'win32-x64', 'win32-arm64'];
+const NODE_PLATFORMS = ['aix', 'android', 'darwin', 'freebsd', 'haiku', 'linux', 'netbsd', 'openbsd', 'sunos', 'win32', 'cygwin', 'dragonfly'];
+const NODE_ARCHES = ['x64', 'arm64', 'ia32', 'arm', 'ppc', 'ppc64', 'riscv64', 'mips', 'mipsel', 's390x', 'sparc'];
+test('every host resolves the entry its own `clode fetch claude` stored (the NetBSD fetch/build disagreement)', () => {
+  const upd = require('../libexec/clode-update.cjs');
+  const bad = [];
+  for (const platform of NODE_PLATFORMS) {
+    for (const arch of NODE_ARCHES) {
+      const fetched = upd.providerKeyFor(upd.providerFor(platform, arch, UPSTREAM_PLATFORMS, { isMusl: false }));
+      const others = ['macos-arm64', 'linux-amd64', 'windows-amd64'].filter((k) => k !== fetched && !k.startsWith(fetched.split('-')[0] + '-'));
+      for (const keys of [[fetched], [...others, fetched], [fetched, ...others]]) {
+        const got = paths.pickProviderEntry(keys, platform, arch);
+        if (got !== fetched) bad.push(`${platform}-${arch}: fetch stores ${fetched}; from [${keys}] the store resolves ${got}`);
+      }
+    }
+  }
+  assert.deepStrictEqual(bad, []);
+});
+test('where upstream carves the OS, another OS\'s entry is never taken', () => {
+  for (const [platform, arch, keys] of [['darwin', 'arm64', ['linux-amd64']], ['linux', 'x64', ['macos-arm64', 'windows-amd64']],
+    ['win32', 'x64', ['linux-amd64', 'macos-arm64']]]) {
+    assert.strictEqual(paths.pickProviderEntry(keys, platform, arch), null, `${platform}-${arch} from [${keys}]`);
+  }
+});

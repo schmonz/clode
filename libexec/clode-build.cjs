@@ -647,7 +647,10 @@ function isStageRequestPath(p) {
   const tmp = real(os.tmpdir());
   return tmp !== null && real(path.dirname(dir)) === tmp && fs.existsSync(p);
 }
-function stageInChild(request, env) {
+// ASYNC, so the builder's own loop keeps running while the child stages: the spinner is drawn by a
+// timer here, and a spawnSync froze it at "Extracting bundle… (0.0s)" for the whole extraction --
+// minutes on a slow box, where a NetBSD user (2026-11-25) could not tell working from wedged.
+async function stageInChild(request, env) {
   if (globalThis.__clodeStageChild || (env && env.CLODE_STAGE_REQUEST)) return { error: STAGE_CHILD_REFUSAL };
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-stage-'));
   const reqPath = path.join(dir, 'request.json');
@@ -655,15 +658,22 @@ function stageInChild(request, env) {
   try {
     fs.writeFileSync(reqPath, JSON.stringify(request));
     const [cmd, ...args] = stageRelaunchArgv();
-    const r = require('node:child_process').spawnSync(cmd, args, {
-      env: { ...env, [STAGE_REQUEST_ENV]: reqPath },
-      stdio: ['ignore', 'inherit', 'inherit'],
+    const r = await new Promise((resolve) => {
+      let child;
+      try {
+        child = require('node:child_process').spawn(cmd, args, {
+          env: { ...env, [STAGE_REQUEST_ENV]: reqPath },
+          stdio: ['ignore', 'inherit', 'inherit'],
+        });
+      } catch (error) { resolve({ status: null, signal: null, error }); return; }
+      child.on('error', (error) => resolve({ status: null, signal: null, error }));
+      child.on('close', (status, signal) => resolve({ status, signal }));
     });
     let res = null;
     try { res = JSON.parse(fs.readFileSync(resPath, 'utf8')); } catch { res = null; }
     if (res && res.error) return { error: res.error };
     if (res && res.ok && r.status === 0) return { scanned: res.scanned || null };
-    return { error: `the staging child (${cmd}) ended without an answer (${describeExit(r)})` };
+    return { error: `the staging child (${cmd}) ended without an answer (${r.error ? `could not start: ${r.error.message}` : describeExit(r)})` };
   } finally {
     try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ }
   }
@@ -704,7 +714,7 @@ function runStageRequest(reqPath, stderr = process.stderr) {
   return res.ok ? 0 : 1;
 }
 
-function stageUpstreamCli({ env, libexec, verbose, prefix, log }) {
+async function stageUpstreamCli({ env, libexec, verbose, prefix, log }) {
   let bin = resolve.resolveClaudeBin({ env });
   if (bin == null || !resolve.pathExists(bin)) {
     return {
@@ -717,7 +727,7 @@ function stageUpstreamCli({ env, libexec, verbose, prefix, log }) {
   const key = resolve.cacheKey(bin);
   const stageDir = path.join(clodeCacheDir(env), key);
   if (log) log(`clode: ${prefix}: staging bundle ${key} ...`);
-  const staged = stageInChild({ bin, cacheDir: stageDir, libexec, verbose, key }, env);
+  const staged = await stageInChild({ bin, cacheDir: stageDir, libexec, verbose, key }, env);
   if (staged.error) return { error: `${prefix}: extraction failed: ${staged.error}` };
   // WHICH PLATFORM THIS CARVE IS FOR, read from the provider's container bytes. Bun folds
   // process.platform at carve time, so a graph is per-platform: a darwin target blobulated from a
@@ -1505,7 +1515,7 @@ async function clodeBuildIn(args, opts) {
       // reaching OUT for a node (the provider is the cheap, local, primary input — a
       // missing one must fail before any network), but AFTER the pin-table check above,
       // which is cheaper still and can rule the whole build out.
-      const staged = stageUpstreamCli({
+      const staged = await stageUpstreamCli({
         env, libexec: effLibexec, verbose, prefix: 'build naude', log: clodeLog,
       });
       if (staged.error) return fail(staged.error);
@@ -1985,7 +1995,7 @@ async function clodeBuildIn(args, opts) {
       // Upstream bundle: resolve + extract + hook via the existing machinery —
       // `libexec` here is the possibly-materialized one (a blobulated builder rebinds
       // it above), which is why stageUpstreamCli takes it as an argument.
-      const staged = stageUpstreamCli({ env, libexec, verbose, prefix: 'build', log: clodeLog });
+      const staged = await stageUpstreamCli({ env, libexec, verbose, prefix: 'build', log: clodeLog });
       if (staged.error) return fail(staged.error);
       key = staged.key;
       bundleVersion = key;

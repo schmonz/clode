@@ -1,7 +1,8 @@
 'use strict';
+const { Root, callable } = require('../internal/callable.cjs');
 // node:events — EventEmitter, the observable subset. Locked by
 // test/node-shim-core.test.cjs against host node.
-class EventEmitter {
+class EventEmitter extends Root {
   #listeners = new Map();
   on(name, fn) { (this.#listeners.get(name) ?? this.#listeners.set(name, []).get(name)).push({ fn, once: false }); return this; }
   once(name, fn) { (this.#listeners.get(name) ?? this.#listeners.set(name, []).get(name)).push({ fn, once: true }); return this; }
@@ -36,6 +37,7 @@ class EventEmitter {
   setMaxListeners(n) { this.#maxListeners = n; return this; }
   getMaxListeners() { return this.#maxListeners === undefined ? EventEmitter.defaultMaxListeners : this.#maxListeners; }
 }
+EventEmitter = callable(EventEmitter);   // ES5 subclasses call it (internal/callable.cjs)
 EventEmitter.defaultMaxListeners = 10;
 EventEmitter.EventEmitter = EventEmitter;
 // node does `module.exports = EventEmitter` — the module IS the class, with the

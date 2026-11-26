@@ -1,4 +1,5 @@
 'use strict';
+const { Root, callable } = require('../internal/callable.cjs');
 // node:fs over the __tjs_fs_sync patch (sync) + tjs native fs (promises).
 // M1 surface; Buffer returns upgrade in Task 7 (buffer-lite).
 //
@@ -589,7 +590,7 @@ function staleStats(obj, raw, conv, timeSuffixes) {
   for (const sfx of timeSuffixes) for (const t of STAT_TIMES) refuseField(obj, t + sfx);
 }
 function rawInt(raw, f) { return f === 'size' ? raw.size64 : raw[f]; }
-class StatsBase {
+class StatsBase extends Root {
   isFile() { return typeIs(this.mode, 'file'); }
   isDirectory() { return typeIs(this.mode, 'dir'); }
   isSymbolicLink() { return typeIs(this.mode, 'symlink'); }
@@ -1672,6 +1673,7 @@ fsMod.close = (fd, cb) => {
     if (cb) cb(null);
   } catch (e) { if (cb) cb(e); }
 };
+Stats = callable(Stats); ReadStream = callable(ReadStream);   // ES5 subclasses call these: internal/callable.cjs
 fsMod.Stats = Stats;
 fsMod.Dirent = Dirent;
 fsMod.ReadStream = ReadStream;

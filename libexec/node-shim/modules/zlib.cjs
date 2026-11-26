@@ -1,4 +1,5 @@
 'use strict';
+const { callable } = require('../internal/callable.cjs');
 // node:zlib — the -p bundle require()s zlib in several HTTP/transport modules and
 // reads `zlib.constants` at init (destructuring specific Z_*/BROTLI_* values). The
 // constants below are the REAL host-node table (byte-identical values), so any
@@ -383,7 +384,7 @@ for (const name of ['createGzip', 'createDeflate', 'createDeflateRaw']) {
   zlib[name] = () => { throw new Error(`node-shim: zlib.${name} not implemented (a compressing STREAM; the one-shot helpers are real)`); };
 }
 for (const [cls, format] of Object.entries(DECOMPRESSORS)) {
-  zlib[cls] = class extends Decompressor { constructor(opts) { super(format, opts); } };
+  zlib[cls] = callable(class extends Decompressor { constructor(opts) { super(format, opts); } });   // internal/callable.cjs
   Object.defineProperty(zlib[cls], 'name', { value: cls });
   zlib[`create${cls}`] = (opts) => new zlib[cls](opts);
 }
@@ -397,7 +398,7 @@ for (const [k, v] of Object.entries(constants)) { if (!k.startsWith('BROTLI_') &
 // so `typeof zlib.Deflate === 'function'` feature-detection matches, while an
 // actual instantiation fails loud (no compressor yet — same contract as create*).
 for (const cls of ['Gzip', 'Deflate', 'DeflateRaw']) {
-  zlib[cls] = class { constructor() { throw new Error(`node-shim: zlib.${cls} not implemented (a compressing STREAM; the one-shot helpers are real)`); } };
+  zlib[cls] = callable(class { constructor() { throw new Error(`node-shim: zlib.${cls} not implemented (a compressing STREAM; the one-shot helpers are real)`); } });
   Object.defineProperty(zlib[cls], 'name', { value: cls });
 }
 zlib.default = zlib;

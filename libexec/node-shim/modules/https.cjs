@@ -1,4 +1,5 @@
 'use strict';
+const { callable } = require('../internal/callable.cjs');
 // node:https — the same client as node:http (see http.cjs, "client" section)
 // with the TLS defaults applied: protocol https:, default port 443, and the
 // connection made with tjs.connect('tls', ...) against the engine's own
@@ -54,6 +55,7 @@ function get(url, options, cb) {
   return req;
 }
 
+Agent = callable(Agent);   // ES5 subclasses call it, as node lets them: internal/callable.cjs
 module.exports = {
   Agent, globalAgent, request, get, ClientRequest: http.ClientRequest,
   STATUS_CODES: http.STATUS_CODES, METHODS: http.METHODS,

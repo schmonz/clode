@@ -1,4 +1,5 @@
 'use strict';
+const { callable } = require('../internal/callable.cjs');
 // node:net — the -p bundle builds an SSRF/private-range `net.BlockList` at load
 // (`new net.BlockList(); addSubnet("127.0.0.0",8,"ipv4"); ...`) and later
 // check()s the target address, plus uses net.isIP*/net.Socket. Because the mock
@@ -162,6 +163,7 @@ const {
   setDefaultAutoSelectFamilyAttemptTimeout, getDefaultAutoSelectFamilyAttemptTimeout,
 } = require('../internal/connect-multiple.cjs');
 
+Socket = callable(Socket); Server = callable(Server);   // ES5 subclasses call these: internal/callable.cjs
 module.exports = {
   isIP, isIPv4, isIPv6, BlockList, Socket, Server, Stream: Socket,
   setDefaultAutoSelectFamily, getDefaultAutoSelectFamily,

@@ -1,4 +1,5 @@
 'use strict';
+const { Root, callable } = require('../internal/callable.cjs');
 // node:tls — the -p boot reads tls.getCACertificates()/tls.rootCertificates at
 // HTTP-client setup. The round-trip targets http://127.0.0.1 (the mock), so no
 // TLS handshake and no CA validation actually occur on this path. Characterized
@@ -198,7 +199,8 @@ const SOCKET_API = ['connect', 'createServer', 'TLSSocket', 'Server', 'checkServ
 // This decides only whether the context is made; the engine's own TLS still verifies with mbedtls, whose parser
 // the bootstrap's NODE_EXTRA_CA_CERTS path consults (libexec/quaude-bootstrap.mjs extraCaBundle). Options this
 // context could not honour (a certificate, a key, ciphers...) still meet the wall: accepting them would lie.
-class SecureContext { constructor() { this.context = {}; } }
+class SecureContext extends Root { constructor() { super(); this.context = {}; } }
+SecureContext = callable(SecureContext);   // node lets an ES5 subclass call it: internal/callable.cjs
 const SECURE_CONTEXT_WALLED = ['cert', 'key', 'pfx', 'passphrase', 'ciphers', 'ecdhCurve', 'dhparam', 'crl',
   'honorCipherOrder', 'secureOptions', 'secureProtocol', 'minVersion', 'maxVersion', 'sigalgs', 'privateKeyEngine',
   'privateKeyIdentifier', 'clientCertEngine', 'sessionIdContext', 'ticketKeys', 'sessionTimeout',

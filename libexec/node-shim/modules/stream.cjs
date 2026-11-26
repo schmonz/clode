@@ -1,4 +1,5 @@
 'use strict';
+const { callable } = require('../internal/callable.cjs');
 // node:stream — the minimal Readable/Writable/PassThrough the SDK's SSE reader
 // and the bundle touch, over node:events. Locked by test/node-shim-stream.test.cjs.
 // This is a behavioral SUBSET (flowing-mode 'data'/'end'/'finish', the
@@ -575,6 +576,9 @@ const promises = {
 // util.inherits(X, require('stream')) — the actual crashing pattern — only
 // needs Stream to be a function with a .prototype, which holds regardless.
 class Stream extends EventEmitter {}
+// ES5 subclasses call these (`Writable.call(this, opts)`), as node lets them: internal/callable.cjs
+Readable = callable(Readable); Writable = callable(Writable); PassThrough = callable(PassThrough);
+Transform = callable(Transform); Duplex = callable(Duplex); Stream = callable(Stream);
 Stream.Readable = Readable;
 Stream.Writable = Writable;
 Stream.PassThrough = PassThrough;

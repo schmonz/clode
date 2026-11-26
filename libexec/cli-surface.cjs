@@ -367,8 +367,10 @@ function has(obj, key) { return Object.prototype.hasOwnProperty.call(obj, key); 
 // continuation lines hanging under the text column. Data in, text out. The wrap exists
 // because the hand-written help block this renderer replaced wrapped its own long lines
 // by hand (its CLODE_TJS entry ran to three), and a table-driven help that emits a
-// 140-column line would be a readability regression dressed up as a refactor.
-const WRAP = 92;
+// 140-column line would be a readability regression dressed up as a refactor. 80, the
+// terminal that has to read it: at 92, 35 of the 82 lines of `clode` overflowed one
+// (a user's report, 2026-11-25); test/cli-surface.test.cjs holds every line to it.
+const WRAP = 80;
 
 // Greedy word wrap to `room` columns. Never splits a word (a long URL or path stays
 // intact and simply overhangs), and never returns an empty list, so the caller always
@@ -402,7 +404,9 @@ function columns(pairs, indent) {
 // Every verb name, subject name and flag name in the output comes from the table —
 // there is no per-verb template here, which is what test/cli-surface.test.cjs's
 // first test checks (help cannot omit or rename what the table declares).
-function renderHelp(version, surface) {
+// { brief: true }: what a bare `clode` prints -- the verbs, their products and options, and
+// a pointer to the rest; no environment blocks.
+function renderHelp(version, surface, { brief = false } = {}) {
   const lines = [`clode ${version} — ${TAGLINE}`, '', 'Usage:'];
   const verbs = Object.keys(surface.verbs);
   for (let i = 0; i < verbs.length; i++) {
@@ -416,7 +420,7 @@ function renderHelp(version, surface) {
     // verb); a checkout-only verb overrides it, because `clode bootstrap` is not a thing
     // anyone can run. Help must never print a command line that does not exist.
     lines.push(`  ${def.invocation || 'clode'} ${verb}${positional}${tail}${flags.length ? ' [options]' : ''}`);
-    lines.push(`      ${def.summary}`);
+    lines.push(...wrapText(def.summary, WRAP - 6).map((l) => `      ${l}`));
     if (subjects.length) {
       lines.push(`      ${def.subjectClass}s:`);
       lines.push(...columns(subjects.map((s) => [s, def.subjects[s] + (s === def.defaultSubject ? ' (default)' : '')]), '        '));
@@ -429,7 +433,7 @@ function renderHelp(version, surface) {
       lines.push('      options:');
       lines.push(...columns(flags.map((f) => [f, def.flags[f]]), '        '));
     }
-    if (def.env.length) {
+    if (def.env.length && !brief) {
       lines.push('      environment:');
       lines.push(...columns(def.env.map((e) => [e.name, e.doc]), '        '));
     }
@@ -441,7 +445,10 @@ function renderHelp(version, surface) {
   // to discover it from a usage error.
   lines.push('Options (before the command):');
   lines.push(...columns(Object.keys(surface.globals).map((g) => [g, surface.globals[g]]), '  '));
-  if (surface.env && surface.env.length) {
+  if (brief) {
+    lines.push('');
+    lines.push("Run 'clode --help' for the environment variables each command reads.");
+  } else if (surface.env && surface.env.length) {
     lines.push('');
     lines.push('Key environment overrides (any command):');
     lines.push(...columns(surface.env.map((e) => [e.name, e.doc]), '  '));
@@ -557,4 +564,4 @@ function parseArgv(argv, surface) {
   return { verb, subject, tail, flags, globalOrder, rest, error, errorKind };
 }
 
-module.exports = { SURFACE, TAGLINE, CHECKOUT_ONLY_VERBS, surfaceFor, renderHelp, parseArgv };
+module.exports = { SURFACE, TAGLINE, CHECKOUT_ONLY_VERBS, WRAP, surfaceFor, renderHelp, parseArgv };

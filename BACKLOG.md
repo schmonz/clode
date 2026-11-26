@@ -8,6 +8,22 @@ Concrete clode-under-Node divergences from native Claude Code, to triage and fix
 That page is GENERATED from `scripts/build-graph.cjs` — the one declaration of the build — so it
 cannot drift from it; it is also where the honest answer to "does this need node?" lives.
 
+## node constructors the shim lacks entirely: 23 of the 61 node lets an ES5 subclass call (2026-11-25)
+
+test/node-shim-callable.test.cjs asks host node which constructors an ES5 subclass may `.call(this)` (61, over every
+module the shim provides) and holds the shim to it. The 38 the shim HAS now all accept the call and initialize the
+caller's object (libexec/node-shim/internal/callable.cjs; they used to throw "class constructors must be invoked with
+'new'", which failed every Remote Control session create on a real Linux box). The other 23 are not refused but
+ABSENT, which is a different gap and is recorded exactly in that test's ABSENT list: assert.Assert,
+child_process.ChildProcess, the crypto classes (Certificate, Cipheriv, Decipheriv, DiffieHellman, DiffieHellmanGroup,
+ECDH, Hash, Hmac, Sign, Verify), fs.WriteStream, http.OutgoingMessage, https.Server, module and module.Module,
+sqlite.Session, stream Readable.ReadableState and Writable.WritableState, url.URLPattern, zlib.BrotliCompress and
+BrotliDecompress.
+
+Measured: test/node-shim-callable.test.cjs, whose fixture run under the shim reports `absent` as exactly those 23
+(2026-11-25). TO DO: for each, find whether the pinned bundle reaches it (the shim-surface
+map answers that), and provide it or refuse it by name; a reached absent constructor is a wall.
+
 ## 2.1.332 reaches for two node APIs the shim lacks: `fs/promises.glob` and `dns/promises.Resolver` (2026-11-25)
 
 Found by the shim-surface map once it enumerated subpath modules (test/shim-surface/collect.cjs reads loader.cjs's

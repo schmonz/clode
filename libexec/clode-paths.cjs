@@ -84,19 +84,29 @@ function providerBinPath(env, version, key) {
 // WHICH entry a given host may use, out of the keys present for a version. PURE, so the
 // policy is testable without a store on disk.
 //
-// The policy is not invented here either: it is the same one clode-update's providerFor()
-// already applies when CHOOSING what to fetch, restated on the reading side so the two
-// cannot disagree. Exact `<os>-<arch>` first; then any entry with the SAME OS, because
-// "arch is don't-care for the carve" (clode-update: tjs loads no native .node addons and
-// the sole arch-switch is moot, so any same-OS build carves the right OS branches) and
-// refusing the fallback here would turn a documented fetch fallback into a permanent cache
-// miss -- a re-fetch loop, not a fix. What it NEVER does is cross the OS boundary: that is
-// the defect, and it is now unrepresentable rather than unlikely.
+// Exact `<os>-<arch>` first; then any entry with the SAME OS, because "arch is don't-care for
+// the carve" (clode-update: tjs loads no native .node addons and the sole arch-switch is
+// moot, so any same-OS build carves the right OS branches) and refusing the fallback here
+// would turn a documented fetch fallback into a permanent cache miss. Where upstream carves
+// this OS, it NEVER crosses the OS boundary.
+//
+// Where upstream does NOT carve this OS (netbsd, freebsd, openbsd, sunos, haiku...), the
+// entry is the one `clode fetch claude` stores there, found by ASKING THE FETCH POLICY
+// (clode-update's providerFor and providerKeyFor), never by restating it. Until 2026-11-25
+// this function restated it, without the OS fallback, and so refused the linux carve fetch
+// had just stored: on a real NetBSD box `clode build quaude` answered "no Claude Code binary
+// found" right after `clode fetch claude` (test/provider-store-key.test.cjs, section 4).
 function pickProviderEntry(keys, platform = process.platform, arch = process.arch) {
   const want = providerKey(platform, arch);
   if (keys.includes(want)) return want;
   const osPrefix = `${canon.canonOsFromNode(platform)}-`;
-  return keys.find((k) => k.startsWith(osPrefix)) || null;
+  const sameOs = keys.find((k) => k.startsWith(osPrefix));
+  if (sameOs) return sameOs;
+  const update = require('./provider-policy.cjs');
+  if (update.upstreamCarvesOs(platform)) return null;
+  const legs = keys.map((k) => canon.targetToNode(k)).filter(Boolean).map((n) => `${n.platform}-${n.arch}`);
+  const key = update.providerKeyFor(update.providerFor(platform, arch, legs, { isMusl: false }));
+  return keys.includes(key) ? key : null;
 }
 
 function nodeStore(env = process.env) {

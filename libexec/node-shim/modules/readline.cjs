@@ -1,4 +1,5 @@
 'use strict';
+const { callable } = require('../internal/callable.cjs');
 // node:readline — the bundle uses readline overwhelmingly to read newline-
 // delimited lines from a stream: the Remote Control bridge (`createInterface({
 // input: conn}).on('line', line => JSON.parse(line))`), child-process stderr/
@@ -143,6 +144,7 @@ function moveCursor(_stream, _dx, _dy, cb) { if (typeof cb === 'function') cb();
 function clearScreenDown(_stream, cb) { if (typeof cb === 'function') cb(); return true; }
 function emitKeypressEvents() { /* no keypress synthesis under the shim */ }
 
+Interface = callable(Interface);   // ES5 subclasses call it, as node lets them: internal/callable.cjs
 module.exports = {
   Interface,
   createInterface,

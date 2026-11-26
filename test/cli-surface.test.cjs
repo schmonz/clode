@@ -130,3 +130,29 @@ test('surfaceFor refuses a kind that is not an entry point', () => {
   // accident on the checkout side too).
   assert.throws(() => surfaceFor('checkedout'), /unknown entry-point kind/);
 });
+
+// 80 columns, every line of every help (a user's report, 2026-11-25: at the old wrap of 92, 35 of the 82 lines a bare
+// `clode` printed overflowed an 80-column terminal). A single word longer than its column (a URL) may overhang; nothing
+// else may.
+test('help: every line fits 80 columns, unless it is one unbreakable word', () => {
+  const { renderHelp, surfaceFor, WRAP } = require('../libexec/cli-surface.cjs');
+  assert.strictEqual(WRAP, 80);
+  for (const kind of ['shipped', 'checkout']) {
+    for (const brief of [false, true]) {
+      const over = renderHelp('0.0.0', surfaceFor(kind), { brief }).split('\n')
+        .filter((l) => l.length > 80 && /\s/.test(l.trim()));
+      assert.deepStrictEqual(over, [], `${kind}${brief ? ' brief' : ''}`);
+    }
+  }
+});
+
+test('a bare `clode` is brief usage on stdout, exit 0: no "unknown command", no environment blocks', () => {
+  const { spawnSync } = require('node:child_process');
+  const path = require('node:path');
+  const r = spawnSync(process.execPath, [path.join(__dirname, '..', 'libexec', 'clode-main.cjs')], { encoding: 'utf8', env: { ...process.env, CLODE_NO_WATCH: '1' } });
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.doesNotMatch(r.stdout + r.stderr, /unknown command/);
+  assert.doesNotMatch(r.stdout, /environment:|CLODE_/);
+  assert.match(r.stdout, /clode --help/);
+  assert.ok(r.stdout.split('\n').every((l) => l.length <= 80), r.stdout);
+});

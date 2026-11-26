@@ -23,6 +23,8 @@ function shimRequire(sandbox, engineConstants = hostEngineConstants()) {
     if (/node-errors\.cjs$/.test(String(id))) return nodeErrors.exports;
     // the options tables are plain data and a pure check, the same in any engine
     if (/internal\/options\.cjs$/.test(String(id))) return require(path.join(__dirname, '..', 'libexec', 'node-shim', 'internal', 'options.cjs'));
+    // so is the ES5-callable constructor wrapper (pure JS, no engine)
+    if (/internal\/callable\.cjs$/.test(String(id))) return require(path.join(__dirname, '..', 'libexec', 'node-shim', 'internal', 'callable.cjs'));
     return require(id);
   };
   vm.runInContext(`(function (module, exports, require) {\n${fs.readFileSync(NODE_ERRORS, 'utf8')}\n})`, sandbox, { filename: 'node-errors.cjs' })(nodeErrors, nodeErrors.exports, req);

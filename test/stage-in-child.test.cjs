@@ -127,15 +127,19 @@ test('in-process from a node:test file, the staging child is clode-main.cjs, not
     `the relaunch names the running test file: ${JSON.stringify(argv)}`);
 });
 
-test('recursion stop: a staging child refuses to start another, by name', () => {
+test('recursion stop: a staging child refuses to start another, by name', async () => {
   const { stageInChild, STAGE_CHILD_REFUSAL } = require('../libexec/clode-build.cjs');
   globalThis.__clodeStageChild = true;
   try {
-    assert.deepStrictEqual(stageInChild({}, {}), { error: STAGE_CHILD_REFUSAL });
+    // a Promise: the builder's loop (and its spinner) must keep running while a child stages; a spawnSync here
+    // froze "Extracting bundle… (0.0s)" for the whole extraction (NetBSD, 2026-11-25)
+    const pending = stageInChild({}, {});
+    assert.ok(pending instanceof Promise, 'stageInChild answers asynchronously');
+    assert.deepStrictEqual(await pending, { error: STAGE_CHILD_REFUSAL });
   } finally {
     delete globalThis.__clodeStageChild;
   }
-  assert.deepStrictEqual(stageInChild({}, { CLODE_STAGE_REQUEST: '/x/request.json' }), { error: STAGE_CHILD_REFUSAL });
+  assert.deepStrictEqual(await stageInChild({}, { CLODE_STAGE_REQUEST: '/x/request.json' }), { error: STAGE_CHILD_REFUSAL });
   assert.match(STAGE_CHILD_REFUSAL, /staging child .*refused/);
 });
 

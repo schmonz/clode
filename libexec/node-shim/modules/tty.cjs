@@ -1,4 +1,5 @@
 'use strict';
+const { callable } = require('../internal/callable.cjs');
 // node:tty — minimal surface for the -p boot. The bundle require()s it (ESM
 // interop probe tty.__esModule, then tty.isatty) to decide whether stdio is a
 // terminal. Under the loader, stdio is treated as non-tty (modules/process.cjs
@@ -281,5 +282,6 @@ class WriteStream extends EventEmitter {
   }
 }
 
+ReadStream = callable(ReadStream); WriteStream = callable(WriteStream);   // ES5 subclasses call these: internal/callable.cjs
 module.exports = { isatty, ReadStream, WriteStream };
 module.exports.default = module.exports;

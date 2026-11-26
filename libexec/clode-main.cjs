@@ -149,6 +149,12 @@ async function main(argv, opts = {}) {
   // The verb's table entry (null when argv named no verb): what dispatch reads for
   // everything below, starting with whether the verb parses its own argv.
   const def = cmd.verb ? surface.verbs[cmd.verb] : null;
+  // A bare `clode` is a request for orientation, not a mistake: brief usage on stdout, exit 0
+  // (it printed "clode: unknown command ''" and all 82 lines of --help, exit 2, until 2026-11-25).
+  if (!args.length) {
+    process.stdout.write(renderHelp(version, surfaceFor(kind || 'shipped'), { brief: true }));
+    return process.exit(0);
+  }
   if (!cmd.verb || (cmd.error && !(cmd.errorKind === 'flag' && def.ownsArgv))) {
     process.stderr.write(`clode: ${cmd.error}\n`);
     process.stderr.write(clodeHelp(version, kind));

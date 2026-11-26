@@ -1,4 +1,5 @@
 'use strict';
+const { Root, callable } = require('../internal/callable.cjs');
 // node:string_decoder — StringDecoder that buffers incomplete multibyte
 // sequences across chunk boundaries (the whole point of the class; used by
 // Readable#setEncoding and the bundle 7×). utf8/utf16le use a streaming
@@ -20,8 +21,9 @@ function toU8(buf) {
   return new Uint8Array(buf.buffer ?? buf, buf.byteOffset ?? 0, buf.byteLength ?? buf.length);
 }
 
-class StringDecoder {
+class StringDecoder extends Root {
   constructor(encoding) {
+    super();
     this.encoding = normalize(encoding);
     this._carry = new Uint8Array(0); // buffered trailing bytes
     if (this.encoding === 'utf8' || this.encoding === 'utf16le') {
@@ -94,5 +96,6 @@ function b64(u8, url) {
   return s;
 }
 
+StringDecoder = callable(StringDecoder);   // node lets an ES5 subclass call it: internal/callable.cjs
 module.exports = { StringDecoder };
 module.exports.default = module.exports;
