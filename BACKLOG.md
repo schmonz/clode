@@ -8,6 +8,18 @@ Concrete clode-under-Node divergences from native Claude Code, to triage and fix
 That page is GENERATED from `scripts/build-graph.cjs` — the one declaration of the build — so it
 cannot drift from it; it is also where the honest answer to "does this need node?" lives.
 
+## string-width 9 does not load under tjs: the engine rejects one of its v-flag regexes (2026-11-26)
+
+Renovate PR #82 moves deps/claude's string-width to 9.0.0, which writes its tables as v-flag regexes: class-set
+subtraction (`[\p{Format}--[...]]`, `[\p{Emoji_Presentation}--[\u{10000}-\u{10FFFF}]]`), nested classes and the
+property of strings `\p{RGI_Emoji}`. Under tjs, loading it throws `SyntaxError: invalid class range`
+(test/node-shim-vflag-regex.test.cjs, test/node-shim-esm.test.cjs); host node loads it. The bump was reverted, so
+deps/claude stays at 8.3.0 until the engine compiles these. Not a hold: the bundle can take the same syntax any day.
+
+Measured: the full suite with string-width 9.0.0 installed, two failures, both this error (2026-11-26). TO DO:
+reduce to the one regex QuickJS refuses (one per line from string-width 9's index.js through the engine), fix
+lre's v-mode, then re-apply #82.
+
 ## node constructors the shim lacks entirely: 23 of the 61 node lets an ES5 subclass call (2026-11-25)
 
 test/node-shim-callable.test.cjs asks host node which constructors an ES5 subclass may `.call(this)` (61, over every
