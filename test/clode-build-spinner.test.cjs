@@ -59,3 +59,38 @@ test('done() is idempotent and stops the animation (no leaked interval)', () => 
   spin.done();
   assert.strictEqual(err.text(), '', 'a second done() must do nothing');
 });
+
+// stalls(): the longest the loop went unserviced in each phase, measured whether or not the spinner draws (a piped or
+// CI build has no terminal, and its stalls still freeze a user's terminal build the same way).
+test('stalls(): a phase that blocks the loop is measured, one that does not is not; TTY or not', async () => {
+  const { makePhaseSpinner } = require('../libexec/clode-build.cjs');
+  for (const tty of [false, true]) {
+    const s = makePhaseSpinner(fakeStream(tty), tty, null);
+    s.phase('Idle');
+    await new Promise((r) => setTimeout(r, 350));
+    s.phase('Blocking');
+    await new Promise((r) => setTimeout(r, 120));
+    const until = Date.now() + 600; while (Date.now() < until) { /* a blocking child process's worth of nothing */ }
+    await new Promise((r) => setTimeout(r, 120));
+    s.done();
+    const [idle, blocking] = s.stalls();
+    assert.strictEqual(idle.phase, 'Idle');
+    assert.ok(idle.maxStallMs < 200, `tty=${tty}: an idle phase stalled ${idle.maxStallMs}ms`);
+    assert.strictEqual(blocking.phase, 'Blocking');
+    assert.ok(blocking.maxStallMs >= 400, `tty=${tty}: a 600ms block measured only ${blocking.maxStallMs}ms`);
+  }
+});
+
+test('stalls(): a block that ends with the phase changing is charged to the phase it happened in', () => {
+  // the shape of the real defect: a blocking call returns and the very next statement starts a new phase, so no
+  // timer tick ever lands between the block and the switch
+  const { makePhaseSpinner } = require('../libexec/clode-build.cjs');
+  const s = makePhaseSpinner(fakeStream(false), false, null);
+  s.phase('Extracting bundle');
+  const until = Date.now() + 600; while (Date.now() < until) { /* blocked */ }
+  s.phase('Resolving dependencies');
+  s.done();
+  const [blocked, next] = s.stalls();
+  assert.ok(blocked.maxStallMs >= 400, `the block was charged ${blocked.maxStallMs}ms`);
+  assert.ok(next.maxStallMs < 200, `the next phase was charged ${next.maxStallMs}ms`);
+});

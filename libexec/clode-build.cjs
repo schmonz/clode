@@ -40,7 +40,6 @@
 // later RUNS under that blobulated builder, the payload is materialized back to
 // disk first (subprocesses — the template-tjs worker — need real files).
 
-const crypto = require('node:crypto');
 const fs = require('node:fs');
 const http = require('node:http');
 const path = require('node:path');
@@ -73,8 +72,11 @@ const { blobulate, materializeBlobPayload } = require('./clode-blobulate.cjs');
 // cli-surface.cjs has zero imports of its own, so this costs nothing and cannot cycle.
 const { SURFACE, CHECKOUT_ONLY_VERBS } = require('./cli-surface.cjs');
 
+// A FILE's sha256 through the host's digest tool (clode-net.cjs sha256Of), never the shim's pure-JS hash: under tjs that
+// took 3.6s for the 5.4MB engine template and froze the "Signing" phase for 6.3s in every native build (found by the
+// per-phase stall gate, test/clode-native.test.cjs acceptance 2, 2026-11-26).
 function sha256File(p) {
-  return crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex');
+  return require('./clode-net.cjs').sha256Of(p);
 }
 
 // Read package.json's declared `dependencies` — the SOURCE OF TRUTH for the
@@ -1010,6 +1012,23 @@ function describeExit(r) {
 function makePhaseSpinner(stderr, active, getTotals) {
   const FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
   let iv = null, label = '', start = 0, frame = 0;
+  // HOW LONG THE LOOP WAS STALLED IN EACH PHASE, measured whether or not anything is drawn: a stall is a frozen
+  // spinner on a terminal ("Extracting bundle… (0.0s)" for minutes, NetBSD 2026-11-25), so it is measured where every
+  // build runs, tests and CI included, and lands in the build trace beside the step timings.
+  const TICK = 100;
+  const stalls = [];
+  let mon = null, last = 0, current = null;
+  const watch = () => { const now = Date.now(); const gap = now - last - TICK; if (current && gap > current.maxStallMs) current.maxStallMs = gap; last = now; };
+  const enter = (name) => {
+    if (current && current.phase === name) return;
+    // settle the OUTGOING phase first: a blocking call returns and the build moves straight to the next phase before
+    // the timer can fire, so without this the stall belongs to no phase at all (the control run, 2026-11-26: a 14s
+    // spawnSync extraction recorded 0ms)
+    if (mon) watch();
+    current = { phase: name, maxStallMs: 0 }; stalls.push(current);
+    last = Date.now();
+    if (!mon) { mon = setInterval(watch, TICK); if (mon.unref) mon.unref(); }
+  };
   const draw = () => {
     const s = ((Date.now() - start) / 1000).toFixed(1);
     const t = getTotals && getTotals();
@@ -1019,16 +1038,21 @@ function makePhaseSpinner(stderr, active, getTotals) {
   };
   return {
     phase(next) {
+      enter(next);
       if (!active) return;
       label = next; start = Date.now(); frame = 0;
       if (!iv) { iv = setInterval(draw, 100); if (iv && iv.unref) iv.unref(); }
       draw();
     },
     done() {
+      if (mon) { watch(); clearInterval(mon); mon = null; }
+      current = null;
       if (iv) { clearInterval(iv); iv = null; }
       if (active && label) stderr.write('\r\x1b[K');
       label = '';
     },
+    // [{ phase, maxStallMs }]: the longest the loop went unserviced in each phase, in order
+    stalls() { return stalls.map((s) => ({ ...s, maxStallMs: Math.max(0, Math.round(s.maxStallMs)) })); },
     // a whole line ABOVE the spinner, which then redraws under it (a bare write would be painted over)
     say(line) {
       if (active && label) { stderr.write(`\r\x1b[K${line}\n`); draw(); } else stderr.write(`${line}\n`);
@@ -2402,6 +2426,7 @@ async function clodeBuildIn(args, opts) {
     try {
       appendRun(traceLog(env), {
         steps: composer.steps(),
+        stalls: spin.stalls(),
         meta: {
           clodeVersion: version,
           bundleVersion,

@@ -285,6 +285,15 @@ test('acceptance 2: the native builder BUILDS THE PRODUCT (quaude blobulate + PO
   assert.match(r.stdout, /clode: blobulated .*quaude-from-native/);
   assert.match(r.stdout, /PONG round-trip ok, attest ok/);   // the mandatory smoke
   assert.ok(fs.statSync(QUAUDE).size > 30 * 1024 * 1024, 'blobulated quaude implausibly small');
+  // NO PHASE FREEZES THE BUILDER'S LOOP (so none freezes its spinner): the trace this build wrote records the longest
+  // stall in each phase. 2026-11-25 a NetBSD user watched "Extracting bundle… (0.0s)" for minutes, because staging
+  // ran in a spawnSync; measured 2026-11-26 after the fix, every phase of a cold build stalls under 15ms on this host.
+  // One second is the limit: far above that, far below anything a person reads as "moving".
+  const runs = require('../libexec/build-trace.cjs').readRuns(require('../libexec/clode-paths.cjs').traceLog({ HOME: DIR }));
+  const stalls = (runs[runs.length - 1] || {}).stalls || [];
+  assert.ok(stalls.some((s) => s.phase === 'Extracting bundle'), `the trace must record the phases: ${JSON.stringify(stalls)}`);
+  const frozen = stalls.filter((s) => s.maxStallMs >= 1000);
+  assert.deepStrictEqual(frozen, [], 'a phase stalled the builder\'s loop (and froze its spinner) for a second or more');
 });
 
 test('acceptance 3: quaude-from-native passes the agentic Bash mock oracle', async (t) => {

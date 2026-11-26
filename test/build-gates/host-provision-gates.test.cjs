@@ -285,3 +285,43 @@ module.exports = {
   readRealCallSites, scanKnownRequirementIds, guard1,
   readRealSha256, scanProvisionSha256, corruptedDigestControlInputs, guard2,
 };
+
+// ==========================================================================
+// GUARD — NO PURE-JS HASH IN SHIPPED BUILD CODE, outside the recorded exceptions.
+// ==========================================================================
+//
+// Under tjs, `crypto.createHash` is the node-shim's pure-JS SHA-256: 3.6s for the 5.4MB engine template, measured
+// 2026-11-26, against 3ms under node. Twice it has cost a user minutes on the builder's own loop: the fetch verify
+// ("hang writing to disk", which is why clode-net.cjs sha256Of goes through a host digest tool), and the build's own
+// sha256File, which froze the native build's "Signing" phase for 6.3s until the per-phase stall gate
+// (test/clode-native.test.cjs acceptance 2) named it. A file's hash goes through sha256Of. These may hash in JS:
+const PURE_JS_HASH_ALLOWED = {
+  'libexec/node-shim/modules/crypto.cjs': 'it IS the shim\'s createHash',
+  'libexec/bun-shim.cjs': 'Bun.CryptoHasher for the running bundle: the bundle\'s own hashing, at runtime',
+  'libexec/naude-entry.cjs': 'runs only under node (a naude), where createHash is native',
+  'libexec/clode-extract.cjs': 'three extractor sources, 177KB together (0.41ms under node, measured in its comment)',
+};
+const CREATE_HASH = /\bcreateHash\s*\(/;
+
+guardTests(defineGuard({
+  name: 'no-pure-js-file-hash',
+  floor: 40,
+  read() {
+    const files = discoverFilesByExt(LIBEXEC, ['.cjs', '.js', '.mjs']);
+    return { sources: files.map((f) => ({ rel: path.relative(REPO, f).split(path.sep).join('/'), text: stripLineComments(fs.readFileSync(f, 'utf8')) })) };
+  },
+  scan({ sources }) {
+    const findings = sources
+      .filter((s) => CREATE_HASH.test(s.text) && !PURE_JS_HASH_ALLOWED[s.rel])
+      .map((s) => `${s.rel}: calls createHash, the shim's pure-JS hash under tjs; hash a file with clode-net.cjs sha256Of, or record why this one may not`);
+    return { findings, examined: sources.length };
+  },
+  // the defect as it was: the build's sha256File
+  control: () => ({ sources: [{ rel: 'libexec/clode-build.cjs', text: "function sha256File(p) { return crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex'); }" }] }),
+}));
+
+test('no-pure-js-file-hash: every allowed file still hashes in JS (an exception nobody needs is removed)', () => {
+  for (const rel of Object.keys(PURE_JS_HASH_ALLOWED)) {
+    assert.ok(CREATE_HASH.test(stripLineComments(fs.readFileSync(path.join(REPO, rel), 'utf8'))), `${rel} no longer calls createHash: drop its entry`);
+  }
+});

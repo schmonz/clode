@@ -51,7 +51,6 @@ function resolveTarget(manifest, name) {
 
 const fs = require('node:fs');
 const path = require('node:path');
-const crypto = require('node:crypto');
 
 // Resolve a target's engine to a local executable path — pin-check, cache by
 // engine name, else fetch + sha256-verify + cache + chmod. `fetch(url)->Promise<Buffer>`
@@ -95,11 +94,9 @@ async function obtainEngine(entry, opts) {
     ? path.join(opts.cacheDir, String(opts.manifestRecipe).slice(0, 12))
     : opts.cacheDir;
   const dest = path.join(cacheDir, entry.engine);
-  const digest = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
-  const verify = (buf) => {
-    const got = digest(buf);
-    if (got !== entry.sha256) throw new TemplatesError(`engine ${entry.engine}: sha256 ${got} != manifest ${entry.sha256}`);
-  };
+  // the engine (~5MB) hashed by the host's digest tool, never the shim's pure-JS hash, which takes seconds under tjs
+  // on the builder's own loop (clode-net.cjs sha256Of; libexec/clode-build.cjs sha256File says what it cost)
+  const digestFile = (p) => (opts.sha256Of || require('./clode-net.cjs').sha256Of)(p);
   // A cache must never be able to FAIL a build — it can only make one faster.
   // Stale or corrupt cached bytes are a MISS: drop them and re-fetch. Only bytes
   // that fail verification after a FRESH download are a real error (corruption in
@@ -107,8 +104,7 @@ async function obtainEngine(entry, opts) {
   // a cache hit was verified against the current manifest and THREW, so a stale
   // cache was indistinguishable from a compromised release.
   if (fs.existsSync(dest)) {
-    const cached = fs.readFileSync(dest);
-    if (digest(cached) === entry.sha256) return dest;
+    if (digestFile(dest) === entry.sha256) return dest;
     try { fs.unlinkSync(dest); } catch { /* best effort; the re-fetch overwrites */ }
   }
 
@@ -152,9 +148,15 @@ async function obtainEngine(entry, opts) {
   } else {
     buf = raw;
   }
-  verify(buf);
   fs.mkdirSync(cacheDir, { recursive: true });
-  fs.writeFileSync(dest, buf);
+  const part = `${dest}.part`;
+  fs.writeFileSync(part, buf);
+  const got = digestFile(part);
+  if (got !== entry.sha256) {
+    try { fs.unlinkSync(part); } catch { /* best effort */ }
+    throw new TemplatesError(`engine ${entry.engine}: sha256 ${got} != manifest ${entry.sha256}`);
+  }
+  fs.renameSync(part, dest);
   fs.chmodSync(dest, 0o755);
   return dest;
 }
