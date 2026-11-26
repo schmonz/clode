@@ -1691,8 +1691,22 @@ jobs:
           bwrap --ro-bind / / --dev /dev --proc /proc --unshare-user --unshare-pid -- unshare --user --map-root-user true \
             || { echo "ERROR: native's sandbox still cannot make a nested user namespace on this runner (see above)" >&2; exit 1; }
           mkdir -p "$RUNNER_TEMP/cells"
-          PROV="$(node scripts/stage-provider.mjs)" || exit 1
-          CLODE_PROVIDER_BIN="$PROV" CLODE_CLAUDE_BIN="$PROV" \
+          # NATIVE IS THE PINNED NATIVE, never the text oracle. CLODE_NATIVE_ORACLE is the native the unicode tables
+          # were generated from, independent of UPSTREAM_PIN; the two named the same version until the 2.1.332 pin
+          # (2026-11-25), and from then this test skipped as "2.1.330, not the pinned 2.1.332" (CI 45746698364). It
+          # is the same full native the rg gates step installs (installed here if that step did not run), and as
+          # there the quaude is built from it too.
+          V=$(sed -n 's/^claude-code //p' UPSTREAM_PIN)
+          [ -n "$V" ] || { echo "ERROR: UPSTREAM_PIN names no claude-code version" >&2; exit 2; }
+          NATIVE="$RUNNER_TEMP/rg-oracle/node_modules/@anthropic-ai/claude-code-linux-x64/claude"
+          if [ -x "$NATIVE" ]; then
+            node scripts/record-provider.mjs --verify RG_ORACLE   # the rg step installed and recorded it
+          else
+            npm i --prefix "$RUNNER_TEMP/rg-oracle" @anthropic-ai/claude-code-linux-x64@"$V" 2>&1 | tail -2
+            test -x "$NATIVE" || { echo "ERROR: no native claude at $NATIVE after installing $V" >&2; exit 1; }
+            node scripts/record-provider.mjs --as RG_ORACLE "$NATIVE"
+          fi
+          CLODE_PROVIDER_BIN="$NATIVE" CLODE_CLAUDE_BIN="$NATIVE" \
             node --require ./test/file-watchdog-preload.cjs --test --test-concurrency=1 \
               --test-reporter=spec --test-reporter-destination=stdout \
               --test-reporter=./test/cell-reporter.mjs --test-reporter-destination="$RUNNER_TEMP/cells/pty-sandbox.jsonl" \
