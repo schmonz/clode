@@ -64,8 +64,10 @@ function ownsRoot(root, pid, { alive = require('./proc-tree.cjs').pidAlive, owne
   if (stamp && stamp.pid === pid && typeof stamp.started === 'number') return Math.abs(o.started - stamp.started) <= SAME_START_MS;
   let st;
   try { st = stat(root); } catch { return false; }
-  // no stamp: a birth time where the filesystem keeps one; with none, a doubt (ctime moves later, so it proves nothing)
-  return !(st.birthtimeMs > 0) || o.started <= st.birthtimeMs;
+  // no stamp: a birth time where the filesystem keeps one; with none, a doubt (ctime moves later, so it proves nothing).
+  // Two clocks, so the same tolerance as the stamp: CI windows-latest on 70469355 read a live child's CIM start a few ms
+  // AFTER the NTFS birth time of a root made right after the spawn (the fs stamps coarser than a FILETIME), and swept it.
+  return !(st.birthtimeMs > 0) || o.started <= st.birthtimeMs + SAME_START_MS;
 }
 
 // The clode-run-<pid>-* roots in `parents`, other than `self`'s: [{ path, pid, alive }], alive meaning ownsRoot.
@@ -129,7 +131,7 @@ function overlapPids(out, parents) {
   return [...pids].sort((a, b) => a - b);
 }
 
-module.exports = { ROOT_NAME, RUNNER_COMMAND, STAMP, stampRoot, readStamp, pidOwner, cachedOwner, ownsRoot, runRoots, removeStaleRoots, watchOverlap, startOverlapWatch, overlapPids };
+module.exports = { ROOT_NAME, RUNNER_COMMAND, STAMP, SAME_START_MS, stampRoot, readStamp, pidOwner, cachedOwner, ownsRoot, runRoots, removeStaleRoots, watchOverlap, startOverlapWatch, overlapPids };
 
 if (require.main === module && process.argv[2] === '--watch-overlap') {
   watchOverlap(process.argv[3], Number(process.argv[4]), process.argv.slice(5));

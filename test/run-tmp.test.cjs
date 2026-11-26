@@ -137,6 +137,9 @@ test('a stamped root is its run\'s while the pid\'s owner has the stamped start,
   assert.strictEqual(RR.ownsRoot(bare, 1, at(Date.now() + 3600000)), true, 'no stamp, no birth time: kept');
   const darwinStat = () => ({ birthtimeMs: 1000, ctimeMs: 1000 });
   assert.strictEqual(RR.ownsRoot(bare, 1, { ...at(5000), stat: darwinStat }), false, 'no stamp, born before the owner started: swept');
+  // WINDOWS'S CASE (CI windows-latest on 70469355): the owner's start reads just after the root's coarser birth time
+  assert.strictEqual(RR.ownsRoot(bare, 1, { ...at(1000 + RR.SAME_START_MS), stat: darwinStat }), true, 'no stamp, owner start within the clock tolerance of the birth: kept');
+  assert.strictEqual(RR.ownsRoot(bare, 1, { ...at(1001 + RR.SAME_START_MS), stat: darwinStat }), false, 'just past the tolerance: swept');
 });
 
 test('a pid running node test/run.mjs owns a root whatever its start time; anything else started later does not', (t) => {
