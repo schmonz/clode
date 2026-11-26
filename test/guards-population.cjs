@@ -1079,6 +1079,15 @@ function controlledProductionModules() {
 // false positive has somewhere honest to go — without it the only escape would be RAISING
 // the baseline, which the ratchet exists to forbid.
 const PRODUCTION_GATE_EXCLUSIONS = [
+  // MEASURED 2026-11-26, both halves, before writing this entry: the verdict half is the regex that reads the quaude's
+  // path out of `clode build`'s printed "run '…' to use it" and the uname/mktemp answer checks; the refuse half is
+  // die()/fail() on a harness that cannot set up (no VM, no release asset, an untracked harness). It is a developer's
+  // VM run that writes a transcript; it ships nothing and stops no build. What it JUDGES lives in
+  // scripts/lib/first-run-report.cjs, held to its controls by test/first-run-report.test.cjs.
+  { file: 'scripts/first-run.mjs',
+    because: 'the first-run VM harness: its matches read the build\'s own printed output and refuse a harness that '
+      + 'cannot start; it gates no build, and its judge (scripts/lib/first-run-report.cjs) is controlled by '
+      + 'test/first-run-report.test.cjs' },
   // MEASURED 2026-09-13 (phase 3a task 5), both halves, before writing this entry:
   //   verdict half — the ONLY match in the whole file is PATTERN_MATCHES' `.includes('`,
   //     and it is inside a COMMENT quoting the shape this module replaced:

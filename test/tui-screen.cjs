@@ -157,6 +157,18 @@ function parseArgs(argv) {
     const at = argv.indexOf('--cells');
     if (at !== -1 && (cut === -1 || at < cut)) { cells = true; argv = argv.slice(0, at).concat(argv.slice(at + 1)); }
   }
+  // --chunk-log FILE: every chunk the child writes, one JSON line each ({ms since spawn, text}), so a first-run
+  // transcript can measure silent gaps and a spinner that stopped moving (scripts/first-run.mjs reads it).
+  let chunkLog = null;
+  {
+    const cut = argv.indexOf('--');
+    const at = argv.indexOf('--chunk-log');
+    if (at !== -1 && (cut === -1 || at < cut)) {
+      chunkLog = argv[at + 1];
+      if (!chunkLog || chunkLog.startsWith('--')) throw new Error('--chunk-log needs a file');
+      argv = argv.slice(0, at).concat(argv.slice(at + 2));
+    }
+  }
   const LIMITS = { '--settle-ms': 'settleMs', '--max-settle-ms': 'maxSettleMs', '--boot-settle-ms': 'bootSettleMs', '--boot-max-ms': 'bootMaxMs' };
   const FLAGS = ['--send-hex', '--then-hex', '--signal', '--rows', '--cols', '--resize', '--script', ...Object.keys(LIMITS)];
   while (argv.length >= 2 && FLAGS.includes(argv[1])) {
@@ -202,7 +214,7 @@ function parseArgs(argv) {
   // A script's output is a sequence of CELL frames: there is no text form of it. SECONDS is
   // not consulted with --script; every wait is bounded by the settle caps instead.
   if (script !== null) cells = true;
-  return { secs: parseFloat(argv[0]), cmd: argv.slice(2), sends, resizes, signals, rows, cols, cells, script, ...limits };
+  return { secs: parseFloat(argv[0]), cmd: argv.slice(2), sends, resizes, signals, rows, cols, cells, script, chunkLog, ...limits };
 }
 
 // Cell-level frame capture. The text screen above answers "what words are on
@@ -280,8 +292,10 @@ async function main() {
   // settle rule needs. Replies to its probes are OUR writes, not its output.
   const state = { lastOut: -Infinity, exited: false, exit: null, current: 'boot' };
   let seen = ''; const answered = new Set();
+  const chunkFd = opts.chunkLog ? fs.openSync(opts.chunkLog, 'w') : null;
   child.onData((d) => {
     state.lastOut = Date.now();
+    if (chunkFd !== null) fs.writeSync(chunkFd, `${JSON.stringify({ ms: state.lastOut - spawnedAt, text: d })}\n`);
     term.write(d); seen += d;
     for (const [needle, key, resp] of EXTRA_PROBES) {
       if (seen.includes(needle) && !answered.has(key)) { answered.add(key); try { child.write(resp); } catch { /* */ } }
@@ -292,6 +306,7 @@ async function main() {
   child.onExit((e) => {
     exited = true; state.exited = true;
     state.exit = { during: state.current, code: e ? e.exitCode : null, signal: (e && e.signal) || null };
+    if (chunkFd !== null) fs.writeSync(chunkFd, `${JSON.stringify({ ms: Date.now() - spawnedAt, exit: { code: state.exit.code, signal: state.exit.signal } })}\n`);
   });
 
   if (steps) {

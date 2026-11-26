@@ -83,6 +83,10 @@ async function main(argv, opts = {}) {
     return process.exit(require('./clode-build.cjs').runStageRequest(reqPath));
   }
 
+  // Every line clode prints to a terminal fits it (term-wrap.cjs says why it is done here, once). A pipe is untouched.
+  require('./term-wrap.cjs').installTermWrap(process.stderr);
+  require('./term-wrap.cjs').installTermWrap(process.stdout);
+
   // 1. Match argv against the surface THIS entry point has. Everything below reads
   //    `cmd` — no branch here compares args[0] to a string, which is the whole point
   //    of the table.

@@ -94,3 +94,15 @@ test('stalls(): a block that ends with the phase changing is charged to the phas
   assert.ok(blocked.maxStallMs >= 400, `the block was charged ${blocked.maxStallMs}ms`);
   assert.ok(next.maxStallMs < 200, `the next phase was charged ${next.maxStallMs}ms`);
 });
+
+test('above(): text written during a phase lands above the spinner, never glued onto its line', () => {
+  const err = fakeStream(true);
+  const spin = makePhaseSpinner(err, true);
+  spin.phase('Extracting bundle');
+  spin.above('clode: build: upstream carves no netbsd provider\n');
+  spin.done();
+  const t = err.text();
+  // the note starts on a cleared line, and the spinner is redrawn after it
+  assert.match(t, /\r\x1b\[Kclode: build: upstream carves no netbsd provider\n\r⠙ Extracting bundle… \(/);
+  assert.doesNotMatch(t, /\)\s*clode: build/, 'no note on the spinner\'s own line');
+});

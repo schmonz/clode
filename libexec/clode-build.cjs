@@ -1054,8 +1054,13 @@ function makePhaseSpinner(stderr, active, getTotals) {
     // [{ phase, maxStallMs }]: the longest the loop went unserviced in each phase, in order
     stalls() { return stalls.map((s) => ({ ...s, maxStallMs: Math.max(0, Math.round(s.maxStallMs)) })); },
     // a whole line ABOVE the spinner, which then redraws under it (a bare write would be painted over)
-    say(line) {
-      if (active && label) { stderr.write(`\r\x1b[K${line}\n`); draw(); } else stderr.write(`${line}\n`);
+    say(line) { this.above(`${line}\n`); },
+    // any text, written above the spinner: its line is cleared first, and it is redrawn once a whole line is out
+    above(text) {
+      if (!(active && label)) return stderr.write(text);
+      stderr.write(`\r\x1b[K${text}`);
+      if (text.endsWith('\n')) draw();
+      return true;
     },
   };
 }
@@ -1384,7 +1389,13 @@ async function clodeBuild(args, opts) {
 async function clodeBuildIn(args, opts) {
   const { here, version } = opts;
   const env = opts.env || process.env;
-  const stderr = opts.stderr || process.stderr;
+  // THE BUILD'S STDERR IS THE SPINNER'S: every line this build writes goes ABOVE a live spinner (spin.above), never
+  // onto its line. A bare write glued itself to the spinner: "⠏ Extracting bundle… (292.7s)clode: build: upstream
+  // carves no netbsd provider…", one 268-column line (scripts/first-run.mjs on NetBSD, 2026-11-26), and there were 18
+  // such writes. Only the spinner itself holds the raw stream.
+  const rawStderr = opts.stderr || process.stderr;
+  let spin = null;
+  const stderr = { write: (s) => (spin ? spin.above(String(s)) : rawStderr.write(s)) };
   const stdout = opts.stdout || process.stdout;
   // The one spawn seam every build step goes through (the blobulate worker, the
   // smokes, and the naude build). Injectable so the naude wiring (and any
@@ -1408,7 +1419,7 @@ async function clodeBuildIn(args, opts) {
   // data source is composer.totals(): once ANY step (builder or worker) has
   // declared a real total, the spinner shows real counts, not a fake percentage
   // for whatever label happens to be on screen.
-  const spin = makePhaseSpinner(stderr, !!stderr.isTTY && !verbose, () => composer.totals());
+  spin = makePhaseSpinner(rawStderr, !!rawStderr.isTTY && !verbose, () => composer.totals());
   // a failure after staging an upstream newer than this clode was released with repeats that, beside the failure
   let skewHint = null;
   const fail = (m) => {
