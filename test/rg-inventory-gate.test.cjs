@@ -135,8 +135,12 @@ test('shim: a refused rg call prints the same parseable rg-debug shape', () => {
   // PATH key is dropped case-insensitively because Windows spells it `Path`, and
   // handing the child both spellings would leave which() reading whichever one
   // won — an instrument that depends on the platform it is measuring.
+  // No PATH at all is NOT "no applets": with PATH unset, libuv (so node's spawn) searches /usr/bin:/bin,
+  // and the one PATH search (libexec/path-lookup.cjs) does the same, so an ubuntu runner's /usr/bin/ugrep
+  // answered (CI on 1d4c3c98). An empty directory as the whole PATH is the honest "nothing installed".
   const env = Object.fromEntries(
     Object.entries(process.env).filter(([k]) => !/^path$/i.test(k) && !/^CLODE_(UGREP|BFS)$/.test(k)));
+  env.PATH = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-no-applets-'));
   env.CLODE_RG_DEBUG = '1';
   const r = cp.spawnSync(process.execPath, ['-e', src], { encoding: 'utf8', env });
   assert.match(r.stderr, /^clode rg-debug: rg -n x \/tmp\/x !! needs ugrep$/m);

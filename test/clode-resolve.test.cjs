@@ -168,7 +168,9 @@ test('5e. when both claude and claude.exe exist, claude wins', () => {
 test('6. claude on PATH last', () => {
   const dir = tmpdir();
   const pathdir = path.join(dir, 'pathdir');
-  const claude = writeExec(path.join(pathdir, 'claude'), '#!/bin/sh\necho hi\n');
+  // Windows runs only a name with an executable extension: npm's Windows install puts claude.cmd beside the
+  // extensionless sh shim, and the .cmd is what a lookup must find there (CI windows-latest on 1d4c3c98).
+  const claude = writeExec(path.join(pathdir, process.platform === 'win32' ? 'claude.cmd' : 'claude'), '#!/bin/sh\necho hi\n');
   const env = { HOME: path.join(dir, 'nohome'), PATH: pathdir };
   assert.strictEqual(resolveClaudeBin({ env }), claude);
 });
