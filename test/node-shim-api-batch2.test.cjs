@@ -87,18 +87,19 @@ console.log(JSON.stringify(keys.map(k => [k, z[k]])));
 `);
 });
 
-// getHashes is a DELIBERATE divergence: the shim implements only sha256 and
-// reports exactly that (so feature-detection never selects an algorithm we'd
-// throw on), whereas host node lists ~50. Assert the honest shape, not equality.
-test('crypto.getHashes reports the honest supported set (sha256 only)', (t) => {
+// getHashes is a DELIBERATE divergence: the shim reports exactly the names it hashes (md5, the sha1/sha2/sha3
+// families and node's aliases for them, through tjs:hashing), so feature-detection never selects an algorithm we'd
+// throw on, whereas host node also lists ripemd, blake2, sm3, shake and more. Assert every name is one host node
+// lists (test/node-shim-crypto.test.cjs holds each one's digest to node's), not equality.
+test('crypto.getHashes reports the honest supported set (a subset of host node\'s)', (t) => {
   if (skipUnlessTjs(t)) return;
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-gh-'));
   const f = path.join(dir, 'p.cjs');
   fs.writeFileSync(f, `console.log(JSON.stringify(require('node:crypto').getHashes()));`);
   const r = runLoader(f);
   assert.strictEqual(r.status, 0, r.stderr);
-  assert.strictEqual(r.stdout.trim(), JSON.stringify(['sha256']));
-  // Host node must at least contain sha256 (sanity that the name is canonical).
-  const hostHashes = require('node:crypto').getHashes();
-  assert.ok(hostHashes.includes('sha256'));
+  const shim = JSON.parse(r.stdout.trim());
+  for (const a of ['md5', 'sha1', 'sha256', 'sha512', 'sha3-256']) assert.ok(shim.includes(a), a);
+  const host = new Set(require('node:crypto').getHashes().map((n) => n.toLowerCase()));
+  assert.deepStrictEqual(shim.filter((n) => !host.has(n.toLowerCase())), [], 'every shim name is one host node lists');
 });

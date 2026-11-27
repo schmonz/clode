@@ -72,9 +72,9 @@ const { blobulate, materializeBlobPayload } = require('./clode-blobulate.cjs');
 // cli-surface.cjs has zero imports of its own, so this costs nothing and cannot cycle.
 const { SURFACE, CHECKOUT_ONLY_VERBS } = require('./cli-surface.cjs');
 
-// A FILE's sha256 through the host's digest tool (clode-net.cjs sha256Of), never the shim's pure-JS hash: under tjs that
-// took 3.6s for the 5.4MB engine template and froze the "Signing" phase for 6.3s in every native build (found by the
-// per-phase stall gate, test/clode-native.test.cjs acceptance 2, 2026-11-26).
+// A FILE's sha256 through clode-net.cjs sha256Of, which streams it into the engine's native hash. The shim's old
+// pure-JS hash took 3.6s for the 5.4MB engine template under tjs and froze the "Signing" phase for 6.3s in every
+// native build (found by the per-phase stall gate, test/clode-native.test.cjs acceptance 2, 2026-11-26).
 function sha256File(p) {
   return require('./clode-net.cjs').sha256Of(p);
 }

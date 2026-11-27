@@ -33,7 +33,7 @@ test('findTool returns the override when it is executable', () => {
 // probes a bare `rg`, so the POSIX form cannot match; skip it there and cover the
 // same behavior with the win32 real-FS twins immediately below (write `rg.exe`, expect
 // PATHEXT resolution). Real Windows findTool coverage also comes from the
-// `provision resolves a real sha256/tar tool` integration tests in host-provision.
+// `provision resolves a real tar/gzip/unzip` integration tests in host-provision.
 test('findTool ignores a non-executable override and walks PATH',
   { skip: process.platform === 'win32' }, () => {
   const dir = tmpdir();
@@ -83,9 +83,9 @@ test('findTool returns null when nothing is found', () => {
 });
 
 // --- findTool: Windows resolves bare tool names via PATHEXT -----------------
-// On Windows the host tools are certutil.exe / tar.exe; a bare-name PATH walk
-// (the POSIX `command -v` behavior) finds nothing, so provision('sha256'|'tar')
-// wrongly reports "no tool found" even though certutil/tar ship with Windows.
+// On Windows host tools are .exe files (certutil.exe, tar.exe); a bare-name PATH walk
+// (the POSIX `command -v` behavior) finds nothing, so provision('tar')
+// wrongly reported "no tool found" even though tar ships with Windows.
 // Host-independent: inject isWin + isExec, match on basename (path.join's
 // separator differs by host).
 test('findTool probes PATHEXT for a bare name on win32 (certutil -> certutil.EXE)', () => {

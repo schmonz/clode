@@ -160,3 +160,51 @@ test('crypto Hash.copy() forks the running state exactly as node does', (t) => {
   assert.strictEqual(r.status, 0, r.stderr);
   assert.strictEqual(r.stdout.trim(), nodeOut);
 });
+
+// Every algorithm, natively. createHash/createHmac go through txiki's tjs:hashing (internal/hash.cjs), never a hash
+// written in JS: md5, sha1, sha512 and sha3-256 (HMAC block sizes 64, 64, 128 and 136) over strings, a Buffer, a
+// subarray, several updates, an empty input, a key longer than the block and a copy(); every getHashes() name, alias
+// included, must be one host node lists and hash exactly as node does; and an unknown algorithm is refused with
+// node's own error for each of createHash and createHmac.
+const ALGS_PROG = `
+const crypto = require('node:crypto');
+const out = [];
+const big = Buffer.alloc(70000); for (let i = 0; i < big.length; i++) big[i] = (i * 7 + 3) & 0xff;
+for (const alg of ['md5', 'sha1', 'sha512', 'sha3-256', 'SHA3-256']) {
+  out.push(alg,
+    crypto.createHash(alg).digest('hex'),
+    crypto.createHash(alg).update('cl').update(Buffer.from('ode')).digest('base64'),
+    crypto.createHash(alg).update(big.subarray(5, 69000)).digest('hex'),
+    crypto.createHmac(alg, 'key').update('clode').digest('hex'),
+    crypto.createHmac(alg, 'k'.repeat(300)).update(big).digest('hex'),
+    crypto.createHmac(alg, '').digest('hex'));
+  const h = crypto.createHash(alg).update('prefix');
+  out.push(h.copy().update('a').digest('hex'), h.update('b').digest('hex'));
+}
+const names = process.env.SHIM_HASHES ? JSON.parse(process.env.SHIM_HASHES) : crypto.getHashes();
+for (const name of names) out.push(name, crypto.createHash(name).update('clode').digest('hex'), crypto.createHmac(name, 'k').update('x').digest('hex'));
+const err = (f) => { try { f(); return 'no-throw'; } catch (e) { return [e.constructor.name, String(e.code), e.message].join(' '); } };
+out.push(err(() => crypto.createHash('nope')), err(() => crypto.createHmac('nope', 'k')));
+console.log(JSON.stringify(out));
+`;
+
+test('crypto createHash/createHmac for md5, sha1, sha512, sha3-256 and every getHashes() name match host node', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-crypto-algs-'));
+  const f = path.join(dir, 'prog.cjs');
+  fs.writeFileSync(f, ALGS_PROG);
+  // The getHashes() rows run under node with the SHIM's list, so each name is one node accepts and digests alike.
+  const names = path.join(dir, 'names.cjs');
+  fs.writeFileSync(names, "console.log(JSON.stringify(require('node:crypto').getHashes()));\n");
+  const n = runLoader(names);
+  assert.strictEqual(n.status, 0, n.stderr);
+  const shimHashes = n.stdout.trim();
+  assert.ok(JSON.parse(shimHashes).includes('sha3-512'), shimHashes);
+  const env = { SHIM_HASHES: shimHashes };
+  const r = runLoader(f, [], { env });
+  assert.strictEqual(r.status, 0, r.stderr);
+  const nodeOut = require('node:child_process')
+    .execFileSync(process.execPath, [f], { encoding: 'utf8', env: { ...process.env, ...env } }).trim();
+  assert.match(nodeOut, /Error undefined Digest method not supported/, 'the host node oracle answered as expected');
+  assert.strictEqual(r.stdout.trim(), nodeOut);
+});

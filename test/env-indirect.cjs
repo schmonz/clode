@@ -87,11 +87,12 @@ const INDIRECT_SITES = [
   },
   {
     file: 'libexec/host-provision.cjs',
-    reaches: ['CLODE_SHA256', 'CLODE_TAR', 'CLODE_GZIP', 'CLODE_UNZIP', 'CLODE_ZSTD'],
+    reaches: ['CLODE_TAR', 'CLODE_GZIP', 'CLODE_UNZIP', 'CLODE_ZSTD'],
     because: 'candidateList()/provision() read `env[req.overrideEnv]`, where req is a REGISTRY '
       + "row and `overrideEnv` is that host tool's override variable. THE ORIGINAL BLIND SPOT: "
-      + 'four of these five had no verdict at all, and the fifth (CLODE_ZSTD) only had one '
-      + 'because libexec/bun-graph.cjs happens to read it directly as well.',
+      + 'four of the five it then reached had no verdict at all, and the fifth (CLODE_ZSTD) only had '
+      + 'one because libexec/bun-graph.cjs happens to read it directly as well. (The fifth-but-one, '
+      + 'CLODE_SHA256, left the registry when file hashes went native; only bootstrap-engine.sh reads it now.)',
   },
   {
     file: 'scripts/record-provider.mjs',

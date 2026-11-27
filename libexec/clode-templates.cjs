@@ -94,8 +94,8 @@ async function obtainEngine(entry, opts) {
     ? path.join(opts.cacheDir, String(opts.manifestRecipe).slice(0, 12))
     : opts.cacheDir;
   const dest = path.join(cacheDir, entry.engine);
-  // the engine (~5MB) hashed by the host's digest tool, never the shim's pure-JS hash, which takes seconds under tjs
-  // on the builder's own loop (clode-net.cjs sha256Of; libexec/clode-build.cjs sha256File says what it cost)
+  // the engine (~5MB) streamed into the native hash (clode-net.cjs sha256Of; libexec/clode-build.cjs sha256File
+  // says what the shim's old pure-JS hash cost)
   const digestFile = (p) => (opts.sha256Of || require('./clode-net.cjs').sha256Of)(p);
   // A cache must never be able to FAIL a build — it can only make one faster.
   // Stale or corrupt cached bytes are a MISS: drop them and re-fetch. Only bytes

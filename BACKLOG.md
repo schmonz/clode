@@ -22,12 +22,13 @@ clean HOME), from the v0.20261125.1 `clode-...-macos` asset, in a throwaway HOME
    TO DO: choose between an x86_64 slice that loads on 10.4 (a 10.4 floor link, if Tiger's 64-bit libSystem is
    enough) and keeping 10.4/10.5 Intel off x86_64 some other way; whichever it is, a gate that reads every
    slice's load commands against the asset's stated floor.
-2. **Tiger has no SHA-256 tool, so `clode fetch claude` refuses to download.** None of host-provision's list exists or
-   works: no sha256sum/shasum, `cksum` has no `-a`, openssl 0.9.7 has no `-sha256`, perl 5.8.6 has no
-   Digest::SHA, python 2.3 has no hashlib. A scratch sha256sum compiled with Tiger's gcc got past it (366 MB in
-   50 s). TO DO, proposed: the engine already links mbedtls, so a native streaming SHA-256 binding would make the
-   verify work on every platform with no host tool at all (and retire the sha256 zoo, certutil included). Engine
-   change, so the user decides.
+2. **Tiger has no SHA-256 tool, so `clode fetch claude` refused to download.** None of host-provision's list
+   existed or worked: no sha256sum/shasum, `cksum` has no `-a`, openssl 0.9.7 has no `-sha256`, perl 5.8.6 has no
+   Digest::SHA, python 2.3 has no hashlib. FIXED with no engine patch: the engine already shipped txiki's
+   `tjs:hashing` (mbedtls), unused. clode-net.cjs's sha256Of now streams the file into it under tjs (node:crypto
+   under node), node:crypto's createHash/createHmac in the shim use it for every algorithm, and the host sha256
+   tool list (CLODE_SHA256 in the JS, certutil included) and the shim's pure-JS SHA-256 are gone. Not yet run on
+   Tiger: needs the next darwin-x86 build.
 3. **`clode build` stops at "codesign of the embedded template failed:" (empty reason).** Tiger has no codesign
    and needs none; codesignAdHoc already treats an absent codesign as success, keyed on `error.code === 'ENOENT'`.
    It never saw one: the engine's pre-10.5 fork/exec `__tjs_spawn_sync` reported a failed execve as a child that
@@ -37,10 +38,10 @@ clean HOME), from the v0.20261125.1 `clode-...-macos` asset, in a throwaway HOME
 
 The class behind 3: code compiled only into no-exec legs (darwin-x86 and darwin-ppc never execute in CI) is never
 run by anything. The Tiger VMs are now the oracle for it. TO DO: a scripted Tiger smoke (engine spawn, ENOENT,
-sha256, `clode --version`) the user's VMs can run on demand.
+tjs:hashing, `clode --version`) the user's VMs can run on demand.
 
 Also from this session, user's idea: a subcommand that checks every external tool and reports what is missing,
-for clode (sha256, tar, codesign or none, lipo) and for quaude (security, a shell by name, git, rg, and the rest).
+for clode (tar, codesign or none, lipo) and for quaude (security, a shell by name, git, rg, and the rest).
 
 Measured: each wall above, on the Intel Tiger VM (2026-11-26). Not measured: the PowerPC Tiger VM (no ssh forward
 from Ptolemy yet), and whether a quaude built there keeps a login. The lead for "login wouldn't stick": upstream
@@ -5209,7 +5210,7 @@ reproducible from a tree they hold.
    download for the same content — and THIS one is a real, unexploited gap: `clode-update.cjs`
    mentions zst exactly zero times. It would pay on slow links and on every CI leg that pulls a
    provider. The cost is a zstd decompressor on the host, which is the host-applet pattern
-   again (see `provision('sha256')` in the same file for the shape) plus a fallback to the
+   again (see `provision('gzip')` in clode-net.cjs for the shape) plus a fallback to the
    plain binary when none is available — so it is additive, not a rewrite.
 
 **Also worth reading properly: `extractFromBunfs.js`.** It is upstream's own supported way to

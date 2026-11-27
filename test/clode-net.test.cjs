@@ -2,7 +2,7 @@
 // Unit tests for libexec/clode-net.cjs — the JS port of bin/clode's
 // download_file (bin/clode:100) and sha256_of (bin/clode:93). The sh helpers
 // shell out to curl/wget and sha256sum/shasum; the JS port drops those deps in
-// favour of Node's built-in fetch + fs + crypto. Covers file:// thoroughly
+// favour of the built-in fetch + fs and a native in-process hash. Covers file:// thoroughly
 // (string + dest modes, binary-safety, missing-file error path) plus a localhost
 // http server fixture; live https is not exercised offline.
 const { test } = require('node:test');
@@ -17,26 +17,22 @@ const { pathToFileURL } = require('node:url');
 const zlib = require('node:zlib');
 const { downloadFile, sha256Of, gunzipBuffer } = require('../libexec/clode-net.cjs');
 
+// provision('gzip') caches the chosen host tool to clodeDataDir/hosttools.json, which by default is the REAL
+// ~/.local/share/clode the suite's hermetic guard watches. Pin that cache to a throwaway dir.
+const GZ_DATADIR = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-net-gz-'));
+
 function tmpdir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'clode-net-'));
 }
 
-// provision('sha256') caches the chosen host tool to clodeDataDir/hosttools.json.
-// Left to default env that resolves to the REAL ~/.local/share/clode, which the
-// suite's hermetic guard watches — a write there fails the whole run on a clean
-// box (it's masked on a dev box where the store already exists). Pin the cache to
-// a throwaway dir so the real store is never touched.
-const SHA_DATADIR = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-net-sha-'));
-const sha = (f) => sha256Of(f, { dataDir: SHA_DATADIR });
-
-// --- sha256Of: real host tool (integration) --------------------------------
+// --- sha256Of: native, in-process (node:crypto here; tjs:hashing under tjs, see node-shim-toolchain) ---
 
 test('sha256Of matches the known digest of "hello"', () => {
   const dir = tmpdir();
   const f = path.join(dir, 'hello.txt');
   fs.writeFileSync(f, 'hello'); // no trailing newline
   assert.strictEqual(
-    sha(f),
+    sha256Of(f),
     '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824'
   );
 });
@@ -47,8 +43,26 @@ test('sha256Of matches crypto over binary bytes (0x00-0xff), lowercase hex', () 
   const buf = Buffer.from(Array.from({ length: 256 }, (_, i) => i));
   fs.writeFileSync(f, buf);
   const expected = crypto.createHash('sha256').update(buf).digest('hex');
-  assert.strictEqual(sha(f), expected);
-  assert.match(sha(f), /^[0-9a-f]{64}$/);
+  assert.strictEqual(sha256Of(f), expected);
+  assert.match(sha256Of(f), /^[0-9a-f]{64}$/);
+});
+
+// The file is hashed in 4MB chunks: an empty file, one exactly a chunk long and one spanning a chunk boundary must
+// each digest exactly as a single in-memory hash of the same bytes.
+test('sha256Of streams across its chunk boundary and handles an empty file', () => {
+  const dir = tmpdir();
+  const CHUNK = 4 * 1024 * 1024;
+  for (const n of [0, CHUNK, CHUNK + 3]) {
+    const f = path.join(dir, `f${n}.bin`);
+    const buf = Buffer.alloc(n);
+    for (let i = 0; i < n; i++) buf[i] = (i * 31 + 7) & 0xff;
+    fs.writeFileSync(f, buf);
+    assert.strictEqual(sha256Of(f), crypto.createHash('sha256').update(buf).digest('hex'), `${n} bytes`);
+  }
+});
+
+test('sha256Of fails loud on a missing file', () => {
+  assert.throws(() => sha256Of(path.join(tmpdir(), 'absent')), /ENOENT/);
 });
 
 // --- downloadFile: file:// -------------------------------------------------
@@ -72,7 +86,7 @@ test('downloadFile(file://) dest mode writes identical bytes (binary-safe)', asy
   const got = fs.readFileSync(dst);
   assert.ok(buf.equals(got), 'dest bytes must equal source bytes');
   // sha256 of copy must equal sha256 of source (the update flow's check)
-  assert.strictEqual(sha(dst), sha(src));
+  assert.strictEqual(sha256Of(dst), sha256Of(src));
 });
 
 test('downloadFile(file://) missing file rejects (caller error path)', async () => {
@@ -179,12 +193,12 @@ test('downloadFile(http://) streams to dest with incremental progress', async ()
 test('gunzipBuffer inflates gzip bytes (binary-exact)', async () => {
   const original = crypto.randomBytes(200000); // non-text, spans a real engine-ish size
   const gz = zlib.gzipSync(original);
-  const out = await gunzipBuffer(gz, { dataDir: SHA_DATADIR }); // pin provision's cache (hermetic)
+  const out = await gunzipBuffer(gz, { dataDir: GZ_DATADIR }); // pin provision's cache (hermetic)
   assert.ok(Buffer.isBuffer(out), 'returns a Buffer');
   assert.strictEqual(Buffer.compare(out, original), 0, 'inflated bytes are byte-identical');
 });
 
 test('gunzipBuffer roundtrips a small known string', async () => {
-  const out = await gunzipBuffer(zlib.gzipSync(Buffer.from('clode')), { dataDir: SHA_DATADIR });
+  const out = await gunzipBuffer(zlib.gzipSync(Buffer.from('clode')), { dataDir: GZ_DATADIR });
   assert.strictEqual(out.toString(), 'clode');
 });

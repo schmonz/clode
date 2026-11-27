@@ -23,7 +23,7 @@
 // DIVERGENCE, by name: a malformed certificate inside a PEM block is refused with OpenSSL's ASN.1 error for the
 // first fault this reader meets ("header too long", "too long", "wrong tag"); OpenSSL's decoder walks the template
 // in its own order, so a certificate with SEVERAL faults may be named by a different one of them.
-const { sha256 } = require('./sha256.cjs');
+const { digestChunks } = require('./hash.cjs');
 const { invalidArgType } = require('./node-errors.cjs');
 
 const CERT_LABELS = ['CERTIFICATE', 'X509 CERTIFICATE', 'TRUSTED CERTIFICATE'];
@@ -178,7 +178,7 @@ class X509Certificate {
     const s = hexUpper(this[kCert].serial).replace(/^(00)+/, '');
     return s === '' ? '0' : s;   // BN_bn2hex: a zero serial is "0"
   }
-  get fingerprint256() { return hexUpper(sha256(this[kCert].raw)).replace(/(..)(?!$)/g, '$1:'); }
+  get fingerprint256() { return hexUpper(digestChunks('sha256', [this[kCert].raw])).replace(/(..)(?!$)/g, '$1:'); }
   get validFrom() { return opensslTime(this[kCert].notBefore); }
   get validTo() { return opensslTime(this[kCert].notAfter); }
   get validFromDate() { return new Date(this[kCert].notBefore.getTime()); }

@@ -1116,18 +1116,33 @@ globalThis.addEventListener('beforeunload', () => {
   if (typeof code === 'number' && code !== 0) { try { tjs.exit(code); } catch { /* fall through to natural exit */ } }
 });
 
-try {
-  // graph.qbc is the code-split shape (2.1.243+) and needs its index; any other .qbc
-  // is the single-module CJS entry. Dispatch on the member NAME, not a version, so the
-  // artifact itself says which shape it is.
-  if (entryAbs.endsWith('/graph.qbc')) evalBytecodeGraph(entryAbs.replace(/\.qbc$/, '.idx'), entryAbs);
-  else if (entryAbs.endsWith('.qbc')) evalBytecodeEntry(entryAbs);
-  else evalModule(entryAbs, true);
-} catch (e) {
-  // QuickJS's Error#stack is the call-frame trace ONLY — it does not, unlike
-  // V8, prepend "Error: <message>" as its first line — so print the message
-  // and stack separately or the failure text is silently lost (verified
-  // empirically: see loader header note).
-  console.error(e && e.stack ? `${e}\n${e.stack}` : String(e));
-  tjs.exit(1);
+function runEntry() {
+  try {
+    // graph.qbc is the code-split shape (2.1.243+) and needs its index; any other .qbc
+    // is the single-module CJS entry. Dispatch on the member NAME, not a version, so the
+    // artifact itself says which shape it is.
+    if (entryAbs.endsWith('/graph.qbc')) evalBytecodeGraph(entryAbs.replace(/\.qbc$/, '.idx'), entryAbs);
+    else if (entryAbs.endsWith('.qbc')) evalBytecodeEntry(entryAbs);
+    else evalModule(entryAbs, true);
+  } catch (e) {
+    // QuickJS's Error#stack is the call-frame trace ONLY — it does not, unlike
+    // V8, prepend "Error: <message>" as its first line — so print the message
+    // and stack separately or the failure text is silently lost (verified
+    // empirically: see loader header note).
+    console.error(e && e.stack ? `${e}\n${e.stack}` : String(e));
+    tjs.exit(1);
+  }
+}
+
+// tjs:hashing (txiki's native digests) backs node:crypto's createHash/createHmac and clode-net.cjs's file hash
+// (internal/hash.cjs). It is an ES module and CJS code cannot import it synchronously, so it is loaded here,
+// before the entry runs; quaude-bootstrap.mjs has already done so for a blobulated binary. An engine without it
+// still runs the entry, and hashing then fails loud on first use.
+if (globalThis.__clodeTjsHashing === undefined) {
+  import('tjs:hashing').then(
+    (m) => { globalThis.__clodeTjsHashing = m; runEntry(); },
+    () => { globalThis.__clodeTjsHashing = null; runEntry(); },
+  );
+} else {
+  runEntry();
 }

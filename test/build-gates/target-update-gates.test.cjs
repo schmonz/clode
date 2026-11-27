@@ -167,7 +167,7 @@ function scanResolveLatestOutcome({ outcome }) {
 // Measured 2026-09-12: this guard checks exactly one real call through resolveLatest's
 // throw-guarded (network) branch per run, so `examined` is always 1 on a clean call —
 // there is no analogous "which ids get checked" corpus the way host-provision's REGISTRY
-// gives its call-site scan a real range (see host-provision-gates.test.cjs GUARD 2's own
+// gives its call-site scan a real range (see the former host-provision-gates.test.cjs GUARD 2's
 // identical disclosure for the precedent). Disclosed honestly rather than padded, per
 // decision #2: the floor-fire demonstration below exercises `examined: 0` directly
 // through the same production-calling `scanResolveLatestOutcome`, since a real call can
@@ -197,7 +197,7 @@ test('consequence: checkUpdate() reports "unknown", never "newer 5.0.0", for the
 });
 
 test('floor fires: target-update-resolvelatest-http-failure goes BROKEN below its floor', () => {
-  // Same shape as host-provision-gates.test.cjs GUARD 2's floor-probe: a single real call
+  // Same shape as the former host-provision-gates.test.cjs GUARD 2's floor-probe: a single real call
   // can never itself produce examined < 1, so this proves checkGate()'s floor wiring for
   // THIS guard's exact floor value via a stand-in scan, not a re-derivation of
   // scanResolveLatestOutcome's own logic.

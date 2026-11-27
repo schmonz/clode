@@ -397,8 +397,24 @@ test('FLOOR: every registered build-gates guard names a production module the cl
   assert.ok(guards.length > 0,
     'no registered guard found under test/build-gates/ — the walk or isMigratedSource broke, '
     + 'NOT "phase 5b controlled nothing"');
+  // A guard whose module is a real gate the classifier cannot read, each with the measured reason.
+  // Every entry must still be true: one whose module turns gate-shaped again goes red below.
+  const NOT_GATE_SHAPED_BY_EQUALITY = {
+    // 2026-11-27: host-provision.cjs's KATs judge a host tool's output by byte equality (`===`) and
+    // refuse (`throw new Error(`); its one pattern-match, parseSha256, went with the sha256
+    // requirement when file hashes went native. The guard file also holds no-hand-written-hash,
+    // which reads libexec's text and names no module.
+    'test/build-gates/host-provision-gates.test.cjs': ['libexec/host-provision.cjs'],
+  };
+  for (const [guardRel, mods] of Object.entries(NOT_GATE_SHAPED_BY_EQUALITY)) {
+    for (const rel of mods) {
+      assert.strictEqual(classifyProductionFile(fs.readFileSync(path.join(TEST_DIR, '..', rel), 'utf8')).gateShaped,
+        false, `${rel} is gate-shaped again: drop ${guardRel} from NOT_GATE_SHAPED_BY_EQUALITY`);
+    }
+  }
   const blind = [];
   for (const guardRel of guards) {
+    if (NOT_GATE_SHAPED_BY_EQUALITY[guardRel]) continue;
     const src = fs.readFileSync(path.join(TEST_DIR, '..', guardRel), 'utf8');
     const named = modulesNamedByGuard(guardRel, src);
     const gates = named.filter((rel) => classifyProductionFile(
@@ -689,10 +705,17 @@ test('the controlled set is EXACTLY the modules a guard was deliberately written
   // line, so uncontrolled stayed at 27 (measured: 49 gate-shaped, 20 controlled); without that
   // guard it reads 28. Its answers are judged by test/fidelity/rg-differential.test.cjs's Bash-route
   // column. The baseline did not move.
+  //
+  // libexec/host-provision.cjs REMOVED 2026-11-27, the tree moving and not the classifier: the
+  // sha256 requirement left the registry when file hashes went native (tjs:hashing / node:crypto),
+  // and parseSha256's regexes were the file's only pattern-match. Its remaining KATs still judge a
+  // tool's output and refuse, but by byte equality (`===`), which the classifier does not read as a
+  // verdict, so it is no longer gate-shaped and cannot count as controlled. It was controlled, so
+  // the uncontrolled count did not move (measured: 56 gate-shaped, 27 uncontrolled). See
+  // NOT_GATE_SHAPED_BY_EQUALITY in the FLOOR test above.
   assert.deepStrictEqual([...controlledProductionModules().keys()].sort(), [
     'libexec/bun-shim.cjs',
     'libexec/clode-build.cjs',
-    'libexec/host-provision.cjs',
     'libexec/inspect-claude-bundle.cjs',
     'libexec/rg-entry.cjs',
     'libexec/rg-regex.cjs',

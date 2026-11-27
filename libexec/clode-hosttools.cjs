@@ -34,7 +34,7 @@ const path = require('node:path');
 // found]` from the blobulated builder, in a job where actions/cache had just run
 // `tar --use-compress-program "zstd -d"` — the tool was there; this function could not
 // see it. (It surfaced only when the zstd decoder started resolving through findTool;
-// the same blindness was already costing provision('sha256'|'tar') on Windows.)
+// the same blindness was already costing provision('tar') on Windows.)
 //
 // There is no execute bit on Windows to ask about, and PATHEXT probing in findTool is
 // what makes the NAME mean "executable", so a regular-file check is the honest question.

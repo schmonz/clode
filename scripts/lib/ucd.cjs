@@ -21,9 +21,8 @@ class UcdOfflineMiss extends Error {
   constructor(msg) { super(msg); this.name = 'UcdOfflineMiss'; }
 }
 
-// Small text files: an in-memory digest is fine. The pure-JS SHA cost that sent
-// clode-net.cjs's sha256Of to a host tool is for the ~265MB provider, not for UCD files
-// (the largest pinned here, 17.0.0 DerivedCoreProperties.txt, is 1.1MB).
+// Small text files (the largest pinned here, 17.0.0 DerivedCoreProperties.txt, is 1.1MB):
+// an in-memory digest is fine. A FILE goes through clode-net.cjs's streaming sha256Of.
 function sha256Text(text) { return crypto.createHash('sha256').update(Buffer.from(text, 'utf8')).digest('hex'); }
 
 function verifyText(text, pin) {

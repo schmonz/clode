@@ -38,12 +38,7 @@ function storeBin(providers, version, plat = PLAT) {
   return path.join(providers, version, CPATHS.providerKey(os_, arch), 'claude');
 }
 
-// Real-host sha256Of caches its chosen tool to clodeDataDir/hosttools.json. In
-// tests it must not touch the real ~/.local/share/clode (the suite's hermetic
-// guard watches it). clodeUpdate already threads its isolated env through to
-// sha256Of; these direct test-side calls get a throwaway cache dir instead.
-const SHA_DATADIR = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-upd-sha-'));
-const sha = (f) => sha256Of(f, { dataDir: SHA_DATADIR });
+const sha = sha256Of;
 
 const PLATFORMS = ['darwin-arm64','darwin-x64','linux-arm64','linux-x64','linux-arm64-musl','linux-x64-musl','win32-x64','win32-arm64'];
 
@@ -239,25 +234,17 @@ test('clode_update fetches the fixed platform into the provider store + current 
   } finally { cleanup(fx); }
 });
 
-// sha256Of is an external dependency now (it shells out to a host digest tool —
-// the same integrity check upstream does, computed natively). On the vanishingly
-// rare host with none of those tools we must FAIL LOUD, and do it BEFORE the
-// ~265MB download rather than after minutes of wasted transfer.
-test('clode_update fails LOUD before downloading when no sha256 digest tool exists', async () => {
+// The download's sha256 is computed in-process (the engine's native hash), so a host with NO digest tool at all
+// still verifies and installs. Mac OS X Tiger is that host: it has no sha256 tool, and while sha256Of went out to
+// one, a Tiger first run refused to download.
+test('clode_update verifies and installs on a host with no sha256 digest tool', async () => {
   const fx = fixture();
   const err = sink();
-  // A host with none of the digest tools on PATH and no CLODE_SHA256 override.
   const env = { ...fx.env, PATH: '', CLODE_SHA256: '' };
   try {
     const status = await clodeUpdate('stable', opts(env, err));
-    assert.strictEqual(status, 1, 'must fail when it cannot verify the download');
-    assert.match(err.text(), /no sha256 digest tool|install one of/i,
-      'prints an actionable message naming the missing tools');
-    // Preflight fires before the download: no unverified binary, no partial left.
-    assert.strictEqual(fs.existsSync(storeBin(fx.providers, V)), false,
-      'no unverified binary installed');
-    assert.strictEqual(fs.existsSync(path.join(fx.providers, V, '.claude.partial')), false,
-      'no partial download left behind');
+    assert.strictEqual(status, 0, err.text());
+    assert.strictEqual(sha(storeBin(fx.providers, V)), fx.sum, 'the verified bytes were installed');
   } finally { cleanup(fx); }
 });
 

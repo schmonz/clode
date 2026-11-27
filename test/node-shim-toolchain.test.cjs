@@ -33,16 +33,16 @@ const EXTRACTOR = path.join(REPO, 'libexec/extract-claude-js.cjs');
 const NET_DRIVER = `
 'use strict';
 const net = require(${JSON.stringify(NET)});
-const [srcFile, downloadSrc, downloadDest, htCache] = process.argv.slice(2);
-// Pin provision('sha256')'s hosttools.json cache to a throwaway dir so this
-// child (run under both node and tjs, inheriting the test's HOME) never writes
-// the real ~/.local/share/clode that the suite's hermetic guard watches.
-const shaOpts = { dataDir: htCache };
+const [srcFile, downloadSrc, downloadDest, bigFile] = process.argv.slice(2);
+// sha256Of hashes natively in-process: tjs:hashing under tjs (globalThis.__clodeTjsHashing, which the loader
+// sets), node:crypto under node. Say which, so a tjs run that silently fell back to the shim's crypto is seen.
 (async () => {
-  process.stdout.write('sha256=' + net.sha256Of(srcFile, shaOpts) + '\\n');
+  process.stdout.write('native=' + (globalThis.tjs ? !!globalThis.__clodeTjsHashing : true) + '\\n');
+  process.stdout.write('sha256=' + net.sha256Of(srcFile) + '\\n');
+  process.stdout.write('big_sha256=' + net.sha256Of(bigFile) + '\\n');
   const ok = await net.downloadFile('file://' + downloadSrc, downloadDest);
   process.stdout.write('download=' + ok + '\\n');
-  process.stdout.write('copy_sha256=' + net.sha256Of(downloadDest, shaOpts) + '\\n');
+  process.stdout.write('copy_sha256=' + net.sha256Of(downloadDest) + '\\n');
 })().catch((e) => { process.stderr.write(String(e && e.stack || e) + '\\n'); process.exit(1); });
 `;
 
@@ -62,15 +62,22 @@ test('Rung 1: clode-net sha256Of + file:// downloadFile match node & known diges
 
   const nodeDest = path.join(dir, 'copy-node.bin');
   const tjsDest = path.join(dir, 'copy-tjs.bin');
-  const htCache = path.join(dir, 'hosttools'); // throwaway provision cache (not the real store)
+  // Larger than sha256Of's 4MB read chunk, so the stream crosses a chunk boundary.
+  const bigFile = path.join(dir, 'big.bin');
+  const big = Buffer.alloc(4 * 1024 * 1024 + 4099);
+  for (let i = 0; i < big.length; i++) big[i] = (i * 131 + 17) & 0xff;
+  fs.writeFileSync(bigFile, big);
+  const bigSha = crypto.createHash('sha256').update(big).digest('hex');
 
-  const nodeOut = execFileSync(process.execPath, [driver, srcFile, dlSrc, nodeDest, htCache], { encoding: 'utf8' }).trim();
-  const r = runLoader(driver, [srcFile, dlSrc, tjsDest, htCache]);
+  const nodeOut = execFileSync(process.execPath, [driver, srcFile, dlSrc, nodeDest, bigFile], { encoding: 'utf8' }).trim();
+  const r = runLoader(driver, [srcFile, dlSrc, tjsDest, bigFile]);
   assert.strictEqual(r.status, 0, r.stderr);
 
   // tjs output == node output, and the sha256 is the known digest of 'clode'.
   assert.strictEqual(r.stdout.trim(), nodeOut);
   assert.match(r.stdout, new RegExp('sha256=' + knownSha));
+  assert.match(r.stdout, new RegExp('big_sha256=' + bigSha));
+  assert.match(r.stdout, /native=true/, 'tjs hashed with tjs:hashing');
 
   // The file:// download copies bytes exactly (== source, and == node's copy).
   assert.ok(fs.readFileSync(tjsDest).equals(fs.readFileSync(dlSrc)), 'tjs copy == source bytes');

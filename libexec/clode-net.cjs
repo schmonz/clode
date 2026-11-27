@@ -5,14 +5,10 @@
 //   sha256_of     (bin/clode:93)   ->  sha256Of(path)
 //
 // The sh launcher shells out to curl/wget for downloads and sha256sum/shasum for
-// checksums. Downloads drop those external tools — built-in fetch (http/https)
-// and fs (file://); dropping curl/wget is an explicit project goal. sha256Of,
-// however, stays an EXTERNAL dependency (like the sh launcher, and like our
-// rg/bfs/ugrep): under the tjs target there is no native crypto, so a pure-JS
-// SHA-256 of the ~265MB provider pegged the main thread for minutes (the "hangs
-// writing to disk" report — really a silent post-download verify). It resolves
-// its digest tool via host-provision.cjs's KAT-verified provision(). See
-// sha256Of below.
+// checksums. Both drop those external tools: downloads use built-in fetch
+// (http/https) and fs (file://); dropping curl/wget is an explicit project goal.
+// sha256Of hashes natively in-process (tjs:hashing under tjs, node:crypto under
+// node). See sha256Of below.
 //
 // Callers in the update flow (bin/clode:357/364/378 -> future clode-update):
 //   - resolve version / manifest: capture the body as a string.
@@ -29,26 +25,38 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { fileURLToPath } = require('node:url');
-const { provision, parseSha256 } = require('./host-provision.cjs');
+const { provision } = require('./host-provision.cjs');
 const { spawnSync } = require('node:child_process');
 
 let gunzipSeq = 0;
 
 // hex sha256 of a file's bytes -> lowercase, identical to `sha256sum` /
-// `shasum -a 256` output (just the digest, no filename). Resolves a host digest
-// tool via provision (KAT-verified, cached) and FAILS LOUD if none exists — never
-// a pure-JS fallback (that was the multi-minute main-thread grind on the tjs
-// target). opts forward to provision for testing (env/findTool/spawn/fs/dataDir).
-function sha256Of(filePath, opts = {}) {
-  const { candidate, path: bin } = provision('sha256', opts);
-  const spawn = opts.spawn || spawnSync;
-  const r = spawn(bin, candidate.args(filePath), { encoding: 'utf8', maxBuffer: 1 << 20 });
-  if (!r || r.status !== 0) {
-    throw new Error(`clode: ${bin} failed to hash ${filePath} (status ${r ? r.status : 'spawn error'})`);
+// `shasum -a 256` output (just the digest, no filename). The file is read in
+// chunks into ONE native hash: txiki's tjs:hashing under tjs (the loader leaves
+// it on globalThis.__clodeTjsHashing; mbedtls, ~320MB/s), node:crypto under node.
+// Never a hash written in JS: the shim's old pure-JS SHA-256 pegged the main
+// thread for minutes on the ~265MB provider (the "hangs writing to disk" report,
+// really a silent post-download verify). Never a host tool either: that was the
+// next answer, and Mac OS X Tiger has no sha256 tool, so a Tiger first run could
+// not verify its download.
+const HASH_CHUNK = 4 * 1024 * 1024;
+function sha256Of(filePath) {
+  const tjsHashing = globalThis.__clodeTjsHashing;
+  const h = tjsHashing ? tjsHashing.createHash('sha256') : require('node:crypto').createHash('sha256');
+  const buf = Buffer.alloc(HASH_CHUNK);
+  // tjs:hashing's update() takes a TypedArray, not a bare ArrayBuffer: hand it a plain Uint8Array view.
+  const view = new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
+  const fd = fs.openSync(filePath, 'r');
+  try {
+    for (;;) {
+      const n = fs.readSync(fd, buf, 0, HASH_CHUNK, null);
+      if (n <= 0) break;
+      h.update(view.subarray(0, n));
+    }
+  } finally {
+    fs.closeSync(fd);
   }
-  const digest = parseSha256(r.stdout);
-  if (!digest) throw new Error(`clode: could not parse a sha256 digest from ${bin}`);
-  return digest;
+  return tjsHashing ? h.digest() : h.digest('hex');
 }
 
 // GET a URL. url may be https://, http:// or file://.
@@ -196,7 +204,7 @@ async function gunzipViaStream(gzBytes) {
 }
 
 // Inflate gzip bytes to a Buffer. PREFERS a native decompressor (fast — the
-// project's exec-a-host-tool convention, like sha256Of/tar), resolved + KAT'd via
+// project's exec-a-host-tool convention, like tar), resolved + KAT'd via
 // host-provision; falls back to gunzipViaStream when no gzip CLI is on PATH. The
 // caller sha256-verifies the INFLATED bytes, so a wrong/broken decompressor is
 // caught there, never shipped. opts forward to provision (env/findTool/spawn/fs).

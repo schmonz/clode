@@ -1115,6 +1115,9 @@ async function main() {
   // node-shim/modules/sqlite.cjs reads it sync. Non-fatal — a build without
   // tjs:sqlite just leaves node:sqlite (and bun:sqlite) fail-loud on use.
   try { globalThis.__clodeTjsSqlite = await import('tjs:sqlite'); } catch (_) { /* no sqlite in this engine */ }
+  // tjs:hashing likewise, for node:crypto's digests and clode-net.cjs's file hash (node-shim/internal/hash.cjs).
+  // The loader imports it itself when this is unset; null means the engine has none, and hashing fails loud on use.
+  try { globalThis.__clodeTjsHashing = await import('tjs:hashing'); } catch (_) { globalThis.__clodeTjsHashing = null; }
   (0, new Function(dec.decode(files.get('node-shim/loader.cjs'))))();
 }
 
