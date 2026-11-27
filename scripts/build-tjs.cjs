@@ -344,7 +344,8 @@ const pinSha = (component) => pinFields(component)[2];
 // Provision it the SAME shape clode-node.cjs fetches the pinned Node: download →
 // sha256-verify against the pin (fail loud) → extract → cache. The download uses
 // clode-net's downloadFile/sha256Of (the no-curl seam); the extract is
-// libexec/unpack.cjs's in-process zip reader (no host unzip).
+// libexec/unpack.cjs's in-process zip reader (no host unzip), which runs on the BOOTSTRAP engine
+// here and so inflates through its DecompressionStream, not __tjs_zlib_sync (CI run 46018235655).
 // Cross-build-safe: only the cosmo target reaches here, and only in the build
 // phase. The pin and its ordered, sha-verified mirror list live in
 // scripts/cosmocc-pin.cjs (also the source of the CI cache key).
@@ -404,7 +405,7 @@ async function provisionCosmocc() {
   const staging = `${dir}.partial`;
   fs.rmSync(staging, { recursive: true, force: true });
   fs.mkdirSync(staging, { recursive: true });
-  extractArchive(zip, staging);
+  await extractArchive(zip, staging);
   if (!fs.existsSync(path.join(staging, 'bin', 'cosmocc'))) {
     throw new Error(`cosmo: extraction of ${zip} did not produce bin/cosmocc (in ${staging})`);
   }

@@ -65,16 +65,31 @@ function snapshot(dir) {
 
 // ---- gunzip -------------------------------------------------------------------------------------
 
-test('gunzip: binary-exact over a size like an engine template', () => {
-  const original = Buffer.from(Array.from({ length: 300000 }, (_, i) => (i * 7919) & 0xff));
-  assert.ok(Buffer.from(unpack.gunzip(zlib.gzipSync(original))).equals(original));
-  assert.strictEqual(Buffer.from(unpack.gunzip(zlib.gzipSync('clode'))).toString(), 'clode');
-});
+// Every decompression row runs under BOTH codecs (libexec/unpack.cjs's seam): node has node:zlib and the WHATWG
+// DecompressionStream, so the stream codec the bootstrap engine uses is exercised here too, not only under an engine.
+const CODECS = ['zlib', 'stream'];
+async function withCodec(name, fn) {
+  const was = unpack.useCodec(name);
+  try { return await fn(); } finally { unpack.useCodec(was); }
+}
 
-test('gunzip: a corrupt stream throws, it never returns short bytes', () => {
-  const gz = zlib.gzipSync(Buffer.alloc(10000, 7));
-  assert.throws(() => unpack.gunzip(gz.subarray(0, gz.length - 12)));
-});
+for (const c of CODECS) {
+  test(`gunzip (${c}): binary-exact over a size like an engine template`, () => withCodec(c, async () => {
+    const original = Buffer.from(Array.from({ length: 300000 }, (_, i) => (i * 7919) & 0xff));
+    assert.ok(Buffer.from(await unpack.gunzip(zlib.gzipSync(original))).equals(original));
+    assert.strictEqual(Buffer.from(await unpack.gunzip(zlib.gzipSync('clode'))).toString(), 'clode');
+  }));
+
+  test(`gunzip (${c}): a corrupt or truncated stream rejects, it never returns short bytes`, () => withCodec(c, async () => {
+    const gz = zlib.gzipSync(Buffer.from(Array.from({ length: 10000 }, (_, i) => (i * 31) & 0xff)));
+    await assert.rejects(async () => unpack.gunzip(gz.subarray(0, gz.length - 12)));
+    // only the trailer cut short: the engine's DecompressionStream accepts that in silence (measured on the bootstrap
+    // engine, 2026-11-27), so the stream codec checks ISIZE itself
+    await assert.rejects(async () => unpack.gunzip(gz.subarray(0, gz.length - 4)));
+    const crcBad = Buffer.from(gz); crcBad[crcBad.length - 6] ^= 0xff;
+    await assert.rejects(async () => unpack.gunzip(crcBad));
+  }));
+}
 
 // ---- tar ----------------------------------------------------------------------------------------
 
@@ -89,14 +104,14 @@ test('tar round trip: modes, symlinks, pax long names and long link targets, emp
   }
 });
 
-test('tar via extractArchive: a .tar.gz, a .tgz and a plain .tar by name', () => {
+test('tar via extractArchive: a .tar.gz, a .tgz and a plain .tar by name', async () => {
   const src = sampleTree();
   const tarBytes = packTar(src, ['top']);
   const dir = tmp('kinds');
   for (const [name, bytes] of [['a.tar.gz', zlib.gzipSync(tarBytes)], ['b.tgz', zlib.gzipSync(tarBytes)], ['c.tar', tarBytes]]) {
     fs.writeFileSync(path.join(dir, name), bytes);
     const out = path.join(dir, `${name}.out`);
-    unpack.extractArchive(path.join(dir, name), out);
+    await unpack.extractArchive(path.join(dir, name), out);
     assert.deepStrictEqual(snapshot(out), snapshot(src), name);
   }
   assert.throws(() => unpack.archiveKind('x.tar.xz'), /cannot tell what kind of archive/);
@@ -231,6 +246,35 @@ test('zip: refusals by name — a failed CRC, encryption, an unknown method, not
   assert.throws(() => unpack.readZip(Buffer.from('not a zip at all, just bytes here')), /not a zip/);
 });
 
+// The stream codec (an engine without __tjs_zlib_sync: the bootstrap engine) writes the same tree, and its CRC-32 is the
+// engine's gzip trailer check, so a corrupt deflated entry is refused there too. writeEntries returns a promise only
+// here, where the entries' data are promises.
+test('zip (stream codec): the same tree, and a failed CRC refused, for stored and deflated entries', () => withCodec('stream', async () => {
+  const entries = [
+    { name: 'z/', type: 'dir' },
+    { name: 'z/run', data: '#!/bin/sh\n', mode: 0o755 },
+    { name: 'z/plain.txt', data: 'x'.repeat(5000), method: 8 },
+    { name: 'z/stored.txt', data: 'stored', method: 0 },
+    { name: 'z/link', type: 'symlink', linkname: 'plain.txt' },
+  ];
+  const zip = makeZip(entries);
+  const out = tmp('zipstream');
+  const pending = unpack.writeEntries(unpack.readZip(zip), out);
+  assert.ok(pending && typeof pending.then === 'function', 'under the stream codec a zip extraction is asynchronous');
+  assert.strictEqual(await pending, entries.length);
+  const ref = tmp('zipref');
+  unpack.useCodec('zlib');
+  assert.strictEqual(unpack.writeEntries(unpack.readZip(zip), ref), entries.length, 'and synchronous under node:zlib');
+  unpack.useCodec('stream');
+  assert.deepStrictEqual(snapshot(out), snapshot(ref));
+  for (const method of [0, 8]) {
+    const z = makeZip([{ name: 'a', data: 'hello hello hello hello hello hello', method }]);
+    const cd = z.indexOf(Buffer.from([0x50, 0x4b, 0x01, 0x02]));
+    z.writeUInt32LE((z.readUInt32LE(cd + 16) ^ 1) >>> 0, cd + 16);   // the central directory's CRC-32
+    await assert.rejects(async () => unpack.readZip(z)[0].data, /CRC-32/, `method ${method}`);
+  }
+}));
+
 // ---- extraction safety --------------------------------------------------------------------------
 
 test('writeEntries refuses an entry outside the destination: absolute, .., or through a symlink it made', () => {
@@ -278,7 +322,7 @@ test('fetchVerifiedArchive: verifies before extracting, hands install the tree, 
 
 // ---- under the engine ---------------------------------------------------------------------------
 
-test('under tjs: a .tar.gz and a zip extract to the same tree as under node', (t) => {
+test('under tjs: a .tar.gz and a zip extract to the same tree as under node', async (t) => {
   if (!helper.tjsPath()) { t.skip('no tjs engine (CLODE_TJS)'); return; }
   const src = sampleTree();
   const dir = tmp('tjs');
@@ -290,12 +334,14 @@ test('under tjs: a .tar.gz and a zip extract to the same tree as under node', (t
   ]));
   const script = path.join(dir, 'x.cjs');
   fs.writeFileSync(script, `const u = require(${JSON.stringify(path.join(REPO, 'libexec', 'unpack.cjs'))});
-for (const f of ['a.tar.gz', 'b.zip']) u.extractArchive(${JSON.stringify(dir)} + '/' + f, ${JSON.stringify(dir)} + '/tjs-' + f);
-console.log('ok');\n`);
+(async () => {
+  for (const f of ['a.tar.gz', 'b.zip']) await u.extractArchive(${JSON.stringify(dir)} + '/' + f, ${JSON.stringify(dir)} + '/tjs-' + f);
+  console.log('ok');
+})().catch((e) => { console.log('ERR ' + e.message); process.exitCode = 1; });\n`);
   const [cmd, argv] = helper.engineSpawn(['run', helper.LOADER, script]);
   const r = spawnSync(cmd, argv, { encoding: 'utf8', timeout: 60000 });
   assert.strictEqual(r.stdout.trim(), 'ok', r.stderr);
-  for (const f of ['a.tar.gz', 'b.zip']) unpack.extractArchive(path.join(dir, f), path.join(dir, `node-${f}`));
+  for (const f of ['a.tar.gz', 'b.zip']) await unpack.extractArchive(path.join(dir, f), path.join(dir, `node-${f}`));
   assert.deepStrictEqual(snapshot(path.join(dir, 'tjs-a.tar.gz')), snapshot(src));
   assert.deepStrictEqual(snapshot(path.join(dir, 'tjs-b.zip')), snapshot(path.join(dir, 'node-b.zip')));
 });

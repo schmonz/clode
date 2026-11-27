@@ -111,7 +111,8 @@ test('every floor entry declares its build-host role, and every build-host exemp
   // __tjs_getrusage (2026-11-21): the same, for process.resourceUsage(), which no build step calls (grepped: no caller
   // in scripts/, libexec/ outside node-shim, or build.sh); only the bundle's event-loop-stall sampler does.
   // __tjs_zlib_sync (2026-11-23): the same, for zlib's *Sync functions; their one caller outside the shims,
-  // scripts/build-templates-manifest.mjs, runs under node.
+  // scripts/build-templates-manifest.mjs, runs under node. (2026-11-27: libexec/unpack.cjs asks node:zlib only on an
+  // engine that has it, and otherwise inflates with DecompressionStream, which IS build-host.)
   // __tjs_set_default_ca (2026-11-23): tls.setDefaultCACertificates, which only the bundle's CA loader calls; refused
   // (ERR_CLODE_ENGINE_FLOOR), never faked, on an engine without it.
   // __tjs_execve (2026-11-22): the same, for process.execve(), which no build step calls.
@@ -136,7 +137,9 @@ test('every floor entry declares its build-host role, and every build-host exemp
     ['__tjs_fs_sync.stat identity', '__tjs_fs_sync.strerror', '__tjs_fs_sync.utime', '__tjs_fs_sync.openFlags', '__tjs_uname', '__tjs_set_default_ca', '__tjs_getrusage',
       '__tjs_libc', '__tjs_zlib_sync', '__tjs_execve', '__tjs_spawn_sync.stdio', '__tjs_spawn_options', '__tjs_spawn_sync.options', '__tjs_proxy_routes', '__tjs_timer_setref',
       '__tjs_tls_write_all', '__tjs_getenv', '__tjs_connect_next_address', 'Uint8Array base64/hex']);
-  assert.deepStrictEqual(floorFor('build-host').map((b) => b.name), ['__tjs_fs_sync', '__tjs_spawn_sync', 'tjs.engine.moduleMeta']);
+  // DecompressionStream (2026-11-27): libexec/unpack.cjs's stream codec, how the build host extracts the cosmocc zip
+  // without __tjs_zlib_sync (CI run 46018235655); test/unpack-build-host.test.cjs runs it on the bootstrap engine.
+  assert.deepStrictEqual(floorFor('build-host').map((b) => b.name), ['__tjs_fs_sync', 'DecompressionStream', '__tjs_spawn_sync', 'tjs.engine.moduleMeta']);
   assert.throws(() => floorFor('shipped'), /unknown role/);
 });
 

@@ -8,11 +8,17 @@
 // and the two pinned-download seams disagreed about .zip: clode-node ran `unzip`, which Windows
 // does not ship, and clode-rcodesign ran `tar -xf`, which GNU tar cannot do
 // (docs/superpowers/findings/2026-11-27-latent-capabilities-audit.md, D3 and rank 3). Every
-// compressed byte now goes through node:zlib: under node that is node's zlib, under tjs it is
-// node-shim's zlib over the engine's miniz (__tjs_zlib_sync, spike/quickjs/patches/
-// txiki-zlib-sync.patch), synchronous and native. The two container formats are plain data
-// structures read here: tar is 512-byte headers, and zip is a central directory of entries,
-// each stored or raw-deflated.
+// compressed byte now goes through ONE decompression seam (CODECS, below): node:zlib, synchronous,
+// wherever it can answer synchronously (under node, and under tjs on an engine with the engine's
+// miniz behind __tjs_zlib_sync, spike/quickjs/patches/txiki-zlib-sync.patch), and the WHATWG
+// DecompressionStream, asynchronous, on an engine without it. The second is not a nicety: the
+// engine build runs on the pinned BOOTSTRAP engine (scripts/bootstrap-engine.sh, v0.20260831.1),
+// which predates that patch, and the cosmo leg extracts its cosmocc zip there (CI run 46018235655:
+// "this engine has no __tjs_zlib_sync ... so zlib.crc32 cannot answer"). So extraction is async
+// (extractArchive and gunzip return promises), while the readers and the writer stay synchronous
+// wherever the bytes are: writeEntries returns a promise only when an entry's data is one. The two
+// container formats are plain data structures read here: tar is 512-byte headers, and zip is a
+// central directory of entries, each stored or raw-deflated.
 //
 // WHAT IS READ. tar: ustar (with its 155-byte prefix), GNU long names and long link targets
 // ('L'/'K'), pax extended headers ('x', and 'g' globals) for path, linkpath and size, GNU
@@ -37,10 +43,114 @@ const path = require('node:path');
 const UTF8 = new TextDecoder('utf-8');
 const utf8 = (buf, off, len) => UTF8.decode(buf.subarray(off, off + len));
 
+// ---- decompression: the one seam -----------------------------------------------------------------
+// Two codecs, one interface: gunzip(bytes) and inflateRaw(raw, crc, size, name), each returning the
+// bytes or a promise of them, and refusing (never returning short or wrong bytes) on a corrupt input.
+//   zlib    node:zlib, synchronous: node's own zlib, or node-shim's over the engine's miniz.
+//   stream  the WHATWG DecompressionStream, asynchronous: what an engine without __tjs_zlib_sync
+//           (the bootstrap engine) has. Its integrity checks are the engine's gzip trailer check:
+//           a raw-deflate zip entry is framed as a one-member gzip stream whose trailer carries the
+//           central directory's CRC-32 and size, so the engine verifies the CRC natively (a pure-JS
+//           CRC-32 measured 16MB/s on the bootstrap engine, 2026-11-27, about 80s for cosmocc). The
+//           engine accepts a gzip stream whose trailer is cut short, so gunzip also checks ISIZE.
+//           Only a stored zip entry is CRC-checked in JS, and stored entries are small.
+const CRC_TABLE = (() => {
+  const t = new Int32Array(256);
+  for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; t[n] = c; }
+  return t;
+})();
+function crc32js(b) {
+  let c = -1;
+  for (let i = 0; i < b.length; i++) c = CRC_TABLE[(c ^ b[i]) & 0xff] ^ (c >>> 8);
+  return (c ^ -1) >>> 0;
+}
+
+function checkInflated(name, data, crc, size, crcOf) {
+  if (data.length !== size) throw new Error(`unpack: zip entry '${name}' inflated to ${data.length} bytes, its header says ${size}`);
+  if (crcOf && (crcOf(data) >>> 0) !== crc) throw new Error(`unpack: zip entry '${name}' fails its CRC-32`);
+  return data;
+}
+
+// Every chunk a DecompressionStream yields for `pieces`, as one Uint8Array. A decode error rejects.
+async function decompress(format, pieces) {
+  const ds = new DecompressionStream(format);
+  const writer = ds.writable.getWriter();
+  const writing = (async () => { for (const p of pieces) await writer.write(p); await writer.close(); })();
+  writing.catch(() => {});   // its error is the reader's too, and surfaces there or at the await below
+  const reader = ds.readable.getReader();
+  const chunks = [];
+  let total = 0;
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    total += value.byteLength;
+  }
+  await writing;
+  if (chunks.length === 1) return chunks[0];
+  const out = new Uint8Array(total);
+  let o = 0;
+  for (const c of chunks) { out.set(c, o); o += c.byteLength; }
+  return out;
+}
+
+const le32 = (v) => new Uint8Array([v & 0xff, (v >>> 8) & 0xff, (v >>> 16) & 0xff, (v >>> 24) & 0xff]);
+const GZIP_HEADER = new Uint8Array([0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 0xff]);   // deflate, no flags, unknown OS
+
+const CODECS = {
+  zlib: {
+    gunzip: (bytes) => require('node:zlib').gunzipSync(bytes),
+    inflateRaw(raw, crc, size, name) {
+      const zlib = require('node:zlib');
+      return checkInflated(name, zlib.inflateRawSync(raw), crc, size, zlib.crc32);
+    },
+    crc32: (b) => require('node:zlib').crc32(b),
+  },
+  stream: {
+    async gunzip(bytes) {
+      const b = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+      if (b.length < 18 || b[0] !== 0x1f || b[1] !== 0x8b) throw new Error('unpack: not a gzip stream (no gzip header)');
+      const out = await decompress('gzip', [b]);
+      const isize = (b[b.length - 4] | (b[b.length - 3] << 8) | (b[b.length - 2] << 16) | (b[b.length - 1] << 24)) >>> 0;
+      if (isize !== (out.length >>> 0)) throw new Error(`unpack: gzip stream is truncated or corrupt (it decoded to ${out.length} bytes, its trailer says ${isize} mod 2^32)`);
+      return out;
+    },
+    async inflateRaw(raw, crc, size, name) {
+      let data;
+      try {
+        data = await decompress('gzip', [GZIP_HEADER, raw, le32(crc), le32(size >>> 0)]);
+      } catch (e) {
+        throw new Error(`unpack: zip entry '${name}' fails to inflate or fails its CRC-32 (${e && e.message ? e.message : e})`);
+      }
+      return checkInflated(name, data, crc, size, null);
+    },
+    crc32: crc32js,
+  },
+};
+
+// node:zlib can answer synchronously under node (no globalThis.tjs) and under tjs on an engine
+// with __tjs_zlib_sync. Asked here, by a probe, and never by calling node-shim's zlib: that would
+// append a refusal to CLODE_ENGINE_FLOOR_LOG, which build-leg gates the bootstrap engine on.
+function defaultCodec() {
+  return (typeof globalThis.tjs === 'undefined' || typeof globalThis.__tjs_zlib_sync === 'function') ? 'zlib' : 'stream';
+}
+let codec = CODECS[defaultCodec()];
+// Which codec is in use; with a name, switch to it and return the previous one's. For the tests that
+// run the stream path under node, where both exist.
+function useCodec(name) {
+  const was = Object.keys(CODECS).find((k) => CODECS[k] === codec);
+  if (name !== undefined) {
+    if (!CODECS[name]) throw new Error(`unpack: no codec '${name}' (one of: ${Object.keys(CODECS).join(', ')})`);
+    codec = CODECS[name];
+  }
+  return was;
+}
+
+const isPromise = (v) => v !== null && typeof v === 'object' && typeof v.then === 'function';
+
 // ---- gunzip ------------------------------------------------------------------------------------
-// node:zlib under node; node-shim's zlib under tjs, which is the engine's miniz, synchronous.
-function gunzip(bytes) {
-  return require('node:zlib').gunzipSync(bytes);
+async function gunzip(bytes) {
+  return codec.gunzip(bytes);
 }
 
 // ---- tar ---------------------------------------------------------------------------------------
@@ -153,9 +263,9 @@ function findEocd(buf) {
 }
 
 // readZip(bytes) -> the same entry shape as readTar. Each file's data is inflated (or sliced, for
-// a stored entry) and its CRC-32 checked when `data` is read.
+// a stored entry) and its CRC-32 checked when `data` is read; a symlink's target, when `linkname`
+// is read. Under the stream codec either is a promise.
 function readZip(bytes) {
-  const zlib = require('node:zlib');
   const buf = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
   const eocd = findEocd(buf);
   let count = u16(buf, eocd + 10);
@@ -203,15 +313,10 @@ function readZip(bytes) {
     const start = localOff + 30 + u16(buf, localOff + 26) + u16(buf, localOff + 28);
     const raw = buf.subarray(start, start + csize);
     if (method !== 0 && method !== 8) throw new Error(`unpack: zip entry '${name}' uses compression method ${method} (only stored and deflate are read)`);
-    const inflate = () => {
-      const data = method === 0 ? raw : zlib.inflateRawSync(raw);
-      if (data.length !== usize) throw new Error(`unpack: zip entry '${name}' inflated to ${data.length} bytes, its header says ${usize}`);
-      if ((zlib.crc32(data) >>> 0) !== crc) throw new Error(`unpack: zip entry '${name}' fails its CRC-32`);
-      return data;
-    };
+    const inflate = () => (method === 0 ? checkInflated(name, raw, crc, usize, codec.crc32) : codec.inflateRaw(raw, crc, usize, name));
     if ((unixMode & S_IFMT) === S_IFLNK) {
-      const target = inflate();
-      entries.push({ name, type: 'symlink', mode: unixMode & 0o7777, linkname: utf8(target, 0, target.length) });
+      const text = (t) => utf8(t, 0, t.length);
+      entries.push({ name, type: 'symlink', mode: unixMode & 0o7777, get linkname() { const t = inflate(); return isPromise(t) ? t.then(text) : text(t); } });
     } else {
       // A DOS/NTFS-made entry carries no mode: unzip's default, 0666 under the umask. The data is
       // inflated when it is read, so an extraction holds one entry's bytes at a time, not the
@@ -237,8 +342,29 @@ function umask() {
   try { return typeof process.umask === 'function' ? process.umask() : 0o022; } catch { return 0o022; }
 }
 
-// Write entries under destDir. Returns the number written.
+// Write entries under destDir. Returns the number written, or, when an entry's data or link target
+// is a promise (a zip under the stream codec), a promise of it: the same writer either way, each
+// entry written in order, one entry's bytes held at a time.
 function writeEntries(entries, destDir) {
+  const w = entryWriter(destDir);
+  const payload = (e) => (e.type === 'file' ? e.data : e.type === 'symlink' ? e.linkname : undefined);
+  let i = 0;
+  const run = () => {
+    while (i < entries.length) {
+      const e = entries[i++];
+      const v = payload(e);
+      if (isPromise(v)) return v.then((got) => { w.put(e, got); return run(); });
+      w.put(e, v);
+    }
+    w.finish();
+    return entries.length;
+  };
+  return run();
+}
+
+// The writer's state, one entry at a time: put(entry, payload) where payload is a file's bytes or a
+// symlink's target, then finish().
+function entryWriter(destDir) {
   fs.mkdirSync(destDir, { recursive: true });
   const mask = ~umask() & 0o777;
   const links = new Set();      // symlinks this extraction made, as relative paths
@@ -256,31 +382,31 @@ function writeEntries(entries, destDir) {
     }
   };
   const clear = (p) => { try { fs.rmSync(p, { force: true }); } catch { /* absent, or a directory: tar keeps a directory */ } };
-  for (const e of entries) {
+  const put = (e, payload) => {
     const parts = safeRelative(e.name);
-    if (parts.length === 0) continue;   // "./" itself
+    if (parts.length === 0) return;   // "./" itself
     through(parts);
     const rel = parts.join('/');
     const target = path.join(destDir, ...parts);
     if (e.type === 'dir') {
       mkdirp(target);
       dirModes.push([target, e.mode & mask]);
-      continue;
+      return;
     }
     mkdirp(path.dirname(target));
     clear(target);
     if (e.type === 'file') {
-      fs.writeFileSync(target, e.data, { mode: e.mode & 0o777 });
+      fs.writeFileSync(target, payload, { mode: e.mode & 0o777 });
       fs.chmodSync(target, e.mode & mask);
     } else if (e.type === 'symlink') {
       try {
-        fs.symlinkSync(e.linkname, target);
+        fs.symlinkSync(payload, target);
       } catch (err) {
         // WINDOWS, a platform fact: making a symlink needs a privilege (or Developer Mode) most
         // accounts lack, and the call fails EPERM. Git for Windows' tar copied the target instead,
         // and so does this, once every entry is down (the target may come later in the archive).
         if (process.platform !== 'win32' || !err || err.code !== 'EPERM') throw err;
-        copies.push([target, path.resolve(path.dirname(target), e.linkname)]);
+        copies.push([target, path.resolve(path.dirname(target), payload)]);
       }
       links.add(rel);
     } else if (e.type === 'link') {
@@ -288,17 +414,19 @@ function writeEntries(entries, destDir) {
       through(from);
       fs.copyFileSync(path.join(destDir, ...from), target);
     }
-  }
-  for (const [to, from] of copies) {
-    if (!path.resolve(from).startsWith(path.resolve(destDir) + path.sep)) {
-      throw new Error(`unpack: symlink ${to} points outside the destination (${from}); this Windows account cannot make symlinks and it will not copy from there`);
+  };
+  const finish = () => {
+    for (const [to, from] of copies) {
+      if (!path.resolve(from).startsWith(path.resolve(destDir) + path.sep)) {
+        throw new Error(`unpack: symlink ${to} points outside the destination (${from}); this Windows account cannot make symlinks and it will not copy from there`);
+      }
+      fs.cpSync(from, to, { recursive: true });
     }
-    fs.cpSync(from, to, { recursive: true });
-  }
-  // Directory modes last, deepest first: a read-only directory set early would refuse its own
-  // contents.
-  for (const [d, m] of dirModes.reverse()) { if (m & 0o700) fs.chmodSync(d, m); }
-  return entries.length;
+    // Directory modes last, deepest first: a read-only directory set early would refuse its own
+    // contents.
+    for (const [d, m] of dirModes.reverse()) { if (m & 0o700) fs.chmodSync(d, m); }
+  };
+  return { put, finish };
 }
 
 // What an archive's name says it is. One table, the only place an extension decides anything.
@@ -310,16 +438,17 @@ function archiveKind(file) {
   throw new Error(`unpack: cannot tell what kind of archive '${path.basename(file)}' is (expected .tar.gz, .tgz, .tar or .zip)`);
 }
 
-function readArchive(bytes, kind) {
-  if (kind === 'tar.gz') return readTar(gunzip(bytes));
+// -> a promise of the entries (gunzip may be asynchronous; see the decompression seam).
+async function readArchive(bytes, kind) {
+  if (kind === 'tar.gz') return readTar(await gunzip(bytes));
   if (kind === 'tar') return readTar(bytes);
   if (kind === 'zip') return readZip(bytes);
   throw new Error(`unpack: unknown archive kind '${kind}'`);
 }
 
-// Extract the archive at `file` into destDir.
-function extractArchive(file, destDir) {
-  return writeEntries(readArchive(fs.readFileSync(file), archiveKind(file)), destDir);
+// Extract the archive at `file` into destDir. -> a promise of the number of entries written.
+async function extractArchive(file, destDir) {
+  return writeEntries(await readArchive(fs.readFileSync(file), archiveKind(file)), destDir);
 }
 
 // ---- fetch -> verify -> extract ----------------------------------------------------------------
@@ -350,4 +479,4 @@ async function fetchVerifiedArchive({ label, what, asset, tmpRoot, download, ver
   }
 }
 
-module.exports = { gunzip, readTar, readZip, writeEntries, archiveKind, readArchive, extractArchive, fetchVerifiedArchive };
+module.exports = { gunzip, readTar, readZip, writeEntries, archiveKind, readArchive, extractArchive, fetchVerifiedArchive, useCodec };

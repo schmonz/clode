@@ -201,10 +201,26 @@ const ENGINE_API_FLOOR = [
     from: 'txiki-zlib-sync.patch',
     why: 'node-shim zlib.gzipSync/deflateSync/deflateRawSync/inflateSync/inflateRawSync/gunzipSync/unzipSync: miniz, synchronously, as node answers before the call returns',
     buildHost: false,
-    notForBuildHost: 'nothing the build runs on an engine calls a zlib *Sync function: the one caller outside node-shim '
+    notForBuildHost: 'nothing the build runs on an engine calls a zlib *Sync function. The build DOES decompress: '
+      + 'scripts/build-tjs.cjs extracts the cosmocc zip on the cosmo leg (provisionCosmocc), through libexec/unpack.cjs, '
+      + 'which asks node:zlib only on an engine that has this binding and otherwise inflates with DecompressionStream '
+      + '(the build-host entry below). That path reached node-shim\'s refusal in CI run 46018235655 before unpack '
+      + 'learned it; test/unpack-build-host.test.cjs now extracts a real zip and tar.gz on the bootstrap engine (when '
+      + 'cached) and on the stand-in, and requires an empty CLODE_ENGINE_FLOOR_LOG. The other caller outside node-shim '
       + 'and bun-shim, scripts/build-templates-manifest.mjs, runs under node in pack.yml and release.yml. On an engine '
       + 'without it node-shim REFUSES the call (ERR_CLODE_ENGINE_FLOOR) and appends it to CLODE_ENGINE_FLOOR_LOG, so '
       + 'the gates listed above refuse a build path that ever reaches it',
+  },
+  {
+    // Without it libexec/unpack.cjs cannot extract anything on an engine that also lacks __tjs_zlib_sync -- the
+    // bootstrap engine -- and node-shim's zlib Inflate/Gunzip streams (an HTTP client's compressed response) cannot run.
+    name: 'DecompressionStream',
+    expr: 'globalThis.DecompressionStream',
+    kind: 'function',
+    from: 'txiki itself (WHATWG Compression Streams over miniz: gzip, deflate, deflate-raw), no patch',
+    why: 'libexec/unpack.cjs\'s stream codec (gunzip and zip inflate where __tjs_zlib_sync is absent: the cosmo leg\'s '
+      + 'cosmocc zip, scripts/build-tjs.cjs provisionCosmocc, CI run 46018235655); node-shim zlib\'s decompression streams',
+    buildHost: true,
   },
   {
     // Without it node-shim has no process.execve: 2.1.330's relaunch (`/tui classic`, `/tui fullscreen`) falls back
