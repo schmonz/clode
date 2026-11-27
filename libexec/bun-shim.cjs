@@ -1552,14 +1552,16 @@ const Bun = {
   // now by NAME, from the v8 wall, instead of a nameless TypeError.
   generateHeapSnapshot: (_fmt, shape)=> {
     const os = require('os'), fsx = require('fs'), pathx = require('path');
-    const f = pathx.join(os.tmpdir(), `clode-heap-${process.pid}-${Date.now()}.heapsnapshot`);
+    // In a directory of its own (mkdtemp, not a pid-named file in a shared /tmp), removed when read back.
+    const dir = fsx.mkdtempSync(pathx.join(os.tmpdir(), 'clode-heap-'));
     try {
+      const f = pathx.join(dir, 'heap.heapsnapshot');
       v8.writeHeapSnapshot(f);
       const buf = fsx.readFileSync(f);
       if (shape === 'arraybuffer') return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
       return buf;
     } finally {
-      try { fsx.unlinkSync(f); } catch(_) {}
+      try { fsx.rmSync(dir, { recursive: true, force: true }); } catch(_) {}
     }
   },
 

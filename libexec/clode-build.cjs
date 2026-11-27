@@ -1533,6 +1533,7 @@ async function clodeBuildIn(args, opts) {
     // materialized libexec (`effLibexec`) through extraction + the gate.
     // Non-blobulated (a checkout) uses everything in place.
     let payloadDir = null;
+    let extrasDir = null;   // the naude extras' private temp dir (below), removed with payloadDir
     if (blobulatedBuilder) {
       payloadDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-naude-payload-'));
       materializeBlobPayload(vfs, payloadDir);
@@ -1691,7 +1692,10 @@ async function clodeBuildIn(args, opts) {
         bom: naudeBom,
         engineVersion: require('./clode-node.cjs').PINNED_VERSION,
       };
-      const extrasPath = path.join(os.tmpdir(), `clode-naude-extras-${process.pid}.json`);
+      // In a directory of its own (mkdtemp: not a predictable name in a shared /tmp), removed in the finally below.
+      // It was clode-naude-extras-<pid>.json in os.tmpdir(), never removed: one left behind per naude build.
+      extrasDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-naude-extras-'));
+      const extrasPath = path.join(extrasDir, 'extras.json');
       fs.writeFileSync(extrasPath, JSON.stringify(naudeExtras));
 
       clodeLog(`clode: build naude: building the Node SEA from ${cliPath} under ${blobgenNode} (embed: ${embedNode}) ...`);
@@ -1725,6 +1729,7 @@ async function clodeBuildIn(args, opts) {
       if (b.result.stdout) clodeLog(b.result.stdout.trimEnd());
     } finally {
       if (payloadDir) { try { fs.rmSync(payloadDir, { recursive: true, force: true }); } catch { /* best effort */ } }
+      if (extrasDir) { try { fs.rmSync(extrasDir, { recursive: true, force: true }); } catch { /* best effort */ } }
     }
 
     // -- smoke: the SAME shared contract quaude's build already runs (mock +

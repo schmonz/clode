@@ -96,9 +96,10 @@ const REGISTRY = {
     // bun-graph uses, and read back from the SAME place — the -o file, never stdout — so the
     // self-check proves the exact invocation the carve will make.
     verify({ candidate, path: bin, run, fs }) {
-      const tmp = path.join(os.tmpdir(), `clode-kat-zstd-${process.pid}.zst`);
-      const out = path.join(os.tmpdir(), `clode-kat-zstd-${process.pid}.out`);
-      try { fs.unlinkSync(out); } catch { /* absent */ }
+      // In a directory of its own (mkdtemp, not clode-kat-zstd-<pid> in a shared /tmp), removed in the finally.
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-kat-zstd-'));
+      const tmp = path.join(dir, 'kat.zst');
+      const out = path.join(dir, 'kat.out');
       fs.writeFileSync(tmp, Buffer.from(ZSTD_KAT.zst));
       try {
         const r = run(bin, candidate.args(tmp, out));
@@ -116,8 +117,7 @@ const REGISTRY = {
         }
         return got === ZSTD_KAT.expected;
       } finally {
-        try { fs.unlinkSync(tmp); } catch { /* absent */ }
-        try { fs.unlinkSync(out); } catch { /* absent */ }
+        try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* absent */ }
       }
     },
     installHint: 'install zstd (or unzstd/zstdcat), or set CLODE_ZSTD to a `zstd -d -o <out> <in>`-compatible decompressor. Needed to carve Claude Code 2.1.251+, which embeds its text assets as zstd frames.',

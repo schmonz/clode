@@ -134,6 +134,7 @@ function binaryFor(manifestText, plat) {
 //
 // opts: { env, libexec, here, node=process.execPath, stderr=process.stderr }.
 async function clodeSignalsReport(ver, prev, bin, opts = {}) {
+  let cldir = null;   // the changelog's private temp dir, removed in the finally
   try {
     const {
       env = process.env,
@@ -146,8 +147,10 @@ async function clodeSignalsReport(ver, prev, bin, opts = {}) {
     const tool = path.join(libexec, 'clode-signals.cjs');
     if (!isFile(tool)) return;
 
-    // Best-effort changelog fetch to a temp file (mirrors bin/clode:339-340).
-    const cltmp = path.join(os.tmpdir(), `clode-changelog.${process.pid}`);
+    // Best-effort changelog fetch to a temp file (mirrors bin/clode:339-340), in a directory of its own (mkdtemp:
+    // not a predictable name in a shared /tmp, as clode-changelog.<pid> was).
+    cldir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-changelog-'));
+    const cltmp = path.join(cldir, 'CHANGELOG.md');
     let cl = '';
     try { await downloadFile(changelogUrl(env), cltmp); cl = cltmp; } catch { /* offline: skip */ }
 
@@ -170,10 +173,10 @@ async function clodeSignalsReport(ver, prev, bin, opts = {}) {
     // capture stdout -> stderr, discard the tool's own stderr, never throw.
     const r = spawnSync(node, [tool, ...args], { env, encoding: 'utf8' });
     if (r && r.stdout) stderr.write(r.stdout);
-
-    try { fs.unlinkSync(cltmp); } catch { /* absent */ }
   } catch {
     // warn-only: any failure in the signals digest is swallowed.
+  } finally {
+    if (cldir) { try { fs.rmSync(cldir, { recursive: true, force: true }); } catch { /* best effort */ } }
   }
 }
 
