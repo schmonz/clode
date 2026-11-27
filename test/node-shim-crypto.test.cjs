@@ -208,3 +208,35 @@ test('crypto createHash/createHmac for md5, sha1, sha512, sha3-256 and every get
   assert.match(nodeOut, /Error undefined Digest method not supported/, 'the host node oracle answered as expected');
   assert.strictEqual(r.stdout.trim(), nodeOut);
 });
+
+// crypto.subtle, as node has it: the same object as crypto.webcrypto.subtle and globalThis.crypto.subtle, and the
+// engine's native WebCrypto behind it (golden's layer2 listed it missing; the `claude gateway` subcommand imports it
+// as `import{subtle}from"crypto"`). Answers held to host node: a digest, an HMAC sign and verify, a PBKDF2 derive.
+const SUBTLE_PROG = `
+const crypto = require('node:crypto');
+const hex = (b) => Buffer.from(b).toString('hex');
+(async () => {
+  const s = crypto.subtle;
+  const out = [s === crypto.webcrypto.subtle, s === globalThis.crypto.subtle];
+  out.push(hex(await s.digest('SHA-256', Buffer.from('clode'))));
+  const key = await s.importKey('raw', Buffer.from('k'), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign', 'verify']);
+  const sig = await s.sign('HMAC', key, Buffer.from('clode'));
+  out.push(hex(sig), await s.verify('HMAC', key, sig, Buffer.from('clode')));
+  const base = await s.importKey('raw', Buffer.from('pw'), 'PBKDF2', false, ['deriveBits']);
+  out.push(hex(await s.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt: Buffer.from('salt'), iterations: 1000 }, base, 256)));
+  console.log(JSON.stringify(out));
+})();
+`;
+
+test('crypto.subtle is webcrypto.subtle, and answers as host node does', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-subtle-'));
+  try {
+    const f = path.join(dir, 'subtle.cjs');
+    fs.writeFileSync(f, SUBTLE_PROG);
+    const nodeOut = require('node:child_process').execFileSync(process.execPath, [f], { encoding: 'utf8' }).trim();
+    const r = runLoader(f);
+    assert.strictEqual(r.status, 0, r.stderr);
+    assert.strictEqual(r.stdout.trim().split('\n').pop(), nodeOut);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});

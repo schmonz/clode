@@ -1,7 +1,7 @@
 'use strict';
 // node:crypto — surface: createHash and createHmac for md5, sha1, sha224/256/384/512, sha512-224/256 and
 // sha3-224/256/384/512 (and node's aliases for them), randomUUID, randomBytes, randomFillSync, randomInt,
-// timingSafeEqual, getHashes, constants, webcrypto passthrough, X509Certificate's byte-answered members. The
+// timingSafeEqual, getHashes, constants, webcrypto and subtle passthrough, X509Certificate's byte-answered members. The
 // digests are txiki's native tjs:hashing (internal/hash.cjs), never a hash written in JS, and are held to host
 // node by test/node-shim-crypto.test.cjs. The asymmetric/KDF surface (createSign/Verify,
 // createPrivateKey/PublicKey, pbkdf2, and X509Certificate's key and name members) is NOT implemented here —
@@ -209,6 +209,8 @@ module.exports = {
   // name get the web cap. Only node's own randomBytes/randomFillSync are uncapped.
   getRandomValues: (a) => crypto.getRandomValues(a),
   webcrypto: crypto,
+  // node's crypto.subtle IS webcrypto.subtle; the engine's WebCrypto (txiki's webcrypto.c over mbedtls) is native.
+  subtle: crypto.subtle,
   // The members a certificate's own bytes answer (internal/x509.cjs); the rest are walls by name.
   X509Certificate: require('./../internal/x509.cjs').X509Certificate,
 };
