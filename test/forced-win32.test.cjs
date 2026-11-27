@@ -194,7 +194,7 @@ test('CONTROL: a 39th AUDIT_PENDING exclusion is RED by name; so is a baseline o
     findings.join('\n'));
   const over = F.exclusionFindings([DA], T, io, { 'test/d.test.cjs': 'its own reason, specific enough' },
     [...F.AUDIT_PENDING_BASELINE, 'test/d.test.cjs']);
-  assert.ok(over.some((x) => /over its ceiling of 38/.test(x)), over.join('\n'));
+  assert.ok(over.some((x) => x.includes(`over its ceiling of ${F.AUDIT_PENDING_CEILING}`)), over.join('\n'));
 });
 
 // Rule 2: node --test's stand-in for a file that reported nothing of its own, as it really spells it (measured on

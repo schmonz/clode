@@ -723,7 +723,8 @@ for (const [label, argv0, env] of [['argv[0] rg', '/some/dir/rg', {}], ['ARGV0=r
       spawn: () => { throw new Error('spawned for rg'); },
       exit: () => {},
     });
-    assert.deepStrictEqual(seen.names, ['rg-entry.cjs', 'rg-native.cjs', 'rg-regex.cjs', 'rg-walk.cjs', 'rg-types.cjs']);
+    // path-lookup.cjs too: rg-entry's findUgrep requires it whenever a search asks for ugrep (rg-native's opts.ugrep()).
+    assert.deepStrictEqual(seen.names, ['rg-entry.cjs', 'rg-native.cjs', 'rg-regex.cjs', 'rg-walk.cjs', 'rg-types.cjs', 'path-lookup.cjs']);
     assert.strictEqual(seen.dest, '/work');
     assert.strictEqual(seen.required, path.join('/work', 'rg-entry.cjs'));
     assert.deepStrictEqual(seen.main.argv, ['--clode-update-guard', '-c', 'x']);

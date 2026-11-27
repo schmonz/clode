@@ -997,9 +997,9 @@ test('spawn/spawnSync of a bare name: PATH from opts.env, non-executable file an
   const body = `
     const cp = require('node:child_process');
     const PATH = ${JSON.stringify(PATH)};
-    const s = cp.spawnSync('pltool', [], { env: { PATH }, encoding: 'utf8' });
+    const s = cp.spawnSync('pltool', [], { env: { PATH, HOME: process.env.HOME }, encoding: 'utf8' });
     const none = cp.spawnSync('pltool', [], { env: { HOME: '/' }, encoding: 'utf8' });
-    const c = cp.spawn('pltool', [], { env: { PATH } });
+    const c = cp.spawn('pltool', [], { env: { PATH, HOME: process.env.HOME } });
     let out = '';
     c.stdout.on('data', (d) => { out += d; });
     c.on('close', (code) => console.log(JSON.stringify({ sync: [s.status, s.stdout], none: none.error && none.error.code, async: [code, out] })));`;

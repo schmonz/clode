@@ -34,6 +34,12 @@ test('findTool returns the override when it is executable', () => {
 // same behavior with the win32 real-FS twins immediately below (write `rg.exe`, expect
 // PATHEXT resolution). Real Windows findTool coverage also comes from the
 // `provision resolves a real tar/gzip/unzip` integration tests in host-provision.
+// These two make REAL files and look them up through path-lookup.cjs, which joins win32 candidates with '\\' as libuv
+// does. The forced-win32 pass flips process.platform on a POSIX box but keeps its filesystem and its already-loaded
+// node:path (posix), so `<posix tmpdir>\\rg.exe` names nothing there: only a real Windows filesystem can answer.
+// The win32 rules themselves are driven host-independently below and in test/path-lookup.test.cjs.
+const FORCED_WIN32_REAL_FS = 'needs a real Windows filesystem (the forced-win32 pass flips process.platform only)';
+
 test('findTool ignores a non-executable override and walks PATH',
   { skip: process.platform === 'win32' }, () => {
   const dir = tmpdir();
@@ -45,7 +51,8 @@ test('findTool ignores a non-executable override and walks PATH',
 });
 
 test('findTool on win32 ignores a non-executable override and walks PATH (PATHEXT)',
-  { skip: process.platform !== 'win32' && 'win32-only: exercises PATHEXT resolution, which only exists on Windows' }, () => {
+  { skip: (process.platform !== 'win32' && 'win32-only: exercises PATHEXT resolution, which only exists on Windows')
+    || (process.env.CLODE_FORCED_WIN32 && FORCED_WIN32_REAL_FS) }, () => {
   const dir = tmpdir();
   const bad = path.join(dir, 'notexec'); // never created -> not executable
   const bindir = path.join(dir, 'bin');
@@ -66,7 +73,8 @@ test('findTool walks PATH in order and finds the first match',
 });
 
 test('findTool on win32 walks PATH in order and finds the first match (PATHEXT)',
-  { skip: process.platform !== 'win32' && 'win32-only: exercises PATHEXT resolution, which only exists on Windows' }, () => {
+  { skip: (process.platform !== 'win32' && 'win32-only: exercises PATHEXT resolution, which only exists on Windows')
+    || (process.env.CLODE_FORCED_WIN32 && FORCED_WIN32_REAL_FS) }, () => {
   const dir = tmpdir();
   const d1 = path.join(dir, 'a');
   const d2 = path.join(dir, 'b');

@@ -94,7 +94,7 @@ test('posix: node agrees — spawn of the bare name runs the same file lookPath 
   fs.mkdirSync(path.join(root, 'b', 'tool'), { recursive: true }); // a directory: so does node
   const real = mk('c/tool');
   const PATH = ['a', 'b', 'c'].map((d) => path.join(root, d)).join(':');
-  const r = spawnSync('tool', [], { env: { PATH }, encoding: 'utf8' });
+  const r = spawnSync('tool', [], { env: { PATH, HOME: process.env.HOME }, encoding: 'utf8' });   // the suite's throwaway home
   assert.strictEqual(r.status, 0, String(r.error || r.stderr));
   assert.strictEqual(r.stdout.trim(), real);
   assert.strictEqual(lookPath('tool', { env: { PATH }, platform: process.platform }), real);

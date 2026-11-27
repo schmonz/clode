@@ -138,6 +138,13 @@ const INDIRECT_SITES = [
       + 'about "all environment variables".',
   },
   {
+    file: 'libexec/path-lookup.cjs',
+    reaches: KEY_AGNOSTIC,
+    because: 'envGet(env, key) reads `env[key]` (and `env[k]` for a case-insensitive match of that key, as Windows spells its variables); '
+      + 'its callers in this file only ever ask PATH, its Windows extension list and NoDefaultCurrentDirectoryInExePath, the OS\'s own '
+      + 'search variables, read from the env a lookup is handed. No CLODE_* name.',
+  },
+  {
     file: 'libexec/target-env.cjs',
     reaches: KEY_AGNOSTIC,
     because: 'setIfUnset(env, name, value) is a `: "${VAR:=value}"` helper; the names come from '

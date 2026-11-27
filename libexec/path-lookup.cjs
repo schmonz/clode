@@ -1,13 +1,13 @@
 'use strict';
 // path-lookup — THE one PATH search. Every lookup of a bare command name in clode, quaude and naude goes through
 // lookPath (or, where the probe must be asynchronous, through pathCandidates plus the caller's own probe):
-// clode-hosttools.findTool, node-shim child_process's resolveExe, clode-resolve.whichClaude, rg-entry.findUgrep,
+// clode-hosttools.findTool, the node-shim's resolveExe, clode-resolve.whichClaude, rg-entry.findUgrep,
 // bun-shim's Bun.which and Bun.spawn, target-env's rg discovery and quaude-bootstrap's sandbox facts. There used to be
 // seven of these, and they disagreed (an execute bit checked or not, PATHEXT read from the wrong env, X_OK asked on
 // Windows, an empty PATH entry meaning cwd in one and nothing in the next): docs/superpowers/findings/
 // 2026-11-27-latent-capabilities-audit.md, D2.
 //
-// THE DEFAULT IS NODE'S, which is libuv's. What `child_process.spawn('name')` would run is what lookPath answers:
+// THE DEFAULT IS NODE'S, which is libuv's. What node runs when asked to spawn a bare name is what lookPath answers:
 //
 //   POSIX (libuv src/unix/process.c, its execvpe emulation copied from musl):
 //     - a name containing '/' is not searched: it is the path.
@@ -48,7 +48,8 @@ const LIBUV_WIN_EXTS = ['.com', '.exe'];
 
 const winOf = (platform) => platform === 'win32';
 
-// A variable from `env`; on win32 the key is case-insensitive, as it is to the OS (and to libuv's env-block scan).
+// A variable from `env`; on win32 the key is case-insensitive (a computed key, but only ever PATH, PATHEXT or
+// NoDefaultCurrentDirectoryInExePath: test/env-indirect.cjs records this file as key-agnostic), as it is to the OS (and to libuv's env-block scan).
 function envGet(env, key, isWin) {
   if (!env) return undefined;
   if (env[key] !== undefined || !isWin) return env[key];

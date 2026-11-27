@@ -6206,7 +6206,9 @@ THE AUDIT THAT CLEARS ONE: read the file's tests and find every spawn they reach
 Either way, delete the name from AUDIT_PENDING_BASELINE and lower AUDIT_PENDING_CEILING. Then run
 `node test/forced-win32.cjs --run <file>` on a POSIX host; any red it shows is a Windows-only failure in waiting.
 
-Unmeasured. None of the 38 has been audited:
+Unmeasured. None of the remaining 36 has been audited (2026-11-27: test/clode-hosttools.test.cjs and
+test/fidelity/applet-config.test.cjs left the list: their closure no longer spawns, so they run under forcing, with
+their three real-Windows-filesystem rows skipped there by name; ceiling 36):
 - test/bench-measure.test.cjs
 - test/build-gates/build-runner-gates.test.cjs
 - test/build-gates/carve-probe-gates.test.cjs
@@ -6219,7 +6221,6 @@ Unmeasured. None of the 38 has been audited:
 - test/clode-build-smoke-home.test.cjs
 - test/clode-build-spinner.test.cjs
 - test/clode-current.test.cjs
-- test/clode-hosttools.test.cjs
 - test/clode-manifest-fetch.test.cjs
 - test/clode-net.test.cjs
 - test/clode-paths.test.cjs
@@ -6230,7 +6231,6 @@ Unmeasured. None of the 38 has been audited:
 - test/env-verdicts.test.cjs
 - test/extract-autoupdater.test.cjs
 - test/extract-cache-key.test.cjs
-- test/fidelity/applet-config.test.cjs
 - test/graph-require-rewrite.test.cjs
 - test/host-provision.test.cjs
 - test/native-oracle.test.cjs

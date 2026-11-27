@@ -188,7 +188,6 @@ const AUDIT_PENDING_BASELINE = Object.freeze([
   'test/clode-build-smoke-home.test.cjs',
   'test/clode-build-spinner.test.cjs',
   'test/clode-current.test.cjs',
-  'test/clode-hosttools.test.cjs',
   'test/clode-manifest-fetch.test.cjs',
   'test/clode-net.test.cjs',
   'test/clode-paths.test.cjs',
@@ -199,7 +198,6 @@ const AUDIT_PENDING_BASELINE = Object.freeze([
   'test/env-verdicts.test.cjs',
   'test/extract-autoupdater.test.cjs',
   'test/extract-cache-key.test.cjs',
-  'test/fidelity/applet-config.test.cjs',
   'test/graph-require-rewrite.test.cjs',
   'test/host-provision.test.cjs',
   'test/native-oracle.test.cjs',
@@ -215,7 +213,7 @@ const AUDIT_PENDING_BASELINE = Object.freeze([
   'test/ucd.test.cjs',
   'test/undici.test.cjs',
 ]);
-const AUDIT_PENDING_CEILING = 38;   // lower it as names go; never raise it
+const AUDIT_PENDING_CEILING = 36;   // lower it as names go; never raise it
 const PRODUCTION_SPAWN_EXCLUDED = {
   ...Object.fromEntries(AUDIT_PENDING_BASELINE.map((k) => [k, AUDIT_PENDING])),
   // A file excluded since 2026-11-19 goes here with ITS OWN reason: what its tests reach that is real, and why.
