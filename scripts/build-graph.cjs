@@ -409,7 +409,8 @@ function defineLazy(ctx, key, derive) {
 //   2. `toolchain` called platformTag.toolchainDir() -- and so osToken(), and so
 //      `os.release()` -- for EVERY context on EVERY machine, including a `--only
 //      engine.compile --needs assume` in a NetBSD or DragonFly VM guest that never bundles
-//      anything. Under tjs those guests report an empty `os.release()`, platform-tag
+//      anything. Under tjs those guests reported an empty `os.release()` (an engine without
+//      __tjs_uname still does), platform-tag
 //      correctly REFUSES to name an artifact `netbsd-`, and the refusal landed on a build
 //      that had not asked the question: CI run 35667585073, both guests, 25s in, before the
 //      first step ran. The old spelling (`scripts/build-tjs.cjs` directly, same engine,

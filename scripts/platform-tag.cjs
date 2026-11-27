@@ -75,12 +75,12 @@ function osToken(platform = process.platform) {
   if (platform === 'darwin') return `macos-${macosVersion()}`;
   if (platform === 'linux') return `linux-${linuxGlibc()}`;
   if (platform === 'win32') return 'windows';   // ABI-stable; node<major> pins compat
-  // A FLOOR THAT CANNOT BE READ MUST WALL, NOT SHIP EMPTY. The node-shim documents
-  // os.release() returning '' as a divergence and calls a caller needing the true release
-  // "a future wall" (libexec/node-shim/modules/os.cjs). THIS IS THAT CALLER: under a
-  // node-free clode on netbsd/freebsd/haiku this produced `netbsd-` — an artifact token
-  // with an EMPTY floor — silently. An asset named for a compatibility floor it does not
-  // know is worse than a build that stops. Found 2026-08-25.
+  // A FLOOR THAT CANNOT BE READ MUST WALL, NOT SHIP EMPTY. node-shim answered os.release()
+  // with '' until it read the engine's uname (libexec/node-shim/internal/identity.cjs), and
+  // on an engine without __tjs_uname (the bootstrap engine, v0.20260831.1) it still does.
+  // THIS IS THE CALLER that needs it: under a node-free clode on netbsd/freebsd/haiku this
+  // produced `netbsd-` — an artifact token with an EMPTY floor — silently. An asset named
+  // for a compatibility floor it does not know is worse than a build that stops. Found 2026-08-25.
   const rel = String(os.release()).split('.')[0];
   if (!rel) {
     throw new Error(`platform-tag: os.release() is empty on ${platform}, so the compatibility `

@@ -85,8 +85,10 @@ const CHECKS = [
   ['cpSrc', /ComSpec/, 'match', 'child_process: shell-mode consults ComSpec'],
   ['cpSrc', /\/d \/s \/c/, 'match', 'child_process: shell-mode uses cmd.exe /d /s /c'],
   ['osSrc', /EOL:.*win32.*\\r\\n/, 'match', 'os.EOL is CRLF on win32'],
-  ['procSrc', /get arch\(\).*win32.*winArch\(\)/, 'match', 'process.arch derives honest arch on win32'],
-  ['procSrc', /PROCESSOR_ARCHITECTURE/, 'match', 'process.arch reads PROCESSOR_ARCHITECTURE'],
+  // process.arch is the engine's uname machine everywhere (internal/identity.cjs; libuv reads GetSystemInfo on
+  // win32); these two keep the older engine's win32 route, which has no uname, present.
+  ['idSrc', /platform\(\) === 'win32' \? winArch\(\)/, 'match', 'process.arch on an engine without uname: winArch on win32'],
+  ['idSrc', /PROCESSOR_ARCHITECTURE/, 'match', 'winArch reads PROCESSOR_ARCHITECTURE'],
   ['procSrc', /execPath:\s*tjs\.exePath/, 'match', 'process.execPath uses tjs.exePath'],
   ['urlSrc', /replace\(\/\\\\\/g, ?'\/'\)/, 'match', 'url.pathToFileURL normalizes backslashes'],
   ['urlSrc', /\[a-zA-Z\]:\$/, 'match', 'url.pathToFileURL recognizes drive-letter paths'],
@@ -134,6 +136,7 @@ const guard = defineGuard({
       plSrc: fs.readFileSync(path.join(__dirname, '..', 'libexec/path-lookup.cjs'), 'utf8'),
       osSrc: fs.readFileSync(path.join(__dirname, '..', 'libexec/node-shim/modules/os.cjs'), 'utf8'),
       procSrc: fs.readFileSync(path.join(__dirname, '..', 'libexec/node-shim/modules/process.cjs'), 'utf8'),
+      idSrc: fs.readFileSync(path.join(__dirname, '..', 'libexec/node-shim/internal/identity.cjs'), 'utf8'),
       urlSrc: fs.readFileSync(path.join(__dirname, '..', 'libexec/node-shim/modules/url.cjs'), 'utf8'),
       loaderSrc2: fs.readFileSync(path.join(__dirname, '..', 'libexec/node-shim/loader.cjs'), 'utf8'),
       fsSrc: fs.readFileSync(path.join(__dirname, '..', 'libexec/node-shim/modules/fs.cjs'), 'utf8'),
@@ -150,6 +153,7 @@ const guard = defineGuard({
       plSrc: '// nothing win32-specific here',
       osSrc: '// nothing win32-specific here',
       procSrc: '// nothing win32-specific here',
+      idSrc: '// nothing win32-specific here',
       urlSrc: '// nothing win32-specific here',
       loaderSrc2: "(process.env.NODE_PATH || '').split(':')",
       fsSrc: "path.resolve(p).split('/')",

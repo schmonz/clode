@@ -146,9 +146,8 @@ console.log(JSON.stringify({
 // environment block with `${os.type()} ${os.release()}` — a missing os.release
 // threw `TypeError: not a function` and crashed the query session before the
 // Messages POST. os.release/version/hostname/networkInterfaces/endianness/machine
-// must all be callable. DIVERGENCE (modules/os.cjs): release()/version() return
-// '' (this tjs build exposes no uname/kernel-release API) — asserted here so the
-// approximation is characterized, not merely mentioned.
+// must all be callable. release()/version() answered '' until they read the
+// engine's uname (internal/identity.cjs); now they are host node's own strings.
 test('os.release/version/hostname/networkInterfaces/endianness are callable', (t) => {
   if (skipUnlessTjs(t)) return;
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-osrel-'));
@@ -167,9 +166,8 @@ console.log(JSON.stringify({
   const r = runLoader(f);
   assert.strictEqual(r.status, 0, r.stderr);
   const out = JSON.parse(r.stdout.trim());
-  // DIVERGENCE assertions: release/version are the documented '' on this tjs.
-  assert.strictEqual(out.release, '');
-  assert.strictEqual(out.version, '');
+  assert.strictEqual(out.release, require('node:os').release());
+  assert.strictEqual(out.version, require('node:os').version());
   assert.strictEqual(out.hostnameStr, true);
   assert.strictEqual(out.niObj, true);
   assert.ok(out.endianness === 'LE' || out.endianness === 'BE');

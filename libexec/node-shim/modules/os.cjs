@@ -41,52 +41,23 @@ const { getPriority, setPriority } = require('./../internal/priority.cjs').makeP
   },
 });
 
-// process.platform -> node's os.type() spelling (uname -s). One case per
-// release-matrix identity; unknown values pass through untouched.
-function unameType(p) {
-  switch (p) {
-    case 'darwin': return 'Darwin';
-    case 'linux': return 'Linux';
-    case 'win32': return 'Windows_NT';
-    case 'freebsd': return 'FreeBSD';
-    case 'openbsd': return 'OpenBSD';
-    case 'netbsd': return 'NetBSD';
-    case 'dragonfly': return 'DragonFly';
-    case 'midnightbsd': return 'MidnightBSD';
-    case 'haiku': return 'Haiku';
-    case 'sunos': return 'SunOS';
-    case 'aix': return 'AIX';
-    default: return p;
-  }
-}
+// platform, arch, type, release, version and machine are node-shim's one host identity (internal/identity.cjs):
+// the engine's compile-time platform and its uname, the same answers process.platform/arch give.
+const identity = require('./../internal/identity.cjs');
 
 module.exports = {
   homedir: () => tjs.homeDir ?? tjs.env.HOME ?? '/',
   tmpdir: () => { const v = tjs.tmpDir ?? tjs.env.TMPDIR ?? '/tmp'; return v.length > 1 && v.endsWith('/') ? v.slice(0, -1) : v; },
-  platform: () => process.platform,
-  arch: () => process.arch,
-  // os.type() (Task 4 wall): the -p boot compares os.type() against 'OS400'
-  // (AIX/IBM i detection). Maps process.platform to Node's uname-style string,
-  // covering every release-matrix identity now that detectPlatform is honest
-  // (netbsd/dragonfly/midnightbsd/haiku joined when the 'linux' fallthrough
-  // lie was fixed — see process.cjs detectPlatform). Characterized by
-  // test/node-shim-platform.test.cjs.
-  type: () => unameType(process.platform),
-  __typeFor: unameType,               // test hook (node-shim-platform.test.cjs)
-  // os.release() (Task 4 wall): the -p bundle builds the system prompt's
-  // environment block with `${os.type()} ${os.release()}` (its `j_o` helper). A
-  // missing os.release throws `TypeError: not a function` and crashes the query
-  // session (surfaced as an error_during_execution result) BEFORE the Messages
-  // POST. DIVERGENCE: this tjs build exposes no uname/kernel-release API
-  // (tjs.system has cpus/loadAvg/networkInterfaces/uptime/userInfo only), so the
-  // real kernel-release string is unavailable — return the empty string. This is
-  // the OS-version suffix in a system-prompt line only (informational; the mock
-  // ignores content and a live prompt is unaffected in substance). A path that
-  // needs the true release is a future wall: add a tjs uname primitive then.
-  // Characterized by test/node-shim-path.test.cjs (os.release/hostname row).
-  release: () => '',
-  // os.version() — same unavailability; empty string DIVERGENCE (see release()).
-  version: () => '',
+  platform: () => identity.platform(),
+  arch: () => identity.arch(),
+  // os.type(), os.release(), os.version(): uname's sysname, release and version, as node answers them. The -p boot
+  // compares os.type() against 'OS400' (AIX/IBM i detection), and the bundle builds the system prompt's environment
+  // line from `${os.type()} ${os.release()}`; release() and version() answered '' until they read __tjs_uname.
+  // Characterized by test/node-shim-platform.test.cjs.
+  type: () => identity.type(),
+  __typeFor: identity.typeFor,        // test hook (node-shim-platform.test.cjs)
+  release: () => identity.release(),
+  version: () => identity.version(),
   hostname: () => tjs.hostName ?? tjs.env.HOSTNAME ?? 'localhost',
   // node returns an OBJECT KEYED BY INTERFACE NAME; tjs returns an ARRAY. Passing it
   // through unchanged handed callers the wrong shape, and the existing characterization
@@ -103,22 +74,23 @@ module.exports = {
     }
     return out;
   },
-  // arm64/x64 are little-endian; process.arch is now leg-scoped (arm64 on
-  // most legs, x64 on win32 — see process.cjs), and both are LE.
-  endianness: () => 'LE',
+  // The byte order this engine was built for, as node's is its build's. It said 'LE' everywhere, written when every
+  // leg was arm64 or x64; the PowerPC, SPARC and s390x legs are big-endian.
+  endianness: () => (new Uint8Array(Uint16Array.of(1).buffer)[0] === 1 ? 'LE' : 'BE'),
   // os.machine(): uname's machine, as node answers it ("x86_64" on x86_64 Linux, "arm64" on Apple silicon), from the
   // engine's __tjs_uname (txiki-uname-global.patch). It was process.arch, which is not the same string ("x64"): the
   // node-shim differential on linux-x64-musl read node "x86_64", quaude "x64" (2026-11-21). An engine without it is
   // REFUSED by name, never answered from a guessed arch-to-machine table (scripts/engine-api-floor.cjs).
   machine: () => {
-    if (typeof globalThis.__tjs_uname !== 'function') {
+    const u = identity.uname();
+    if (!u) {
       const e = new Error('node-shim: this engine has no __tjs_uname (it predates txiki-uname-global.patch), so '
         + 'os.machine() cannot answer uname\'s machine; rebuild it: ./build.sh --only engine.compile');
       e.code = 'ERR_CLODE_ENGINE_FLOOR';
       require('../internal/engine-floor-log.cjs').engineFloorLog(e.message);
       throw e;
     }
-    return globalThis.__tjs_uname().machine;
+    return u.machine;
   },
   // Memory figures: tjs exposes no free/total memory API. DIVERGENCE: return 0 so
   // callers that only read `.length`/compare-to-0 don't crash; a path needing real

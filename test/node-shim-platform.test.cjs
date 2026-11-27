@@ -48,7 +48,8 @@ const live = process.__detectPlatform(navigator.userAgentData?.platform, navigat
 if (process.platform !== live) out.push('FAIL live platform ' + process.platform + ' != ' + live);
 if (os.type() !== os.__typeFor(process.platform)) out.push('FAIL live type ' + os.type());
 // Live arch honesty: process.arch must equal machineToNodeArch(uname -m), never a
-// hardcoded 'arm64' on an x86_64 host (the Mavericks-build bug).
+// hardcoded 'arm64' on an x86_64 host (the Mavericks-build bug). uname -m is spawned
+// HERE, as the oracle; the shim itself reads the engine's __tjs_uname.
 try {
   const mach = String(require('node:child_process').execFileSync('uname', ['-m'], { encoding: 'utf8' })).trim();
   const want = process.machineToNodeArch(mach);
@@ -100,4 +101,64 @@ test('machineToNodeArch maps uname -m to node process.arch values', () => {
   assert.strictEqual(machineToNodeArch('powerpc'), 'ppc');
   assert.strictEqual(machineToNodeArch('Arm64'), 'arm64');     // case-insensitive
   assert.strictEqual(machineToNodeArch(''), 'x64');            // unknown/empty -> safe default (NOT the old arm64 lie)
+});
+
+// The one identity (internal/identity.cjs), DIFFERENTIALLY: every member process and os answer it with is host
+// node's own value on this host. release() and version() answered '' before they read the engine's uname, and
+// os.endianness() said 'LE' on every leg. process.arch must not spawn anything: the engine reports uname.
+const IDENTITY_PROG = `
+const os = require('node:os');
+console.log(JSON.stringify({
+  platform: process.platform, arch: process.arch,
+  osPlatform: os.platform(), osArch: os.arch(), type: os.type(), release: os.release(), version: os.version(),
+  machine: os.machine(), endianness: os.endianness(),
+}));
+`;
+
+test('process.platform/arch and os.platform/arch/type/release/version/machine/endianness are host node\'s', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-identity-'));
+  try {
+    const f = path.join(dir, 'identity.cjs');
+    fs.writeFileSync(f, IDENTITY_PROG);
+    const node = JSON.parse(require('node:child_process').execFileSync(process.execPath, [f], { encoding: 'utf8' }));
+    const r = runLoader(f);
+    assert.strictEqual(r.status, 0, r.stderr);
+    assert.deepStrictEqual(JSON.parse(r.stdout.trim().split('\n').pop()), node);
+    assert.notStrictEqual(node.release, '');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+// process.arch reads the engine's uname, never a subprocess: with spawnSync made to throw, it still answers.
+test('process.arch spawns nothing on an engine with __tjs_uname', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-arch-nospawn-'));
+  try {
+    const f = path.join(dir, 'arch.cjs');
+    fs.writeFileSync(f, `const cp = require('node:child_process');
+cp.spawnSync = () => { throw new Error('process.arch spawned a child'); };
+console.log(JSON.stringify(process.arch));`);
+    const r = runLoader(f);
+    assert.strictEqual(r.status, 0, r.stderr);
+    assert.strictEqual(JSON.parse(r.stdout.trim().split('\n').pop()), process.arch);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+// The bootstrap engine (v0.20260831.1, simulated by test/fixtures/stale-engine-prelude.js) has no __tjs_uname and
+// still runs the build, which reads process.arch: there arch takes the old route and answers the same, type() maps
+// the platform, release()/version() answer the '' they always did.
+test('on an engine without __tjs_uname, process.arch and os.type still answer, release/version are empty', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-identity-stale-'));
+  try {
+    const prelude = fs.readFileSync(path.join(__dirname, 'fixtures', 'stale-engine-prelude.js'), 'utf8');
+    const f = path.join(dir, 'stale.cjs');
+    fs.writeFileSync(f, `${prelude}
+const os = require('node:os');
+console.log(JSON.stringify({ uname: typeof globalThis.__tjs_uname, arch: process.arch, type: os.type(), release: os.release(), version: os.version() }));`);
+    const r = runLoader(f);
+    assert.strictEqual(r.status, 0, r.stderr);
+    assert.deepStrictEqual(JSON.parse(r.stdout.trim().split('\n').pop()),
+      { uname: 'undefined', arch: process.arch, type: os.type(), release: '', version: '' });
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

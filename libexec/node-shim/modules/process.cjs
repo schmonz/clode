@@ -7,12 +7,9 @@
 //   - tjs.cwd, tjs.exePath, tjs.pid are already-evaluated VALUES, not
 //     functions (unlike the brief's tjs.cwd()/tjs.exit() draft assumed for
 //     cwd/exePath/pid — exit() genuinely is a function).
-//   - tjs.platform does not exist on the global; navigator.platform
-//     ('MacIntel' / 'Linux x86_64' / 'Win32' / ...) is the real signal.
-//   - tjs has no arch signal outside win32 (arch below defaults non-win32 to
-//     'arm64' — a documented gap; M4 (NetBSD/mac68k guest) must revisit
-//     this). On win32, arch is now honestly derived from
-//     PROCESSOR_ARCHITECTURE (winArch, below) — no non-x64 gap remains there.
+//   - tjs.platform does not exist on the global; platform and arch come from
+//     internal/identity.cjs (navigator.userAgentData.platform, the engine's
+//     compile-time platform, and __tjs_uname's machine).
 //
 // stdout/stderr writes: Task-3 used tjs.stdout.getWriter().write(...) and
 // never awaited the returned promise — a write() immediately followed by
@@ -41,88 +38,9 @@ function engineRusage(caller) {
 
 const { writeSyncFd } = require('../internal/stdio-write.cjs');
 const { isTerminalFd } = require('../internal/terminal-fd.cjs');
-// The 5-case uaPlatform->node switch below used to be duplicated
-// character-for-character in quaude-bootstrap.mjs's tjsPlatform; it now lives
-// ONCE in target-env.cjs's mapPlatform (the require-free member quaude's
-// blobulated bootstrap evaluates pre-node-shim). This module runs under the
-// node-shim, where require exists, so it just requires the shared file.
-const { mapPlatform } = require('../../target-env.cjs');
-
-// Honest process.platform for EVERY release-matrix leg. The old version
-// enumerated Mac/Win/Linux/FreeBSD/OpenBSD and DEFAULTED to 'linux', so 8 of
-// the 22 tjs builder legs (netbsd ×2, dragonflybsd, midnightbsd, the three
-// SunOS/illumos legs, haiku) lied — quaude-on-NetBSD read "Platform: linux"
-// in its own system prompt while uname said NetBSD. Primary signal:
-// navigator.userAgentData.platform, which txiki maps for its big five and
-// passes through VERBATIM (lowercase CMAKE_SYSTEM_NAME: 'netbsd',
-// 'dragonfly', 'sunos', 'midnightbsd', 'haiku', ...) for everything else —
-// matching node's process.platform convention for every known case, current
-// and future legs alike. That mapping is target-env.cjs's mapPlatform (shared
-// with quaude-bootstrap.mjs's tjsPlatform — see the require above). Fallback,
-// LOCAL to this module: the legacy navigator.platform regexes, for when ua is
-// empty — quaude's blobulated bootstrap never has this second signal, so it stays
-// out of the shared mapping. txiki's fallthrough there is "<platform>
-// <machine>" (first token = the same lowercase name). Characterized by
-// test/node-shim-platform.test.cjs. DEFERRED (Q3 engine batch, needs uname on
-// the tjs facade): process.arch, os.release()/version(), per-platform
-// O_*/signal tables.
-function detectPlatform(uaPlatform, navPlatform) {
-  const ua = uaPlatform
-    ?? (typeof navigator !== 'undefined' && navigator.userAgentData && navigator.userAgentData.platform)
-    ?? '';
-  if (ua) return mapPlatform(ua);
-  const np = navPlatform ?? ((typeof navigator !== 'undefined' && navigator.platform) || '');
-  if (/^Mac/.test(np)) return 'darwin';
-  if (/^Win/.test(np)) return 'win32';
-  if (/^Linux/.test(np)) return 'linux';
-  if (/^FreeBSD/i.test(np)) return 'freebsd';
-  if (/^OpenBSD/i.test(np)) return 'openbsd';
-  if (np) return np.split(' ')[0].toLowerCase();
-  return 'linux';
-}
-
-// Honest Windows arch from PROCESSOR_ARCHITECTURE (ARM64 | AMD64 | x86), set by
-// the OS for every process. Our tjs.exe is a NATIVE binary (not under WoW64), so
-// this reports the true arch — no PROCESSOR_ARCHITEW6432 dance. Fixes both legs:
-// x64 -> 'x64', arm64 -> 'arm64'.
-function winArch(env = (typeof tjs !== 'undefined' && tjs.env) || {}) {
-  const pa = String(env.PROCESSOR_ARCHITECTURE || '').toUpperCase();
-  if (pa === 'ARM64') return 'arm64';
-  if (pa === 'X86') return 'ia32';
-  return 'x64'; // AMD64 or unknown -> x64 (the safe existing default)
-}
-
-// uname -m machine string -> node process.arch value (the non-win32 arch source).
-// The old hardcoded 'arm64' here was the Mavericks-build bug: on an x86_64 host it
-// made codesignAdHoc (clode-build.cjs) thin the genuinely-fat tjs template down to
-// arm64. Covers the arches our targets run on; unknown -> 'x64' (safe, never the
-// arm64 lie). NetBSD reports 'evbarm' on arm64 — mapping, not passthrough.
-function machineToNodeArch(machine) {
-  const m = String(machine || '').trim().toLowerCase();
-  if (m === 'x86_64' || m === 'amd64') return 'x64';
-  if (m === 'arm64' || m === 'aarch64' || m === 'evbarm') return 'arm64';
-  if (m === 'i386' || m === 'i486' || m === 'i586' || m === 'i686' || m === 'x86') return 'ia32';
-  if (m === 'arm' || /^armv[4-8]/.test(m)) return 'arm';
-  if (m === 'ppc64le' || m === 'ppc64') return 'ppc64';
-  if (m === 'ppc' || m === 'powerpc') return 'ppc';
-  if (m === 's390x') return 's390x';
-  if (m === 'riscv64') return 'riscv64';
-  return m || 'x64';
-}
-
-// Honest non-win32 arch: `uname -m`, mapped. Lazy + cached — process.arch is read
-// well after boot (the build's codesignAdHoc), so the child_process shim is loaded
-// by then and this never runs at module-eval. uname-unavailable -> 'x64' (safe).
-let _unixArch;
-function unixArch() {
-  if (_unixArch) return _unixArch;
-  let m = '';
-  try {
-    const r = require('node:child_process').spawnSync('uname', ['-m'], { encoding: 'utf8' });
-    m = r && r.stdout != null ? String(r.stdout).trim() : '';
-  } catch { m = ''; }
-  return (_unixArch = machineToNodeArch(m));
-}
+// process.platform and process.arch are node-shim's one host identity (internal/identity.cjs), which node:os
+// answers from too.
+const identity = require('../internal/identity.cjs');
 
 // process.getuid() (Task 5 wall, POSIX-only — matches Node, which does not
 // define it on win32). PROVEN behavioral impact: without this, quaude's uid
@@ -146,7 +64,7 @@ function unixArch() {
 //
 // FALLBACK (only reachable if tjs.system.userInfo itself is ever absent —
 // not expected on any real libuv-backed engine, kept for defense in depth):
-// the exact pattern unixArch() above already uses for process.arch — shell
+// the pattern internal/identity.cjs uses for process.arch on an engine without __tjs_uname — shell
 // out to a real POSIX utility. `id -u -r` asks for the REAL id explicitly
 // (plain `id -u` is the EFFECTIVE uid, a real-vs-effective mismatch the
 // primary path does not have); if `-r` isn't supported by whatever `id` is
@@ -155,7 +73,7 @@ function unixArch() {
 //
 // LAST RESORT: if every primitive is unavailable (no libuv userInfo AND no
 // working `id` on PATH — e.g. PATH stripped entirely), DEGRADE to 0 rather
-// than throw, mirroring unixArch()'s degrade-to-'x64'. This function is
+// than throw, mirroring identity's degrade-to-'x64'. This function is
 // called unguarded at some bundle call sites (`process.getuid()===0`); a
 // throw there would crash a process real Node starts successfully (Node's
 // getuid(2) cannot fail on any platform that defines it at all) — turning a
@@ -328,18 +246,13 @@ module.exports = {
       return v === undefined ? undefined : { value: v, enumerable: true, configurable: true, writable: true };
     },
   }),
-  platform: detectPlatform(),
-  __detectPlatform: detectPlatform,   // test hook (node-shim-platform.test.cjs)
-  winArch,                            // test hook (node-shim-platform.test.cjs)
-  machineToNodeArch,                  // test hook (node-shim-platform.test.cjs)
-  // arch: honest on every platform now. win32 from PROCESSOR_ARCHITECTURE
-  // (winArch); non-win32 from `uname -m` mapped to node's arch spelling
-  // (unixArch/machineToNodeArch). Lazy getter — arch is read at build time
-  // (codesignAdHoc), long after boot, so the uname spawn never fires at
-  // module-eval. This retires the old hardcoded 'arm64' that broke `clode build`
-  // on x86_64 macOS (it thinned the fat tjs template to arm64). See
-  // shim-platform-honesty + the universal-template diagnosis.
-  get arch() { return detectPlatform() === 'win32' ? winArch() : unixArch(); },
+  platform: identity.platform(),
+  __detectPlatform: identity.detectPlatform,   // test hook (node-shim-platform.test.cjs)
+  winArch: identity.winArch,                   // test hook (node-shim-platform.test.cjs)
+  machineToNodeArch: identity.machineToNodeArch, // test hook (node-shim-platform.test.cjs)
+  // arch: the engine's uname machine in node's spelling (identity.arch). A getter, as it was when it spawned
+  // `uname -m`: the older engine's route still does, and nothing should pay for it at module-eval.
+  get arch() { return identity.arch(); },
   pid: tjs.pid,
   // process.ppid (Task 5 wall): the bundle polls this to detect reparenting
   // (orphan-check: "has my launcher died?") — a snapshot-then-recompare
@@ -678,8 +591,8 @@ function makeReport() {
         throw require('../internal/node-errors.cjs').invalidArgType('The "err" argument must be of type object', err);
       }
       const header = { platform: module.exports.platform, arch: module.exports.arch };
-      if (typeof globalThis.__tjs_uname === 'function') {
-        const u = globalThis.__tjs_uname();
+      const u = identity.uname();
+      if (u) {
         Object.assign(header, { osName: u.sysname, osRelease: u.release, osVersion: u.version, osMachine: u.machine });
       }
       Object.assign(header, globalThis.__tjs_libc());
