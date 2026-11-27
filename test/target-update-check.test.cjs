@@ -11,12 +11,8 @@ function fakeFetch(bodyOrErr) {
     return { ok: true, status: 200, text: async () => bodyOrErr };
   };
 }
-// Numeric-dotted order, standing in for Bun.semver.order (npm semver compare).
-const order = (a, b) => {
-  const pa = a.split('.').map(Number), pb = b.split('.').map(Number);
-  for (let i = 0; i < 3; i++) { if (pa[i] !== pb[i]) return pa[i] < pb[i] ? -1 : 1; }
-  return 0;
-};
+// The one version order (libexec/version-compare.cjs), standing in for Bun.semver.order (npm semver compare).
+const { compareVersions: order } = require('../libexec/version-compare.cjs');
 
 test('resolveChannel precedence: explicit > env > default latest', () => {
   assert.strictEqual(resolveChannel('stable', {}), 'stable');

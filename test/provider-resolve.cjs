@@ -232,14 +232,8 @@ function pinnedVersion() {
   } catch { return null; }
 }
 
-function cmpVersion(a, b) {
-  const A = a.split('.').map(Number), B = b.split('.').map(Number);
-  for (let i = 0; i < Math.max(A.length, B.length); i++) {
-    const d = (A[i] || 0) - (B[i] || 0);
-    if (d) return d < 0 ? -1 : 1;
-  }
-  return 0;
-}
+// The one version order (libexec/version-compare.cjs).
+const { compareVersions: cmpVersion } = require('../libexec/version-compare.cjs');
 
 // THE rg ORACLE: providerBin's provider when it RUNS as rg (native's embedded rg answers `--version` under argv0
 // rg), else null. CI's suite hands the tests a MINIMISED carve (scripts/stage-provider.mjs: only clode reads it,

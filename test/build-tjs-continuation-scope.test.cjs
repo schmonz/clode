@@ -168,7 +168,7 @@ function scanContinuationScope({ src }) {
 
 const continuationScopeGuard = defineGuard({
   name: 'build-tjs-continuation-scope',
-  // 1 for the opener + one per function declared inside it (7 today). EXACT, not
+  // 1 for the opener + one per function declared inside it (6 today). EXACT, not
   // padded: floor is a minimum, so legitimate growth only raises `examined`. If the
   // count FALLS the guard is inspecting less than it must and BROKEN is the right
   // answer — a human then lowers this deliberately.
@@ -180,8 +180,10 @@ const continuationScopeGuard = defineGuard({
   // meaningful. 7 -> 8: assertBytecodeRulesPresent was ADDED, because deleting that
   // detector is only safe while the injected rules are actually present, and a
   // --build-only over a pre-4c-2 tree is a real way for them not to be. Kept EXACT
-  // rather than left at 7, so the next fall is still caught.
-  floor: 8,
+  // rather than left at 7, so the next fall is still caught. 8 -> 7 (2026-11-27):
+  // cmakeVersionSupportsIgnorePrefixPath was DELETED, not moved: the cmake gate is now
+  // libexec/version-compare.cjs's compareVersions against a named floor, inline.
+  floor: 7,
   read: () => ({ src: fs.readFileSync(BUILD_TJS, 'utf8') }),
   scan: scanContinuationScope,
   // The incident itself, in miniature: a top-level statement calling a function
@@ -195,7 +197,6 @@ const continuationScopeGuard = defineGuard({
     'function buildHostTjsc(d, t) { return t; }',
     'function regenBytecodeArrays() {}',
     'function assertBytecodeRulesPresent() {}',
-    'function cmakeVersionSupportsIgnorePrefixPath() {}',
     'function bytecodeSymbolBase() {}',
     'function checkHermeticDeps() {}',
     '})();',

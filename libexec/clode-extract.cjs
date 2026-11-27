@@ -292,7 +292,7 @@ function extractIfNeeded(opts) {
   // runs, whose shell function bun-shim writes; grep-native Task 10c), and path-lookup.cjs (the one PATH search, which
   // bun-shim and rg-entry both require), see test/shim-companions.test.cjs: staged
   // beside the shim everywhere the shim is staged, never on its own.
-  const companions = ['unicode-text.cjs', 'rg-entry.cjs', 'rg-native.cjs', 'rg-regex.cjs', 'rg-walk.cjs', 'rg-types.cjs', 'path-lookup.cjs']
+  const companions = ['unicode-text.cjs', 'rg-entry.cjs', 'rg-native.cjs', 'rg-regex.cjs', 'rg-walk.cjs', 'rg-types.cjs', 'path-lookup.cjs', 'version-compare.cjs']
     .map((name) => ({ name, src: path.join(libexec, name), cache: path.join(cacheDir, name) }));
   const sigPath = path.join(cacheDir, '.extractor-sig');
 

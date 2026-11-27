@@ -47,6 +47,9 @@ const rgRegexModule = () => _rgRegex || (_rgRegex = require(__dirname + '/rg-reg
 let _rgWalk = null, _rgTypes = null;
 const rgWalkModule = () => _rgWalk || (_rgWalk = require(__dirname + '/rg-walk.cjs'));
 const rgTypesModule = () => _rgTypes || (_rgTypes = require(__dirname + '/rg-types.cjs'));
+// The one version order (version-compare.cjs), for the ugrep floor: a companion too, required on first use.
+let _versionCompare = null;
+const versionCompareModule = () => _versionCompare || (_versionCompare = require(__dirname + '/version-compare.cjs'));
 
 // Is this executable rg? By BASENAME, never by the exact string `rg`: the bundle resolves
 // rg as `Bun.which('rg') ?? 'rg'`, which was an absolute path whenever the host had an rg
@@ -209,9 +212,7 @@ function parseUgrepVersion(text) {
   return m ? `${+m[1]}.${+m[2]}.${+m[3]}` : null;
 }
 function versionAtLeast(v, min) {
-  const a = String(v).split('.').map(Number), b = String(min).split('.').map(Number);
-  for (let i = 0; i < 3; i++) if ((a[i] || 0) !== (b[i] || 0)) return (a[i] || 0) > (b[i] || 0);
-  return true;
+  return versionCompareModule().compareVersions(v, min) >= 0;
 }
 
 // What this ugrep can do for quaude's rg: { bin, version, format, reason }. `format` is true

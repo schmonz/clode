@@ -7,9 +7,8 @@
 //   REPO/CHANGELOG.md                    (HIGH/low signal source)
 //   CLODE_PROVIDERS/<v>/claude + current symlink   (fake clode-managed provider)
 //
-// version_gt uses the REAL `semver` ext-dep; like test_watch.bats we pin
-// CLODE_DEPS to the real store (per-test HOME/XDG overrides mustn't hide it) and
-// skip when it's absent.
+// version_gt is libexec/version-compare.cjs's order, so nothing here depends on an
+// installed `semver` (it used to, and these tests skipped wherever none was installed).
 const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -23,34 +22,7 @@ const {
 
 const REPO_ROOT = path.resolve(__dirname, '..');
 const LIBEXEC = path.join(REPO_ROOT, 'libexec');
-const HERE = path.join(REPO_ROOT, 'bin');
 const NODE = process.env.CLODE_NODE || process.execPath;
-
-// Pin the real dep store so version_gt's semver resolves regardless of the
-// per-test HOME/XDG overrides (identical to test_watch.bats's setup()).
-const REAL_STORE = path.join(
-  process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share'),
-  'clode');
-// WHERE semver ACTUALLY LIVES. clode-watch resolves it from EITHER the shared store
-// (CLODE_DEPS / XDG_DATA_HOME) or a sibling deps/claude/node_modules — see
-// libexec/clode-watch.cjs:54-56. This gate used to check ONLY the store, and that made
-// the suite's coverage depend on mutable machine state OUTSIDE the repo:
-//
-//   * CI populates deps/claude/node_modules (`npm ci --prefix deps/claude`) and NEVER
-//     the shared store, so all 16 of these tests SKIPPED IN CI — silently, forever.
-//   * On a dev box they run only if something happened to have primed the store. Two of
-//     them were asserting pre-1af2027 wording and passing for months by not running; they
-//     failed the instant an unrelated `clode build` created ~/.local/share/clode at
-//     01:13 on 2026-08-25.
-//
-// So the gate now mirrors the resolution order of the code under test. A test whose
-// coverage turns on and off with machine state is not a test, it is a coin flip.
-const SEMVER_SRC = [
-  path.join(REAL_STORE, 'node_modules', 'semver'),
-  path.join(__dirname, '..', 'deps', 'claude', 'node_modules', 'semver'),
-].find((p) => fs.existsSync(p)) || null;
-const HAVE_SEMVER = SEMVER_SRC !== null;
-const semverOpts = { skip: HAVE_SEMVER ? false : 'semver ext-dep not installed (store or deps/claude)' };
 
 function tmpdir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'clode-watch-'));
@@ -93,8 +65,6 @@ function watchFixture(latest, current, tier) {
     CLODE_RELEASES_URL: 'file://' + repo,
     CLODE_CHANGELOG_URL: 'file://' + path.join(repo, 'CHANGELOG.md'),
     CLODE_PROVIDERS: providers,
-    // Pin the real store so semver resolves.
-    CLODE_DEPS: path.dirname(path.dirname(SEMVER_SRC)),
   };
   const notice = path.join(watchDirPath, 'watch-notice');
   return { tmp, env, notice, watchDirPath, providers };
@@ -109,53 +79,20 @@ function readNotice(p) {
   return out;
 }
 
-// --- versionGt (real semver) ------------------------------------------------
+// --- versionGt (the one version order) --------------------------------------
 
-test('versionGt uses real semver: greater, equal, lesser, prerelease', semverOpts, () => {
-  const env = { CLODE_DEPS: path.dirname(path.dirname(SEMVER_SRC)) };
-  const o = { env };
-  assert.strictEqual(versionGt('2.0.0', '1.9.9', o), true);
-  assert.strictEqual(versionGt('2.1.10', '2.1.9', o), true);
-  assert.strictEqual(versionGt('1.0.0', '1.0.0', o), false);
-  assert.strictEqual(versionGt('1.9.9', '2.0.0', o), false);
-  assert.strictEqual(versionGt('2.0.0', '2.0.0-rc1', o), true);
+test('versionGt: greater, equal, lesser, prerelease', () => {
+  assert.strictEqual(versionGt('2.0.0', '1.9.9'), true);
+  assert.strictEqual(versionGt('2.1.10', '2.1.9'), true);
+  assert.strictEqual(versionGt('1.0.0', '1.0.0'), false);
+  assert.strictEqual(versionGt('1.9.9', '2.0.0'), false);
+  assert.strictEqual(versionGt('2.0.0', '2.0.0-rc1'), true);
+  assert.strictEqual(versionGt('2.1.332', '2.1.330'), true);
 });
 
-test('versionGt is conservative (false) on garbage / no semver', () => {
-  // Bogus store => semver unresolvable => conservative non-greater.
-  const env = { CLODE_DEPS: '/nonexistent-store-xyz', XDG_DATA_HOME: '/nonexistent-xyz' };
-  assert.strictEqual(versionGt('2.0.0', '1.0.0', { env }), false);
-});
-
-test('versionGt works with a semver exposing only compare() (no gt)', () => {
-  // The sanctioned fake semver (test_helper.bash seed + managed-deps fixture)
-  // exports compare/satisfies only. versionGt must not depend on gt().
-  const tmp = tmpdir();
-  const nm = path.join(tmp, 'clode', 'node_modules', 'semver');
-  fs.mkdirSync(nm, { recursive: true });
-  fs.writeFileSync(path.join(nm, 'package.json'),
-    '{"name":"semver","version":"0.0.0-test","main":"index.js"}');
-  fs.writeFileSync(path.join(nm, 'index.js'),
-    'const P=v=>String(v).replace(/^[v=]+/,"").split(".").map(n=>parseInt(n,10)||0);' +
-    'exports.compare=(a,b)=>{const x=P(a),y=P(b);for(let i=0;i<3;i++)' +
-    'if((x[i]||0)!==(y[i]||0))return (x[i]||0)<(y[i]||0)?-1:1;return 0;};' +
-    'exports.satisfies=()=>true;');
-  const env = { CLODE_DEPS: path.join(tmp, 'clode') };
-  assert.strictEqual(versionGt('2.0.0', '1.0.0', { env }), true, 'greater');
-  assert.strictEqual(versionGt('1.0.0', '2.0.0', { env }), false, 'lesser');
-  assert.strictEqual(versionGt('1.0.0', '1.0.0', { env }), false, 'equal');
-});
-
-test('versionGt resolves semver via a sibling deps/claude/node_modules (source checkout layout)', semverOpts, () => {
-  const tmp = tmpdir();
-  const appBin = path.join(tmp, 'app', 'bin');
-  const appNm = path.join(tmp, 'app', 'deps', 'claude', 'node_modules');
-  fs.mkdirSync(appBin, { recursive: true });
-  fs.mkdirSync(appNm, { recursive: true });
-  fs.cpSync(SEMVER_SRC,
-    path.join(appNm, 'semver'), { recursive: true });
-  const env = { CLODE_DEPS: path.join(tmp, 'empty'), XDG_DATA_HOME: path.join(tmp, 'empty') };
-  assert.strictEqual(versionGt('2.0.0', '1.0.0', { env, here: appBin }), true);
+test('versionGt is conservative (false) on a version that is not one', () => {
+  assert.strictEqual(versionGt('2.0.0', 'garbage'), false);
+  assert.strictEqual(versionGt('nope', '1.0.0'), false);
 });
 
 // --- watchDir ---------------------------------------------------------------
@@ -193,9 +130,9 @@ test('fileMtime returns a numeric epoch; 0 for missing', () => {
 
 // --- clodeWatch: the poll->detect->notify cycle ----------------------------
 
-test('clodeWatch: newer version with HIGH signal writes high=1 notice', semverOpts, async () => {
+test('clodeWatch: newer version with HIGH signal writes high=1 notice', async () => {
   const fx = watchFixture('2.0.0', '1.0.0', 'high');
-  const rc = await clodeWatch('', { env: fx.env, libexec: LIBEXEC, here: HERE, node: NODE, stderr: sink() });
+  const rc = await clodeWatch('', { env: fx.env, libexec: LIBEXEC, node: NODE, stderr: sink() });
   assert.strictEqual(rc, 0);
   const n = readNotice(fx.notice);
   assert.strictEqual(n.latest, '2.0.0');
@@ -203,60 +140,60 @@ test('clodeWatch: newer version with HIGH signal writes high=1 notice', semverOp
   assert.strictEqual(n.high, '1');
 });
 
-test('clodeWatch: newer version without HIGH signal writes high=0', semverOpts, async () => {
+test('clodeWatch: newer version without HIGH signal writes high=0', async () => {
   const fx = watchFixture('2.0.0', '1.0.0', 'low');
-  const rc = await clodeWatch('', { env: fx.env, libexec: LIBEXEC, here: HERE, node: NODE, stderr: sink() });
+  const rc = await clodeWatch('', { env: fx.env, libexec: LIBEXEC, node: NODE, stderr: sink() });
   assert.strictEqual(rc, 0);
   assert.strictEqual(readNotice(fx.notice).high, '0');
 });
 
-test('clodeWatch: not newer writes high=0, never banners', semverOpts, async () => {
+test('clodeWatch: not newer writes high=0, never banners', async () => {
   const fx = watchFixture('1.0.0', '1.0.0', 'high');
   const err = sink();
-  const rc = await clodeWatch('', { env: fx.env, libexec: LIBEXEC, here: HERE, node: NODE, stderr: err });
+  const rc = await clodeWatch('', { env: fx.env, libexec: LIBEXEC, node: NODE, stderr: err });
   assert.strictEqual(rc, 0);
   assert.strictEqual(readNotice(fx.notice).high, '0');
   assert.strictEqual(err.text(), '');
 });
 
-test('clodeWatch: no provider store is a silent no-op (no notice written)', semverOpts, async () => {
+test('clodeWatch: no provider store is a silent no-op (no notice written)', async () => {
   const fx = watchFixture('2.0.0', '', 'high');
-  const rc = await clodeWatch('', { env: fx.env, libexec: LIBEXEC, here: HERE, node: NODE, stderr: sink() });
+  const rc = await clodeWatch('', { env: fx.env, libexec: LIBEXEC, node: NODE, stderr: sink() });
   assert.strictEqual(rc, 0);
   assert.strictEqual(fs.existsSync(fx.notice), false);
 });
 
-test('clodeWatch manual mode: HIGH prints a repackaging-impact summary to stderr', semverOpts, async () => {
+test('clodeWatch manual mode: HIGH prints a repackaging-impact summary to stderr', async () => {
   const fx = watchFixture('2.0.0', '1.0.0', 'high');
   const err = sink();
-  const rc = await clodeWatch('manual', { env: fx.env, libexec: LIBEXEC, here: HERE, node: NODE, stderr: err });
+  const rc = await clodeWatch('manual', { env: fx.env, libexec: LIBEXEC, node: NODE, stderr: err });
   assert.strictEqual(rc, 0);
   assert.match(err.text(), /may affect how clode repackages it/);
 });
 
-test('clodeWatch manual mode: low prints an available/no-signals summary', semverOpts, async () => {
+test('clodeWatch manual mode: low prints an available/no-signals summary', async () => {
   const fx = watchFixture('2.0.0', '1.0.0', 'low');
   const err = sink();
-  const rc = await clodeWatch('manual', { env: fx.env, libexec: LIBEXEC, here: HERE, node: NODE, stderr: err });
+  const rc = await clodeWatch('manual', { env: fx.env, libexec: LIBEXEC, node: NODE, stderr: err });
   assert.strictEqual(rc, 0);
   assert.match(err.text(), /is available \(no repackaging-impacting signals\)/);
 });
 
-test('clodeWatch manual mode: up-to-date prints an up-to-date summary', semverOpts, async () => {
+test('clodeWatch manual mode: up-to-date prints an up-to-date summary', async () => {
   const fx = watchFixture('1.0.0', '1.0.0', 'high');
   const err = sink();
-  const rc = await clodeWatch('manual', { env: fx.env, libexec: LIBEXEC, here: HERE, node: NODE, stderr: err });
+  const rc = await clodeWatch('manual', { env: fx.env, libexec: LIBEXEC, node: NODE, stderr: err });
   assert.strictEqual(rc, 0);
   assert.match(err.text(), /up to date \(1\.0\.0; latest 1\.0\.0\)/);
 });
 
-test('clodeWatch follows autoUpdatesChannel when picking the upstream pointer', semverOpts, async () => {
+test('clodeWatch follows autoUpdatesChannel when picking the upstream pointer', async () => {
   // stable -> 1.0.0 (== current), latest -> 2.0.0. Default (no setting) follows
   // latest, so 2.0.0 is seen as newer; autoUpdatesChannel=stable sees up-to-date.
   const fx = watchFixture('2.0.0', '1.0.0', 'low');
   fs.writeFileSync(path.join(fx.tmp, 'repo', 'stable'), '1.0.0\n');
 
-  const def = await clodeWatch('', { env: fx.env, libexec: LIBEXEC, here: HERE, node: NODE, stderr: sink() });
+  const def = await clodeWatch('', { env: fx.env, libexec: LIBEXEC, node: NODE, stderr: sink() });
   assert.strictEqual(def, 0);
   assert.strictEqual(readNotice(fx.notice).latest, '2.0.0', 'default follows latest pointer');
 
@@ -264,27 +201,27 @@ test('clodeWatch follows autoUpdatesChannel when picking the upstream pointer', 
   fs.mkdirSync(cfg, { recursive: true });
   fs.writeFileSync(path.join(cfg, 'settings.json'), JSON.stringify({ autoUpdatesChannel: 'stable' }) + '\n');
   const err = sink();
-  const rc = await clodeWatch('manual', { env: fx.env, libexec: LIBEXEC, here: HERE, node: NODE, stderr: err });
+  const rc = await clodeWatch('manual', { env: fx.env, libexec: LIBEXEC, node: NODE, stderr: err });
   assert.strictEqual(rc, 0);
   assert.match(err.text(), /up to date \(1\.0\.0; stable 1\.0\.0\)/, 'stable setting follows stable pointer');
 });
 
-test('clodeWatch non-manual mode is silent (no stderr)', semverOpts, async () => {
+test('clodeWatch non-manual mode is silent (no stderr)', async () => {
   const fx = watchFixture('2.0.0', '1.0.0', 'high');
   const err = sink();
-  const rc = await clodeWatch('', { env: fx.env, libexec: LIBEXEC, here: HERE, node: NODE, stderr: err });
+  const rc = await clodeWatch('', { env: fx.env, libexec: LIBEXEC, node: NODE, stderr: err });
   assert.strictEqual(rc, 0);
   assert.strictEqual(err.text(), '');
 });
 
 // --- clodeWatchBanner -------------------------------------------------------
 
-test('clodeWatchBanner prints once for a HIGH notice that still applies', semverOpts, () => {
+test('clodeWatchBanner prints once for a HIGH notice that still applies', () => {
   const fx = watchFixture('2.0.0', '1.0.0', 'high');
   fs.mkdirSync(fx.watchDirPath, { recursive: true });
   fs.writeFileSync(fx.notice, 'latest=2.0.0\ncurrent=1.0.0\nhigh=1\nchecked_at=1\n');
   const err = sink();
-  const rc = clodeWatchBanner({ env: fx.env, here: HERE, stderr: err });
+  const rc = clodeWatchBanner({ env: fx.env, stderr: err });
   assert.strictEqual(rc, 0);
   const t = err.text();
   assert.match(t, /2\.0\.0/);
@@ -294,28 +231,28 @@ test('clodeWatchBanner prints once for a HIGH notice that still applies', semver
     "clode: Claude Code 2.0.0 is available and may affect how clode repackages it (run 'clode read-anthropic-tea-leaves' for details, 'clode fetch claude' to take it).");
 });
 
-test('clodeWatchBanner is silent for a high=0 notice', semverOpts, () => {
+test('clodeWatchBanner is silent for a high=0 notice', () => {
   const fx = watchFixture('2.0.0', '1.0.0', 'low');
   fs.mkdirSync(fx.watchDirPath, { recursive: true });
   fs.writeFileSync(fx.notice, 'latest=2.0.0\ncurrent=1.0.0\nhigh=0\nchecked_at=1\n');
   const err = sink();
-  assert.strictEqual(clodeWatchBanner({ env: fx.env, here: HERE, stderr: err }), 0);
+  assert.strictEqual(clodeWatchBanner({ env: fx.env, stderr: err }), 0);
   assert.strictEqual(err.text(), '');
 });
 
-test('clodeWatchBanner self-clears once the provider has caught up', semverOpts, () => {
+test('clodeWatchBanner self-clears once the provider has caught up', () => {
   const fx = watchFixture('2.0.0', '2.0.0', 'high'); // provider advanced to 2.0.0
   fs.mkdirSync(fx.watchDirPath, { recursive: true });
   fs.writeFileSync(fx.notice, 'latest=2.0.0\ncurrent=1.0.0\nhigh=1\nchecked_at=1\n');
   const err = sink();
-  assert.strictEqual(clodeWatchBanner({ env: fx.env, here: HERE, stderr: err }), 0);
+  assert.strictEqual(clodeWatchBanner({ env: fx.env, stderr: err }), 0);
   assert.strictEqual(err.text(), '');
 });
 
 test('clodeWatchBanner is a silent no-op when no notice exists', () => {
   const fx = watchFixture('2.0.0', '1.0.0', 'high');
   const err = sink();
-  assert.strictEqual(clodeWatchBanner({ env: fx.env, here: HERE, stderr: err }), 0);
+  assert.strictEqual(clodeWatchBanner({ env: fx.env, stderr: err }), 0);
   assert.strictEqual(err.text(), '');
 });
 

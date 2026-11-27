@@ -57,7 +57,8 @@ const SITES = [
 // below derives this list from the sources, transitively, so a new companion cannot be required there without being
 // named here.
 // path-lookup.cjs (the one PATH search: bun-shim's Bun.which and rg-entry's findUgrep both require it).
-const COMPANIONS = ['unicode-text.cjs', 'rg-native.cjs', 'rg-regex.cjs', 'rg-walk.cjs', 'rg-types.cjs', 'rg-entry.cjs', 'path-lookup.cjs'];
+// version-compare.cjs (the one version order: rg-native's ugrep floor requires it).
+const COMPANIONS = ['unicode-text.cjs', 'rg-native.cjs', 'rg-regex.cjs', 'rg-walk.cjs', 'rg-types.cjs', 'rg-entry.cjs', 'path-lookup.cjs', 'version-compare.cjs'];
 
 // read() — the only I/O: this repo's own site sources. Nothing this guard could
 // write to; it never touches ~/.local/share/clode or any build output.
@@ -118,7 +119,7 @@ test('a site that no longer names bun-shim.cjs at all is its own finding', () =>
 // synthetic input independent of the real tree).
 test('a site naming bun-shim.cjs and every companion is clean', () => {
   const r = scanCompanions({
-    sites: [{ rel: 'synthetic/clean.cjs', src: "const a = 'bun-shim.cjs'; const b = 'unicode-text.cjs'; const c = 'rg-native.cjs'; const d = 'rg-regex.cjs'; const e = 'rg-walk.cjs'; const f = 'rg-types.cjs'; const g = 'rg-entry.cjs'; const h = 'path-lookup.cjs';\n" }],
+    sites: [{ rel: 'synthetic/clean.cjs', src: "const a = 'bun-shim.cjs'; const b = 'unicode-text.cjs'; const c = 'rg-native.cjs'; const d = 'rg-regex.cjs'; const e = 'rg-walk.cjs'; const f = 'rg-types.cjs'; const g = 'rg-entry.cjs'; const h = 'path-lookup.cjs'; const i = 'version-compare.cjs';\n" }],
   });
   assert.deepStrictEqual(r.findings, []);
   assert.strictEqual(r.examined, 1);
@@ -132,7 +133,7 @@ test('a site that stages one companion but not another is a finding naming the o
   });
   assert.deepStrictEqual(r.findings, ['synthetic/half.cjs: stages bun-shim.cjs but never rg-regex.cjs', 'synthetic/half.cjs: stages bun-shim.cjs but never rg-walk.cjs',
     'synthetic/half.cjs: stages bun-shim.cjs but never rg-types.cjs', 'synthetic/half.cjs: stages bun-shim.cjs but never rg-entry.cjs',
-    'synthetic/half.cjs: stages bun-shim.cjs but never path-lookup.cjs']);
+    'synthetic/half.cjs: stages bun-shim.cjs but never path-lookup.cjs', 'synthetic/half.cjs: stages bun-shim.cjs but never version-compare.cjs']);
 });
 
 // COMPANIONS is derived-checked, not trusted: every `require(__dirname + '/<x>')` in bun-shim.cjs

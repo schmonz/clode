@@ -19,20 +19,9 @@ import { legsFor } from './tjs-legs.mjs';
 
 const { ALLOWED: ALLOWED_LABELS, parseRunnerReadme } = createRequire(import.meta.url)('./runner-labels.cjs');
 
-// Segment-wise natural compare over the formats the catalogs actually use:
-// 10.1 / 7.10 / 6.4.2 / r151058 / r1beta5 / 202604-build / 11.4-gcc.
-export function cmpVersions(a, b) {
-  const seg = (s) => String(s).split(/[.-]/).flatMap((p) => p.match(/\d+|\D+/g) ?? []);
-  const A = seg(a), B = seg(b);
-  for (let i = 0; i < Math.max(A.length, B.length); i++) {
-    const x = A[i] ?? '', y = B[i] ?? '';
-    if (x === y) continue;
-    const nx = /^\d+$/.test(x), ny = /^\d+$/.test(y);
-    if (nx && ny) return Number(x) - Number(y);
-    return x < y ? -1 : 1;
-  }
-  return 0;
-}
+// Catalog labels (10.1 / 7.10 / 6.4.2 / r151058 / r1beta5 / 202604-build / 11.4-gcc) are ordered by the one
+// version module's label rule, libexec/version-compare.cjs's compareLabels.
+export const cmpVersions = createRequire(import.meta.url)('../libexec/version-compare.cjs').compareLabels;
 
 // null = pin is the catalog max; otherwise a human-readable drift line.
 export function drift(leg, pinned, catalog) {

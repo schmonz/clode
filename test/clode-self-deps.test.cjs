@@ -20,10 +20,6 @@
 // this test was written and is legitimate at runtime — clode reading a file
 // that happens to live inside an npm-shaped install layout, never clode
 // ITSELF depending on that package:
-//   - libexec/clode-watch.cjs's loadSemver(): require(pkgDir) where pkgDir is
-//     a resolved path INTO a target's semver install (deps/claude or the
-//     user's CLODE_DEPS store) — clode reading Claude Code's dep, not
-//     depending on one itself.
 //   - libexec/inspect-claude-bundle.cjs: require(process.argv[1]) — loads
 //     whatever bundle file the caller named, for introspection.
 //   - scripts/apicheck.mjs: require(path.join(REPO, 'test', ...)) — loads a

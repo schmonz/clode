@@ -9,12 +9,12 @@
 // two deliberate exceptions to clode's silent-by-default rule).
 //
 // Ports (sh -> JS):
-//   version_gt         (:475)  -> versionGt(a, b, {env, here})
+//   version_gt         (:475)  -> versionGt(a, b)
 //   watch_dir          (:490)  -> watchDir(env)
 //   file_mtime         (:495)  -> fileMtime(path)
 //   write_watch_notice (:501)  -> writeWatchNotice(path, latest, current, high, checkedAt)
-//   clode_watch        (:396)  -> clodeWatch(manual, {env, libexec, here, node, stderr})  [async]
-//   clode_watch_banner (:509)  -> clodeWatchBanner({env, here, stderr})
+//   clode_watch        (:396)  -> clodeWatch(manual, {env, libexec, node, stderr})  [async]
+//   clode_watch_banner (:509)  -> clodeWatchBanner({env, stderr})
 //   clode_watch_fire   (:528)  -> clodeWatchFire({self})
 //   clode_watch_maybe  (:535)  -> clodeWatchMaybe({env, self, fire})
 //
@@ -29,6 +29,7 @@ const { execFileSync } = require('node:child_process');
 const { downloadFile } = require('./clode-net.cjs');
 const { resolveChannel, releasesUrl } = require('./clode-update.cjs');
 const cpaths = require('./clode-paths.cjs');
+const { compareVersions } = require('./version-compare.cjs');
 const { currentVersion } = require('./clode-current.cjs');
 
 const HERE_DEFAULT = __dirname; // libexec/; bin/ is a sibling
@@ -39,36 +40,12 @@ function envOf(opts) {
 }
 
 // ---------------------------------------------------------------------------
-// version_gt A B -> true iff A is strictly greater than B, using the real
-// `semver` ext-dep (the same module the bundle uses — Claude Code's dep, not
-// clode's own; clode has none). semver is resolved from clode's dep store
-// (CLODE_DEPS / XDG_DATA_HOME) AND a sibling deps/claude/node_modules
-// ($here/../deps/claude/node_modules, a source checkout that already ran
-// `npm install --prefix deps/claude`) — resolved explicitly so we never fall
-// back to ambient resolution. Conservative (false) if semver is unavailable or
-// the versions are garbage, so the watcher under-alarms rather than
-// false-alarms.
-function loadSemver(opts) {
-  const env = envOf(opts);
-  const store = cpaths.depsStore(env);
-  const cands = [path.join(store, 'node_modules')];
-  const here = (opts && opts.here) || null;
-  if (here) cands.push(path.join(here, '..', 'deps', 'claude', 'node_modules'));
-  for (const base of cands) {
-    const pkg = path.join(base, 'semver');
-    if (fs.existsSync(path.join(pkg, 'package.json'))) {
-      try { return require(pkg); } catch { /* try next */ }
-    }
-  }
-  return null;
-}
-
-function versionGt(a, b, opts) {
-  const semver = loadSemver(opts || {});
-  if (!semver) return false;
-  // Use compare() (the fundamental primitive every semver-compatible module
-  // provides, incl. the render fakes) rather than gt(); a > b iff compare > 0.
-  try { return semver.compare(a, b) > 0; } catch { return false; }
+// version_gt A B -> true iff A is strictly greater than B, in the one version order (version-compare.cjs: semver's
+// for every x.y.z, prereleases before their release). It used to borrow npm `semver` from clode's dep store or a
+// sibling deps/claude, and answered false when neither held it, so a clode with no deps installed never saw a newer
+// release. Conservative (false) on a version that is not one, so the watcher under-alarms rather than false-alarms.
+function versionGt(a, b) {
+  try { return compareVersions(a, b) > 0; } catch { return false; }
 }
 
 // ---------------------------------------------------------------------------
@@ -163,7 +140,6 @@ async function clodeWatch(manual, opts) {
   const env = envOf(opts);
   const stderr = opts.stderr || process.stderr;
   const libexec = opts.libexec || LIBEXEC_DEFAULT;
-  const here = opts.here || null;
 
   const wd = watchDir(env);
   try { fs.mkdirSync(wd, { recursive: true }); } catch { return 0; }
@@ -185,7 +161,7 @@ async function clodeWatch(manual, opts) {
 
   const now = Math.floor(Date.now() / 1000);
 
-  if (!versionGt(latest, current, { env, here })) {
+  if (!versionGt(latest, current)) {
     writeWatchNotice(notice, latest, current, 0, now);
     if (manual) stderr.write(`clode: up to date (${current}; ${chan} ${latest}).\n`);
     return 0;
@@ -239,7 +215,6 @@ function clodeWatchBanner(opts) {
   opts = opts || {};
   const env = envOf(opts);
   const stderr = opts.stderr || process.stderr;
-  const here = opts.here || null;
 
   const notice = path.join(watchDir(env), 'watch-notice');
   if (!fs.existsSync(notice)) return 0;
@@ -248,7 +223,7 @@ function clodeWatchBanner(opts) {
 
   let cur = currentProvider(env);
   if (!cur) cur = n.current;
-  if (!versionGt(n.latest, cur, { env, here })) return 0;
+  if (!versionGt(n.latest, cur)) return 0;
 
   stderr.write(`clode: Claude Code ${n.latest} is available and may affect how clode repackages it (run 'clode read-anthropic-tea-leaves' for details, 'clode fetch claude' to take it).\n`);
   return 0;

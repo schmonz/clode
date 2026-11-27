@@ -169,8 +169,10 @@ const __import_meta = {
 // a __clodeState tag the notice patch reads.
 globalThis.__clodeCheckUpdate = function (current) {
   var chk = require(__dirname + '/target-update-check.cjs');
+  // Bun.semver.order is what upstream's own updater asks; without it, the one version order (version-compare.cjs,
+  // bun-shim's companion beside this file), never a string compare ('2.1.9' > '2.1.10').
   var semverOrder = (globalThis.Bun && globalThis.Bun.semver && globalThis.Bun.semver.order)
-    ? globalThis.Bun.semver.order : function (a, b) { return a === b ? 0 : (a > b ? 1 : -1); };
+    ? globalThis.Bun.semver.order : require(__dirname + '/version-compare.cjs').compareVersions;
   return chk.checkUpdate({ current: current, env: process.env, semverOrder: semverOrder })
     .then(function (r) {
       return { wasUpdated: false,

@@ -530,6 +530,9 @@ members.push({ name: 'rg-entry.cjs', data: await mustRead(path.join(libexecDir, 
 // (`require(__dirname + '/path-lookup.cjs')`), node-shim's child_process climbs '../../path-lookup.cjs' to it, and the
 // bootstrap hands it to target-env.cjs. At the archive ROOT in BOTH roles, for the same reasons as unicode-text.cjs.
 members.push({ name: 'path-lookup.cjs', data: await mustRead(path.join(libexecDir, 'path-lookup.cjs'), 'path-lookup.cjs member') });
+// version-compare.cjs, the one version order: rg-native.cjs requires it as its sibling (the ugrep floor), and the
+// PRELUDE's update check falls back to it beside cli.cjs. At the archive ROOT in BOTH roles, beside rg-native.cjs.
+members.push({ name: 'version-compare.cjs', data: await mustRead(path.join(libexecDir, 'version-compare.cjs'), 'version-compare.cjs member') });
 
 // ext-dep closure (DEPS = extras.deps, derived node-side — see above). The
 // node side already fails the build if a listed package is missing from

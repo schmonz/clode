@@ -14,6 +14,7 @@
 // test/build-gates/macho-floor-gates.test.cjs are real `otool -l` captures, that release's among them.
 
 const fs = require('node:fs');
+const { compareVersions } = require('../libexec/version-compare.cjs');
 
 // Every LC_BUILD_VERSION minos and LC_VERSION_MIN_MACOSX version in `otool -l` text.
 function parseOtoolLoadCommands(text) {
@@ -36,9 +37,8 @@ function parseOtoolLoadCommands(text) {
 }
 
 function usesBuildVersion(floor) {
-  const m = /^(\d+)\.(\d+)/.exec(String(floor));
-  if (!m) throw new Error(`floor '${floor}' is not <major>.<minor>`);
-  return Number(m[1]) * 100 + Number(m[2]) >= 1014;
+  if (!/^\d+\.\d+/.test(String(floor))) throw new Error(`floor '${floor}' is not <major>.<minor>`);
+  return compareVersions(floor, '10.14') >= 0;
 }
 
 // [] when `otoolText` carries exactly `floor` where that floor's dyld looks; else reasons.

@@ -40,11 +40,8 @@ function versionKey(v) {
   return p.slice(0, 3).join('.');
 }
 
-function compareVersions(a, b) {
-  const x = versionKey(a).split('.').map(Number); const y = versionKey(b).split('.').map(Number);
-  for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] < y[i] ? -1 : 1;
-  return 0;
-}
+// The one version order (libexec/version-compare.cjs): a missing part is 0, so '18.0' and '18.0.0' are equal.
+const { compareVersions } = require('../../libexec/version-compare.cjs');
 
 // May native `n` (nativeIntl's answer) judge tables whose header.intl is `h`?
 //   { judge: true }                   the same oracle: compare

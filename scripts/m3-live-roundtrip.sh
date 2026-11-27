@@ -21,6 +21,7 @@ cp "$REPO/libexec/rg-walk.cjs" "$SCRATCH/rg-walk.cjs"
 cp "$REPO/libexec/rg-types.cjs" "$SCRATCH/rg-types.cjs"
 cp "$REPO/libexec/rg-entry.cjs" "$SCRATCH/rg-entry.cjs"
 cp "$REPO/libexec/path-lookup.cjs" "$SCRATCH/path-lookup.cjs"
+cp "$REPO/libexec/version-compare.cjs" "$SCRATCH/version-compare.cjs"
 echo "=== M3 LIVE round-trip (api.anthropic.com) ==="
 START=$(date +%s)
 NODE_PATH="$REPO/node_modules" "$TJS" run "$REPO/libexec/node-shim/loader.cjs" "$SCRATCH/cli.cjs" -p 'say PONG' < /dev/null

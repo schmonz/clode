@@ -260,7 +260,7 @@ async function main(argv, opts = {}) {
     // which has no upstream bundle to drift and is release plumbing rather than a user
     // invocation, so it gets no watch trigger and never mind the network fetch inside
     // one — that is now a difference between two BRANCHES, not a flag this one tests.
-    watch.clodeWatchBanner({ env, here: HERE });
+    watch.clodeWatchBanner({ env });
     watch.clodeWatchMaybe({ env, self });
     const status = await build.clodeBuild(buildArgs, { env, libexec: LIBEXEC, here: HERE, version, self, product: subject });
     return process.exit(status);
@@ -271,7 +271,7 @@ async function main(argv, opts = {}) {
   //    direction of travel (warn-only, never authoritative, never downloads the
   //    binary). Prints a summary to stderr, then exits 0.
   if (cmd.verb === 'read-anthropic-tea-leaves') {
-    await watch.clodeWatch('manual', { env, libexec: LIBEXEC, here: HERE, node });
+    await watch.clodeWatch('manual', { env, libexec: LIBEXEC, node });
     return process.exit(0);
   }
 

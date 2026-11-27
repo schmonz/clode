@@ -95,6 +95,7 @@ const crypto = require('node:crypto');
 // builds the engine had to stop needing Node to run. `require` is built in
 // here, so the createRequire this block used to need deletes itself.
 const { resetCheckoutToPristine } = require('./tjs-source-reset.cjs');
+const { compareVersions } = require('../libexec/version-compare.cjs');
 // The JS-bundle step's two inputs, and the refusal that names both (see the call site in
 // the source phase below). A sibling, not inline, for the reason every other build decision
 // in this file is one: a test can hand it a known-bad tree without a 785MB checkout.
@@ -4208,21 +4209,13 @@ applyArDeterminismDecision(cmakeArgs, arDet);
 // of the verdict logic. It stays ONE definition for the same reason it became
 // one in the first place: two hand-maintained copies drifted, /usr/pkg went
 // missing from the cmake half, and native NetBSD broke.
-// CMAKE_IGNORE_PREFIX_PATH shipped in cmake 3.23. Extracted into a named
-// function (not inlined into the `if` below) so the test suite can pull the
-// EXACT comparison through the same brace-balanced extractFunction()
-// machinery it already uses elsewhere in this file, rather than
-// hand-copying the arithmetic — a hand copy tracks nothing: inverting `>=`
-// to `<` here would leave a hand-copied test green.
-function cmakeVersionSupportsIgnorePrefixPath(major, minor) {
-  return major > 3 || (major === 3 && minor >= 23);
-}
+// CMAKE_IGNORE_PREFIX_PATH shipped in cmake 3.23, asked through the one version order
+// (libexec/version-compare.cjs, whose table test holds the arithmetic).
+const CMAKE_IGNORE_PREFIX_PATH_SINCE = '3.23';
 if (!crossFile) {
   const cmakeVerOut = runOut('cmake', ['--version']);
   const cmakeVerMatch = cmakeVerOut.match(/(\d+)\.(\d+)\.(\d+)/);
-  const [cmMajor, cmMinor] = cmakeVerMatch
-    ? [Number(cmakeVerMatch[1]), Number(cmakeVerMatch[2])] : [0, 0];
-  if (cmakeVerMatch && cmakeVersionSupportsIgnorePrefixPath(cmMajor, cmMinor)) {
+  if (cmakeVerMatch && compareVersions(cmakeVerMatch[0], CMAKE_IGNORE_PREFIX_PATH_SINCE) >= 0) {
     cmakeArgs.push(`-DCMAKE_IGNORE_PREFIX_PATH=${PKG_MANAGER_ROOTS.join(';')}`);
   } else {
     // Loud, not silent: an old-cmake native leg builds WITHOUT this

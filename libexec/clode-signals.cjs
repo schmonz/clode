@@ -6,6 +6,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { pyJson } = require('./clode-jsutil.cjs');
+const { compareVersions } = require('./version-compare.cjs');
 
 // --- bundle phrase scan -------------------------------------------------------
 const BUNDLE_PHRASES = [
@@ -34,15 +35,6 @@ const CHANGELOG_MED = [
 
 const VER_RE = /^##\s+(\d+\.\d+\.\d+)\s*$/;
 
-const verKey = (v) => v.split('.').map((x) => parseInt(x, 10));
-
-// Tuple compare like Python's (a,b,c) < (d,e,f). verKey always yields length-3
-// tuples here (gated by VER_RE), so a fixed 3-wide compare is exact.
-function cmpKey(a, b) {
-  for (let i = 0; i < 3; i++) { if (a[i] !== b[i]) return a[i] - b[i]; }
-  return 0;
-}
-
 function parseChangelog(text) {
   // Return [[version, [lines]]] in file order (newest first, as published).
   const sections = []; let cur = null, buf = [];
@@ -62,15 +54,13 @@ function parseChangelog(text) {
 function scanChangelog(text, version, prev) {
   // Flag lines in the (prev, version] release-note range. If prev is null or
   // not found, scan only `version`'s own section.
-  const vk = verKey(version);
-  const pk = prev ? verKey(prev) : null;
+  // The one version order (version-compare.cjs). A --version/--prev that is not a version throws, as the Python
+  // oracle's int() raised ValueError; a changelog heading is one already (VER_RE).
   const flags = [];
   for (const [ver, lines] of parseChangelog(text)) {
-    const k = verKey(ver);
-    // VER_RE guarantees three numeric components; no ValueError equivalent.
-    const inRange = pk === null
-      ? cmpKey(k, vk) === 0
-      : (cmpKey(pk, k) < 0 && cmpKey(k, vk) <= 0);
+    const inRange = !prev
+      ? compareVersions(ver, version) === 0
+      : (compareVersions(prev, ver) < 0 && compareVersions(ver, version) <= 0);
     if (!inRange) continue;
     for (const ln of lines) {
       const s = ln.trim();

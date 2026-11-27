@@ -101,23 +101,15 @@ test('build-tjs: an old cmake (<3.23) does not silently skip the protection — 
   assert.match(buildTjsSrc, /predates|too old|unavailable/i);
 });
 
-// Behavioral: extract the ACTUAL cmakeVersionSupportsIgnorePrefixPath(major,
-// minor) function out of build-tjs.cjs (brace-balanced, via extractFunction
-// below — the same machinery already used for checkHermeticDeps)
-// and run it directly, rather than hand-copying the comparison into the
-// test. A hand copy tracks nothing: flipping `>= 23` to `< 23` (or `>` to
-// `>=` on the major-version branch) in build-tjs.cjs would leave a
-// hand-copied `gate` here green forever. This is defined as its own
-// function declaration (not inline in the `if`) in build-tjs.cjs
-// specifically so it can be extracted and exercised here.
-test('build-tjs: version-gate arithmetic accepts 3.23+, rejects older', () => {
-  const src = extractFunction(buildTjsSrc, 'cmakeVersionSupportsIgnorePrefixPath');
-  // eslint-disable-next-line no-new-func
-  const gate = new Function(`${src}\nreturn cmakeVersionSupportsIgnorePrefixPath;`)();
-  assert.strictEqual(gate(3, 23), true);
-  assert.strictEqual(gate(4, 0), true);
-  assert.strictEqual(gate(3, 22), false);
-  assert.strictEqual(gate(2, 8), false);
+// The gate is the one version order (libexec/version-compare.cjs) against a named floor; the arithmetic is
+// that module's, held by test/version-compare.test.cjs. Here: build-tjs asks it, at >= 0, for the cmake it ran.
+test('build-tjs: the cmake gate is compareVersions(<cmake --version>, 3.23) >= 0', () => {
+  assert.match(buildTjsSrc, /const CMAKE_IGNORE_PREFIX_PATH_SINCE = '3\.23';/);
+  assert.match(buildTjsSrc, /compareVersions\(cmakeVerMatch\[0\], CMAKE_IGNORE_PREFIX_PATH_SINCE\) >= 0/);
+  const { compareVersions } = require('../libexec/version-compare.cjs');
+  for (const [v, ok] of [['3.23.0', true], ['4.0.2', true], ['3.22.6', false], ['2.8.12', false]]) {
+    assert.strictEqual(compareVersions(v, '3.23') >= 0, ok, v);
+  }
 });
 
 // ---- HALF 2: post-build dependency check -----------------------------------

@@ -92,6 +92,7 @@ function writeFileOnceSync(file, text) {
 }
 const sha256Hex = (text) => require('node:crypto').createHash('sha256').update(text).digest('hex');
 const { checkUpdate } = require('./target-update-check.cjs');
+const { compareVersions } = require('./version-compare.cjs');
 const { carveClodeArgs, CLODE_FLAGS, attestReport } = require('./clode-attest.cjs');
 // RG-ARGV0 (grep-native Task 10c): a naude invoked as rg IS rg, as native's binary is; the Bash tool's `rg` runs it
 // that way (libexec/rg-entry.cjs states the rule and the command; its top level requires only node builtins, so
@@ -100,7 +101,7 @@ const { isRgInvocation } = require('./rg-entry.cjs');
 // rg-entry.cjs and the companions it requires from its own directory: what rg needs on disk (and, beside bun-shim,
 // what the bundle needs: bun-shim.cjs requires rg-entry.cjs for the shell function it writes).
 // path-lookup.cjs (the one PATH search) is rg-entry.cjs's companion and bun-shim.cjs's.
-const RG_ASSETS = ['rg-entry.cjs', 'rg-native.cjs', 'rg-regex.cjs', 'rg-walk.cjs', 'rg-types.cjs', 'path-lookup.cjs'];
+const RG_ASSETS = ['rg-entry.cjs', 'rg-native.cjs', 'rg-regex.cjs', 'rg-walk.cjs', 'rg-types.cjs', 'path-lookup.cjs', 'version-compare.cjs'];
 require('./unpack.cjs'); // ensure esbuild bundles it into the SEA: naude-sea.cjs's materializeDeps extracts deps.tar with it
 
 // Install globalThis.__clodeCheckUpdate exactly as the quaude PRELUDE does
@@ -115,12 +116,12 @@ require('./unpack.cjs'); // ensure esbuild bundles it into the SEA: naude-sea.cj
 // here, because globalThis.Bun is only set once the baked cli.cjs's own
 // prelude has run (its `globalThis.Bun = ... require(bun-shim.cjs)` line runs
 // before any of its own code, including the updater that eventually calls
-// this) — falls back to a crude string comparator if Bun is somehow absent.
+// this) — falls back to the one version order (version-compare.cjs) if Bun is somehow absent.
 function installCheckUpdateGlobal() {
   globalThis.__clodeCheckUpdate = function (current) {
     const semverOrder = (globalThis.Bun && globalThis.Bun.semver && globalThis.Bun.semver.order)
       ? globalThis.Bun.semver.order
-      : (a, b) => (a === b ? 0 : (a > b ? 1 : -1));
+      : compareVersions;
     return checkUpdate({ current, env: process.env, semverOrder })
       .then((r) => ({
         wasUpdated: false,
