@@ -154,6 +154,13 @@ const FILES = [
   // built by a different compiler; the derived check named it the moment build-tjs.cjs
   // required it.
   'scripts/cosmocc-pin.cjs',
+  // ADDED 2026-11-27. libexec/version-compare.cjs answers build-tjs.cjs's "is this cmake
+  // 3.23 or newer?", which decides whether configure gets -DCMAKE_IGNORE_PREFIX_PATH, i.e.
+  // whether a package-manager prefix may shadow a vendored dep in the engine. It replaced a
+  // hand-rolled major/minor check (fc4025e9) that lived inside build-tjs.cjs and so was
+  // hashed; moving the arithmetic out must not un-hash it. It is require-free and rarely
+  // edited, so the cache-invalidation cost is small. The derived check named it.
+  'libexec/version-compare.cjs',
   // The netbsd-sparc in-guest ENGINE bake recipe. It is engine source for that
   // leg in the most literal sense — it IS the compile — yet an edit to it moved
   // nothing, so the tjs cache happily restored an engine built by a DIFFERENT

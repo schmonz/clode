@@ -124,48 +124,50 @@ nothing can notice going missing.
 flowchart LR
   s0[["engine.source"]]
   a0("ci/osxcross-darwin/Dockerfile")
-  a1("patches/ — 3 files")
-  a2("scripts/ — 19 files")
-  a3("spike/quickjs/ — 2 files")
-  a4("spike/quickjs/patches/ — 51 files")
-  a5("spike/quickjs/qemu/ci-guest-bake.sh")
-  a6("engine-checkout")
+  a1("libexec/version-compare.cjs")
+  a2("patches/ — 3 files")
+  a3("scripts/ — 19 files")
+  a4("spike/quickjs/ — 2 files")
+  a5("spike/quickjs/patches/ — 51 files")
+  a6("spike/quickjs/qemu/ci-guest-bake.sh")
+  a7("engine-checkout")
   s1[["engine.bytecode"]]
-  a7("engine-checkout/src/js")
-  a8("engine-checkout/src/bundles/c")
+  a8("engine-checkout/src/js")
+  a9("engine-checkout/src/bundles/c")
   s2[["engine.compile"]]
-  a9("engine")
+  a10("engine")
   s3[["bundle.clode-main"]]
-  a10("libexec/ — 53 files")
-  a11("libexec/node-shim/internal/ — 16 files")
-  a12("libexec/node-shim/loader.cjs")
-  a13("libexec/node-shim/modules/ — 32 files")
-  a14("deps/clode/ — 2 files")
-  a15("VERSION")
-  a16("spike/quickjs/PINS.md")
-  a17("scripts/engine-recipe.cjs")
-  a18("toolchain")
-  a19("build/bundle/ — 2 files")
+  a11("libexec/ — 53 files")
+  a12("libexec/node-shim/internal/ — 16 files")
+  a13("libexec/node-shim/loader.cjs")
+  a14("libexec/node-shim/modules/ — 32 files")
+  a15("deps/clode/ — 2 files")
+  a16("VERSION")
+  a17("spike/quickjs/PINS.md")
+  a18("scripts/engine-recipe.cjs")
+  a19("toolchain")
+  a20("build/bundle/ — 2 files")
   s4[["clode.blobulate"]]
-  a20("clode-native")
+  a21("clode-native")
   a0 --> s0
   a1 --> s0
   a2 --> s0
   a3 --> s0
   a4 --> s0
   a5 --> s0
-  s0 --> a6
-  a7 --> s1
-  s1 --> a8
-  a8 --> s2
+  a6 --> s0
+  s0 --> a7
+  a8 --> s1
+  s1 --> a9
+  a9 --> s2
   a0 --> s2
   a1 --> s2
   a2 --> s2
   a3 --> s2
   a4 --> s2
   a5 --> s2
-  s2 --> a9
-  a10 --> s3
+  a6 --> s2
+  s2 --> a10
   a11 --> s3
   a12 --> s3
   a13 --> s3
@@ -173,11 +175,12 @@ flowchart LR
   a15 --> s3
   a16 --> s3
   a17 --> s3
-  s3 -.->|"provisions, then reads"| a18
-  s3 --> a19
-  a9 --> s4
-  a19 --> s4
-  s4 --> a20
+  a18 --> s3
+  s3 -.->|"provisions, then reads"| a19
+  s3 --> a20
+  a10 --> s4
+  a20 --> s4
+  s4 --> a21
 ```
 
 ## Where each step runs, across the 42 release legs

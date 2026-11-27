@@ -77,6 +77,9 @@ const EXPECTED_SET = [
   // ADDED 2026-11-19: the cosmocc toolchain pin, split out of build-tjs.cjs (mirror list
   // + derived cache key). See scripts/engine-recipe.cjs.
   'scripts/cosmocc-pin.cjs',
+  // ADDED 2026-11-27: the cmake-3.23 decision's comparator, moved out of build-tjs.cjs
+  // by fc4025e9. See scripts/engine-recipe.cjs.
+  'libexec/version-compare.cjs',
   // ADDED 2026-08-29: the netbsd-sparc in-guest bake recipe IS that leg's
   // compile, and editing it used to move nothing — so the cache could restore an
   // engine built by a different recipe. See scripts/engine-recipe.cjs.
@@ -237,6 +240,7 @@ const BASE = {
   'scripts/provision-bundle-inputs.sh': 'provision',
   'scripts/file-prefix-map.cjs': 'fileprefixmap',
   'scripts/cosmocc-pin.cjs': 'cosmoccpin',
+  'libexec/version-compare.cjs': 'versioncompare',
   'spike/quickjs/qemu/ci-guest-bake.sh': 'bake',
   'scripts/x.toolchain.cmake': 'tc',
   'spike/quickjs/atomic-shim.c': 'shim',
@@ -293,7 +297,9 @@ test('a changed byte in any of the ten split-out orchestration files moves the r
     // decides what the JS bundle step is built against. Covered here for the same reason
     // as the nine above and because the require-graph ratchet cannot see it.
     'scripts/provision-bundle-inputs.sh',
-    'scripts/file-prefix-map.cjs']) {
+    'scripts/file-prefix-map.cjs',
+    // Outside scripts/: build-tjs.cjs's cmake-3.23 comparator since fc4025e9.
+    'libexec/version-compare.cjs']) {
     const after = recipe(fakeSource({ ...BASE, [p]: `${BASE[p]}-edited` }));
     assert.notStrictEqual(after, before, `editing ${p} did not move the engine identity`);
   }
