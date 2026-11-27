@@ -8,6 +8,21 @@ Concrete clode-under-Node divergences from native Claude Code, to triage and fix
 That page is GENERATED from `scripts/build-graph.cjs` — the one declaration of the build — so it
 cannot drift from it; it is also where the honest answer to "does this need node?" lives.
 
+## Two ratchets CI taught on 2026-11-27
+
+1. **A test that deletes PATH is not testing "nothing installed".** With PATH unset, libuv (so node's
+   spawn) and `libexec/path-lookup.cjs` both search `/usr/bin:/bin`; an ubuntu runner has ugrep there,
+   so `rg-inventory-gate` went red only on CI (fixed in 2739c072 by making PATH one empty directory).
+   The class: a guard that refuses a test env built by FILTERING PATH OUT with no replacement PATH, in
+   the shape of suite-home-hermetic's "env built from nothing with no HOME". Control: the old
+   rg-inventory-gate filter.
+2. **The midnightbsd leg depends on one mirror being up.** midnightbsd.org was down for hours, and the
+   guest's `mport install` (expat, gmake, c-ares, ...) died with "Connection reset by peer", failing
+   the leg on every push with no code at fault. Cache the guest's packages keyed by the leg's package
+   list and OS version, so an outage costs nothing once the cache is warm; and say "upstream mirror
+   unreachable" in the job, distinctly from a build failure. Check the other qemu legs for the same
+   single-mirror dependency while there.
+
 ## Tiger, first run from the released asset: three walls before quaude exists (2026-11-26)
 
 Driven over ssh on the user's Intel Tiger VM (Mac OS X 10.4.11, Darwin 8.11.1 i386, Virtual Intel Mac, 4 CPUs,
