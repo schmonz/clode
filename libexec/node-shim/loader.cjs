@@ -330,7 +330,7 @@ function makeRequire(fromDir) {
 }
 
 /* ---- minimal ESM -> CJS transpile -------------------------------------------
- * The npm text packages in deps/claude (strip-ansi, which backs Bun.stripANSI, and
+ * The npm text packages in deps/claude (strip-ansi, which string-width imports, and
  * string-width, and their graph: ansi-regex, get-east-asian-width) are ESM-only
  * (package "type":"module"). Host node's require() loads ESM; this loader's
  * new Function() host does not. Rather than a full ESM engine, transpile the

@@ -493,6 +493,31 @@ function escapeLayer(str) {
   return { text: from === 0 ? str : text + str.slice(from), sequences };
 }
 
+// BUN-STRIPANSI (rule): Bun.stripANSI is the string with every ESCAPE-LAYER sequence taken out
+//   and nothing else: unlike the escape layer's text it keeps a lone surrogate (`lone D83D` is
+//   itself). Its argument is converted as a template literal converts it (no argument is
+//   "undefined", null "null", a Symbol throws). Measured 2026-11-27 against 2.1.332's native Bun:
+//   equal over test/text-strip-ansi.test.cjs's corpus, where npm strip-ansi (which backed it until
+//   then) left text behind on 19 of 74, among them `ESC[>4;2m` (xterm modifyOtherKeys) as "4;2m",
+//   `ESC[1 q` (cursor shape) as " q", `ESC[<0;10;20M` (an SGR mouse report), DCS/SOS/PM/APC and
+//   every C1-introduced sequence.
+function stripAnsi(input) {
+  const str = `${input}`;
+  const n = str.length;
+  let text = '';
+  let from = 0;
+  for (let i = 0; i < n;) {
+    if (startsSequence(str.charCodeAt(i))) {
+      text += str.slice(from, i);
+      i = readSequence(str, i, 0, null);
+      from = i;
+      continue;
+    }
+    i++;
+  }
+  return from === 0 ? str : text + str.slice(from);
+}
+
 // BUN-STRINGWIDTH (rule): Bun.stringWidth is the UNCAPPED sum of the bun-cell widths of the
 //   bun-cell clusters of its text — the escape layer's text, or the string as given with
 //   countAnsiEscapeCodes (ESC is then a zero-width control like any other). It makes no
@@ -1485,5 +1510,5 @@ function wrapAnsi(input, columns, options) {
   }
 }
 
-module.exports = { graphemeBoundaries, clusterWidth: cellClusterWidth, codePointWidth, escapeLayer, textWidth, stringWidth, forEachCell, cellSgr,
+module.exports = { graphemeBoundaries, clusterWidth: cellClusterWidth, codePointWidth, escapeLayer, stripAnsi, textWidth, stringWidth, forEachCell, cellSgr,
   oscLink, sliceAnsi, wrapAnsi, joinsSpace, UNICODE_DATA };

@@ -46,8 +46,8 @@ function req(pkg) {
   return (m && m.default) || m;
 }
 
-const { stringWidth, sliceAnsi, wrapAnsi } = require(path.join(__dirname, '..', 'libexec', 'unicode-text.cjs'));
-const stripAnsi   = req('strip-ansi');
+// Bun.stripANSI is unicode-text.cjs's too (2026-11-27, BUN-STRIPANSI), no longer npm strip-ansi: measured here directly.
+const { stringWidth, sliceAnsi, wrapAnsi, stripAnsi } = require(path.join(__dirname, '..', 'libexec', 'unicode-text.cjs'));
 const YAML        = req('yaml');
 const semver      = req('semver');
 

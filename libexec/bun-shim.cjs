@@ -331,30 +331,22 @@ const _ut = require(__dirname + '/unicode-text.cjs');
 const stringWidth = _ut.stringWidth;
 const sliceAnsi = _ut.sliceAnsi;
 const wrapAnsi = _ut.wrapAnsi;
+// Bun.stripANSI: unicode-text.cjs's, the same escape grammar Bun.stringWidth/sliceAnsi/wrapAnsi read
+// (BUN-STRIPANSI there). It was npm strip-ansi, a second grammar that left text behind for sequences
+// the terminal never shows (xterm's ESC[>4;2m as "4;2m", cursor shape ESC[1 q as " q", DCS strings,
+// every C1-introduced sequence): 46k of 55k corpus strings differed from native, against none now.
+const stripANSI = _ut.stripAnsi;
 
 // --- external deps backed by real npm packages -----------------------------
-// stripANSI (and semver, below) are backed by the npm strip-ansi / semver
-// packages -- no in-house clones.
-// They render every frame / gate versions, so a missing one is FATAL: write the
-// install hint and exit (nothing to recover, unlike the optional ws/yaml features).
-// require() resolves these even though strip-ansi is ESM-
-// only: Node (clode floors at 24) supports require() of ESM with no top-level await
-// and returns a namespace whose `.default` is the function -- hence `.default || m`.
-// (A future top-level-await release would make require() throw ERR_REQUIRE_ASYNC_
-// MODULE; pin a sync version then.)
+// semver (below) is backed by the npm semver package -- no in-house clone.
+// It gates versions, so a missing one is FATAL: write the install hint and exit
+// (nothing to recover, unlike the optional ws/yaml features).
 function _extMissing(pkg, feature){
   return "clode: " + feature + " needs the npm '" + pkg + "' package, which isn't installed.\n" +
     "       Install it with the same Node as clode:  npm install -g " + pkg + "\n" +
     "       (or point NODE_PATH at a node_modules dir that has it).";
 }
 function _extFatal(msg){ try { fs.writeSync(2, '\n' + msg + '\n'); } catch (_) {} process.exit(1); }
-function _extResolve(pkg){ try { const m = require(pkg); return (m && m.default) || m; } catch (_) { return undefined; } }
-
-const _stripAnsiFn   = _extResolve('strip-ansi');
-function stripANSI(...a){ return _stripAnsiFn ? _stripAnsiFn(...a) : _extFatal(_extMissing('strip-ansi', 'text rendering (ANSI stripping)')); }
-// Without the real module this is a fail-loud stub, not an implementation -- tag so
-// inspect-claude-bundle coverage reports it honestly (see Bun.YAML).
-if (!_stripAnsiFn) stripANSI.__bunShimStub = true;
 
 // --- rewriteSnapshot: rewrite Claude Code's grep/find/rg shell-snapshot shadows
 // to run the REAL host applet instead of the upstream native multiplexer (which

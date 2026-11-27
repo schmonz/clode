@@ -218,6 +218,9 @@ const PRODUCTION_SPAWN_EXCLUDED = {
   // host tool. Its tests call the extractor's text transforms and never inject that spawn, so it is not
   // spawn-injected; it reads `process.platform` only through those transforms' carve fixtures.
   'test/extract-hooks.test.cjs': 'out only through extract-claude-js.cjs -> bun-graph.cjs (a host zstd spawn its tests never reach and never inject)',
+  // 2026-11-27: its live differential asks native Bun.stripANSI through scripts/lib/native-oracle.cjs, which spawns the
+  // native claude. That spawn IS the oracle, so it is real on purpose and cannot be injected; its other tests are pure.
+  'test/text-strip-ansi.test.cjs': 'out only through scripts/lib/native-oracle.cjs (the native claude its live differential spawns on purpose)',
 };
 // Sensitive, OUT, undeclared, and its test-side code spawns nothing: out only through a production module.
 function productionSpawnOnly(testFiles, io = realIo) {

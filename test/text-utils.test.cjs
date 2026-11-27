@@ -1,10 +1,8 @@
-// test/text-utils.test.cjs — Bun.stripANSI backed by the npm strip-ansi dep (the ext-dep
-// pattern). It is CORE (every render), so a missing one is fatal: write the install hint
-// and exit, like ws — clode can't render without it, so there's nothing to recover.
-// Bun.stringWidth, Bun.sliceAnsi and Bun.wrapAnsi are NOT npm-backed any more (phase 3,
-// 2026-09-24 and -25; wrapAnsi 2026-09-26): they are libexec/unicode-text.cjs's, judged
-// against native by test/fidelity/text-differential.test.cjs, so they need no module and
-// ignore one.
+// test/text-utils.test.cjs — Bun's four text functions need no npm module. Bun.stringWidth,
+// Bun.sliceAnsi and Bun.wrapAnsi stopped being npm-backed in phase 3 (2026-09-24 and -25;
+// wrapAnsi 2026-09-26) and Bun.stripANSI on 2026-11-27 (it was npm strip-ansi): all four are
+// libexec/unicode-text.cjs's, judged against native (test/fidelity/text-differential.test.cjs,
+// test/text-strip-ansi.test.cjs), so they need no module and ignore one.
 const { test } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
@@ -12,11 +10,8 @@ const fs = require('node:fs');
 const os = require('node:os');
 const { runShimChild } = require('./isolated-shim.cjs');
 
-// Fake string-width/strip-ansi/wrap-ansi/slice-ansi on a NODE_PATH dir. string-width and
-// strip-ansi are ESM-only upstream (default export), so model that shape — a
-// `{default: fn}` namespace — to prove the shim unwraps `.default`. The fakes of the
-// packages the shim no longer uses are there to prove it ignores them. `over` replaces a
-// fake's body (the CJS-function shape, below).
+// Fake string-width/strip-ansi/wrap-ansi/slice-ansi on a NODE_PATH dir, in each package's
+// own export shape, to prove the shim uses none of them. `over` replaces a fake's body.
 function withFakes(over = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-text-'));
   const mk = (name, body) => {
@@ -37,14 +32,17 @@ function withFakes(over = {}) {
   return dir;
 }
 
-for (const [api, call] of [['stripANSI', "Bun.stripANSI('x')"]]) {
-  test(`fail-loud: Bun.${api} exits with an install hint when its module is absent`, () => {
-    const r = runShimChild(`${call}; console.log('CONTINUED');`);
-    assert.notStrictEqual(r.status, 0, 'must exit non-zero when the dep is missing');
-    assert.doesNotMatch(r.stdout, /CONTINUED/, 'must exit, not continue (every render needs it)');
-    assert.match(r.stderr, /npm install/);
-  });
-}
+test('Bun.stripANSI needs no npm module, and ignores one that is there', () => {
+  // native 2.1.332: ESC[>4;2m (xterm modifyOtherKeys) leaves nothing; npm strip-ansi left "4;2m".
+  const probe = 'const E = String.fromCharCode(0x1b); console.log(JSON.stringify([Bun.stripANSI(E + "[31mhi" + E + "[0m"), '
+    + 'Bun.stripANSI(E + "[>4;2m" + "x"), Bun.stripANSI()]));';
+  const want = JSON.stringify(['hi', 'x', 'undefined']);
+  const bare = runShimChild(probe);
+  assert.strictEqual(bare.status, 0, bare.stderr);
+  assert.strictEqual(bare.stdout.trim(), want);
+  const faked = runShimChild(probe, { NODE_PATH: withFakes() });
+  assert.strictEqual(faked.stdout.trim(), want, 'a strip-ansi module on NODE_PATH must not be used');
+});
 
 test('Bun.stringWidth needs no npm module, and ignores one that is there', () => {
   // U+4E2D is 2 columns and `a` 1 (native 2.1.278); the ESC[1m is not counted.
@@ -81,17 +79,4 @@ test('Bun.wrapAnsi needs no npm module, and ignores one that is there', () => {
   assert.strictEqual(bare.stdout.trim(), want);
   const faked = runShimChild(probe, { NODE_PATH: withFakes() });
   assert.strictEqual(faked.stdout.trim(), want, 'a wrap-ansi module on NODE_PATH must not be used');
-});
-
-test('forwards all args to the real modules and unwraps ESM .default', () => {
-  const r = runShimChild(
-    `console.log(Bun.stripANSI('\\u001b[31mhi\\u001b[0m'));`,
-    { NODE_PATH: withFakes() });
-  assert.match(r.stdout, /STRIP:\[31mhi\[0m/);                // default-export unwrapped
-  // CJS-function shape: module.exports = fn, no `.default` (proves `(m && m.default) || m`
-  // falls back to m; bun-shim's _extResolve still resolves strip-ansi this way).
-  const cjs = runShimChild("console.log(Bun.stripANSI('x', 'y'));",
-    { NODE_PATH: withFakes({ 'strip-ansi': 'module.exports=(...a)=>"CJS:"+JSON.stringify(a);' }) });
-  assert.strictEqual(cjs.status, 0, cjs.stderr);
-  assert.strictEqual(cjs.stdout.trim(), 'CJS:["x","y"]');
 });

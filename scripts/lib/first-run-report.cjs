@@ -9,11 +9,11 @@
 //   - an exit that was not 0, or no exit at all (the step was stopped).
 // Pure: the harness and its test feed it records.
 
-// eslint-disable-next-line no-control-regex
-const ANSI = /\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]|\x1b[()][0-9A-Za-z]/g;
+// The one escape grammar (libexec/unicode-text.cjs, Bun.stripANSI's): what the terminal would not show is not text.
+const { stripAnsi } = require('../../libexec/unicode-text.cjs');
 const SPINNER = /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏✻✽✶✳✢·*]\s+\S.*?\(\d+(?:\.\d+)?s\)|\(\d+(?:\.\d+)?s\)\s*$/m;
 
-const plain = (s) => String(s).replace(ANSI, '');
+const plain = (s) => stripAnsi(String(s));
 
 function parseChunkLog(text) {
   const chunks = []; let exit = null;
