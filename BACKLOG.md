@@ -8,6 +8,41 @@ Concrete clode-under-Node divergences from native Claude Code, to triage and fix
 That page is GENERATED from `scripts/build-graph.cjs` — the one declaration of the build — so it
 cannot drift from it; it is also where the honest answer to "does this need node?" lives.
 
+## Build process: three fixes from the 2026-11-27 review
+
+The review is docs/superpowers/findings/2026-11-27-build-process-review.md (untracked). Queued after the
+remaining dedup clusters, before zstd-in-engine:
+1. **Reproducible output.** `builtAt: new Date().toISOString()` (libexec/quaude-blobulate.js) is the only
+   byte difference between two builds of `clode-native` from one commit, and it reaches every user's quaude.
+   Take it from SOURCE_DATE_EPOCH / the commit time, and widen repro.yml past the engine (2 of 44 legs today)
+   to cover `clode-native`.
+2. **docs/build.md names every network fetch, and `--plan` fetches nothing.** The page says esbuild is the only
+   fetch; the review saw six (prebuilt engine even under `--plan`, txiki clone + submodules, 12 npm tarballs,
+   simde by an unverified movable tag at cmake configure, `npm ci` for esbuild, a silent `npm ci` into
+   ~/.local/share/clode during blobulate).
+3. **CI builds through `./build.sh`.** Every CI call uses `--only`, and release.yml assembles the builder by
+   calling build-clode-main.mjs and `stage0.mjs bootstrap` directly, so the front door humans use is untested
+   and the two recipes differ.
+Also seen, not yet queued: no up-to-date check (a no-op rebuild takes 19s, 54 patches reapplied); any untracked
+txiki-/quickjs-ng-/lws- patch in spike/quickjs/patches is applied silently; the engine recipe hash covers all
+of build-tjs.cjs and platform-tag.cjs, so unrelated edits invalidate all 42 CI engine caches.
+
+Measured: three builds of 25b1727f in scratch clones; the `clode-native` byte diff is only `builtAt` and its
+sha; cold build 2m20s, no-op rebuild 19s (2026-11-27).
+
+## Tiger's Terminal.app blinks on 256-color text (2026-11-27)
+
+On the Intel Tiger VM the theme picker blinked continuously. quaude was idle (CPU time frozen) while
+Terminal.app was busy. The picker's bytes are identical to native 2.1.332's, including 33 `ESC[38;5;N m`
+256-color codes that upstream emits even with FORCE_COLOR=1 (NO_COLOR=1 leaves 14). Tiger's Terminal.app
+predates 256-color support and likely parses `38;5;174` as three attributes: 38, **5 (blink)**, 174.
+Fix direction, a written-reason divergence from upstream (on that terminal the code is misread as a different
+attribute, not merely shown in another color): when the terminal lacks 256 colors, rewrite 256-color and
+24-bit SGR to the nearest of the 16 on output. Workaround meanwhile: an "(ANSI colors only)" theme.
+
+Unmeasured. The blink is not yet confirmed on Tiger's Terminal: `printf '\033[38;5;174mhello\033[0m\n'`
+there settles it; the user is to run it when they next drive Tiger.
+
 ## Two ratchets CI taught on 2026-11-27
 
 1. **A test that deletes PATH is not testing "nothing installed".** With PATH unset, libuv (so node's
