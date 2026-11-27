@@ -28,7 +28,7 @@ This repo contains no Anthropic code, only a tool that, by request:
 6. Writes `quaude`
 
 (If your host is Node-compatible and you want that runtime instead,
-`clode build --naude` writes `naude`, replacing steps 4 and 5 with an embedded Node interpreter.)
+`clode build naude` writes `naude`, replacing steps 4 and 5 with an embedded Node interpreter.)
 
 ## Runtime dependencies
 
@@ -38,9 +38,8 @@ For day-to-day `quaude` tool use:
 - `bfs` >= 3.x (built with Oniguruma)
 - `ugrep` >= 7.5.0
 
-For `clode fetch` to verify and extract `claude`:
+For `clode fetch claude` to extract `claude`:
 
-- `sha256` (or `sha256sum`, `shasum`, `gsha256sum`, `cksum`, `openssl`, or `digest`)
 - `tar`
 - `gzip`
 - `unzip`
@@ -51,7 +50,7 @@ For `clode build` to extract embedded assets that are compressed in `claude` 2.1
 
 ## Updating `quaude`
 
-Run `clode fetch` and `clode build` again.
+Run `clode fetch claude` and `clode build` again.
 
 ## Updating `clode`
 
