@@ -99,7 +99,8 @@ const { carveClodeArgs, CLODE_FLAGS, attestReport } = require('./clode-attest.cj
 const { isRgInvocation } = require('./rg-entry.cjs');
 // rg-entry.cjs and the companions it requires from its own directory: what rg needs on disk (and, beside bun-shim,
 // what the bundle needs: bun-shim.cjs requires rg-entry.cjs for the shell function it writes).
-const RG_ASSETS = ['rg-entry.cjs', 'rg-native.cjs', 'rg-regex.cjs', 'rg-walk.cjs', 'rg-types.cjs'];
+// path-lookup.cjs (the one PATH search) is rg-entry.cjs's companion and bun-shim.cjs's.
+const RG_ASSETS = ['rg-entry.cjs', 'rg-native.cjs', 'rg-regex.cjs', 'rg-walk.cjs', 'rg-types.cjs', 'path-lookup.cjs'];
 require('./host-provision.cjs'); // ensure esbuild bundles it into the SEA for runtime provision('tar')
 
 // Install globalThis.__clodeCheckUpdate exactly as the quaude PRELUDE does

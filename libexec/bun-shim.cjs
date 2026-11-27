@@ -218,6 +218,8 @@ const _rgNative = require(__dirname + '/rg-native.cjs');
 // quaude's rg as a COMMAND (grep-native Task 10c): the Bash tool's `rg` is the shell function rgShadowFunction
 // writes, which runs this very binary as rg, and the binary answers as rg-entry.cjs before the bundle loads.
 const _rgEntry = require(__dirname + '/rg-entry.cjs');
+// The one PATH search (Bun.which, Bun.spawn's pre-check): a companion beside this file in every packaging.
+const _pathLookup = require(__dirname + '/path-lookup.cjs');
 
 // QUAUDE'S OWN rg PATH: what Bun.which('rg') answers, always, whatever PATH holds (grep-native Task 10b; user ruling
 // 2026-10-03: a PATH STRING ONLY, no file is ever created there). `rg` beside the binary running the bundle (the
@@ -972,23 +974,14 @@ function spawn(cmdOrOpts, maybeOpts){
   // (with no 'error' listener) crashes the process. This froze the interactive
   // TUI when it spawned `rg` (ripgrep, bundled in the native binary) and rg was
   // absent from the host PATH. Match Bun: throw synchronously on a missing exe.
-  // The same two win32 blind spots as which(), one level up: `C:\tools\ugrep.exe`
-  // has no '/', so it used to be treated as a bare command name and hunted for
-  // inside every PATH entry (never found -> a spurious throw), and an extension-less
-  // pathed name was X_OK'd, which on Windows answers nothing useful. So: pathedness
-  // is decided the way node decides it, and a pathed win32 name is accepted if the
-  // name or any PATHEXT spelling of it is a file — the set libuv would go on to try.
+  // The executable is looked up the way Bun.which (below) looks it up, so the two cannot disagree: a bare name on
+  // PATH, a pathed one (on win32 a backslash or drive letter counts, as node decides it; `C:\tools\ugrep.exe` is
+  // not hunted for inside every PATH entry) as itself or any extension spelling of it.
   if (isRg) {
     // answered by quaude's rg, below; nothing to find
-  } else if (exe && !_exeIsPathed(exe, process.platform === 'win32')) {
-    if (!which(exe, { PATH: env.PATH, PATHEXT: env.PATHEXT })) throw new Error(`Executable not found in $PATH: "${exe}"`);
-  } else if (exe) {
-    if (process.platform === 'win32') {
-      if (!_whichLeaves(exe, true, env.PATHEXT).some(_isFileWin)) throw new Error(`Executable not found: "${exe}"`);
-    } else {
-      try { fs.accessSync(exe, fs.constants.X_OK); }
-      catch (_) { throw new Error(`Executable not found: "${exe}"`); }
-    }
+  } else if (exe && !which(exe, { PATH: env.PATH, PATHEXT: env.PATHEXT })) {
+    throw new Error(_pathLookup.isPathed(exe, process.platform)
+      ? `Executable not found: "${exe}"` : `Executable not found in $PATH: "${exe}"`);
   }
   const spawnOpts = { cwd: opts.cwd, env, stdio: stdio.map((x) => x.node) };
   for (const k of ['argv0', 'detached', 'uid', 'gid', 'timeout', 'killSignal', 'signal', 'windowsHide', 'windowsVerbatimArguments']) {
@@ -1056,127 +1049,32 @@ spawn.sync = function(cmdOrOpts, maybeOpts){
   return out;
 };
 
-// Fallback only. On a real Windows PATHEXT is always set; this is the documented
-// default's load-bearing head, and the same four clode-hosttools.findTool and
-// clode-resolve.whichClaude fall back to — three lookups, one list.
-const WHICH_PATHEXT_DEFAULT = '.COM;.EXE;.BAT;.CMD';
-
-// "Is this an executable file?", per platform.
+// Bun.which: first executable named `bin` on PATH, or null. libexec/path-lookup.cjs's lookPath, the one PATH search
+// (it travels beside this file, a companion like unicode-text.cjs), so Bun.which, Bun.spawn's pre-check, rg-entry's
+// ugrep, clode's findTool and the node-shim's spawn all answer from one rule: a regular file, executable off Windows (a
+// +x DIRECTORY no longer counts, as it never could be spawned), never X_OK on win32 (under tjs the CRT's _access
+// rejects mode 1 for every path: path-lookup.cjs's header), quoted win32 PATH entries unquoted as libuv does.
 //
-// POSIX: X_OK, byte-for-byte the original predicate (a +x DIRECTORY still
-// answers yes, as it always has — narrowing that is a behaviour change and this
-// is not the commit for it).
+// Two named divergences from node's search, win32-only, both what this function already did:
+//   pathext: true      — Bun.which answers "is the tool installed", and on Windows an executable is ugrep.exe or a
+//                        bfs.cmd shim; the bare-name walk this once did matched NOTHING, and every caller read that
+//                        null as "the applet is not installed" (_rgAppletMissing) with ugrep sitting on PATH. The
+//                        returned path KEEPS its extension, because the spawn that follows needs it.
+//   windowsCwd: false  — Windows would search the current directory first; CWD-on-PATH is a footgun we decline.
 //
-// win32: a regular file, and deliberately NOT X_OK. There is no execute bit to
-// ask about, and asking is worse than useless here: quaude's fs.accessSync is
-// __tjs_fs_sync.access -> the CRT's _access (spike/quickjs/patches/txiki-sync-fs
-// .patch, `FSS_PATH_INT(access, access(p, m))`), which validates its mode as
-// `(mode & ~6) == 0` and so rejects X_OK (1) with EINVAL for EVERY path,
-// existing or not. Under Node/libuv the same call is a no-op that succeeds
-// (fs__access only consults FILE_ATTRIBUTE_READONLY for W_OK) — which is why the
-// sibling lookups get away with it and this one, running on the tjs engine,
-// would not. UNVERIFIED ON WINDOWS: the _access claim is read from UCRT's
-// documented validation, not measured. Nothing here depends on which way it
-// falls — a stat is the honest question either way.
-function _isExecPosix(p){
-  try { fs.accessSync(p, fs.constants.X_OK); return true; } catch(_){ return false; }
-}
-function _isFileWin(p){
-  try { return fs.statSync(p).isFile(); } catch(_){ return false; }
-}
-
-// The leaf names to look for in each PATH directory.
-//
-// POSIX: exactly the name, no probing — unchanged.
-//
-// win32: the name AS GIVEN first, then name+ext for each PATHEXT entry. Entries
-// are lower-cased, which is what makes PATHEXT case-insensitive: NTFS is, so
-// `.EXE` and `.exe` both find ugrep.exe, and lower-casing keeps the string we
-// return predictable. Malformed entries without a leading dot are ignored rather
-// than concatenated into `ugrepexe`.
-//
-// A name that ALREADY ends in a PATHEXT extension is taken at its word and gets
-// no appendices: `ugrep.exe` must not go looking for `ugrep.exe.com`. But a name
-// whose trailing dot-something is not an executable extension (`python3.11`,
-// `node20.1`) is still probed with the extensions — that is a real spelling and
-// dropping it is how you lose a tool that is right there.
-function _whichLeaves(bin, isWin, pathext){
-  if (!isWin) return [bin];
-  const raw = (pathext === undefined || pathext === null)
-    ? (process.env.PATHEXT || WHICH_PATHEXT_DEFAULT) : pathext;
-  const exts = [];
-  for (const entry of String(raw).split(';')){
-    const ext = entry.trim().toLowerCase();
-    if (ext && ext[0] === '.' && !exts.includes(ext)) exts.push(ext);
-  }
-  const low = String(bin).toLowerCase();
-  const leaves = [bin];
-  if (exts.some((e) => low.endsWith(e))) return leaves;
-  for (const ext of exts) leaves.push(bin + ext);
-  return leaves;
-}
-
-// Does this name already carry a path, so PATH must not be searched? Node's own
-// rule (node-shim child_process.cjs resolveExe): a slash anywhere, and on win32
-// also a backslash or a drive letter. Without the win32 half, `C:\tools\ugrep.exe`
-// looks like a bare command name and gets hunted for inside every PATH directory.
-function _exeIsPathed(exe, isWin){
-  const s = String(exe);
-  return s.includes('/') || (!!isWin && (s.includes('\\') || /^[a-zA-Z]:/.test(s)));
-}
-
-// Bun.which: first executable named `bin` on PATH, or null.
-//
-// WINDOWS. An executable on PATH is `ugrep.exe`, never `ugrep`, so the bare-name
-// walk this used to do matched NOTHING — and the callers read that as "the applet
-// is not installed": every rg-derived file search on a Windows quaude took the
-// missing-applet path (see _rgAppletMissing) even with ugrep sitting right
-// there on PATH, unless the user had set CLODE_UGREP to a path spelled out to the
-// extension. So, win32-only: probe PATHEXT, strip the quotes cmd.exe tolerates
-// around a PATH element (libuv's search_path does the same — deps/libuv/src/win/
-// process.c), and split on ';' (path.win32.delimiter, not the host's).
-//
-// The returned path KEEPS the extension, because the eventual spawn needs it:
-// libuv's path_search_walk_ext tries the exact name only when it HAS one, then
-// appends .com and .exe — so `...\ugrep` still finds ugrep.exe but nothing finds
-// a ugrep.cmd. (Corollary, unchanged by this fix: a .BAT/.CMD hit is a path
-// CreateProcess cannot launch without a shell. Reporting where it is remains
-// more honest than reporting nothing.)
-//
-// An empty PATH element is skipped on win32: Windows would search the current
-// directory there, and CWD-on-PATH is a footgun we decline to reproduce. On POSIX
-// an empty element keeps resolving relative to cwd exactly as it did.
-//
-// isWin/isExec/PATHEXT are injectable seams, not options the bundle passes: they
-// are how the win32 behaviour is tested from a Mac (test/bun-shim-which.test.cjs),
-// the same shape clode-hosttools.findTool uses.
+// isWin/isExec/PATHEXT are injectable seams, not options the bundle passes: they are how the win32 behaviour is
+// tested from a Mac (test/bun-shim-which.test.cjs).
 function which(bin, opts){
   // rg is quaude's own, never the host's: one absolute path (RG_PATH, above), and that path answers itself (the
   // sandbox's dependency check asks Bun.which(<its rg command>)).
   if (bin === 'rg' || bin === RG_PATH) return RG_PATH;
   const o = opts || {};
   const isWin = (o.isWin === undefined) ? (process.platform === 'win32') : !!o.isWin;
-  const PATH = o.PATH || process.env.PATH || '';
-  const P = isWin ? path.win32 : path.posix;
-  const isExec = o.isExec || (isWin ? _isFileWin : _isExecPosix);
-  const leaves = _whichLeaves(bin, isWin, o.PATHEXT);
-  for (let dir of PATH.split(P.delimiter)){
-    if (isWin){
-      // Same unquoting libuv's search_path does when it walks this very PATH
-      // (deps/libuv/src/win/process.c, "Adjust if the path is quoted") — BOTH
-      // quote characters, so what we report and what the spawn then finds cannot
-      // disagree over `"C:\Program Files\ugrep"`.
-      if (dir.length > 1 && (dir[0] === '"' || dir[0] === "'") && dir[dir.length-1] === dir[0]) {
-        dir = dir.slice(1, -1);
-      }
-      if (!dir) continue;   // never the CWD (libuv likewise skips a zero-length slice)
-    }
-    for (const leaf of leaves){
-      const p = P.join(dir, leaf);
-      if (isExec(p)) return p;
-    }
-  }
-  return null;
+  const env = { PATH: o.PATH || process.env.PATH, PATHEXT: o.PATHEXT === undefined ? process.env.PATHEXT : o.PATHEXT };
+  return _pathLookup.lookPath(bin, {
+    env, platform: isWin ? 'win32' : 'posix', pathext: true, windowsCwd: false,
+    isExec: o.isExec || ((p) => _pathLookup.isExecutableFile(p, { isWin })),
+  });
 }
 
 // --- semver: backed by the npm `semver` package; fail loud if absent. (The old
@@ -2515,6 +2413,4 @@ module.exports.awaitSkewProbe = awaitSkewProbe;
 module.exports._markSnapshotProbed = _markSnapshotProbed;   // for test/extract-hooks.test.cjs
 module.exports.CLODE_SHADOWS = CLODE_SHADOWS;
 module.exports.RG_PATH = RG_PATH;               // quaude's own rg path, stated once above (test/bun-shim-which.test.cjs, rg-differential)
-module.exports._whichLeaves = _whichLeaves;     // exported for test/bun-shim-which.test.cjs
-module.exports._exeIsPathed = _exeIsPathed;     //   (the win32 seams, driven from a Mac)
 globalThis.Bun = globalThis.Bun || module.exports;   // ensure global even if required directly

@@ -61,7 +61,7 @@ const path = require('node:path');
 // (quaude/bootstrap), plus the prebuilt naude bundle, postject, and the naude
 // assembler scripts (build naude). Extra members a given target doesn't use
 // are harmless. Member-name -> on-disk-home mapping mirrors quaude-blobulate.js's
-// archive namespace (target-env.cjs, unicode-text.cjs, rg-entry.cjs, rg-native.cjs, rg-regex.cjs, rg-walk.cjs, rg-types.cjs and the naude bundle
+// archive namespace (target-env.cjs, unicode-text.cjs, path-lookup.cjs, rg-entry.cjs, rg-native.cjs, rg-regex.cjs, rg-walk.cjs, rg-types.cjs and the naude bundle
 // ride at the archive ROOT; everything else keeps its path).
 function materializeBlobPayload(vfs, mat) {
   for (const [name, bytes] of vfs.files) {
@@ -82,6 +82,9 @@ function materializeBlobPayload(vfs, mat) {
     // rg-regex.cjs, rg-walk.cjs and rg-types.cjs (rg-native.cjs's own companions) beside it, the same way, and
     // rg-entry.cjs (the rg command, bun-shim.cjs's companion too: grep-native Task 10c).
     else if (name === 'rg-regex.cjs' || name === 'rg-walk.cjs' || name === 'rg-types.cjs' || name === 'rg-entry.cjs') dest = path.join(mat, 'libexec', name);
+    // path-lookup.cjs (the one PATH search; companion of bun-shim.cjs and rg-entry.cjs, climbed to by node-shim's
+    // child_process) the same way.
+    else if (name === 'path-lookup.cjs') dest = path.join(mat, 'libexec', name);
     // deps/claude (ext-dep closure + lockfile sources of truth) AND deps/clode
     // (postject's carried JS — build naude's --postject) keep their paths.
     else if (name.startsWith('deps/')) dest = path.join(mat, name);

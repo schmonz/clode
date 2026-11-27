@@ -22,7 +22,9 @@ const os = require('node:os');
 const path = require('node:path');
 
 const bun = require('../libexec/bun-shim.cjs');
-const { which, _whichLeaves, _exeIsPathed } = bun;
+const { which } = bun;
+// The walk itself is libexec/path-lookup.cjs's (the one PATH search); its own rules are pinned in
+// test/path-lookup.test.cjs. These tests pin what Bun.which asks of it: pathext: true, windowsCwd: false.
 
 const WIN_WORLD = (...files) => {
   const have = new Set(files.map((f) => f.toLowerCase()));
@@ -74,16 +76,13 @@ test('win32: a name that already carries an extension still resolves', () => {
     isExec: WIN_WORLD('C:\\tools\\ugrep.exe'),
   });
   assert.strictEqual(found, 'C:\\tools\\ugrep.exe');
-  // ...and a name that already spells an executable extension gets no appendices:
-  // no ugrep.exe.exe, no ugrep.exe.com.
-  assert.deepStrictEqual(_whichLeaves('ugrep.exe', true, '.COM;.EXE'), ['ugrep.exe']);
 });
 
 test('win32: a dotted name that is NOT an executable extension is still probed', () => {
-  // `python3.11` ends in ".11", which is not in PATHEXT — treating it as
-  // "already has an extension" would lose python3.11.exe, which is right there.
-  assert.deepStrictEqual(_whichLeaves('python3.11', true, '.COM;.EXE'),
-    ['python3.11', 'python3.11.com', 'python3.11.exe']);
+  // `python3.11` ends in ".11": tried as spelled, and as python3.11.exe, which is right there.
+  assert.strictEqual(which('python3.11', {
+    isWin: true, PATH: 'C:\\py', PATHEXT: '.COM;.EXE', isExec: WIN_WORLD('C:\\py\\python3.11.exe'),
+  }), 'C:\\py\\python3.11.exe');
 });
 
 test('win32: PATH is split on ; and walked in order', () => {
@@ -126,10 +125,6 @@ test('win32: an empty PATH element does NOT search the current directory', () =>
   assert.strictEqual(found, null);
 });
 
-test('win32: a PATHEXT entry without a leading dot is ignored, not concatenated', () => {
-  assert.deepStrictEqual(_whichLeaves('ugrep', true, 'EXE;.exe'), ['ugrep', 'ugrep.exe']);
-});
-
 test('win32: nothing on PATH -> null', () => {
   assert.strictEqual(which('ugrep', {
     isWin: true, PATH: 'C:\\tools', PATHEXT: '.EXE', isExec: WIN_WORLD(),
@@ -157,23 +152,25 @@ test('win32 default predicate: stats the candidate, never asks for X_OK', () => 
 
 // ---------------------------------------------------------------- posix ----
 
-test('posix default predicate: X_OK on the bare name, and no extension probing', () => {
+test('posix default predicate: one candidate, the bare name — a regular file, then X_OK', () => {
+  // stat first (a +x DIRECTORY is not runnable, so node walks past it, and so does this now), X_OK only for a file.
   const { out, calls } = spyFs(() => which('ugrep', { isWin: false, PATH: '/opt/bin' }));
   assert.strictEqual(out, null);
-  assert.deepStrictEqual(calls.access, [['/opt/bin/ugrep', fs.constants.X_OK]],
-    'POSIX must probe exactly one candidate, with X_OK — unchanged');
-  assert.deepStrictEqual(calls.stat, [], 'POSIX must not have grown a stat');
+  assert.deepStrictEqual(calls.stat, ['/opt/bin/ugrep'], 'POSIX must probe exactly one candidate, no extensions');
+  assert.deepStrictEqual(calls.access, [], 'nothing there: no X_OK asked');
 });
 
 test('posix: PATHEXT is never consulted, whatever the environment says', () => {
-  assert.deepStrictEqual(_whichLeaves('ugrep', false, '.COM;.EXE'), ['ugrep']);
+  const asked = [];
   const prev = process.env.PATHEXT;
   process.env.PATHEXT = '.COM;.EXE';
   try {
-    assert.deepStrictEqual(_whichLeaves('ugrep', false, undefined), ['ugrep']);
+    which('ugrep', { isWin: false, PATH: '/opt/bin', PATHEXT: '.COM;.EXE', isExec: (p) => { asked.push(p); return false; } });
+    which('ugrep', { isWin: false, PATH: '/opt/bin', isExec: (p) => { asked.push(p); return false; } });
   } finally {
     if (prev === undefined) delete process.env.PATHEXT; else process.env.PATHEXT = prev;
   }
+  assert.deepStrictEqual(asked, ['/opt/bin/ugrep', '/opt/bin/ugrep']);
 });
 
 const posixOnly = { skip: process.platform === 'win32' ? 'POSIX X_OK semantics' : false };
@@ -210,31 +207,37 @@ test('posix (real FS): a ugrep.exe does NOT satisfy `ugrep`', posixOnly, () => {
     'PATHEXT probing must not leak onto POSIX');
 });
 
-test('posix (real FS): an empty PATH element still means cwd, as it always did', posixOnly, () => {
-  // Not a property worth having — it is just the property this function HAS, and
-  // "fix which() for Windows" is not the commit that gets to change it on POSIX.
-  // (`PATH: ''` would not even reach the walk: an empty string is falsy, so the
-  // caller's PATH falls back to the environment's. That, too, is pre-existing.)
+test('posix (real FS): a +x DIRECTORY named like the tool is not a match (node walks past it too)', posixOnly, () => {
+  const root = tmpbin();
+  fs.mkdirSync(path.join(root, 'a', 'ugrep'), { recursive: true, mode: 0o755 });
+  const real = mkexe(path.join(root, 'b'), 'ugrep');
+  assert.strictEqual(which('ugrep', { PATH: [path.join(root, 'a'), path.join(root, 'b')].join(':') }), real);
+});
+
+test('posix (real FS): an empty PATH element means cwd (node\'s rule), answered as a path', posixOnly, () => {
+  // (`PATH: ''` would not even reach the walk: an empty string is falsy, so Bun.which falls back to the
+  // process's PATH, as Bun does when the caller names none.)
   const dir = tmpbin();
   mkexe(dir, 'ugrep');
   const cwd = process.cwd();
   process.chdir(dir);
   try {
-    assert.strictEqual(which('ugrep', { PATH: ':' }), 'ugrep');
+    assert.strictEqual(which('ugrep', { PATH: ':' }), './ugrep');
   } finally { process.chdir(cwd); }
+});
+
+test('a pathed name is not searched: it answers itself when executable', posixOnly, () => {
+  const p = mkexe(tmpbin(), 'ugrep');
+  assert.strictEqual(which(p, { PATH: '/nonexistent' }), p);
+  assert.strictEqual(which(p + '-missing', { PATH: path.dirname(p) }), null);
 });
 
 // ------------------------------------------------------- pathed vs bare ----
 
-test('_exeIsPathed: win32 counts a backslash and a drive letter; POSIX does not', () => {
-  assert.strictEqual(_exeIsPathed('ugrep', false), false);
-  assert.strictEqual(_exeIsPathed('/usr/bin/ugrep', false), true);
-  assert.strictEqual(_exeIsPathed('C:\\tools\\ugrep.exe', false), false); // POSIX: a weird bare name
-  assert.strictEqual(_exeIsPathed('C:\\tools\\ugrep.exe', true), true);
-  assert.strictEqual(_exeIsPathed('.\\ugrep.exe', true), true);
-  assert.strictEqual(_exeIsPathed('C:ugrep.exe', true), true);           // drive-relative
-  assert.strictEqual(_exeIsPathed('ugrep.exe', true), false);
-  assert.strictEqual(_exeIsPathed('C:/tools/ugrep.exe', true), true);
+test('win32: a pathed name is checked as itself (and its extension spellings), never hunted for on PATH', () => {
+  assert.strictEqual(which('C:\\tools\\ugrep', {
+    isWin: true, PATH: 'C:\\elsewhere', PATHEXT: '.EXE', isExec: WIN_WORLD('C:\\tools\\ugrep.exe', 'C:\\elsewhere\\C:\\tools\\ugrep.exe'),
+  }), 'C:\\tools\\ugrep.exe');
 });
 
 test('spawn (posix): a bare command absent from PATH throws synchronously', posixOnly, () => {

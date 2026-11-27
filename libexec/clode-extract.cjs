@@ -289,9 +289,10 @@ function extractIfNeeded(opts) {
   // (Task 5), rg-native.cjs (quaude's rg; grep-native Task 4) and ITS companions rg-regex.cjs
   // (rg's regex dialect; grep-native Task 5b), rg-walk.cjs and rg-types.cjs (rg's walk, and its
   // type table and version text; grep-native Task 9), and rg-entry.cjs (the rg command the Bash tool's `rg`
-  // runs, whose shell function bun-shim writes; grep-native Task 10c), see test/shim-companions.test.cjs: staged
+  // runs, whose shell function bun-shim writes; grep-native Task 10c), and path-lookup.cjs (the one PATH search, which
+  // bun-shim and rg-entry both require), see test/shim-companions.test.cjs: staged
   // beside the shim everywhere the shim is staged, never on its own.
-  const companions = ['unicode-text.cjs', 'rg-entry.cjs', 'rg-native.cjs', 'rg-regex.cjs', 'rg-walk.cjs', 'rg-types.cjs']
+  const companions = ['unicode-text.cjs', 'rg-entry.cjs', 'rg-native.cjs', 'rg-regex.cjs', 'rg-walk.cjs', 'rg-types.cjs', 'path-lookup.cjs']
     .map((name) => ({ name, src: path.join(libexec, name), cache: path.join(cacheDir, name) }));
   const sigPath = path.join(cacheDir, '.extractor-sig');
 

@@ -77,11 +77,13 @@ test('loader P: POSIX behavior unchanged', () => {
 // stopped matching (a rename, a refactor) would read as "passing" the same as
 // a genuinely-guarded feature.
 const CHECKS = [
-  ['cpSrc', /PATHEXT/, 'match', 'child_process: resolveExe probes PATHEXT'],
-  ['cpSrc', /CP_IS_WIN\s*\?\s*';'\s*:\s*':'/, 'match', 'child_process: PATH split on ; on win32'],
+  // resolveExe IS libexec/path-lookup.cjs's lookPath (the one PATH search); its win32 rules are driven behaviourally in
+  // test/path-lookup.test.cjs, and these three keep a presence check where the code now lives.
+  ['cpSrc', /require\('\.\.\/\.\.\/path-lookup\.cjs'\)/, 'match', 'child_process: resolveExe delegates to path-lookup.cjs'],
+  ['plSrc', /PATHEXT/, 'match', 'path-lookup: the pathext option probes PATHEXT'],
+  ['plSrc', /indexOf\(';'/, 'match', 'path-lookup: win32 PATH split on ;'],
   ['cpSrc', /ComSpec/, 'match', 'child_process: shell-mode consults ComSpec'],
   ['cpSrc', /\/d \/s \/c/, 'match', 'child_process: shell-mode uses cmd.exe /d /s /c'],
-  ['cpSrc', /\[a-zA-Z\]:/, 'match', 'child_process: win32 exe-resolution recognizes drive letters'],
   ['osSrc', /EOL:.*win32.*\\r\\n/, 'match', 'os.EOL is CRLF on win32'],
   ['procSrc', /get arch\(\).*win32.*winArch\(\)/, 'match', 'process.arch derives honest arch on win32'],
   ['procSrc', /PROCESSOR_ARCHITECTURE/, 'match', 'process.arch reads PROCESSOR_ARCHITECTURE'],
@@ -129,6 +131,7 @@ const guard = defineGuard({
   read: () => ({
     sources: {
       cpSrc: fs.readFileSync(path.join(__dirname, '..', 'libexec/node-shim/modules/child_process.cjs'), 'utf8'),
+      plSrc: fs.readFileSync(path.join(__dirname, '..', 'libexec/path-lookup.cjs'), 'utf8'),
       osSrc: fs.readFileSync(path.join(__dirname, '..', 'libexec/node-shim/modules/os.cjs'), 'utf8'),
       procSrc: fs.readFileSync(path.join(__dirname, '..', 'libexec/node-shim/modules/process.cjs'), 'utf8'),
       urlSrc: fs.readFileSync(path.join(__dirname, '..', 'libexec/node-shim/modules/url.cjs'), 'utf8'),
@@ -144,6 +147,7 @@ const guard = defineGuard({
   control: () => ({
     sources: {
       cpSrc: '// nothing win32-specific here',
+      plSrc: '// nothing win32-specific here',
       osSrc: '// nothing win32-specific here',
       procSrc: '// nothing win32-specific here',
       urlSrc: '// nothing win32-specific here',

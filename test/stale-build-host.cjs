@@ -8,7 +8,7 @@
 // captures it at load, so a prelude that runs as part of the ENTRY is too late for anything the
 // loader itself set up. The stand-in therefore runs a copy of libexec/ with the prelude inserted
 // right after the loader's 'use strict' (the copy is a whole libexec/ because node-shim reaches
-// ../../target-env.cjs and ../../unicode-text.cjs, and deps/ is symlinked in because the loader
+// ../../target-env.cjs, ../../unicode-text.cjs and ../../path-lookup.cjs, and deps/ is symlinked in because the loader
 // resolves packages from ../../../deps/claude/node_modules). Every `run <...>/loader.cjs` is
 // redirected to that copy; every other `run <file>` gets the prelude prepended; `eval` gets it
 // prefixed. So build.sh, the resolver, build-tjs-boot.sh and everything they start see one engine.

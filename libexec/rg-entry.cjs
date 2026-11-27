@@ -22,11 +22,11 @@
 //   RG-CONFIG         RIPGREP_CONFIG_PATH, which native's Bash `rg` reads and quaude's rg cannot: refused by name
 //
 // bun-shim.cjs requires this file (for rgShadowFunction), so it travels beside bun-shim in every packaging
-// (test/shim-companions.test.cjs); its own companion is rg-native.cjs, required on first use. Node builtins only.
+// (test/shim-companions.test.cjs); its own companions are rg-native.cjs and path-lookup.cjs, each required on first
+// use. Node builtins otherwise.
 // Node builtins are required where they are used, never at the top: the quaude bootstrap evaluates this file before
 // any module system exists, for isRgInvocation alone (libexec/quaude-bootstrap.mjs).
 const fsm = () => require('fs');
-const pathm = () => require('path');
 
 // RG-ARGV0: native 2.1.283 (darwin-arm64, measured 2026-10-04, `--version` under each spelling) answers as rg when
 // argv[0]'s last path component is exactly `rg` (`rg`, `/x/rg`, a symlink named rg), or when the environment's
@@ -101,23 +101,12 @@ function stdinPieces(readFd = (b) => fsm().readSync(0, b, 0, b.length, null)) {
   return next;
 }
 
-// The ugrep quaude's rg searches with: CLODE_UGREP, else the first executable `ugrep` on PATH (bun-shim's which()
-// rule, without the bundle-facing rg special case: rg is never looked up).
+// The ugrep quaude's rg searches with: CLODE_UGREP, else path-lookup.cjs's search for `ugrep` with bun-shim's
+// Bun.which options (pathext: true, windowsCwd: false; the reasons are written there), so this and the bundle's
+// Bun.which('ugrep') cannot disagree. path-lookup.cjs is a companion beside this file in every packaging.
 function findUgrep(env) {
   if (env.CLODE_UGREP) return env.CLODE_UGREP;
-  const fs = fsm(), path = pathm();
-  const win = process.platform === 'win32';
-  const leaves = win ? (env.PATHEXT || '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean).map((x) => 'ugrep' + x.toLowerCase()) : ['ugrep'];
-  for (let dir of String(env.PATH || '').split(path.delimiter)) {
-    if (win && dir.length > 1 && (dir[0] === '"' || dir[0] === "'") && dir[dir.length - 1] === dir[0]) dir = dir.slice(1, -1);
-    if (!dir) continue;
-    for (const leaf of leaves) {
-      const p = path.join(dir, leaf);
-      // runnable: a regular file, with an execute bit off Windows (where there are none: PATHEXT decides)
-      try { const st = fs.statSync(p); if (st.isFile() && (win || (st.mode & 0o111) !== 0)) return p; } catch { /* next */ }
-    }
-  }
-  return null;
+  return require(__dirname + '/path-lookup.cjs').lookPath('ugrep', { env, platform: process.platform, pathext: true, windowsCwd: false });
 }
 
 // rg's stdout and stderr, as Rust's std writes them. EPIPE (a reader that went away: `rg x | head -1`) ends rg at

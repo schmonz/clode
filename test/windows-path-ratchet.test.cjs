@@ -83,19 +83,19 @@ const REPO = path.resolve(__dirname, '..');
 const RULES = {
   'path-walk': {
     re: /process\.env\.PATH/,
-    why: 'resolving an executable by walking PATH has ONE home — clode-hosttools.findTool, which '
-       + 'probes PATHEXT on Windows. Three hand-rolled copies existed and two were broken (0dd9553).',
+    why: 'resolving an executable by walking PATH has ONE home — libexec/path-lookup.cjs lookPath, '
+       + 'node\'s own search, reading PATH from the env it is handed. Seven copies existed and disagreed.',
   },
   'x-ok-exec': {
     re: /accessSync\([^)]*X_OK/,
     why: 'X_OK does not test executability on Windows. Under quaude fs.accessSync IS the CRT _access, '
        + 'and UCRT rejects mode 1 with EINVAL for every path — so this answers "not executable" always. '
-       + 'Branch on win32 (statSync().isFile()), as clode-hosttools.isExecutableFile does.',
+       + 'Branch on win32 (statSync().isFile()), as path-lookup.cjs isExecutableFile does.',
   },
   'slash-only-pathedness': {
     re: /includes\('\/'\)|lastIndexOf\('\/'\)|indexOf\('\/'\)/,
     why: 'on win32 a path may be C:\\x or a\\b, so "/" alone decides neither pathedness nor basename. '
-       + 'Mirror child_process.cjs resolveExe: slash, plus backslash and drive-letter when isWin.',
+       + 'Use path-lookup.cjs isPathed: slash, plus backslash and drive colon when win32.',
   },
   'c-file-url-sep': {
     // NEW KIND, 2026-08-25. clode injects C into the engine (scripts/build-tjs.cjs
@@ -274,9 +274,9 @@ const ALLOWED = {
     'scripts/build-tjs.cjs': 1,
   },
   'path-walk': {
-    // Bun.which's own implementation and spawn's Bun-parity existence check.
-    // These ARE the lookup — they now go through the PATHEXT-aware walk (0dd9553).
-    'libexec/bun-shim.cjs': 2,
+    // Bun.which's default PATH (Bun's own: the process's, when the caller names none). The walk
+    // itself is libexec/path-lookup.cjs's lookPath, which reads PATH from the env it is HANDED.
+    'libexec/bun-shim.cjs': 1,
     // provisionCosmocc PREPENDS cosmocc's bin dir to PATH so cmake's child
     // processes can exec cosmoar/cosmoranlib's per-arch backends by bare name.
     // It resolves nothing itself — no walk, no executable lookup — so PATHEXT
@@ -292,25 +292,16 @@ const ALLOWED = {
     // string/template/regex state. This entry is the honest count for the two
     // lines this rule allows here, not a residue of the old blindness.
     'scripts/build-tjs.cjs': 2,
-    // node's documented resolveExe semantics for child_process; already handles
-    // backslash and drive-letter, and must stay independent of the shim's applets.
-    'libexec/node-shim/modules/child_process.cjs': 2,
   },
   'x-ok-exec': {
-    // Both sides of the win32/POSIX branch in the fixed which(); the win32 side
-    // never reaches X_OK.
-    'libexec/bun-shim.cjs': 2,
-    // isExecutableFile — the one home, and it branches on isWin.
-    'libexec/clode-hosttools.cjs': 1,
-    // whichClaude — already PATHEXT-correct; runs under real Node, where libuv's
-    // fs__access consults the mode only for W_OK.
-    'libexec/clode-resolve.cjs': 1,
+    // isExecutableFile — the one home (every PATH lookup's default predicate), and it returns
+    // before X_OK on win32.
+    'libexec/path-lookup.cjs': 1,
   },
   'slash-only-pathedness': {
-    // _exeIsPathed, which tests backslash and drive-letter too. (The two GLOB sites,
-    // where "/" was the glob's own semantics, went with rgFilesToListing: grep-native
-    // Task 10, the listing is quaude's rg's own walk now.)
-    'libexec/bun-shim.cjs': 1,
+    // isPathed (the '/' half of a test that adds backslash and ':' on win32) and leafNames'
+    // basename (lastIndexOf of '\\', '/' and ':' together): libexec/path-lookup.cjs, the one PATH search.
+    'libexec/path-lookup.cjs': 2,
     // rg's walk (grep-native Task 9): one is a GLOB line (a `/` in an rg glob is the glob's own
     // anchoring, gitignore.rs add_line); two are rg's unix pathutil.rs (is_file_name, file_name) over
     // the walk's OWN paths, which it joins with `/` on every host, so `/` is their only separator by
@@ -319,8 +310,6 @@ const ALLOWED = {
     'libexec/rg-walk.cjs': 3,
     // The loader's internal module ids are POSIX-canonical by construction.
     'libexec/node-shim/loader.cjs': 2,
-    // resolveExe: the correct implementation everything else mirrors.
-    'libexec/node-shim/modules/child_process.cjs': 1,
     // This IS the path module; :188 already tests both separators.
     'libexec/node-shim/modules/path.cjs': 2,
     // bytecodeSymbolBase deliberately mirrors tjsc's get_c_name, which splits on

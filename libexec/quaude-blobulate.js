@@ -526,6 +526,10 @@ members.push({ name: 'rg-types.cjs', data: await mustRead(path.join(libexecDir, 
 // entry, libexec/quaude-bootstrap.mjs), and what bun-shim.cjs requires as its sibling for the shell function the Bash
 // tool's `rg` is. At the archive ROOT beside rg-native.cjs, which it requires, for the same reasons.
 members.push({ name: 'rg-entry.cjs', data: await mustRead(path.join(libexecDir, 'rg-entry.cjs'), 'rg-entry.cjs member') });
+// path-lookup.cjs, the one PATH search: bun-shim.cjs and rg-entry.cjs require it as their sibling
+// (`require(__dirname + '/path-lookup.cjs')`), node-shim's child_process climbs '../../path-lookup.cjs' to it, and the
+// bootstrap hands it to target-env.cjs. At the archive ROOT in BOTH roles, for the same reasons as unicode-text.cjs.
+members.push({ name: 'path-lookup.cjs', data: await mustRead(path.join(libexecDir, 'path-lookup.cjs'), 'path-lookup.cjs member') });
 
 // ext-dep closure (DEPS = extras.deps, derived node-side — see above). The
 // node side already fails the build if a listed package is missing from

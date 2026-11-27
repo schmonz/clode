@@ -89,13 +89,13 @@ test('findTool returns null when nothing is found', () => {
 // Host-independent: inject isWin + isExec, match on basename (path.join's
 // separator differs by host).
 test('findTool probes PATHEXT for a bare name on win32 (certutil -> certutil.EXE)', () => {
-  const isExec = (p) => /[\\/]certutil\.EXE$/.test(p); // only the .EXE exists
+  const isExec = (p) => /[\\/]certutil\.EXE$/i.test(p); // only the .EXE exists (NTFS: any case)
   const found = findTool('certutil', {
     isWin: true,
     env: { PATH: 'C:\\Windows\\System32', PATHEXT: '.COM;.EXE;.BAT;.CMD' },
     isExec,
   });
-  assert.match(found || '', /certutil\.EXE$/);
+  assert.match(found || '', /certutil\.exe$/i); // path-lookup.cjs spells PATHEXT lower-case
 });
 
 test('findTool on win32 leaves a name that already has an extension alone', () => {
@@ -169,8 +169,18 @@ test('isExecutableFile on POSIX still requires the execute bit', () => {
 // rejects X_OK. Before the fix findTool returns null here and provision reports "not found".
 test('findTool resolves a real .EXE on a win32 host whose access() rejects X_OK', () => {
   const found = findTool('zstd', {
-    isWin: true, fs: winAccessFs(/zstd\.EXE$/),
+    isWin: true, fs: winAccessFs(/zstd\.EXE$/i),
     env: { PATH: 'C:\\tools', PATHEXT: '.COM;.EXE;.BAT;.CMD' },
   });
-  assert.match(found || '', /zstd\.EXE$/);
+  assert.match(found || '', /zstd\.exe$/i);
+});
+
+// findTool is libexec/path-lookup.cjs's lookPath with two named win32 divergences from node's search: PATHEXT (a tool
+// may be a .cmd, which libuv's .com/.exe would miss) and NO cwd-first search (clode runs what this finds; a tar.exe in
+// the directory the user stands in must not shadow the system's).
+test('findTool on win32 finds a .cmd through PATHEXT and never searches the current directory', () => {
+  const asked = [];
+  const isExec = (p) => { asked.push(p); return /^C:\\npm\\npm\.cmd$/i.test(p) || !/^C:/i.test(p); };
+  assert.strictEqual(findTool('npm', { isWin: true, env: { PATH: 'C:\\npm', PATHEXT: '.COM;.EXE;.BAT;.CMD' }, isExec }), 'C:\\npm\\npm.cmd');
+  assert.ok(asked.every((p) => /^C:/i.test(p)), `only PATH candidates were asked: ${asked.join(', ')}`);
 });

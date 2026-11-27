@@ -150,7 +150,12 @@ test('probePaths lists every path shapeTargetEnv might test', () => {
   const lin = probePaths({ env: { PATH: '/usr/bin' }, platform: 'linux', delimiter: ':' });
   assert.deepStrictEqual(lin, ['/usr/bin/rg'], 'trustd is a darwin-only question');
   const win = probePaths({ env: { PATH: 'C:\\bin' }, platform: 'win32', delimiter: ';' });
-  assert.deepStrictEqual(win, ['C:\\bin\\rg.exe']);
+  // libexec/path-lookup.cjs's candidates: what the later spawn of `rg` would try (libuv's .com, then .exe).
+  assert.deepStrictEqual(win, ['C:\\bin\\rg.com', 'C:\\bin\\rg.exe']);
+  // Only ABSOLUTE candidates: the rg dir goes on PATH for the whole session, and a cwd-relative one stops being the
+  // same directory the moment it cds (an empty POSIX entry; a relative entry; win32's cwd-first search).
+  assert.deepStrictEqual(probePaths({ env: { PATH: ':rel:/opt/bin:' }, platform: 'linux' }), ['/opt/bin/rg']);
+  assert.deepStrictEqual(probePaths({ env: { PATH: 'rel;C:\\bin' }, platform: 'win32' }), ['C:\\bin\\rg.com', 'C:\\bin\\rg.exe']);
 });
 
 // The drift guard: if shapeTargetEnv ever tests a path probePaths did not
@@ -199,7 +204,10 @@ test('mapPlatform: empty/undefined input defaults to linux (the quaude fallback)
 
 // target-env.cjs is evaluated as a blobulated member under tjs via `new Function`,
 // BEFORE the node-shim (and its require) exists. Adding mapPlatform must not
-// smuggle in a dependency that breaks that.
+// smuggle in a dependency that breaks that. ONE require is allowed, by name:
+// './path-lookup.cjs' (the one PATH search), which is require-free itself and which
+// the bootstrap hands over as that require's only answer (the test after this guard
+// evaluates target-env.cjs exactly that way).
 function scanRequireFree({ src }) {
   const findings = [];
   // Coordinator fix round 1: a hardcoded `const examined = 1` reads OK even against an
@@ -208,7 +216,7 @@ function scanRequireFree({ src }) {
   // all (0 for an emptied file, 1 otherwise) makes floor 1 mean something: a
   // target-env.cjs truncated/emptied to '' now reads BROKEN, not a clean OK.
   const examined = src.length > 0 ? 1 : 0;
-  if (src.includes('require(')) {
+  if (src.replace(/require\('\.\/path-lookup\.cjs'\)/g, '').includes('require(')) {
     findings.push('target-env.cjs contains require(...) — it is evaluated pre-node-shim under '
       + 'tjs via `new Function`, before require exists');
   }
@@ -233,3 +241,15 @@ const requireFreeGuard = defineGuard({
   control: () => ({ src: "const fs = require('node:fs');\n" }),
 });
 guardTests(requireFreeGuard);
+
+test('target-env.cjs evaluates as the bootstrap evaluates it: new Function, path-lookup.cjs its only require', () => {
+  const lib = path.join(__dirname, '..', 'libexec');
+  const plm = { exports: {} };
+  (0, new Function('module', 'exports', fs.readFileSync(path.join(lib, 'path-lookup.cjs'), 'utf8')))(plm, plm.exports);
+  const tem = { exports: {} };
+  (0, new Function('module', 'exports', 'require', fs.readFileSync(path.join(lib, 'target-env.cjs'), 'utf8')))(tem, tem.exports,
+    (name) => { assert.strictEqual(name, './path-lookup.cjs'); return plm.exports; });
+  assert.deepStrictEqual(tem.exports.probePaths({ env: { PATH: '/opt/bin' }, platform: 'linux' }), ['/opt/bin/rg']);
+  const env = tem.exports.shapeTargetEnv(opts({ env: { PATH: '/opt/bin' }, isExec: (p) => p === '/opt/bin/rg' }));
+  assert.strictEqual(env.USE_BUILTIN_RIPGREP, '0');
+});

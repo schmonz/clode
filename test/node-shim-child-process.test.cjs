@@ -979,3 +979,34 @@ test("spawnSync: 'ignore' still ignores, and is not replayed by the inherit fix"
   assert.deepStrictEqual(JSON.parse(r.stdout.trim()), JSON.parse(node.stdout.trim()),
     "node returns null for a slot it was told to ignore; so must the shim");
 });
+
+// PATH resolution of a bare name is node's (libuv's), via libexec/path-lookup.cjs: a NON-EXECUTABLE file and a
+// DIRECTORY of the same name earlier on PATH are walked past (resolveExe used to take the first regular file, and the
+// spawn then died EACCES where node ran the real one), and the PATH searched is the env HANDED to the spawn, not the
+// parent's (spawnSync used to fall back to process.env whenever opts.env had no PATH).
+test('spawn/spawnSync of a bare name: PATH from opts.env, non-executable file and directory skipped, like node', (t) => {
+  if (skipUnlessTjs(t)) return;
+  if (process.platform === 'win32') { t.skip('POSIX execute-bit semantics'); return; }
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-cp-path-'));
+  fs.mkdirSync(path.join(root, 'a'));
+  fs.writeFileSync(path.join(root, 'a', 'pltool'), '#!/bin/sh\necho WRONG-not-executable\n', { mode: 0o644 });
+  fs.mkdirSync(path.join(root, 'b', 'pltool'), { recursive: true });
+  fs.mkdirSync(path.join(root, 'c'));
+  fs.writeFileSync(path.join(root, 'c', 'pltool'), '#!/bin/sh\necho right\n', { mode: 0o755 });
+  const PATH = ['a', 'b', 'c'].map((d) => path.join(root, d)).join(':');
+  const body = `
+    const cp = require('node:child_process');
+    const PATH = ${JSON.stringify(PATH)};
+    const s = cp.spawnSync('pltool', [], { env: { PATH }, encoding: 'utf8' });
+    const none = cp.spawnSync('pltool', [], { env: { HOME: '/' }, encoding: 'utf8' });
+    const c = cp.spawn('pltool', [], { env: { PATH } });
+    let out = '';
+    c.stdout.on('data', (d) => { out += d; });
+    c.on('close', (code) => console.log(JSON.stringify({ sync: [s.status, s.stdout], none: none.error && none.error.code, async: [code, out] })));`;
+  const f = prog(body);
+  const node = JSON.parse(require('node:child_process').execFileSync(process.execPath, [f], { encoding: 'utf8', env: { ...process.env, PATH: `${PATH}:${process.env.PATH}` } }).trim());
+  assert.deepStrictEqual(node, { sync: [0, 'right\n'], none: 'ENOENT', async: [0, 'right\n'] }, 'the oracle itself');
+  const r = runLoader(f, [], { env: { PATH: `${PATH}:${process.env.PATH}` } });
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.deepStrictEqual(JSON.parse(r.stdout.trim()), node);
+});

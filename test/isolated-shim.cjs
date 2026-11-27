@@ -20,7 +20,7 @@ function isoDir() {
   fs.copyFileSync(path.resolve(__dirname, '../libexec/unicode-text.cjs'), path.join(_dir, 'unicode-text.cjs'));
   fs.copyFileSync(path.resolve(__dirname, '../libexec/rg-native.cjs'), path.join(_dir, 'rg-native.cjs'));
   fs.copyFileSync(path.resolve(__dirname, '../libexec/rg-regex.cjs'), path.join(_dir, 'rg-regex.cjs'));
-  for (const c of ['rg-walk.cjs', 'rg-types.cjs', 'rg-entry.cjs']) fs.copyFileSync(path.resolve(__dirname, '../libexec', c), path.join(_dir, c));
+  for (const c of ['rg-walk.cjs', 'rg-types.cjs', 'rg-entry.cjs', 'path-lookup.cjs']) fs.copyFileSync(path.resolve(__dirname, '../libexec', c), path.join(_dir, c));
   return _dir;
 }
 // Run `node -e '<prelude requiring the isolated shim as Bun>; <body>'`. env overrides

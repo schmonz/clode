@@ -173,10 +173,10 @@ test('6. claude on PATH last', () => {
   assert.strictEqual(resolveClaudeBin({ env }), claude);
 });
 
-test('6b. a non-executable claude on PATH is skipped', () => {
-  // Mock a claude on PATH whose accessSync(X_OK) fails (non-executable). Tests whichClaude's
-  // skip-on-inaccessible logic uniformly — Windows has no exec bit, so a real chmod wouldn't apply.
-  const pathdir = path.join(path.sep === '\\' ? 'C:\\pd' : '/pd');
+test('6b. a non-executable claude on PATH is skipped (POSIX: the execute bit decides)',
+  { skip: process.platform === 'win32' && 'win32 has no execute bit: path-lookup.cjs never asks X_OK there (6c)' }, () => {
+  // Mock a claude on PATH whose accessSync(X_OK) fails (non-executable).
+  const pathdir = '/pd';
   const cand = path.join(pathdir, 'claude');
   const enoent = () => { const e = new Error('ENOENT'); e.code = 'ENOENT'; throw e; };
   const fsm = {
@@ -187,6 +187,19 @@ test('6b. a non-executable claude on PATH is skipped', () => {
   };
   const env = { HOME: '/nohome', PATH: pathdir };
   assert.strictEqual(resolveClaudeBin({ env, fsm }), null);
+});
+
+test('6c. whichClaude on win32: PATHEXT finds claude.cmd (an npm install), and X_OK is never asked', () => {
+  const { whichClaude } = require('../libexec/clode-resolve.cjs');
+  const enoent = () => { const e = new Error('ENOENT'); e.code = 'ENOENT'; throw e; };
+  const fsm = {
+    statSync: (p) => (String(p).toLowerCase() === 'c:\\npm\\claude.cmd' ? { isFile: () => true } : enoent()),
+    // the CRT's _access under tjs: X_OK is EINVAL for every path
+    accessSync: () => { const e = new Error('EINVAL'); e.code = 'EINVAL'; throw e; },
+  };
+  assert.strictEqual(whichClaude({ PATH: 'C:\\nope;C:\\npm', PATHEXT: '.COM;.EXE;.BAT;.CMD' }, fsm, 'win32'), 'C:\\npm\\claude.cmd');
+  // ...and never the current directory, whatever Windows' own default.
+  assert.strictEqual(whichClaude({ PATH: '', PATHEXT: '.EXE' }, { statSync: () => ({ isFile: () => true }) }, 'win32'), null);
 });
 
 test('7. no provider yields the not-found signal (null)', () => {

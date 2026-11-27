@@ -86,8 +86,9 @@ const P = {
     return P.normalize(r);
   },
 };
-// Does a require() request name a path (a separator in it), as resolveExe in modules/child_process.cjs decides it:
-// a slash, and on win32 also a backslash or a drive letter (C:\x, a\b). The package resolver uses it to tell a deep
+// Does a require() request name a path (a separator in it)? A slash, and on win32 also a backslash or a LEADING drive
+// letter (C:\x, a\b). Not path-lookup.cjs's isPathed, which counts a ':' anywhere as libuv does for an executable:
+// a module request may be `node:fs`, which is no path. The package resolver uses it to tell a deep
 // request (es-errors/eval, pkg\sub) from a bare package name.
 const hasPathSep = (s) => s.includes("/") || (IS_WIN && (s.includes("\\") || /^[a-zA-Z]:/.test(s)));
 /* @loader-paths-end */

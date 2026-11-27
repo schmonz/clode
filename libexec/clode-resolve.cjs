@@ -9,6 +9,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { homeDir } = require('./clode-paths.cjs');
 const { currentBin } = require('./clode-current.cjs');
+const { lookPath, isExecutableFile } = require('./path-lookup.cjs');
 
 // Does `p` exist? Mirrors sh `[ -e "$p" ]` — existence, following symlinks (any
 // stat error, incl. a dangling link, is "no"). statSync (not lstat) so a symlink
@@ -142,28 +143,17 @@ function resolveClaudeBin(opts = {}) {
   return null;
 }
 
-// command -v claude: first executable regular file named `claude` on PATH.
-function whichClaude(env, fsm = fs) {
-  const PATH = env.PATH || '';
-  // Candidate leaf names: `claude` plus the Windows executable extensions from PATHEXT (data, not a
-  // platform branch — on POSIX PATHEXT is unset so the default list's `.exe`/`.cmd`/… simply never
-  // exist; on Windows a PATH provider is claude.exe/claude.cmd).
-  const exts = (env.PATHEXT || '.COM;.EXE;.BAT;.CMD').split(';').map((e) => e.trim().toLowerCase()).filter(Boolean);
-  const leaves = ['claude', ...exts.map((e) => 'claude' + e)];
-  for (const dir of PATH.split(path.delimiter)) {
-    if (!dir) continue; // an empty PATH element means CWD in sh; clode never relies on it
-    for (const leaf of leaves) {
-      const cand = path.join(dir, leaf);
-      try {
-        if (!fsm.statSync(cand).isFile()) continue;
-        fsm.accessSync(cand, fs.constants.X_OK);
-        return cand;
-      } catch {
-        // not there / not executable -> keep walking
-      }
-    }
-  }
-  return null;
+// command -v claude: path-lookup.cjs's search for `claude` (an executable regular file; on Windows a file, never X_OK,
+// which tjs's CRT _access rejects for every path). Two named divergences from node's own search, win32-only:
+// pathext: true, because an npm-installed claude on Windows is claude.cmd, which libuv's .com/.exe would never find;
+// windowsCwd: false, because this locates the claude clode reads its bundle from, and a claude.exe in whatever
+// directory the user stands in must not be it. `platform` is injectable so the win32 rule is testable from any host.
+function whichClaude(env, fsm = fs, platform = process.platform) {
+  const isWin = platform === 'win32';
+  return lookPath('claude', {
+    env, platform, pathext: true, windowsCwd: false,
+    isExec: (p) => isExecutableFile(p, { fs: fsm, isWin }),
+  });
 }
 
 module.exports = {

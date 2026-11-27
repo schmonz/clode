@@ -339,6 +339,7 @@ test('materializeBlobPayload: each member name lands at its documented on-disk h
     put('rg-walk.cjs');
     put('rg-types.cjs');
     put('rg-entry.cjs');
+    put('path-lookup.cjs');
     put('deps/claude/package-lock.json');
     put('scripts/build-naude.mjs');
     put('naude-entry.bundle.cjs');
@@ -363,6 +364,8 @@ test('materializeBlobPayload: each member name lands at its documented on-disk h
     assert.strictEqual(at(path.join('libexec', 'rg-regex.cjs')), 'rg-regex.cjs', 'beside rg-native.cjs, which requires it');
     // rg-walk.cjs and rg-types.cjs (rg-native.cjs's companions since grep-native Task 9) the same way.
     for (const c of ['rg-walk.cjs', 'rg-types.cjs']) assert.strictEqual(at(path.join('libexec', c)), c, 'beside rg-native.cjs, which requires it');
+    // path-lookup.cjs (the one PATH search) beside node-shim/, for child_process.cjs's ../../ climb.
+    assert.strictEqual(at(path.join('libexec', 'path-lookup.cjs')), 'path-lookup.cjs');
     // rg-entry.cjs (the rg command, bun-shim.cjs's companion since grep-native Task 10c) beside bun-shim's home too.
     assert.strictEqual(at(path.join('libexec', 'rg-entry.cjs')), 'rg-entry.cjs', 'beside bun-shim.cjs, which requires it');
     assert.strictEqual(at(path.join('libexec', 'quaude-blobulate.js')), 'libexec/quaude-blobulate.js');

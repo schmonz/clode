@@ -51,7 +51,7 @@ function seedProvider(dir) {
   // ...and its rg-native.cjs companion (grep-native Task 4), for the same reason.
   fs.copyFileSync(path.join(LIBEXEC, 'rg-native.cjs'), path.join(stageDir, 'rg-native.cjs'));
   fs.copyFileSync(path.join(LIBEXEC, 'rg-regex.cjs'), path.join(stageDir, 'rg-regex.cjs'));
-  for (const c of ['rg-walk.cjs', 'rg-types.cjs', 'rg-entry.cjs']) fs.copyFileSync(path.join(LIBEXEC, c), path.join(stageDir, c));
+  for (const c of ['rg-walk.cjs', 'rg-types.cjs', 'rg-entry.cjs', 'path-lookup.cjs']) fs.copyFileSync(path.join(LIBEXEC, c), path.join(stageDir, c));
   fs.writeFileSync(path.join(stageDir, '.extractor-sig'),
     // The stored sig is the extractor's signature COMPOSED WITH the provider's platform:
     // a version alone never determined the carve (see test/extract-cache-key.test.cjs).

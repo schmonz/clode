@@ -104,25 +104,23 @@ function filterUndefinedEnv(envObj) {
   return out;
 }
 
-function resolveExe(file, env) {
-  // Node resolves a bare command via PATH for spawn; a path with a separator is
-  // used as-is. On Windows the separator is \ or / or a drive letter, PATH is
-  // ;-delimited, and a bare name without an extension is probed against PATHEXT
-  // (.COM;.EXE;.BAT;.CMD;...) — this is how the bundle's Bash tool finds bash.exe.
-  if (file.includes('/') || (CP_IS_WIN && (file.includes('\\') || /^[a-zA-Z]:/.test(file)))) return file;
-  const delim = CP_IS_WIN ? ';' : ':';
-  const exts = CP_IS_WIN
-    ? String(process.env.PATHEXT || '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean)
-    : [''];
-  const alreadyHasExt = CP_IS_WIN && /\.[^.\\/]+$/.test(file);
-  for (const dir of String((env && env.PATH) || process.env.PATH || '').split(delim)) {
-    if (!dir) continue;
-    for (const ext of (alreadyHasExt ? [''] : exts)) {
-      const p = path.join(dir, file + ext);
-      try { if (FSS.stat(p).kind === 'file') return p; } catch { /* keep looking */ }
-    }
-  }
-  return file; // let spawn surface the ENOENT
+// Node's own PATH search for a bare command (libuv's; libexec/path-lookup.cjs states it and is the one copy), so the
+// shim spawns what node would: the env HANDED to the spawn decides PATH (and an env with no PATH searches libuv's
+// /usr/bin:/bin, as node does), an empty POSIX entry is the child's cwd, and a candidate counts only if the spawn could
+// run it (a non-executable `git` early on PATH no longer wins and then fails EACCES; node walks past it). On win32 that
+// is libuv's .com/.exe, not PATHEXT: node cannot spawn a .cmd/.bat without a shell either. A miss returns the name, so
+// the spawn reports the ENOENT. path-lookup.cjs rides at the archive root beside node-shim/ (and at libexec/ in a
+// checkout), required on first spawn.
+let _lookPath = null;
+function resolveExe(file, env, cwd) {
+  if (!_lookPath) ({ lookPath: _lookPath } = require('../../path-lookup.cjs'));
+  const platform = CP_IS_WIN ? 'win32' : process.platform;
+  const fsm = {
+    statSync: (p) => ({ isFile: () => FSS.stat(p).kind === 'file' }),
+    accessSync: (p, m) => FSS.access(p, m),
+    constants: { X_OK: 1 },
+  };
+  return _lookPath(file, { env: env || {}, platform, cwd, fs: fsm }) || file;
 }
 
 // Map one node stdio slot value to what tjs.spawn accepts. 'inherit'/'ignore'
@@ -283,7 +281,7 @@ function spawn(file, args = [], opts = {}) {
   const child = new EventEmitter();
   let proc;
   try {
-    proc = tjs.spawn([resolveExe(file, env || process.env), ...args], {
+    proc = tjs.spawn([resolveExe(file, env, opts.cwd), ...args], {
       cwd: opts.cwd, env, stdin: stdio.stdin, stdout: stdio.stdout, stderr: stdio.stderr,
       uid: opts.uid, gid: opts.gid,
       detached: !!engineOpts.detached, windowsHide: !!engineOpts.windowsHide,
@@ -592,7 +590,7 @@ function spawnSync(file, args = [], opts = {}, entry = 'child_process.spawnSync'
     // pass a real ArrayBuffer slice (the C side reads an ArrayBuffer)
     input = b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength);
   }
-  const exe = resolveExe(file, (opts.env && opts.env.PATH) ? opts.env : process.env);
+  const exe = resolveExe(file, filterUndefinedEnv(opts.env || tjs.env), opts.cwd);
   const slots = normStdio(opts);
   // The engine's spawner takes the slots (txiki-sync-spawn.patch: `__tjs_spawn_sync.stdio`): an inherited slot is
   // the parent's own fd in the child, an ignored one /dev/null (NUL), and only a 'pipe' is captured. An engine that

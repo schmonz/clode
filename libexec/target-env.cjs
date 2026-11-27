@@ -9,7 +9,9 @@
 // DEPENDENCY-FREE ON PURPOSE. quaude's bootstrap evaluates this as a blobulated
 // member under tjs, BEFORE the node-shim loader exists — there is no node:fs and
 // no node:path there. Every primitive is injected. Callers supply them; nothing
-// here reaches for a runtime.
+// here reaches for a runtime. Its one require is path-lookup.cjs (the PATH
+// search, see rgCandidates), which is require-free too and which the bootstrap
+// hands it.
 //
 // NODE_PATH is deliberately NOT our business: naude builds its own from the
 // materialized deps, and quaude carries its deps as trailer members with no
@@ -44,7 +46,7 @@ function shapeTargetEnv(opts) {
   // Point the Grep tool at a real ripgrep when one exists. rg stays OPTIONAL —
   // none found means leave the config alone (the bundle falls back to its
   // embedded search). CLODE_RG wins verbatim.
-  const rg = env.CLODE_RG || findOnPath({ env, platform, delimiter, isExec });
+  const rg = env.CLODE_RG || findOnPath({ env, platform, isExec });
   if (rg) {
     setIfUnset(env, 'USE_BUILTIN_RIPGREP', '0');
     const rgdir = dirname(rg);
@@ -69,11 +71,20 @@ function shapeTargetEnv(opts) {
   return env;
 }
 
-// Candidate rg paths, in PATH order.
-function rgCandidates({ env, platform, delimiter }) {
-  const bin = platform === 'win32' ? 'rg.exe' : 'rg';
-  const sep = platform === 'win32' ? '\\' : '/';
-  return (env.PATH || '').split(delimiter).filter(Boolean).map((dir) => dir + sep + bin);
+// Candidate rg paths, in search order: path-lookup.cjs's pathCandidates, the one PATH search, so what this probes is
+// what the Grep tool's later spawn of `rg` would find (on win32 libuv's rg.com/rg.exe, a quoted entry unquoted).
+// Two caller-side choices, both because the rg dir found here is put on PATH for the WHOLE session: windowsCwd: false,
+// and only ABSOLUTE candidates (an empty POSIX entry, or a relative PATH dir, is the current directory or relative to
+// it, which stops being the same directory the moment the session cds). It is also what lets probePaths stay a pure
+// list, computed before anything has looked at a filesystem.
+//
+// path-lookup.cjs is this file's one require, and it is require-free itself: quaude's bootstrap, which evaluates this
+// file before any module system exists, hands it over as the answer to that require (libexec/quaude-bootstrap.mjs).
+// Required on first use, so an evaluation that only wants mapPlatform needs nothing at all.
+function rgCandidates({ env, platform }) {
+  const isWin = platform === 'win32';
+  return require('./path-lookup.cjs').pathCandidates('rg', { env, platform, windowsCwd: false })
+    .filter((p) => (isWin ? /^([a-zA-Z]:)?[\\/]/.test(p) : p[0] === '/'));
 }
 
 // "Does a path exist?" and "can I run this path?" are different questions —
@@ -84,8 +95,8 @@ function rgCandidates({ env, platform, delimiter }) {
 // slot, switching off USE_BUILTIN_RIPGREP's embedded-search fallback for a tool
 // that can never run. So rg candidates are asked with `isExec`, never `exists`
 // — that predicate is reserved for genuine existence checks (trustd, above).
-function findOnPath({ env, platform, delimiter, isExec }) {
-  for (const cand of rgCandidates({ env, platform, delimiter })) {
+function findOnPath({ env, platform, isExec }) {
+  for (const cand of rgCandidates({ env, platform })) {
     if (isExec(cand)) return cand;
   }
   return null;
@@ -123,10 +134,10 @@ function mapPlatform(uaPlatform) {
 // asynchronously, then answers shapeTargetEnv from the result. Keeping the list
 // in THIS module is what stops it drifting from what shapeTargetEnv actually
 // asks about — test/target-env.test.cjs asserts exactly that.
-function probePaths({ env, platform, delimiter = ':' }) {
+function probePaths({ env, platform }) {
   const paths = [];
   if (platform === 'darwin') paths.push('/usr/libexec/trustd');
-  paths.push(...rgCandidates({ env, platform, delimiter }));
+  paths.push(...rgCandidates({ env, platform }));
   return paths;
 }
 

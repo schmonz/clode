@@ -13,52 +13,32 @@
 // all injectable.
 
 const fs = require('node:fs');
-const path = require('node:path');
 
-// Is `p` an executable regular file? (sh `command -v`/`[ -x ]` accept a path only
-// when it resolves to something runnable.) Any error (missing, EACCES, a dir) is
-// a plain "not executable".
+const { isExecutableFile: sharedIsExecutableFile, lookPath } = require('./path-lookup.cjs');
+
+// Is `p` an executable regular file? path-lookup.cjs's predicate (a regular file; X_OK off Windows only), with this
+// module's injectable seams: `fs`, and `isWin` so a test steers it from any host.
 //
-// WIN32 DOES NOT ASK X_OK, and that is not a tidy-up — it is the difference between
-// finding the host's tools and reporting that Windows ships none. Under quaude/tjs
-// `fs.accessSync` is __tjs_fs_sync.access -> the CRT's `_access`, which validates its
-// mode as `(mode & ~6) == 0` and therefore rejects X_OK (1) with EINVAL for EVERY
-// path, existing or not. Under Node/libuv the identical call is a no-op that succeeds
-// (fs__access only consults FILE_ATTRIBUTE_READONLY, and only for W_OK). So this
-// predicate answered "no" for every candidate on the SHIPPED Windows binary while
-// answering "yes" under Node — invisible to every Node-side test.
-//
-// libexec/bun-shim.cjs:825-843 had already worked this out for its own `which` and
-// marked it "UNVERIFIED ON WINDOWS". CI run 33245690046 verified it: windows-amd64 and
-// windows-arm64 both reported `[tried: zstd: not found; unzstd: not found; zstdcat: not
-// found]` from the blobulated builder, in a job where actions/cache had just run
-// `tar --use-compress-program "zstd -d"` — the tool was there; this function could not
-// see it. (It surfaced only when the zstd decoder started resolving through findTool;
-// the same blindness was already costing provision('tar') on Windows.)
-//
-// There is no execute bit on Windows to ask about, and PATHEXT probing in findTool is
-// what makes the NAME mean "executable", so a regular-file check is the honest question.
-// POSIX is unchanged, byte for byte. `fs`/`isWin` are injectable so this is testable
-// from any host — the same seam findTool already offers.
+// WIN32 DOES NOT ASK X_OK, and that is not a tidy-up — it is the difference between finding the host's tools and
+// reporting that Windows ships none. Under quaude/tjs `fs.accessSync` is __tjs_fs_sync.access -> the CRT's `_access`,
+// which validates its mode as `(mode & ~6) == 0` and therefore rejects X_OK (1) with EINVAL for EVERY path. CI run
+// 33245690046 verified it: windows-amd64 and windows-arm64 both reported `zstd: not found` from the blobulated builder,
+// in a job where actions/cache had just run `zstd -d`. path-lookup.cjs states the rule once; this keeps the seam.
 function isExecutableFile(p, opts = {}) {
   const { fs: fsm = fs, isWin = process.platform === 'win32' } = opts;
-  try {
-    if (!fsm.statSync(p).isFile()) return false;
-    if (isWin) return true;
-    fsm.accessSync(p, fsm.constants.X_OK);
-    return true;
-  } catch {
-    return false;
-  }
+  return sharedIsExecutableFile(p, { fs: fsm, isWin });
 }
 
 // Replacement for `command -v NAME` with the CLODE_* override pattern
 // (`${OVERRIDE:-$(command -v NAME)}`): return the override if it is set and
-// executable, else walk PATH for an executable `name`, else null.
-// On Windows a bare tool name resolves to name+PATHEXT (certutil -> certutil.exe,
-// tar -> tar.exe); without probing PATHEXT the walk finds nothing and provision
-// wrongly reports "no tool found" for tools that ship WITH Windows. Mirrors
-// child_process.cjs's resolveExe. isWin is injectable for host-independent tests.
+// executable, else path-lookup.cjs's PATH search for an executable `name`, else null.
+// isWin/fs/isExec are injectable for host-independent tests.
+//
+// Two named divergences from node's own search (path-lookup.cjs's options), both win32-only:
+//   pathext: true      — provision() asks "which tool does this host have", and on Windows a tool may be a .cmd/.bat
+//                        (npm is npm.cmd); libuv's .com/.exe alone would report it missing.
+//   windowsCwd: false  — clode runs what this finds; a tar.exe in whatever directory the user stands in must not
+//                        shadow the system's.
 function findTool(name, opts = {}) {
   const {
     override, env = process.env, fs: fsm = fs,
@@ -69,19 +49,7 @@ function findTool(name, opts = {}) {
     isExec = (p) => isExecutableFile(p, { fs: fsm, isWin }),
   } = opts;
   if (override && isExec(override)) return override;
-  const delim = isWin ? ';' : ':';
-  const hasExt = isWin && /\.[^.\\/]+$/.test(name); // e.g. an explicit "tar.exe"
-  const exts = isWin && !hasExt
-    ? String(env.PATHEXT || '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean)
-    : [''];
-  for (const dir of (env.PATH || '').split(delim)) {
-    if (!dir) continue; // an empty PATH element means CWD in sh; clode never relies on it
-    for (const ext of exts) {
-      const cand = path.join(dir, name + ext);
-      if (isExec(cand)) return cand;
-    }
-  }
-  return null;
+  return lookPath(name, { env, platform: isWin ? 'win32' : 'posix', pathext: true, windowsCwd: false, isExec });
 }
 
 module.exports = {

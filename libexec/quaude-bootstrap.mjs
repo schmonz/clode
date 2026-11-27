@@ -641,7 +641,7 @@ async function policyMayExist(tjs, providerPlatform, procVersion) {
 // facts its own dependency check reads. Bun.which looks a name up on PATH (the env the bundle will see, already shaped
 // by bootstrapTargetEnv); `policyMaySetDeps`: EVIDENCE that policy could set sandbox.bwrapPath/socatPath (a visible
 // policy source exists, or the user's --managed-settings sets them), never mere "may exist" (fix round 3).
-async function sandboxFacts(tjs, providerPlatform, procVersion, argv) {
+async function sandboxFacts(tjs, providerPlatform, procVersion, argv, pathLookup) {
   const env = tjs.env;
   if (providerPlatform === 'win32') {
     let nankeenGate = false;
@@ -656,11 +656,13 @@ async function sandboxFacts(tjs, providerPlatform, procVersion, argv) {
     return { providerPlatform, nankeenEnv: env.CLAUDE_CODE_NANKEEN_KESTREL, nankeenGate };
   }
   if (providerPlatform !== 'linux') return { providerPlatform };
+  // path-lookup.cjs's candidates (the one PATH search, the same Bun.which the bundle's own check asks), probed
+  // asynchronously because tjs has no sync stat this early. The predicate is the same question as path-lookup's
+  // default, asked of a stat: a regular file with an execute bit (any of the three; tjs offers no access(2) here).
   const onPath = async (name) => {
-    for (const dir of String(env.PATH || '').split(':')) {
-      if (!dir) continue;
+    for (const cand of pathLookup.pathCandidates(name, { env, platform: 'linux' })) {
       try {
-        const st = await tjs.stat(dir + '/' + name);
+        const st = await tjs.stat(cand);
         if (((st.mode || 0) & S_IFMT) === S_IFREG && ((st.mode || 0) & S_IXALL) !== 0) return true;
       } catch (_) { /* not here */ }
     }
@@ -1017,8 +1019,14 @@ async function main() {
     // process.cjs also requires this member (relative to its blobulated SHIM_DIR,
     // which has no 'libexec' ancestor in the archive namespace — see
     // quaude-blobulate.js), so this and that require must agree on where it lives.
+    // path-lookup.cjs (the one PATH search, also a bare root member) is target-env.cjs's one require, and is itself
+    // require-free: evaluate it first and hand it over as that require's only answer. sandboxFacts (step 7.6) asks it
+    // too.
+    const plm = { exports: {} };
+    (0, new Function('module', 'exports', dec.decode(files.get('path-lookup.cjs'))))(plm, plm.exports);
     const tem = { exports: {} };
-    (0, new Function('module', 'exports', dec.decode(files.get('target-env.cjs'))))(tem, tem.exports);
+    (0, new Function('module', 'exports', 'require', dec.decode(files.get('target-env.cjs'))))(tem, tem.exports,
+      (name) => (name === './path-lookup.cjs' ? plm.exports : {}));   // nothing else to require yet (evalMember's rule)
     globalThis.__clodeShapeTargetEnv = tem.exports.shapeTargetEnv;
     globalThis.__clodeProbePaths = tem.exports.probePaths;
     // The shared uaPlatform->node switch (see tjsPlatform, above) — installed
@@ -1054,7 +1062,7 @@ async function main() {
       // another gap, never open.
       const procVersion = await readProcVersion(tjs);
       const policyMayOverride = await policyMayExist(tjs, manifest.providerPlatform, procVersion);
-      const required = sandboxWouldRun(await sandboxFacts(tjs, manifest.providerPlatform, procVersion, rest));
+      const required = sandboxWouldRun(await sandboxFacts(tjs, manifest.providerPlatform, procVersion, rest, plm.exports));
       const hookCommand = '"' + tjs.exePath + '" --clode-update-guard';
       const guardSettings = { hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: hookCommand }] }] } };
       if (required) guardSettings.sandbox = { failIfUnavailable: true };

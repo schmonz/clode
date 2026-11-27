@@ -48,6 +48,9 @@ files.set('target-env.cjs', await tjs.readFile(path.join(path.dirname(shimRoot),
 // first segmented line throws. The mini cli below segments once, so that in-VFS climb is
 // exercised, not merely staged.
 files.set('unicode-text.cjs', await tjs.readFile(path.join(path.dirname(shimRoot), 'unicode-text.cjs')));
+// path-lookup.cjs (the one PATH search) rides at the root too: modules/child_process.cjs climbs
+// '../../path-lookup.cjs' to it at the first spawn of a bare name.
+files.set('path-lookup.cjs', await tjs.readFile(path.join(path.dirname(shimRoot), 'path-lookup.cjs')));
 
 // Mini members standing in for the extracted bundle + deps.
 files.set('lib.cjs', enc.encode(`module.exports = { value: 'vfs-lib-ok' };\n`));

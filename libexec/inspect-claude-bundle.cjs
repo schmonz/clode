@@ -478,8 +478,8 @@ function embeddedAppletVersions(data) {
   return out;
 }
 
-// PATH lookup lives in ONE place: clode-hosttools.findTool, which already
-// probes PATHEXT on Windows. This file carried a third hand-rolled copy that did
+// PATH lookup lives in ONE place: libexec/path-lookup.cjs, reached here through
+// clode-hosttools.findTool, which probes PATHEXT on Windows. This file carried a third hand-rolled copy that did
 // not -- a bare-name join plus accessSync(X_OK) -- so on a Windows runner it
 // reported "no ugrep/bfs" for applets that were installed, and could not find
 // node.exe either. Two other copies had the same bug; the shipped one is fixed
