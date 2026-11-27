@@ -10,15 +10,16 @@
 // needs a real resolver (txiki exposes no JS DNS resolver primitive today), so
 // lookup() of such a name throws a branded wall rather than guessing; resolve*/
 // reverse are likewise branded-unimplemented. The -p mock path never hits these.
-const IPV4 = /^(\d{1,3}\.){3}\d{1,3}$/;
 const IPV6 = /:/;
+// node's lookup answers an IP literal itself, by node's net.isIP (internal/ip.cjs); '999.1.1.1' is a name.
+const { isIP } = require('../internal/ip.cjs');
 
 function familyOf(addr) { return IPV6.test(addr) ? 6 : 4; }
 
 function resolveLiteral(hostname) {
   if (hostname === 'localhost') return { address: '127.0.0.1', family: 4 };
-  if (IPV4.test(hostname)) return { address: hostname, family: 4 };
-  if (IPV6.test(hostname)) return { address: hostname, family: 6 };
+  const family = isIP(hostname);
+  if (family) return { address: hostname, family };
   return null;
 }
 

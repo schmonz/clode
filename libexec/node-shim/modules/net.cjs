@@ -14,49 +14,8 @@ const { callable } = require('../internal/callable.cjs');
 // definitions at load resolve; connect/createConnection throw a branded wall, createServer one naming the sandbox.
 const { EventEmitter } = require('node:events');
 
-// ---- isIP family (real, matches host node semantics) ----
-function isIPv4(s) {
-  if (typeof s !== 'string') return false;
-  const parts = s.split('.');
-  if (parts.length !== 4) return false;
-  for (const p of parts) {
-    if (!/^\d+$/.test(p)) return false;
-    if (p.length > 1 && p[0] === '0') return false;   // no leading zeros
-    const n = Number(p);
-    if (n < 0 || n > 255) return false;
-  }
-  return true;
-}
-
-function isIPv6(s) {
-  if (typeof s !== 'string' || s.length === 0) return false;
-  s = s.split('%')[0];                                 // strip zone id
-  if (!s.includes(':')) return false;
-  const dbl = s.split('::');
-  if (dbl.length > 2) return false;
-  const hex = (g) => /^[0-9a-fA-F]{1,4}$/.test(g);
-  const groups = (str) => (str === '' ? [] : str.split(':'));
-  const validate = (arr, tail) => {
-    for (let i = 0; i < arr.length; i++) {
-      const g = arr[i];
-      const isLast = tail && i === arr.length - 1;
-      if (isLast && g.includes('.')) { if (!isIPv4(g)) return false; }
-      else if (!hex(g)) return false;
-    }
-    return true;
-  };
-  const head = groups(dbl[0]);
-  const tail = dbl.length === 2 ? groups(dbl[1]) : null;
-  // an embedded IPv4 in the final group counts as 2 sextets
-  const count = (arr) => arr.reduce((n, g) => n + (g.includes('.') ? 2 : 1), 0);
-  if (!validate(head, dbl.length !== 2)) return false;
-  if (tail && !validate(tail, true)) return false;
-  const total = count(head) + (tail ? count(tail) : 0);
-  if (dbl.length === 2) return total <= 7;             // '::' fills >=1 group
-  return total === 8;
-}
-
-function isIP(s) { return isIPv4(s) ? 4 : isIPv6(s) ? 6 : 0; }
+// ---- isIP family: node's own (internal/ip.cjs, the shim's one IP-literal test) ----
+const { isIPv4, isIPv6, isIP } = require('../internal/ip.cjs');
 
 // ---- BlockList (real) ----
 function v4ToInt(s) {

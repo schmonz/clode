@@ -26,12 +26,9 @@ const DEFAULT_ATTEMPT_TIMEOUT = 250;
 const MIN_ATTEMPT_TIMEOUT = 10;
 const state = { autoSelectFamily: true, attemptTimeout: DEFAULT_ATTEMPT_TIMEOUT };
 
-const V4 = /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/;
-function ipFamily(s) {
-  if (typeof s !== 'string') return 0;
-  if (V4.test(s)) return 4;
-  return /^[0-9a-fA-F:.]+(%[\w.-]+)?$/.test(s) && s.includes(':') ? 6 : 0;
-}
+// An address's family, or 0 for a name: node's net.isIP, as node's connect asks it (internal/ip.cjs).
+const { isIP } = require('./ip.cjs');
+const ipFamily = (s) => (typeof s === 'string' ? isIP(s) : 0);
 
 // node's alternation: bucket by family (first answer's family first), dedupe, interleave.
 function attemptOrder(addresses) {

@@ -366,6 +366,8 @@ const NO_PROXY_TABLE = [
   ['127.0.0.0-127.0.0.255', '127.0.0.1', 80, false],       // simple IPv4 ranges
   ['127.0.0.0-127.0.0.255', '128.0.0.1', 80, true],
   ['10.0.0.1-10.0.0.9', 'example.com', 80, true],           // range vs a name: no match
+  ['1.2.3.0-1.2.3.9', '01.2.3.4', 80, true],               // a leading zero is no IPv4 to node: no range match
+  ['01.2.3.0-1.2.3.9', '1.2.3.4', 80, true],               // ...in the range either
 ];
 
 test('no_proxy matching is node\'s, case for case', () => {

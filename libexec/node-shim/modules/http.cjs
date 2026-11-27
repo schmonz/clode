@@ -784,11 +784,8 @@ function proxyUrlFromEnv(env, protocol) {
   return raw;
 }
 
-function isIPv4(s) {
-  const parts = String(s).split('.');
-  if (parts.length !== 4) return false;
-  return parts.every((p) => /^\d{1,3}$/.test(p) && Number(p) <= 255);
-}
+// node's ProxyConfig tests its no_proxy ranges with node's own isIPv4, which refuses '01.2.3.4' (internal/ip.cjs).
+const { isIPv4 } = require('../internal/ip.cjs');
 function ipToInt(s) {
   const p = String(s).split('.').map(Number);
   return ((p[0] << 24) >>> 0) + (p[1] << 16) + (p[2] << 8) + p[3];
