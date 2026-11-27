@@ -23,6 +23,9 @@ cannot drift from it; it is also where the honest answer to "does this need node
    unreachable" in the job, distinctly from a build failure. Check the other qemu legs for the same
    single-mirror dependency while there.
 
+Measured: the rg-inventory-gate failure on CI ubuntu-latest for 1d4c3c98, and midnightbsd.org timing out
+(homepage and FTP tree) for the whole of 2026-11-27 while the leg failed in `mport install` (2026-11-27).
+
 ## Tiger, first run from the released asset: three walls before quaude exists (2026-11-26)
 
 Driven over ssh on the user's Intel Tiger VM (Mac OS X 10.4.11, Darwin 8.11.1 i386, Virtual Intel Mac, 4 CPUs,
@@ -885,7 +888,7 @@ shapes cut to the driver's argument count.
 - DIFF-ZLIB: the one-shot helpers are real now (miniz in the engine, txiki-zlib-sync.patch); what is left is the
   message for a corrupt deflate block (`inflateRawSync("data\n")`): miniz reports no reason, so node-shim says
   "invalid compressed data" where node names zlib's (code and errno agree). `zlib.constants.ZLIB_VERNUM` is not node's.
-- DIFF-OS-MEMORY-RELEASE: `os.totalmem()` and `os.freemem()` answer 0, `os.release()` and `os.version()` "".
+- DIFF-OS-MEMORY-RELEASE: `os.totalmem()` and `os.freemem()` answer 0 (`os.release()`/`os.version()` answer from uname since 25b1727f).
 - DIFF-NET-SERVER: `net.createServer` throws (the named stub; the sandbox entries below).
 - DIFF-PATH-DOTDOT: `path.parse` answers dir "." where node answers "" for a bare name, and `path.parse("..")`,
   `path.extname("..")` treat ".." as an extension.

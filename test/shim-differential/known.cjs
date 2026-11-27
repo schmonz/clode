@@ -38,7 +38,7 @@ const CAUSES = [
   { cause: 'DIFF-MISSING-MEMBERS', api: '^(fs\\.promises|fs/promises\\.constants|path\\.(win32|posix)|util\\.types|zlib\\.constants)$', leaf: '^r\\.(keys\\.\\w+|[A-Z][A-Z0-9_]*|undefined)$' },
   { cause: 'DIFF-STDIO-CLASS', api: '^process\\.(stdout|stderr|env)$', leaf: '^r\\.ctor$' },
   { cause: 'DIFF-ZLIB', api: '^zlib\\.inflateRawSync$', leaf: '^r\\.error\\.message$' },
-  { cause: 'DIFF-OS-MEMORY-RELEASE', api: '^os\\.(totalmem|freemem|release|version)$', leaf: '^r(\\.sign)?$' },
+  { cause: 'DIFF-OS-MEMORY-RELEASE', api: '^os\\.(totalmem|freemem)$', leaf: '^r(\\.sign)?$' },
   { cause: 'DIFF-NET-SERVER', api: '^net\\.createServer$', leaf: '^r\\.(closed|error\\.(ctor|name|message))$' },
   { cause: 'DIFF-PATH-DOTDOT', api: '^path\\.(parse|extname)$', leaf: '^r(\\.(dir|ext|name|base|root))?$' },
   { cause: 'DIFF-ISATTY-DEVNULL', api: '^tty\\.isatty$', id: '\\(0\\)$', leaf: '^r$' },
