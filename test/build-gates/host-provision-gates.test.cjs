@@ -4,8 +4,8 @@
 // every archive moved in process, libexec/unpack.cjs), run them on a known input, and demand the EXACT expected output
 // before trusting the winner. This file is the house-shape (defineGuard/guardTests, per
 // test/build-gates/lexical-code-mask.test.cjs and dep-closure-gates.test.cjs) that
-// controls provision()'s unknown-requirement throw-site, plus the guard that keeps
-// every hash in shipped code native (no hand-written hash implementation in libexec).
+// controls provision()'s unknown-requirement throw-site, plus the guards that keep
+// every hash and every base64/hex codec in shipped code native (no hand-written hash or codec in libexec).
 // (A second guard here once controlled the sha256 requirement's KAT; sha256 left the
 // registry when file hashes went native, and that guard went with it.)
 //
@@ -201,5 +201,47 @@ test('no-hand-written-hash: each round constant is recognised on its own', () =>
   for (const [hex, name] of [['0x428A2F98', 'SHA-256'], ['0xd76aa478', 'MD5'], ['0x5a827999', 'SHA-1']]) {
     const { findings } = scanHandWrittenHash({ sources: [{ rel: 'synthetic.cjs', text: `const k = ${hex};` }] });
     assert.strictEqual(findings.length, 1, `${name}: ${findings}`);
+  }
+});
+
+// ==========================================================================
+// GUARD — NO HAND-WRITTEN BASE64 OR HEX CODEC IN SHIPPED CODE.
+// ==========================================================================
+//
+// The same class one encoding over. node-shim carried five codecs: feross's base64-js under the bundle's Buffer,
+// internal/buffer-lite.cjs's own alphabet, a base64url translate-and-rewrap layer, and hex loops in crypto, x509,
+// string_decoder and both quaude-side digests (docs/superpowers/findings/2026-11-27-latent-capabilities-audit.md,
+// D4). Under tjs they decoded a 10MB attachment's base64 in ~3.3s; the engine's native Uint8Array base64/hex does
+// it in ~8ms, and libexec/node-shim/internal/codec.cjs is now the one place node's lenient rules sit on top of it.
+// A codec cannot be written without its digit table, so the table is the thing banned: base64's alphabet (either
+// variant shares the 62-character prefix) or the sixteen hex digits as one string.
+const CODEC_TABLES = [
+  { re: /ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789/, what: "base64's alphabet" },
+  { re: /0123456789abcdef|0123456789ABCDEF/, what: 'a hex digit table' },
+];
+
+function scanHandWrittenCodec({ sources }) {
+  const findings = [];
+  for (const s of sources) {
+    for (const k of CODEC_TABLES) {
+      if (k.re.test(s.text)) findings.push(`${s.rel}: carries ${k.what}, a codec written in JS; encode and decode through Buffer, or libexec/node-shim/internal/codec.cjs inside the shim (native Uint8Array toBase64/fromBase64/toHex/fromHex)`);
+    }
+  }
+  return { findings, examined: sources.length };
+}
+
+guardTests(defineGuard({
+  name: 'no-hand-written-base64',
+  floor: 80,
+  read: readLibexecSources,
+  scan: scanHandWrittenCodec,
+  // the defect as it was: internal/buffer-lite.cjs's own encoder table
+  control: () => ({ sources: [{ rel: 'libexec/node-shim/internal/buffer-lite.cjs', text: "const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';" }] }),
+}));
+
+test('no-hand-written-base64: each table is recognised on its own', () => {
+  for (const t of ["'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'", "'0123456789abcdef'", '"0123456789ABCDEF"']) {
+    const { findings } = scanHandWrittenCodec({ sources: [{ rel: 'synthetic.cjs', text: `const T = ${t};` }] });
+    assert.strictEqual(findings.length, 1, `${t}: ${findings}`);
   }
 });

@@ -3,33 +3,8 @@
 // M2 replaces this with the vendored feross `buffer` for the bundle's needs.
 const te = new TextEncoder();
 const td = new TextDecoder();
-const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
-
-// node's base64 decoder reads BOTH alphabets (`+/` and `-_`) for 'base64' and 'base64url' alike,
-// skips whitespace and anything else outside them, and stops at the first `=`.
-const B64_VALUE = new Map([...B64].map((c, i) => [c, i]).concat([['-', 62], ['_', 63]]));
-function b64decode(s) {
-  const out = [];
-  let bits = 0, acc = 0;
-  for (const ch of s) {
-    if (ch === '=') break;
-    const v = B64_VALUE.get(ch);
-    if (v === undefined) continue;
-    acc = ((acc << 6) | v) & 0xffffff; bits += 6;
-    if (bits >= 8) { bits -= 8; out.push((acc >> bits) & 0xff); }
-  }
-  return Uint8Array.from(out);
-}
-function b64encode(bytes) {
-  let out = '';
-  for (let i = 0; i < bytes.length; i += 3) {
-    const [a, b, c] = [bytes[i], bytes[i + 1], bytes[i + 2]];
-    out += B64[a >> 2] + B64[((a & 3) << 4) | (b ?? 0) >> 4]
-      + (b === undefined ? '=' : B64[((b & 15) << 2) | (c ?? 0) >> 6])
-      + (c === undefined ? '=' : B64[c & 63]);
-  }
-  return out;
-}
+// base64, base64url and hex are internal/codec.cjs, the shim's one codec (native, with node's lenient decoding).
+const codec = require('./codec.cjs');
 
 // node's encoding names, any case: 'utf8' (also 'utf-8'), 'utf16le' (also 'utf-16le', 'ucs2', 'ucs-2'),
 // 'latin1' (also 'binary'), 'ascii', 'base64', 'base64url', 'hex'. Anything else is read as utf8, as
@@ -40,23 +15,11 @@ function encodingOf(enc) {
   const e = String(enc).toLowerCase();
   return ENCODING[e] || e;
 }
-// node's hex decoder: pairs of hex digits, up to the first pair that is not one.
-function hexdecode(s) {
-  const out = [];
-  for (let i = 0; i + 1 < s.length; i += 2) {
-    const h = s.slice(i, i + 2);
-    if (!/^[0-9a-fA-F]{2}$/.test(h)) break;
-    out.push(parseInt(h, 16));
-  }
-  return Uint8Array.from(out);
-}
-
 class Buffer extends Uint8Array {
   static from(src, enc) {
     if (typeof src === 'string') {
       const e = encodingOf(enc);
-      if (e === 'hex') return new Buffer(hexdecode(src));
-      if (e === 'base64' || e === 'base64url') return new Buffer(b64decode(src));
+      if (e === 'hex' || e === 'base64' || e === 'base64url') return new Buffer(codec.decode(src, e));
       // latin1/binary (and ascii, which node writes the same way): low-byte of each code
       // unit (NOT utf-8). This is the extractor's write path: Buffer.from(latin1Text,
       // 'latin1') must map 1 char -> 1 byte or bytes >= 0x80 corrupt.
@@ -81,13 +44,7 @@ class Buffer extends Uint8Array {
     const e = encodingOf(enc);
     if (e === 'latin1' || e === 'ascii') return str.length;
     if (e === 'utf16le') return str.length * 2;
-    if (e === 'hex') return str.length >>> 1;
-    if (e === 'base64' || e === 'base64url') {
-      let n = str.length;
-      if (n > 0 && str.charCodeAt(n - 1) === 0x3d) n--;
-      if (n > 1 && str.charCodeAt(n - 1) === 0x3d) n--;
-      return (n * 3) >>> 2;
-    }
+    if (e === 'hex' || e === 'base64' || e === 'base64url') return codec.byteLength(str, e);
     return te.encode(str).length;
   }
   // node: concat(list[, totalLength]) — totalLength TRUNCATES or zero-pads. Ignoring it
@@ -114,10 +71,7 @@ class Buffer extends Uint8Array {
     if (e0 <= s0) return '';
     const v = s0 === 0 && e0 === len ? this : this.subarray(s0, e0);
     const e = encodingOf(enc);
-    if (e === 'hex') return [...v].map((x) => x.toString(16).padStart(2, '0')).join('');
-    if (e === 'base64') return b64encode(v);
-    // base64url: the url-safe alphabet, unpadded.
-    if (e === 'base64url') return b64encode(v).replace(/=+$/, '').replace(/\+/g, '-').replace(/\//g, '_');
+    if (e === 'hex' || e === 'base64' || e === 'base64url') return codec.encode(v, e);
     const CH = 0x8000;
     const chars = (units) => { let s = ''; for (let i = 0; i < units.length; i += CH) s += String.fromCharCode.apply(null, units.subarray(i, Math.min(i + CH, units.length))); return s; };
     if (e === 'latin1') return chars(v);

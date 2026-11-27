@@ -57,8 +57,7 @@ const enc = new TextEncoder();
 const dec = new TextDecoder();
 
 async function sha256hex(bytes) {
-  const d = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
-  return Array.from(d, (b) => b.toString(16).padStart(2, '0')).join('');
+  return new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)).toHex(); // native (engine-api-floor)
 }
 
 async function mustRead(file, what) {

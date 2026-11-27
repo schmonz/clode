@@ -1,5 +1,6 @@
 'use strict';
 const { Root, callable } = require('../internal/callable.cjs');
+const { toBase64, toBase64Url, toHex } = require('../internal/codec.cjs');
 // node:string_decoder — StringDecoder that buffers incomplete multibyte
 // sequences across chunk boundaries (the whole point of the class; used by
 // Readable#setEncoding and the bundle 7×). utf8/utf16le use a streaming
@@ -51,12 +52,7 @@ class StringDecoder extends Root {
       return s;
     }
     if (enc === 'hex') {
-      const all = concat(this._carry, bytes);
-      const evenLen = all.length; // hex is byte->2 chars; no partial byte possible
-      this._carry = new Uint8Array(0);
-      let s = '';
-      for (let i = 0; i < evenLen; i++) s += all[i].toString(16).padStart(2, '0');
-      return s;
+      return toHex(bytes); // a byte is two hex digits: nothing ever carries
     }
     if (enc === 'base64' || enc === 'base64url') {
       const all = concat(this._carry, bytes);
@@ -91,10 +87,7 @@ function concat(a, b) {
   out.set(a, 0); out.set(b, a.length);
   return out;
 }
-function b64(u8, url) {
-  const s = globalThis.Buffer.from(u8).toString(url ? 'base64url' : 'base64');
-  return s;
-}
+const b64 = (u8, url) => (url ? toBase64Url(u8) : toBase64(u8));
 
 StringDecoder = callable(StringDecoder);   // node lets an ES5 subclass call it: internal/callable.cjs
 module.exports = { StringDecoder };

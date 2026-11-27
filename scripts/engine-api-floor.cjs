@@ -351,6 +351,18 @@ const ENGINE_API_FLOOR = [
     buildHost: true,
   },
   {
+    name: 'Uint8Array base64/hex',
+    expr: 'Uint8Array.fromBase64 && Uint8Array.fromHex && Uint8Array.prototype.toBase64 && Uint8Array.prototype.toHex',
+    kind: 'function',
+    from: 'quickjs-ng itself (TC39 Uint8Array to/from base64, quickjs.c; vendored v0.15.1, spike/quickjs/PINS.md), no patch',
+    why: "the attest/blobulate digests' hex (quaude-bootstrap.mjs, quaude-blobulate.js); node-shim's codec "
+      + '(internal/codec.cjs) would fall back to atob/btoa, two orders of magnitude slower on an attachment',
+    buildHost: false,
+    notForBuildHost: 'the two direct users are the shipped bootstrap and the blobulate step, and neither runs on the '
+      + 'bootstrap engine (blobulate runs on the BUILT engine, see the role note above); the build tooling that does run '
+      + "there reaches base64/hex only through node-shim's codec, which answers the same through atob/btoa without it",
+  },
+  {
     name: 'tjs.engine.moduleMeta',
     expr: 'globalThis.tjs.engine.moduleMeta',
     kind: 'function',

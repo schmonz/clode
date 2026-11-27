@@ -8,19 +8,27 @@
 // this build has no native OpenSSL and a wrong stub would violate fail-loud, so they remain walls (see
 // phase3-api-coverage.md "needs-investigation").
 const hash = require('./../internal/hash.cjs');
+const codec = require('./../internal/codec.cjs');
 const te = new TextEncoder();
 
 function toBytes(data, enc) {
   if (typeof data === 'string') {
     if (!enc || enc === 'utf8' || enc === 'utf-8') return te.encode(data);
-    if (enc === 'hex') { const u = new Uint8Array(data.length / 2); for (let i = 0; i < u.length; i++) u[i] = parseInt(data.substr(i * 2, 2), 16); return u; }
+    // node's update(string, 'hex') refuses an odd length outright (ERR_INVALID_ARG_VALUE, before hashing anything)
+    // and otherwise reads hex as Buffer.from does: whole pairs up to the first bad one.
+    const c = codec.codecOf(enc);
+    if (c === 'hex' && data.length % 2) {
+      throw Object.assign(new TypeError(`The argument 'encoding' is invalid for data of length ${data.length}. Received '${enc}'`), { code: 'ERR_INVALID_ARG_VALUE' });
+    }
+    if (c) return codec.decode(data, c);
     return new Uint8Array(globalThis.Buffer.from(data, enc));
   }
   return new Uint8Array(data.buffer ?? data, data.byteOffset ?? 0, data.byteLength ?? data.length);
 }
 
 function encodeDigest(d, enc) {
-  if (enc === 'hex') return [...d].map((x) => x.toString(16).padStart(2, '0')).join('');
+  const c = codec.codecOf(enc);
+  if (c) return codec.encode(d, c);
   if (enc) return globalThis.Buffer.from(d).toString(enc);
   return globalThis.Buffer.from(d);
 }

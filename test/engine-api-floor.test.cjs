@@ -130,10 +130,12 @@ test('every floor entry declares its build-host role, and every build-host exemp
   // every build host ran on before it: the same answers, slower, so not a refusal and not logged.
   // __tjs_connect_next_address (2026-11-24): the build opens no WebSocket and its fetches go to public hosts; without it
   // a fetch still goes on when lws cannot start a connection, and fails loudly when an address refuses one.
+  // Uint8Array base64/hex (2026-11-27): quickjs-ng's own, no patch; its direct users (the bootstrap's and blobulate's
+  // digest hex) never run on the bootstrap engine, and node-shim's codec answers the same through atob/btoa without it.
   assert.deepStrictEqual(ENGINE_API_FLOOR.filter((b) => !b.buildHost).map((b) => b.name),
     ['__tjs_fs_sync.stat identity', '__tjs_fs_sync.strerror', '__tjs_fs_sync.utime', '__tjs_fs_sync.openFlags', '__tjs_uname', '__tjs_set_default_ca', '__tjs_getrusage',
       '__tjs_libc', '__tjs_zlib_sync', '__tjs_execve', '__tjs_spawn_sync.stdio', '__tjs_spawn_options', '__tjs_spawn_sync.options', '__tjs_proxy_routes', '__tjs_timer_setref',
-      '__tjs_tls_write_all', '__tjs_getenv', '__tjs_connect_next_address']);
+      '__tjs_tls_write_all', '__tjs_getenv', '__tjs_connect_next_address', 'Uint8Array base64/hex']);
   assert.deepStrictEqual(floorFor('build-host').map((b) => b.name), ['__tjs_fs_sync', '__tjs_spawn_sync', 'tjs.engine.moduleMeta']);
   assert.throws(() => floorFor('shipped'), /unknown role/);
 });

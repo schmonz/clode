@@ -85,8 +85,7 @@ function attestReport({ manifestText, members, bom, notes }) {
 const RG_UNREAD = /^(?:graph[.-]|cli\.qbc$|template\/|node_modules\/)/;
 
 async function sha256hex(bytes) {
-  const d = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
-  return Array.from(d, (b) => b.toString(16).padStart(2, '0')).join('');
+  return new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)).toHex(); // native (engine-api-floor)
 }
 
 // tjs -> node spelling. This used to duplicate the node-shim's detectPlatform

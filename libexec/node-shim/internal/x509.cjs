@@ -24,6 +24,7 @@
 // first fault this reader meets ("header too long", "too long", "wrong tag"); OpenSSL's decoder walks the template
 // in its own order, so a certificate with SEVERAL faults may be named by a different one of them.
 const { digestChunks } = require('./hash.cjs');
+const { toHex } = require('./codec.cjs');
 const { invalidArgType } = require('./node-errors.cjs');
 
 const CERT_LABELS = ['CERTIFICATE', 'X509 CERTIFICATE', 'TRUSTED CERTIFICATE'];
@@ -140,7 +141,7 @@ function opensslTime(d) {
   return `${MONTHS[d.getUTCMonth()]} ${String(d.getUTCDate()).padStart(2, ' ')} ${p2(d.getUTCHours())}:${p2(d.getUTCMinutes())}:${p2(d.getUTCSeconds())} ${d.getUTCFullYear()} GMT`;
 }
 
-const hexUpper = (u8) => Array.from(u8, (x) => x.toString(16).padStart(2, '0')).join('').toUpperCase();
+const hexUpper = (u8) => toHex(u8).toUpperCase();
 
 // node's X509Certificate reads PEM first (the first CERTIFICATE, X509 CERTIFICATE or TRUSTED CERTIFICATE block),
 // then DER; when neither reads, the error is PEM's "no start line".

@@ -8,38 +8,72 @@ const impl = feross && feross.Buffer
   ? feross
   : require('./../internal/buffer-lite.cjs');
 
-// base64url: Node's Buffer supports it; feross `buffer` v6.0.3 does not (it
-// throws "Unknown encoding: base64url"), and buffer-lite only knows plain
-// base64. The bundle decodes Remote Control "work secrets" with it. base64url
-// is base64 over the URL-safe alphabet (`+`->`-`, `/`->`_`) with no `=`
-// padding, so we translate to/from the impl's plain base64 rather than
-// reimplement the codec. Idempotent guard so re-require never double-wraps.
+// base64, base64url and hex: internal/codec.cjs, the shim's ONE codec (the engine's native Uint8Array base64/hex,
+// read with node's lenient rules), in place of feross's base64-js and hex loops. feross 6.0.3 also has no
+// base64url at all ("Unknown encoding: base64url"; the bundle decodes Remote Control "work secrets" with it),
+// sizes base64 by decoding it rather than by node's length estimate, ignores toString's range for base64url, and
+// reads '1g' as hex 01; test/node-shim-buffer-codec.test.cjs holds every member below to host node's answers.
+// buffer-lite calls the codec itself. The one path left on base64-js is feross's own byte COUNT inside the
+// deprecated `Buffer(string, encoding)` constructor; the bytes it then writes come through write() below.
+// Idempotent guard so re-require never double-wraps.
+const codec = require('../internal/codec.cjs');
 const B = impl.Buffer;
-if (B && !B.__clodeBase64Url) {
-  B.__clodeBase64Url = true;
-  const toB64 = (s) => {
-    let x = String(s).replace(/-/g, '+').replace(/_/g, '/');
-    const pad = x.length % 4;
-    return pad ? x + '='.repeat(4 - pad) : x;
-  };
-  const toB64Url = (s) => s.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+if (impl === feross && B && !B.__clodeCodec) {
+  B.__clodeCodec = true;
   const _from = B.from;
+  const fromBytes = (u8) => _from.call(B, u8.buffer, u8.byteOffset, u8.byteLength);
   B.from = function from(src, enc, ...rest) {
-    if (enc === 'base64url' && typeof src === 'string') return _from.call(this, toB64(src), 'base64');
-    return _from.call(this, src, enc, ...rest);
+    const c = typeof src === 'string' ? codec.codecOf(enc) : null;
+    return c ? fromBytes(codec.decode(src, c)) : _from.call(this, src, enc, ...rest);
   };
   // Preserve feross's other static Buffer.* members (alloc, concat, isBuffer, …).
   Object.getOwnPropertyNames(_from).forEach((k) => {
     if (!(k in B.from)) { try { B.from[k] = _from[k]; } catch (_) { /* readonly */ } }
   });
+  // node's toString(encoding, start, end) range rules (lib/buffer.js), then the codec.
   const _toString = B.prototype.toString;
-  B.prototype.toString = function toString(enc, ...rest) {
-    if (enc === 'base64url') return toB64Url(_toString.call(this, 'base64'));
-    return _toString.call(this, enc, ...rest);
+  B.prototype.toString = function toString(enc, start, end) {
+    const c = codec.codecOf(enc);
+    if (!c) return _toString.apply(this, arguments);
+    const len = this.length;
+    if (start <= 0 || start === undefined) start = 0;
+    else if (start >= len) return '';
+    else start = Math.trunc(start) || 0;
+    if (end === undefined || end > len) end = len;
+    else end = Math.trunc(end) || 0;
+    if (end <= start) return '';
+    return codec.encode(start === 0 && end === len ? this : Uint8Array.prototype.subarray.call(this, start, end), c);
+  };
+  B.prototype.toLocaleString = B.prototype.toString;
+  // write(string[, offset[, length]][, encoding]): node's argument shapes; a decoded string is written up to
+  // the room left. An offset or length feross would refuse is left to feross to refuse.
+  const _write = B.prototype.write;
+  B.prototype.write = function write(string, offset, length, encoding) {
+    const enc = typeof offset === 'string' ? offset : typeof length === 'string' ? length : encoding;
+    const c = codec.codecOf(enc);
+    if (!c) return _write.apply(this, arguments);
+    let off = 0, room = this.length;
+    if (typeof offset !== 'string' && offset !== undefined) {
+      if (!Number.isInteger(offset) || offset < 0 || offset > this.length) return _write.apply(this, arguments);
+      off = offset; room = this.length - offset;
+      if (typeof length !== 'string' && length !== undefined) {
+        if (!Number.isInteger(length) || length < 0) return _write.apply(this, arguments);
+        room = Math.min(room, length);
+      }
+    }
+    const bytes = codec.decode(string, c);
+    const n = Math.min(bytes.length, room);
+    Uint8Array.prototype.set.call(this, n === bytes.length ? bytes : bytes.subarray(0, n), off);
+    return n;
+  };
+  const _byteLength = B.byteLength;
+  B.byteLength = function byteLength(string, enc) {
+    const c = typeof string === 'string' ? codec.codecOf(enc) : null;
+    return c ? codec.byteLength(string, c) : _byteLength.apply(this, arguments);
   };
   const _isEncoding = typeof B.isEncoding === 'function' ? B.isEncoding.bind(B) : null;
   B.isEncoding = function isEncoding(e) {
-    return e === 'base64url' || (_isEncoding ? _isEncoding(e) : false);
+    return codec.codecOf(e) !== null || (_isEncoding ? _isEncoding(e) : false);
   };
 }
 
@@ -55,7 +89,7 @@ if (B && !B.__clodeBase64Url) {
 // it, it does not accept it — an earlier draft of this comment claimed the
 // opposite without checking). Neither feross `buffer` nor internal/buffer-lite.cjs
 // (the two possible `impl`s) define this, so it's added here, once, guarded so
-// re-require never double-wraps (same idiom as the base64url patch above).
+// re-require never double-wraps (same idiom as the codec patch above).
 // TextDecoder('utf-8',{fatal:true}) IS the WHATWG UTF-8 decode algorithm — it
 // throws iff the input is not valid UTF-8, which is exactly Node's isUtf8
 // contract (not an approximation).
