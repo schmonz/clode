@@ -9,7 +9,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const { nodeAsset, ensurePinnedNode, nodeBinPath, PINNED_VERSION, tarExtract } = require('../libexec/clode-node.cjs');
+const { nodeAsset, ensurePinnedNode, nodeBinPath, PINNED_VERSION } = require('../libexec/clode-node.cjs');
 
 test('nodeAsset: darwin-arm64 -> a nodejs.org url + the pinned sha', () => {
   const a = nodeAsset('darwin', 'arm64');
@@ -106,57 +106,57 @@ test('ensurePinnedNode: happy path downloads, verifies, extracts, and returns no
     fs.readdirSync(path.join(store, 'share', 'clode', 'nodes', '.tmp')).length === 0);
 });
 
-test('tarExtract resolves tar via provision and uses the resolved binary', () => {
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-node-'));
-  const calls = [];
-  // Real tar on the host resolves; assert the actual extract used a resolved path.
-  const destDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-node-dst-'));
-  // Build a tiny gzip tarball with the host tar to feed the real extract.
+// The DEFAULT extract (unpack.cjs's extractArchive, no injected seam): the real archive shapes,
+// read in process with no tar or unzip on PATH. The tar.gz keeps bin/node's executable bit and
+// the bin/npm symlink, as nodejs.org's tarballs carry them; the win32 zip is DOS-made, as
+// nodejs.org's is.
+async function withEmptyPath(fn) {
+  const saved = process.env.PATH;
+  process.env.PATH = '';
+  try { return await fn(); } finally { process.env.PATH = saved; }
+}
+
+test('ensurePinnedNode: the default extract unpacks a real .tar.gz in process, keeping modes and symlinks', async () => {
+  const { packTar } = require('../scripts/tar-pack.cjs');
+  const zlib = require('node:zlib');
   const src = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-node-src-'));
-  fs.writeFileSync(path.join(src, 'hello'), 'hi');
-  const arc = path.join(src, 'a.tgz');
-  // Build the fixture archive by BASENAME with cwd=its dir: an absolute `-czf C:\…\a.tgz`
-  // is misread as a remote host:path by Git Bash's GNU tar on Windows (the drive-letter
-  // colon). Colon-free is uniform across GNU tar / bsdtar. (Same rule tarExtract itself
-  // follows.)
-  require('node:child_process').spawnSync('tar', ['-czf', path.basename(arc), '-C', src, 'hello'],
-    { cwd: path.dirname(arc) });
-  tarExtract(arc, destDir, {
-    env: { ...process.env },
-    spawn: (bin, args, o) => { calls.push(bin); return require('node:child_process').spawnSync(bin, args, o); },
-    dataDir,
-  });
-  assert.strictEqual(fs.readFileSync(path.join(destDir, 'hello'), 'utf8'), 'hi');
-  assert.ok(calls.some((b) => path.isAbsolute(b) && /tar|gtar|bsdtar/.test(b)),
-    'used a provision-resolved (absolute) tar path');
+  const top = `node-v${PINNED_VERSION}-linux-x64`;
+  fs.mkdirSync(path.join(src, top, 'bin'), { recursive: true });
+  fs.mkdirSync(path.join(src, top, 'lib', 'npm', 'bin'), { recursive: true });
+  fs.writeFileSync(path.join(src, top, 'bin', 'node'), '#!fake node\n');
+  fs.chmodSync(path.join(src, top, 'bin', 'node'), 0o755);
+  fs.writeFileSync(path.join(src, top, 'lib', 'npm', 'bin', 'npm-cli.js'), '// npm');
+  const canLink = process.platform !== 'win32';
+  if (canLink) fs.symlinkSync('../lib/npm/bin/npm-cli.js', path.join(src, top, 'bin', 'npm'));
+  const tgz = zlib.gzipSync(packTar(src, [top]));
+  const env = { CLODE_NODES: fs.mkdtempSync(path.join(os.tmpdir(), 'clode-node-store-')) };
+  const got = await withEmptyPath(() => ensurePinnedNode({
+    env, platform: 'linux', arch: 'x64',
+    download: async (_u, dest) => { fs.writeFileSync(dest, tgz); },
+    verify: async () => nodeAsset('linux', 'x64').sha256,
+  }));
+  assert.strictEqual(got, nodeBinPath(env, 'linux', 'x64'));
+  assert.strictEqual(fs.readFileSync(got, 'utf8'), '#!fake node\n');
+  if (canLink) {
+    assert.strictEqual(fs.statSync(got).mode & 0o111, 0o111, 'bin/node is still executable');
+    assert.strictEqual(fs.readlinkSync(path.join(path.dirname(got), 'npm')), '../lib/npm/bin/npm-cli.js');
+  }
 });
 
-test('tarExtract resolves unzip via provision for a .zip and extracts it', () => {
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-node-'));
-  const calls = [];
-  const destDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-node-zdst-'));
-  const src = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-node-zsrc-'));
-  // A fixed, deterministic tiny zip (STORED, entry "hello" = "hi"), same shape
-  // as host-provision's ZIP_KAT — avoids depending on a `zip` creator tool
-  // just to build the test fixture.
-  const zipBytes = Buffer.from([
-    80, 75, 3, 4, 20, 0, 0, 0, 0, 0, 0, 0, 33, 0, 172, 42, 147, 216, 2, 0, 0,
-    0, 2, 0, 0, 0, 5, 0, 0, 0, 104, 101, 108, 108, 111, 104, 105, 80, 75, 1,
-    2, 20, 3, 20, 0, 0, 0, 0, 0, 0, 0, 33, 0, 172, 42, 147, 216, 2, 0, 0, 0,
-    2, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 128, 1, 0, 0, 0, 0, 104,
-    101, 108, 108, 111, 80, 75, 5, 6, 0, 0, 0, 0, 1, 0, 1, 0, 51, 0, 0, 0,
-    37, 0, 0, 0, 0, 0,
-  ]);
-  const arc = path.join(src, 'a.zip');
-  fs.writeFileSync(arc, zipBytes);
-  tarExtract(arc, destDir, {
-    env: { ...process.env },
-    spawn: (bin, args, o) => { calls.push(bin); return require('node:child_process').spawnSync(bin, args, o); },
-    dataDir,
-  });
-  assert.strictEqual(fs.readFileSync(path.join(destDir, 'hello'), 'utf8'), 'hi');
-  assert.ok(calls.some((b) => path.isAbsolute(b) && /unzip/.test(b)),
-    'used a provision-resolved (absolute) unzip path');
+test('ensurePinnedNode: the default extract unpacks a real DOS-made win32 .zip in process', async () => {
+  const { makeZip } = require('./archive-fixtures.cjs');
+  const zip = makeZip([
+    { name: 'node-vX-win-x64/', type: 'dir' },
+    { name: 'node-vX-win-x64/node.exe', data: 'WINNODE' },
+    { name: 'node-vX-win-x64/README.md', data: 'readme', method: 0 },
+  ], { unix: false });
+  const env = { CLODE_NODES: fs.mkdtempSync(path.join(os.tmpdir(), 'clode-node-zstore-')) };
+  const got = await withEmptyPath(() => ensurePinnedNode({
+    env, platform: 'win32', arch: 'x64',
+    download: async (_u, dest) => { fs.writeFileSync(dest, zip); },
+    verify: async () => nodeAsset('win32', 'x64').sha256,
+  }));
+  assert.strictEqual(fs.readFileSync(got, 'utf8'), 'WINNODE');
 });
 
 test('nodeBinPath: <nodeStore>/<version>/<platform>-<arch>/<leaf>, whether or not it exists', () => {

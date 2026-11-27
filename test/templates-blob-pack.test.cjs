@@ -30,11 +30,10 @@ const net = require('../libexec/clode-net.cjs');
 
 const sha = (b) => crypto.createHash('sha256').update(b).digest('hex');
 
-// INJECTED inflate, exactly as test/clode-templates.test.cjs does. Letting the real
-// gunzipBuffer run would call host-provision, which CACHES a resolved gzip tool into
-// ~/.local/share/clode — a REAL dir test/run.mjs's hermeticity guard watches. That is
-// invisible on a dev box where the store already exists and fails every fresh CI runner
-// with ABSENT -> created. The real gunzipBuffer path is covered by clode-net's own tests.
+// INJECTED inflate, exactly as test/clode-templates.test.cjs does, so these rows exercise
+// the slicing alone. (The real inflate, libexec/unpack.cjs's gunzip, is in process and
+// caches nothing; test/unpack.test.cjs covers it. It once ran a host gzip that host-provision
+// cached into ~/.local/share/clode, which is why this seam was injected first.)
 const gunzip = async (b) => zlib.gunzipSync(b);
 
 function tmpdir(tag) {

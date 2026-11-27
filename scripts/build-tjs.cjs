@@ -343,8 +343,8 @@ const pinSha = (component) => pinFields(component)[2];
 // The cosmo APE is built with cosmocc, a single self-contained toolchain zip.
 // Provision it the SAME shape clode-node.cjs fetches the pinned Node: download →
 // sha256-verify against the pin (fail loud) → extract → cache. The download uses
-// clode-net's downloadFile/sha256Of (the no-curl seam); the extract routes
-// through host-provision's KAT-verified `unzip` (libexec/host-provision.cjs).
+// clode-net's downloadFile/sha256Of (the no-curl seam); the extract is
+// libexec/unpack.cjs's in-process zip reader (no host unzip).
 // Cross-build-safe: only the cosmo target reaches here, and only in the build
 // phase. The pin and its ordered, sha-verified mirror list live in
 // scripts/cosmocc-pin.cjs (also the source of the CI cache key).
@@ -366,7 +366,7 @@ function ensureCosmoToolsExec(binDir) {
 // verifies + extracts into the clode cache (CLODE_CACHE or ~/.cache/clode).
 async function provisionCosmocc() {
   const { downloadFile, sha256Of } = require(path.join(repo, 'libexec/clode-net.cjs'));
-  const { provision } = require(path.join(repo, 'libexec/host-provision.cjs'));
+  const { extractArchive } = require(path.join(repo, 'libexec/unpack.cjs'));
 
   const explicit = process.env.CLODE_COSMOCC;
   if (explicit && fs.existsSync(path.join(explicit, 'cosmocc'))) {
@@ -399,13 +399,12 @@ async function provisionCosmocc() {
     fs.rmSync(zip, { force: true });
     throw new Error(`cosmo: ${COSMOCC_ZIP} sha mismatch (expected ${COSMOCC_SHA256}, got ${got}) — refusing to use it`);
   }
-  const { path: unzipBin } = provision('unzip');
-  // Extract beside, then rename: an interrupted unzip must never leave a dir whose
+  // Extract beside, then rename: an interrupted extraction must never leave a dir whose
   // bin/cosmocc exists (the reuse test above) over a partial tree.
   const staging = `${dir}.partial`;
   fs.rmSync(staging, { recursive: true, force: true });
   fs.mkdirSync(staging, { recursive: true });
-  run(unzipBin, ['-o', '-q', zip, '-d', staging]);
+  extractArchive(zip, staging);
   if (!fs.existsSync(path.join(staging, 'bin', 'cosmocc'))) {
     throw new Error(`cosmo: extraction of ${zip} did not produce bin/cosmocc (in ${staging})`);
   }

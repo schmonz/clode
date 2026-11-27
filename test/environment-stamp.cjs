@@ -52,8 +52,8 @@ const SAFE_GATE_NAMES = new Set([
   // Resolved binary/tool paths: filesystem locations, not secrets.
   'CLODE_TJS', 'CLODE_NODE', 'CLODE_PROVIDER_BIN', 'CLODE_DARWIN_PROVIDER_BIN',
   'CLODE_CLAUDE_BIN', 'CLODE_NAUDE_BIN', 'CLODE_QUAUDE', 'CLODE_QUAUDE_EXE',
-  'CLODE_RG', 'CLODE_BFS', 'CLODE_UGREP', 'CLODE_ZSTD', 'CLODE_TAR', 'CLODE_GZIP',
-  'CLODE_UNZIP', 'CLODE_NPM', 'CLODE_LIBEXEC',
+  'CLODE_RG', 'CLODE_BFS', 'CLODE_UGREP', 'CLODE_ZSTD',
+  'CLODE_NPM', 'CLODE_LIBEXEC',
   // Store/cache roots: filesystem locations, not secrets.
   'CLODE_STATE_ROOT', 'CLODE_DEPS', 'CLODE_CACHE',
   // Small operational flags: build/target selectors, not secrets.

@@ -721,6 +721,7 @@ test('the controlled set is EXACTLY the modules a guard was deliberately written
     'libexec/rg-regex.cjs',
     'libexec/scc-merge.cjs',
     'libexec/target-update-check.cjs',
+    'libexec/unpack.cjs',  // ADDED 2026-11-27: every archive read in process, refusing an entry outside its destination (new gate, born controlled by unpack-gates)
     'scripts/build-graph.cjs',
     'scripts/build-runner.cjs',
     'scripts/carve-probe.mjs',

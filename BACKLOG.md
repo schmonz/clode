@@ -1205,9 +1205,9 @@ date, which the gate reports by name. The tool-level account below is as of 2026
 Deferred from the Phase A final review (2026-11-20), no plan yet:
 - M5: the shim's fs.realpath and fs.mkdtemp ignore the `encoding` option (readdir, readlink and opendir were fixed
   in Phase A; these two were not). An upstream caller passing { encoding: 'buffer' } gets a string.
-- M6: nothing forces tar spawns through libexec/host-provision.cjs tarPlan (the archive basename relative to cwd,
-  -C with forward slashes, so a drive-letter path is never read as a remote host). A new tar spawn can bypass it
-  silently. The ratchet is a source scan that refuses a `tar` spawn outside tarPlan.
+- M6: RESOLVED 2026-11-27 by removal: no tar spawn is left to force through tarPlan (gone too). Every archive is
+  read in process (libexec/unpack.cjs) and deps.tar is written by scripts/tar-pack.cjs; the ratchet is
+  test/build-gates/unpack-gates.test.cjs's no-host-archive-tool, which refuses any tar/gzip/unzip spawn.
 
 `every-tool-driven` (test/build-gates/tool-coverage-gates.test.cjs; the grep-native plan's task
 0c) reads the tool registry from the pinned carve and requires each tool to have a live check
@@ -6206,9 +6206,11 @@ THE AUDIT THAT CLEARS ONE: read the file's tests and find every spawn they reach
 Either way, delete the name from AUDIT_PENDING_BASELINE and lower AUDIT_PENDING_CEILING. Then run
 `node test/forced-win32.cjs --run <file>` on a POSIX host; any red it shows is a Windows-only failure in waiting.
 
-Unmeasured. None of the remaining 36 has been audited (2026-11-27: test/clode-hosttools.test.cjs and
+Unmeasured. None of the remaining 32 has been audited (2026-11-27: test/clode-hosttools.test.cjs and
 test/fidelity/applet-config.test.cjs left the list: their closure no longer spawns, so they run under forcing, with
-their three real-Windows-filesystem rows skipped there by name; ceiling 36):
+their three real-Windows-filesystem rows skipped there by name; ceiling 36. Later 2026-11-27: test/clode-net,
+clode-rcodesign, clode-templates and templates-blob-pack left it the same way, when unpacking moved in process and
+their closure stopped reaching a host tool; ceiling 32):
 - test/bench-measure.test.cjs
 - test/build-gates/build-runner-gates.test.cjs
 - test/build-gates/carve-probe-gates.test.cjs
@@ -6222,11 +6224,8 @@ their three real-Windows-filesystem rows skipped there by name; ceiling 36):
 - test/clode-build-spinner.test.cjs
 - test/clode-current.test.cjs
 - test/clode-manifest-fetch.test.cjs
-- test/clode-net.test.cjs
 - test/clode-paths.test.cjs
-- test/clode-rcodesign.test.cjs
 - test/clode-target-build.test.cjs
-- test/clode-templates.test.cjs
 - test/clode-watch.test.cjs
 - test/env-verdicts.test.cjs
 - test/extract-autoupdater.test.cjs
@@ -6240,7 +6239,6 @@ their three real-Windows-filesystem rows skipped there by name; ceiling 36):
 - test/provider-platform.test.cjs
 - test/rg-stream.test.cjs
 - test/sea-sign.test.cjs
-- test/templates-blob-pack.test.cjs
 - test/text-probe.test.cjs
 - test/tls-cacert-pem.test.cjs
 - test/ucd.test.cjs
@@ -9875,7 +9873,7 @@ probably should not say `CLODE_` at all.
 
 | group | examples | plausible answer |
 |---|---|---|
-| host-tool overrides | `CLODE_BFS` `CLODE_UGREP` `CLODE_RG` `CLODE_TAR` `CLODE_GZIP` `CLODE_UNZIP` `CLODE_SHA256` `CLODE_ZSTD` `CLODE_NPM` `CLODE_NODE` | ten vars for "use this binary" is ten chances to disagree; one flag or a config file |
+| host-tool overrides | `CLODE_BFS` `CLODE_UGREP` `CLODE_RG` `CLODE_SHA256` `CLODE_ZSTD` `CLODE_NPM` `CLODE_NODE` | seven vars (ten until CLODE_TAR/GZIP/UNZIP went, 2026-11-27) for "use this binary" is seven chances to disagree; one flag or a config file |
 | paths / state | `CLODE_CACHE` `CLODE_DEPS` `CLODE_STATE_ROOT` `CLODE_PROVIDERS` `CLODE_LIBEXEC` `CLODE_VERSION_DIR` | genuinely useful for isolation; needs ONE story, not six |
 | input selection | `CLODE_CLAUDE_BIN` `CLODE_TJS` `CLODE_TARGET_TEMPLATE` `CLODE_MAIN_BUNDLE` `CLODE_TEMPLATES*` | these change WHAT IS BUILT — the dangerous group. Flags, and announced |
 | network | `CLODE_RELEASES_URL` `CLODE_CHANGELOG_URL` `CLODE_TEMPLATES_BASEURL` `CLODE_UPDATE_CHANNEL` | mostly test seams pointing at local servers |

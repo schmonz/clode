@@ -219,7 +219,8 @@ if (role === 'builder') {
   // allocator every build-dir helper in platform-tag.cjs now resolves through —
   // Task 8), and scripts/sea-sign.cjs (which build-naude execs to unsign/re-sign
   // the SEA — on macOS the ad-hoc re-sign after postject is MANDATORY or the
-  // binary won't run). A blobulated builder ships no scripts/ dir, so `clode build
+  // binary won't run), and scripts/tar-pack.cjs (which packs deps.tar in
+  // process). A blobulated builder ships no scripts/ dir, so `clode build
   // naude` under clode-native materializes these (clode-blobulate.cjs's
   // materializeBlobPayload) and spawns the copy. Member names keep their scripts/
   // path (re-joined onto the payload dir verbatim). Committed files that always
@@ -232,7 +233,7 @@ if (role === 'builder') {
   // scripts/build-naude.mjs but omits scripts/merge-step.mjs would build fine and then die
   // the first time it re-blobulates a provider with residual cyclic requires — same failure
   // shape the acceptance-4 gate exists to catch for the naude assembler's own chain.
-  for (const f of ['build-naude.mjs', 'platform-tag.cjs', 'canonical-name.cjs', 'build-scratch.cjs', 'sea-sign.cjs', 'merge-step.mjs']) {
+  for (const f of ['build-naude.mjs', 'platform-tag.cjs', 'canonical-name.cjs', 'build-scratch.cjs', 'sea-sign.cjs', 'merge-step.mjs', 'tar-pack.cjs']) {
     members.push({ name: `scripts/${f}`, data: await mustRead(path.join(path.dirname(libexecDir), 'scripts', f), `naude assembler member scripts/${f}`) });
   }
   // host-provision.cjs rides here as forwarded bytes, same as its loop-siblings

@@ -63,30 +63,14 @@ const APPLET_BECAUSE = 'env-only: overrides which host binary the bun-shim/targe
   + "zstd's consumer runs during `clode build`, not at target runtime. CLODE_ZSTD now has "
   + 'its own entry; do not re-attach this constant to a name whose reader is a build step.';
 
-// The host-provision.cjs REGISTRY's override variables — CLODE_TAR /
-// CLODE_GZIP / CLODE_UNZIP (CLODE_ZSTD is the same family but earns its own text below,
-// because its failure mode is sharper). Read INDIRECTLY, as `env[req.overrideEnv]` at
-// host-provision.cjs:281, which is why none of them had a verdict until the indirect
-// detector (test/env-indirect.cjs) went in.
-//
-// These run DURING a build (clode-node.cjs and naude-sea.cjs and clode-rcodesign.cjs unpack tarballs, build-tjs.cjs unzips), so the
-// "runtime, not build-time" reasoning that fits the applet overrides does not apply. They
-// are env-only for a different and better reason: they name WHICH HOST PROGRAM performs a
-// step whose OUTPUT is fixed. The registry runs a known-answer test on whatever it
-// resolves — a tar round-trip, a gzip/zip blob with known
-// plaintext — so an override that is not the tool it claims to be is REFUSED rather than
-// used, and an override that passes produces byte-identical results to the default. A knob
-// that cannot change the artifact is not a build input.
-const HOST_TOOL_BECAUSE = 'env-only: names which host program host-provision.cjs uses for '
-  + 'this step (resolved indirectly as `env[req.overrideEnv]` from its REGISTRY row). These '
-  + 'steps run during a build AND, for tar, inside an already-built naude — naude-entry.cjs '
-  + "requires host-provision.cjs precisely so runtime provision('tar') works in the SEA. "
-  + 'The registry KAT-tests whatever it resolves and refuses an override that fails, so an '
-  + 'override that passes does the step correctly for what the KAT covers — hashing, and a '
-  + 'round trip of one plain regular file. That is a real floor, not a byte-equivalence '
-  + 'proof: no KAT here exercises modes, symlinks or ownership, and this repo has already '
-  + 'shipped a copy that dropped mode. A host-tool LOCATION override for a host that keeps '
-  + 'the tool somewhere unusual — same family as CLODE_NPM, not a build-input selector.';
+// The host-provision.cjs REGISTRY's override variable — CLODE_ZSTD, the one left (CLODE_TAR /
+// CLODE_GZIP / CLODE_UNZIP went 2026-11-27, when every archive moved in process,
+// libexec/unpack.cjs). Read INDIRECTLY, as `env[req.overrideEnv]` in host-provision.cjs, which is
+// why the family had no verdict until the indirect detector (test/env-indirect.cjs) went in.
+// THE HOST-TOOL REASON it is env-only: it names WHICH HOST PROGRAM performs a step whose OUTPUT
+// is fixed. The registry runs a known-answer test on whatever it resolves, so an override that is
+// not the tool it claims to be is REFUSED rather than used. A knob that cannot change the
+// artifact is not a build input.
 
 // CLODE_TTY_MOUSE / CLODE_TTY_FOCUS — the one pair in this table whose classification has a
 // fact to face rather than route around: libexec/node-shim/modules/tty.cjs documents them,
@@ -232,7 +216,7 @@ const VERDICTS = [
   { name: 'CLODE_UGREP', verdict: 'env-only', because: APPLET_BECAUSE },
 
   // ---- host-provision.cjs's REGISTRY overrides — reached INDIRECTLY (see the ----
-  // ---- HOST_TOOL_BECAUSE note above and test/env-indirect.cjs for why they were ----
+  // ---- host-tool note above and test/env-indirect.cjs for why they were ----
   // ---- invisible to the inventory until 2026-09-13). ----
   { name: 'CLODE_SHA256', verdict: 'env-only',
     because: 'points scripts/bootstrap-engine.sh (a shell script, so it cannot use the engine\'s '
@@ -240,15 +224,6 @@ const VERDICTS = [
       + 'before it verifies anything, so a tool that is not a sha256 is refused. The JS side '
       + 'no longer reads it: clode-net.cjs hashes files natively (tjs:hashing / node:crypto). '
       + 'Selects nothing about what gets BUILT, only how a downloaded engine is verified.' },
-  { name: 'CLODE_TAR', verdict: 'env-only', because: HOST_TOOL_BECAUSE
-    + ' Consumers: clode-node.cjs, naude-sea.cjs, clode-rcodesign.cjs; the registry KAT is a '
-    + 'create+extract round-trip compared byte-exactly, so a tar that cannot do both is refused.' },
-  { name: 'CLODE_GZIP', verdict: 'env-only', because: HOST_TOOL_BECAUSE
-    + ' Consumer: clode-net.cjs; the registry KAT inflates an embedded blob and compares the '
-    + 'exact plaintext, so an override that is not a gzip decompressor is refused.' },
-  { name: 'CLODE_UNZIP', verdict: 'env-only', because: HOST_TOOL_BECAUSE
-    + ' Consumers: clode-node.cjs and scripts/build-tjs.cjs; the registry KAT extracts an '
-    + "embedded zip and compares its single entry's exact content." },
   { name: 'CLODE_ZSTD', verdict: 'env-only',
     because: 'CORRECTED (fix round 3): this was carrying APPLET_BECAUSE, which is wrong on '
       + 'both the WHEN and the WHAT. Its consumer is not the runtime applet resolver — it is '
@@ -257,7 +232,7 @@ const VERDICTS = [
       + 'bun-graph.cjs:197-199 says outright that "without this, the shipped builder cannot '
       + 'carve upstream 2.1.251+ at all" (tjs has no zstd and node-shim/modules/zlib.cjs '
       + 'deliberately has none, so on a published clode the external decoder is the ONLY one '
-      + 'there is). It is still env-only, for the HOST_TOOL_BECAUSE reason rather than a '
+      + 'there is). It is still env-only, for the host-tool reason (the note above) rather than a '
       + 'runtime one: it names which host program decodes, not what gets built. That holds '
       + 'only because the resolution goes through host-provision.cjs and its KAT — '
       + 'bun-graph.cjs:216-219 records the failure mode when it does not (a "zstd" that exits '

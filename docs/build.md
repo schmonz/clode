@@ -136,7 +136,7 @@ flowchart LR
   s2[["engine.compile"]]
   a9("engine")
   s3[["bundle.clode-main"]]
-  a10("libexec/ — 51 files")
+  a10("libexec/ — 52 files")
   a11("libexec/node-shim/internal/ — 13 files")
   a12("libexec/node-shim/loader.cjs")
   a13("libexec/node-shim/modules/ — 32 files")

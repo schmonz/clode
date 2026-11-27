@@ -38,12 +38,6 @@ For day-to-day `quaude` tool use:
 - `bfs` >= 3.x (built with Oniguruma)
 - `ugrep` >= 7.5.0
 
-For `clode fetch claude` to extract `claude`:
-
-- `tar`
-- `gzip`
-- `unzip`
-
 For `clode build` to extract embedded assets that are compressed in `claude` 2.1.251 and up:
 
 - `zstd` (or `unzstd` or `zstdcat`)

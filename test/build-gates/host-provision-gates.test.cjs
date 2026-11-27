@@ -1,7 +1,7 @@
 'use strict';
 // PHASE 5B, TASK 3. `libexec/host-provision.cjs` is one KAT-verified resolver every
-// artifact (the clode builder, quaude, naude) uses to find host tools (tar, gzip,
-// unzip, zstd), run them on a known input, and demand the EXACT expected output
+// artifact uses to find host tools (zstd, the one left: tar, gzip and unzip went when
+// every archive moved in process, libexec/unpack.cjs), run them on a known input, and demand the EXACT expected output
 // before trusting the winner. This file is the house-shape (defineGuard/guardTests, per
 // test/build-gates/lexical-code-mask.test.cjs and dep-closure-gates.test.cjs) that
 // controls provision()'s unknown-requirement throw-site, plus the guard that keeps
@@ -66,7 +66,7 @@ const NEVER_WRITTEN_DATADIR = path.join(os.tmpdir(), 'clode-hp-guard-unknown-req
 // stripLineComments and discoverFilesByExt come from test/source-scan.cjs (they were
 // duplicated verbatim across this file, target-update-gates.test.cjs and
 // guards-population.cjs). Comment stripping is what keeps a prose mention of
-// `provision('tar')` — host-provision.cjs has one, naude-entry.cjs another —
+// `provision('zstd')` — host-provision.cjs's doc comments have them —
 // from reading as a real call site; source-scan.cjs states which direction each of its
 // approximations fails in.
 
@@ -122,16 +122,14 @@ function unknownRequirementControlInputs() {
 }
 
 // Measured 2026-11-27: `grep -rn "provision(" libexec scripts` with line comments
-// stripped (the same stripLineComments() this guard uses) finds 7 real call sites —
-// libexec/naude-sea.cjs ('tar'), libexec/bun-graph.cjs ('zstd'),
-// libexec/clode-node.cjs ('unzip', 'tar'), libexec/clode-net.cjs ('gzip'),
-// libexec/clode-rcodesign.cjs ('tar'), and scripts/build-tjs.cjs ('unzip'). (9 until the
-// two 'sha256' sites, clode-net.cjs and clode-update.cjs, went with native hashing.) The
-// floor is that exact count — a drop means either a call site was removed (in which
-// case this floor should move with it) or the scan broke.
+// stripped (the same stripLineComments() this guard uses) finds 1 real call site —
+// libexec/bun-graph.cjs ('zstd'). (7 until tar, gzip and unzip left the registry when every
+// archive moved in process, libexec/unpack.cjs; 9 before that, until the two 'sha256' sites
+// went with native hashing.) The floor is that exact count — a drop means either the call
+// site was removed (in which case this floor should move with it) or the scan broke.
 const guard1 = defineGuard({
   name: 'host-provision-unknown-requirement',
-  floor: 7,
+  floor: 1,
   read: readRealCallSites,
   scan: scanKnownRequirementIds,
   control: unknownRequirementControlInputs,
@@ -141,7 +139,7 @@ guardTests(guard1);
 test('floor fires: host-provision-unknown-requirement goes BROKEN below its floor', () => {
   const r = checkGate({
     name: 'floor-probe-1', floor: guard1.floor,
-    read: () => ({ sites: [{ file: 'synthetic', id: 'tar' }] }), // fewer than the real 7
+    read: () => ({ sites: [] }), // fewer than the real 1
     scan: scanKnownRequirementIds,
   });
   assert.strictEqual(r.verdict, BROKEN, r.message);

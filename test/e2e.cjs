@@ -77,10 +77,10 @@ function sandbox(t) {
   // an OS constant (path to cmd.exe), not real user/app state, so surfacing it keeps the
   // sandbox hermetic while letting the Windows .cmd-spawn paths work.
   //
-  // Likewise the POSIX PATH above (/usr/bin:/bin) is where the host tar tool
-  // provision() needs lives on Unix; the Windows equivalent (tar.exe) ships
-  // in %SystemRoot%\System32. Append it so provision('tar') resolves on Windows —
-  // System32 is an OS constant like ComSpec, not user/app state, so this stays hermetic.
+  // Likewise the POSIX PATH above (/usr/bin:/bin) is where the OS's own tools
+  // live on Unix; the Windows equivalent is %SystemRoot%\System32 (it was added
+  // for tar.exe, before every archive was read in process). System32 is an OS
+  // constant like ComSpec, not user/app state, so this stays hermetic.
   if (process.platform === 'win32') {
     env.ComSpec = process.env.ComSpec || 'C:\\Windows\\System32\\cmd.exe';
     const sys32 = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32');

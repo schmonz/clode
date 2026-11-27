@@ -92,7 +92,7 @@ test('findTool returns null when nothing is found', () => {
 
 // --- findTool: Windows resolves bare tool names via PATHEXT -----------------
 // On Windows host tools are .exe files (certutil.exe, tar.exe); a bare-name PATH walk
-// (the POSIX `command -v` behavior) finds nothing, so provision('tar')
+// (the POSIX `command -v` behavior) finds nothing, so provision() (then for tar)
 // wrongly reported "no tool found" even though tar ships with Windows.
 // Host-independent: inject isWin + isExec, match on basename (path.join's
 // separator differs by host).

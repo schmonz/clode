@@ -57,28 +57,17 @@ function packageManifests(root) {
 // that dir — shaped like a clode DEPS_ROOT (it contains node_modules/), so the caller
 // hands it to the normal launch path as depsRoot with no SEA-specific handling.
 // Idempotent (skips a tree that is whole, see UNPACKED) and atomic (temp dir + rename).
-function materializeDeps({ sea = seaMod(), cacheDir, assetBuffer: getAsset = assetBuffer, spawn, env = process.env } = {}) {
-  const { provision } = require('./host-provision.cjs');
-  const { execFileSync } = require('node:child_process');
+function materializeDeps({ sea = seaMod(), cacheDir, assetBuffer: getAsset = assetBuffer } = {}) {
+  const { readTar, writeEntries } = require('./unpack.cjs');
   const sig = getAsset(sea, 'deps.sig').toString('utf8').trim();
   const dir = path.join(cacheDir, 'sea-deps', sig);
   if (unpackedWhole(dir)) return dir;   // already materialized
   const tmp = dir + '.partial-' + process.pid;
   fs.rmSync(tmp, { recursive: true, force: true }); // clear a stale partial from a crashed run
   fs.mkdirSync(tmp, { recursive: true });
-  // Extract via STDIN (`-xf -`) with tmp as the process cwd, instead of passing OS-native paths
-  // as tar args. On Windows under a bash PATH, `tar` is Git Bash's GNU tar, which reads an archive
-  // path like `C:\…\deps.tar` as a remote `host:path` (the drive-letter colon) and dies "Cannot
-  // connect". Streaming the buffer to stdin with no colon-bearing path args is uniform on GNU tar
-  // (Windows/Linux) and bsdtar (macOS) — the runtime mirror of the build-side archive step. Which
-  // tar binary that is comes from provision('tar') (host-provision.cjs), the SAME KAT-verified
-  // resolver the builder uses — not a bare 'tar' literal, so a tar-less PATH fails loud with an
-  // install hint instead of a raw ENOENT.
-  const { path: tarBin } = provision('tar', { env, spawn });
-  const runExtract = spawn
-    ? (bin, args) => spawn(bin, args, { cwd: tmp, input: getAsset(sea, 'deps.tar'), maxBuffer: 1 << 30 })
-    : (bin, args) => execFileSync(bin, args, { cwd: tmp, input: getAsset(sea, 'deps.tar'), maxBuffer: 1 << 30 });
-  runExtract(tarBin, ['-xf', '-']);
+  // Extracted in process (unpack.cjs: the tar reader every clode download goes through), not by
+  // a host tar: no tool to find, and no Windows path for Git for Windows' GNU tar to misread.
+  writeEntries(readTar(getAsset(sea, 'deps.tar')), tmp);
   fs.writeFileSync(path.join(tmp, UNPACKED), JSON.stringify(packageManifests(tmp)));
   fs.mkdirSync(path.dirname(dir), { recursive: true });
   // A tree that is there but not whole (emptied by the cleaner, or unpacked before the marker)

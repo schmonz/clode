@@ -10,15 +10,15 @@ function tmpDataDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'clode-hp-'));
 }
 
-// The provision() mechanics below (cache, re-probe, override, KAT, refusal) are exercised through the gzip
-// requirement: a fake spawn that behaves like a working `gzip -dc`, inflating the operand file (last arg) with
-// node's zlib (test host only), so the KAT probe passes. (They used sha256 until file hashes went native.)
-function realGunzipSpawn(calls) {
-  const zlib = require('node:zlib');
+// The provision() mechanics below (cache, re-probe, override, KAT, refusal) are exercised through the zstd
+// requirement, the one host tool left: a fake spawn that behaves like a working `zstd -d -o <out>`, writing the
+// KAT's plaintext to the -o file it is handed, so the KAT probe passes. (They used sha256 until file hashes went
+// native, then gzip until every archive was read in process.)
+function goodZstdSpawn(calls) {
   return (bin, args) => {
     calls && calls.push([bin, args]);
-    const file = args[args.length - 1];
-    return { status: 0, stdout: zlib.gunzipSync(fs.readFileSync(file)).toString('utf8'), stderr: '' };
+    fs.writeFileSync(outArg(args), REGISTRY.zstd.KAT.expected);
+    return { status: 0, stdout: '', stderr: '' };
   };
 }
 
@@ -26,33 +26,33 @@ function realGunzipSpawn(calls) {
 test('provision resolves the first candidate whose KAT passes and caches it', () => {
   const dataDir = tmpDataDir();
   const calls = [];
-  const findTool = (name) => (name === 'gzip' ? '/usr/bin/gzip' : null);
-  const got = provision('gzip', {
-    env: { PATH: '/usr/bin' }, findTool, spawn: realGunzipSpawn(calls), fs, dataDir,
+  const findTool = (name) => (name === 'zstd' ? '/usr/bin/zstd' : null);
+  const got = provision('zstd', {
+    env: { PATH: '/usr/bin' }, findTool, spawn: goodZstdSpawn(calls), fs, dataDir,
   });
-  assert.strictEqual(got.candidate.name, 'gzip');
-  assert.strictEqual(got.path, '/usr/bin/gzip');
-  // KAT actually ran (probe inflated a temp file before we trusted the tool).
+  assert.strictEqual(got.candidate.name, 'zstd');
+  assert.strictEqual(got.path, '/usr/bin/zstd');
+  // KAT actually ran (probe decoded a temp file before we trusted the tool).
   assert.ok(calls.length >= 1, 'KAT probe ran');
   // Persisted to the cache file.
   const cache = JSON.parse(fs.readFileSync(path.join(dataDir, 'hosttools.json'), 'utf8'));
-  assert.deepStrictEqual(cache.gzip, { candidate: 'gzip', path: '/usr/bin/gzip' });
+  assert.deepStrictEqual(cache.zstd, { candidate: 'zstd', path: '/usr/bin/zstd' });
 });
 
 // --- provision: cache hit avoids re-probing -------------------------------
 test('provision returns the cached tool without re-probing when still executable', () => {
   const dataDir = tmpDataDir();
   fs.writeFileSync(path.join(dataDir, 'hosttools.json'),
-    JSON.stringify({ gzip: { candidate: 'gunzip', path: '/bin/gunzip' } }));
+    JSON.stringify({ zstd: { candidate: 'unzstd', path: '/bin/unzstd' } }));
   let probed = false;
-  const got = provision('gzip', {
+  const got = provision('zstd', {
     env: { PATH: '/bin' },
-    findTool: () => '/bin/gunzip',
+    findTool: () => '/bin/unzstd',
     spawn: () => { probed = true; return { status: 0, stdout: 'clode' }; },
     fs, dataDir,
     isExec: () => true, // injected executability check (see Step 3)
   });
-  assert.strictEqual(got.path, '/bin/gunzip');
+  assert.strictEqual(got.path, '/bin/unzstd');
   assert.strictEqual(probed, false, 'cache hit must not spawn a probe');
 });
 
@@ -60,29 +60,29 @@ test('provision returns the cached tool without re-probing when still executable
 test('provision re-probes when the cached tool is no longer executable', () => {
   const dataDir = tmpDataDir();
   fs.writeFileSync(path.join(dataDir, 'hosttools.json'),
-    JSON.stringify({ gzip: { candidate: 'gunzip', path: '/gone/gunzip' } }));
-  const got = provision('gzip', {
+    JSON.stringify({ zstd: { candidate: 'unzstd', path: '/gone/unzstd' } }));
+  const got = provision('zstd', {
     env: { PATH: '/usr/bin' },
-    findTool: (name) => (name === 'gzip' ? '/usr/bin/gzip' : null),
-    spawn: realGunzipSpawn(),
+    findTool: (name) => (name === 'zstd' ? '/usr/bin/zstd' : null),
+    spawn: goodZstdSpawn(),
     fs, dataDir,
-    isExec: (p) => p === '/usr/bin/gzip', // /gone/gunzip is stale
+    isExec: (p) => p === '/usr/bin/zstd', // /gone/unzstd is stale
   });
-  assert.strictEqual(got.path, '/usr/bin/gzip');
+  assert.strictEqual(got.path, '/usr/bin/zstd');
 });
 
-// --- provision: CLODE_GZIP override jumps the queue -----------------------
-test('provision honors an absolute-path CLODE_GZIP override (real findTool)', () => {
+// --- provision: CLODE_ZSTD override jumps the queue -----------------------
+test('provision honors an absolute-path CLODE_ZSTD override (real findTool)', () => {
   const dataDir = tmpDataDir();
   // A real executable file at an absolute path outside PATH.
   const bindir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-ov-'));
-  const ovPath = path.join(bindir, 'mygzip');
+  const ovPath = path.join(bindir, 'myzstd');
   fs.writeFileSync(ovPath, '#!/bin/sh\n', { mode: 0o755 });
   const seen = [];
-  const got = provision('gzip', {
-    env: { CLODE_GZIP: ovPath, PATH: '/usr/bin:/bin' }, // override is NOT on PATH
+  const got = provision('zstd', {
+    env: { CLODE_ZSTD: ovPath, PATH: '/usr/bin:/bin' }, // override is NOT on PATH
     // no findTool injection -> real hosttools.findTool
-    spawn: realGunzipSpawn(seen),
+    spawn: goodZstdSpawn(seen),
     fs, dataDir,
   });
   assert.strictEqual(got.path, ovPath, 'absolute-path override must resolve via findTool override option');
@@ -92,25 +92,25 @@ test('provision honors an absolute-path CLODE_GZIP override (real findTool)', ()
 // --- provision: a present-but-wrong-output tool fails its KAT, next wins ---
 test('provision skips a present tool whose KAT fails and uses the next', () => {
   const dataDir = tmpDataDir();
-  const findTool = (name) => (['gzip', 'gunzip'].includes(name) ? `/bin/${name}` : null);
-  const real = realGunzipSpawn();
+  const findTool = (name) => (['zstd', 'unzstd'].includes(name) ? `/bin/${name}` : null);
+  const real = goodZstdSpawn();
   const spawn = (bin, args) =>
-    bin.endsWith('/gzip')
-      ? { status: 0, stdout: 'not clode\n' } // wrong bytes -> KAT fails
-      : real(bin, args);                      // gunzip inflates correctly
-  const got = provision('gzip', { env: { PATH: '/bin' }, findTool, spawn, fs, dataDir });
-  assert.strictEqual(got.candidate.name, 'gunzip');
+    bin.endsWith('/zstd')
+      ? (fs.writeFileSync(outArg(args), 'not clode'), { status: 0, stdout: '' }) // wrong bytes -> KAT fails
+      : real(bin, args);                                                            // unzstd decodes correctly
+  const got = provision('zstd', { env: { PATH: '/bin' }, findTool, spawn, fs, dataDir });
+  assert.strictEqual(got.candidate.name, 'unzstd');
 });
 
 // --- provision: fail loud when nothing resolves ---------------------------
 test('provision throws an actionable error when no tool is found', () => {
   const dataDir = tmpDataDir();
   assert.throws(
-    () => provision('gzip', {
+    () => provision('zstd', {
       env: { PATH: '' }, findTool: () => null,
       spawn: () => { throw new Error('must not spawn'); }, fs, dataDir,
     }),
-    /set CLODE_GZIP/
+    /set CLODE_ZSTD/
   );
 });
 
@@ -125,101 +125,13 @@ test('there is no sha256 host-tool requirement', () => {
   assert.throws(() => provision('sha256', { dataDir: tmpDataDir() }), /unknown requirement/i);
 });
 
-// --- tar: the one argument shape (tarPlan), judged by a model of Git for Windows' GNU tar -------------------
-// CI 9c655b7 windows-latest: every materializeDeps row died in the tar KAT, "C\:\\Users\\...\\clode-run-n2gbTv
-// <newline>aude-sea-9gxkv1\\clode-kat-tar-3824.dst: Cannot open", because GNU tar unquotes backslash escapes in its
-// -C argument (and reads a colon in the archive argument as a remote host). This model of it judges an argument
-// list the way that tar parses one, on every host, so the Windows shape is judged everywhere.
-function gnuTarModel(args) {
-  const arc = args[args.findIndex((x) => /^-[cx]z?f$/.test(x)) + 1];
-  if (!args.includes('--force-local') && /^[^/\\]*:/.test(arc)) return { status: 2, stderr: `tar: Cannot connect to ${arc.split(':')[0]}: resolve failed` };
-  const esc = { n: '\n', t: '\t', r: '\r', f: '\f', v: '\v', b: '\b', a: '\x07', '\\': '\\' };
-  const dir = args[args.indexOf('-C') + 1].replace(/\\(.)/g, (m, ch) => (ch in esc ? esc[ch] : m));
-  if (/[\x00-\x1f]/.test(dir)) return { status: 2, stderr: `tar: ${JSON.stringify(dir)}: Cannot open: No such file or directory` };
-  return { status: 0, stderr: '' };
-}
-const WIN_ARCHIVE = 'C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\clode-run-n2gbTv\\naude-sea-9gxkv1\\clode-kat-tar-3824.tar';
-const WIN_DIR = 'C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\clode-run-n2gbTv\\naude-sea-9gxkv1\\clode-kat-tar-3824.dst';
-
-test('CONTROL: the GNU tar model refuses the shapes that broke CI (a drive-letter archive, a backslash-escaped -C)', () => {
-  const absolute = gnuTarModel(['-xf', WIN_ARCHIVE, '-C', 'C:/x']);
-  assert.strictEqual(absolute.status, 2);
-  assert.match(absolute.stderr, /Cannot connect to C/);
-  const escaped = gnuTarModel(['-xf', 'a.tar', '-C', WIN_DIR]);
-  assert.strictEqual(escaped.status, 2);
-  assert.match(escaped.stderr, /clode-run-n2gbTv\\naude-sea-9gxkv1.*Cannot open/);
-});
-
-test('tarPlan hands a Windows archive and dir to GNU tar in a shape it reads: basename in its dir, -C with slashes', () => {
-  const { tarPlan } = require('../libexec/host-provision.cjs');
-  const plan = tarPlan('-xf', WIN_ARCHIVE, WIN_DIR, path.win32);
-  assert.deepStrictEqual(plan, {
-    cwd: 'C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\clode-run-n2gbTv\\naude-sea-9gxkv1',
-    args: ['-xf', './clode-kat-tar-3824.tar', '-C', 'C:/Users/RUNNER~1/AppData/Local/Temp/clode-run-n2gbTv/naude-sea-9gxkv1/clode-kat-tar-3824.dst'],
-  });
-  const r = gnuTarModel(plan.args);
-  assert.strictEqual(r.status, 0, r.stderr);
-  // and on POSIX the plan is the paths themselves
-  assert.deepStrictEqual(tarPlan('-xzf', '/t/n/a.tar.gz', '/t/n/out', path.posix), { cwd: '/t/n', args: ['-xzf', './a.tar.gz', '-C', '/t/n/out'] });
-});
-
-test('tarPlan: a colon in the archive\'s own name cannot read as a remote host either (./ puts a slash before it)', () => {
-  const { tarPlan } = require('../libexec/host-provision.cjs');
-  assert.strictEqual(gnuTarModel(['-xf', 'node-v24:x.tar', '-C', 'out']).status, 2); // control: a bare basename would
-  const plan = tarPlan('-xf', 'C:\\dl\\node-v24:x.tar', 'C:\\out', path.win32);
-  assert.strictEqual(plan.args[1], './node-v24:x.tar');
-  assert.strictEqual(gnuTarModel(plan.args).status, 0);
-});
-
-// --- tar: real-host integration (create + extract round-trip KAT) ---------
-test('provision resolves a real tar on this host (integration)', () => {
-  const got = provision('tar', { dataDir: tmpDataDir() });
-  assert.ok(got.path, 'a real tar resolved');
-  assert.ok(['tar', 'gtar', 'bsdtar'].includes(got.candidate.name));
-});
-
-test('provision(tar) fails loud when no tar is found', () => {
-  assert.throws(
-    () => provision('tar', {
-      env: { PATH: '' }, findTool: () => null,
-      spawn: () => { throw new Error('must not spawn'); }, fs, dataDir: tmpDataDir(),
-    }),
-    /CLODE_TAR/
-  );
-});
-
-// --- gzip: real-host integration (KAT inflates the embedded blob) ----------
-test('provision resolves a real gzip decompressor on this host (integration)', () => {
-  const got = provision('gzip', { dataDir: tmpDataDir() });
-  assert.ok(got.path, 'a real gzip tool resolved');
-  assert.ok(['gzip', 'gunzip', 'zcat', 'pigz'].includes(got.candidate.name));
-});
-
-test('provision(gzip) fails loud when no decompressor is found', () => {
-  assert.throws(
-    () => provision('gzip', {
-      env: { PATH: '' }, findTool: () => null,
-      spawn: () => { throw new Error('must not spawn'); }, fs, dataDir: tmpDataDir(),
-    }),
-    /CLODE_GZIP/
-  );
-});
-
-// --- unzip: real-host integration (KAT extracts the embedded zip) ---------
-test('provision resolves a real unzip on this host (integration)', () => {
-  const got = provision('unzip', { dataDir: tmpDataDir() });
-  assert.ok(got.path, 'a real unzip resolved');
-  assert.strictEqual(got.candidate.name, 'unzip');
-});
-
-test('provision(unzip) fails loud when no extractor is found', () => {
-  assert.throws(
-    () => provision('unzip', {
-      env: { PATH: '' }, findTool: () => null,
-      spawn: () => { throw new Error('must not spawn'); }, fs, dataDir: tmpDataDir(),
-    }),
-    /CLODE_UNZIP/
-  );
+// --- tar, gzip, unzip are not host tools: every archive is read in process (libexec/unpack.cjs) ---
+test('there is no tar, gzip or unzip host-tool requirement', () => {
+  for (const id of ['tar', 'gzip', 'unzip']) {
+    assert.strictEqual(REGISTRY[id], undefined, id);
+    assert.throws(() => provision(id, { dataDir: tmpDataDir() }), /unknown requirement/i, id);
+  }
+  assert.deepStrictEqual(Object.keys(REGISTRY), ['zstd']);
 });
 
 // --- zstd: the requirement that decides whether the SHIPPED builder can carve ---
@@ -306,13 +218,13 @@ test('provision(zstd) fails loud when no decompressor is found', () => {
 test('an override outranks an already-cached winner', () => {
   const dataDir = tmpDataDir();
   fs.writeFileSync(path.join(dataDir, 'hosttools.json'),
-    JSON.stringify({ gzip: { candidate: 'gunzip', path: '/bin/gunzip' } }));
+    JSON.stringify({ zstd: { candidate: 'unzstd', path: '/bin/unzstd' } }));
   const bindir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-ov2-'));
-  const ovPath = path.join(bindir, 'mygzip');
+  const ovPath = path.join(bindir, 'myzstd');
   fs.writeFileSync(ovPath, '#!/bin/sh\n', { mode: 0o755 });
-  const got = provision('gzip', {
-    env: { CLODE_GZIP: ovPath, PATH: '/usr/bin:/bin' },
-    spawn: realGunzipSpawn(), fs, dataDir, isExec: () => true,
+  const got = provision('zstd', {
+    env: { CLODE_ZSTD: ovPath, PATH: '/usr/bin:/bin' },
+    spawn: goodZstdSpawn(), fs, dataDir, isExec: () => true,
   });
   assert.strictEqual(got.path, ovPath, 'the override must win over the cached path');
 });
@@ -412,8 +324,7 @@ test('provision(zstd) REFUSES a frame walker that copies raw blocks without deco
 
 // A decoder that appends a newline is not this decoder. bun-graph embeds the decoded bytes as the
 // asset's text, and on a row with no Frame_Content_Size nothing downstream would notice the extra
-// byte — so the KAT compares EXACTLY, unlike the gzip family's trailing-whitespace strip (whose
-// consumer unpacks an archive rather than embedding a string).
+// byte — so the KAT compares EXACTLY.
 test('provision(zstd) REFUSES a decoder that appends a newline to correct output', () => {
   const { expected } = REGISTRY.zstd.KAT;
   assert.throws(

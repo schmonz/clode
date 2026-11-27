@@ -12,16 +12,17 @@
 // stores alongside the host's node instead of clobbering it.
 //
 // download/verify/extract/log are all injectable seams (default to clode-net's
-// downloadFile/sha256Of + a `tar -xzf` spawn) so callers — and every test in
-// this suite — never have to hit the real network or a real tarball.
+// downloadFile/sha256Of + unpack.cjs's in-process extractArchive) so callers — and
+// every test in this suite — never have to hit the real network or a real tarball.
+// The fetch -> verify -> extract sequence itself is unpack.cjs's fetchVerifiedArchive,
+// shared with clode-rcodesign.cjs.
 
 const fs = require('node:fs');
 const path = require('node:path');
-const os = require('node:os');
-const { spawnSync } = require('node:child_process');
 
 const { nodeStore } = require('./clode-paths.cjs');
 const { downloadFile, sha256Of } = require('./clode-net.cjs');
+const { extractArchive, fetchVerifiedArchive } = require('./unpack.cjs');
 
 // The pin (version + trusted sha256s) is INLINED at bundle time: a JSON require
 // esbuild resolves at build. That is load-bearing for the shipped clode-native,
@@ -99,40 +100,6 @@ function nodeBinPath(env = process.env, platform = process.platform, arch = proc
   return path.join(nodeStore(env), PINNED_VERSION, `${platform}-${arch}`, ...leaf);
 }
 
-// Default extract seam: a spawned `tar -xzf <tarball> -C <destDir>`, with the
-// tar binary itself resolved via host-provision (a KAT-verified tar/gtar/
-// bsdtar on PATH), not hardcoded — so a host whose tar lives elsewhere or is
-// named gtar/bsdtar still works, and a toolless host fails loud up front.
-// win32's Node asset is a `.zip` (GNU tar can't read it), so a `.zip` tarball
-// branches to a host-provision-resolved `unzip` instead; every other platform
-// is unchanged.
-function tarExtract(tarball, destDir, opts = {}) {
-  const { provision } = require('./host-provision.cjs');
-  const { spawn = spawnSync, env = process.env, dataDir } = opts;
-  fs.mkdirSync(destDir, { recursive: true });
-  if (tarball.endsWith('.zip')) {
-    const { path: unzipBin } = provision('unzip', { env, dataDir, spawn });
-    // Same colon-avoidance as the tar branch below: basename + cwd, never an
-    // absolute archive path.
-    const res = spawn(unzipBin, ['-o', '-q', path.basename(tarball), '-d', destDir],
-      { stdio: 'inherit', cwd: path.dirname(tarball) });
-    if (res.error) throw res.error;
-    if (res.status !== 0) {
-      throw new Error(`clode-node: ${unzipBin} -o -q ${tarball} -d ${destDir} exited ${res.status}`);
-    }
-    return;
-  }
-  const { path: tarBin } = provision('tar', { env, dataDir, spawn });
-  // tarPlan (host-provision.cjs): Git for Windows' GNU tar misreads a Windows archive path (a colon is a remote host)
-  // and a Windows -C path (its backslash escapes are unquoted), so it gets the archive by basename and -C with slashes.
-  const plan = require('./host-provision.cjs').tarPlan('-xzf', tarball, destDir);
-  const res = spawn(tarBin, plan.args, { stdio: 'inherit', cwd: plan.cwd });
-  if (res.error) throw res.error;
-  if (res.status !== 0) {
-    throw new Error(`clode-node: ${tarBin} -xzf ${tarball} -C ${destDir} exited ${res.status}`);
-  }
-}
-
 // Move the platform tarball's flattened contents (node-v<ver>-<plat>-<arch>/*)
 // up into <nodeStore>/<version>/, so nodeBinPath's fixed bin/node shape holds
 // regardless of the (platform,arch)-specific top-level dir name inside the
@@ -161,7 +128,7 @@ async function ensurePinnedNode(opts = {}) {
     env = process.env,
     download = downloadFile,
     verify = async (p) => sha256Of(p),
-    extract = tarExtract,
+    extract = extractArchive,
     log = () => {},
     platform = process.platform,
     arch = process.arch,
@@ -174,36 +141,17 @@ async function ensurePinnedNode(opts = {}) {
 
   const asset = nodeAsset(platform, arch);
   const store = nodeStore(env);
-  const tmpRoot = path.join(store, '.tmp');
-  fs.mkdirSync(tmpRoot, { recursive: true });
-  const workDir = fs.mkdtempSync(path.join(tmpRoot, 'dl-'));
-  const tarballPath = path.join(workDir, asset.filename);
-
-  try {
-    log(`clode-node: downloading ${asset.url}`);
-    await download(asset.url, tarballPath);
-
-    const actualSha = await verify(tarballPath);
-    if (actualSha !== asset.sha256) {
-      throw new Error(
-        `clode-node: pinned node sha mismatch — refusing to use it (expected ${asset.sha256}, got ${actualSha})`
-      );
-    }
-
-    const extractedInto = path.join(workDir, 'extracted');
-    fs.mkdirSync(extractedInto, { recursive: true });
-    await extract(tarballPath, extractedInto);
-
-    const versionDir = path.join(store, PINNED_VERSION, `${platform}-${arch}`);
-    flattenExtractedTopDir(extractedInto, versionDir);
-
-    if (!fs.existsSync(binPath)) {
-      throw new Error(`clode-node: extraction completed but ${binPath} is missing`);
-    }
-    return binPath;
-  } finally {
-    fs.rmSync(workDir, { recursive: true, force: true });
-  }
+  return fetchVerifiedArchive({
+    label: 'clode-node', what: 'node', asset, tmpRoot: path.join(store, '.tmp'),
+    download, verify, extract, log,
+    install: (extractedInto) => {
+      flattenExtractedTopDir(extractedInto, path.join(store, PINNED_VERSION, `${platform}-${arch}`));
+      if (!fs.existsSync(binPath)) {
+        throw new Error(`clode-node: extraction completed but ${binPath} is missing`);
+      }
+      return binPath;
+    },
+  });
 }
 
-module.exports = { PINNED_VERSION, nodeAsset, pinnedNodeRefusal, ensurePinnedNode, nodeBinPath, tarExtract, targetToNodeAsset };
+module.exports = { PINNED_VERSION, nodeAsset, pinnedNodeRefusal, ensurePinnedNode, nodeBinPath, targetToNodeAsset };

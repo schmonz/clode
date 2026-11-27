@@ -101,7 +101,7 @@ const { isRgInvocation } = require('./rg-entry.cjs');
 // what the bundle needs: bun-shim.cjs requires rg-entry.cjs for the shell function it writes).
 // path-lookup.cjs (the one PATH search) is rg-entry.cjs's companion and bun-shim.cjs's.
 const RG_ASSETS = ['rg-entry.cjs', 'rg-native.cjs', 'rg-regex.cjs', 'rg-walk.cjs', 'rg-types.cjs', 'path-lookup.cjs'];
-require('./host-provision.cjs'); // ensure esbuild bundles it into the SEA for runtime provision('tar')
+require('./unpack.cjs'); // ensure esbuild bundles it into the SEA: naude-sea.cjs's materializeDeps extracts deps.tar with it
 
 // Install globalThis.__clodeCheckUpdate exactly as the quaude PRELUDE does
 // (extract-claude-js.cjs): a pure check-upstream-and-notify, never an install

@@ -60,7 +60,7 @@ export function buildManifest({ tjsPin, inputs, compression, blob, slices, recip
 //
 // WHY A BYTE SLICE IS ENOUGH: every member is an INDEPENDENT gzip stream (its
 // own header, deflate data, and CRC/ISIZE trailer), so bytes [offset, offset+len)
-// are a complete, self-contained .gz — inflatable by the existing gunzipBuffer
+// are a complete, self-contained .gz — inflatable by the one gunzip (libexec/unpack.cjs)
 // path with no framing format of our own to parse, and no change to the
 // integrity story (sha256 is still of the DECOMPRESSED engine, verified after
 // inflation). Concatenated gzip members are also valid as a single stream per

@@ -52,3 +52,31 @@ test('ensureRcodesign fetches + sha-verifies + caches; a mismatch fails loud + c
   }), /sha|mismatch/i);
   assert.ok(!fs.existsSync(rcodesignBinPath({ CLODE_DEPS: data2 }, 'linux', 'x64')), 'no poisoned store entry');
 });
+
+// The DEFAULT extract, for both of rcodesign's archive shapes: the linux .tar.gz and the win32
+// .zip go through the same in-process reader (unpack.cjs). The two used to disagree: this seam
+// ran `tar -xf` on the zip, which GNU tar cannot read, while clode-node ran a host `unzip`.
+test('ensureRcodesign: the default extract reads the win32 .zip and the linux .tar.gz alike, in process', async () => {
+  const { makeZip } = require('./archive-fixtures.cjs');
+  const { packTar } = require('../scripts/tar-pack.cjs');
+  const zlib = require('node:zlib');
+  const top = `apple-codesign-${RCODESIGN_VERSION}-x86_64-pc-windows-msvc`;
+  const zip = makeZip([{ name: `${top}/rcodesign.exe`, data: 'WINRC' }, { name: `${top}/COPYING`, data: 'license' }], { unix: false });
+  const src = fs.mkdtempSync(path.join(os.tmpdir(), 'rcs-src-'));
+  fs.mkdirSync(path.join(src, 'apple-codesign-linux'), { recursive: true });
+  fs.writeFileSync(path.join(src, 'apple-codesign-linux', 'rcodesign'), 'LINUXRC');
+  const tgz = zlib.gzipSync(packTar(src, ['apple-codesign-linux']));
+  const saved = process.env.PATH;
+  process.env.PATH = '';   // no host tar or unzip can be what reads them
+  try {
+    for (const [platform, bytes, want] of [['win32', zip, 'WINRC'], ['linux', tgz, 'LINUXRC']]) {
+      const env = { CLODE_DEPS: fs.mkdtempSync(path.join(os.tmpdir(), 'rcs-default-')) };
+      const p = await ensureRcodesign({
+        env, platform, arch: 'x64',
+        download: async (_u, dst) => { fs.writeFileSync(dst, bytes); },
+        verify: async () => rcodesignAsset(platform, 'x64').sha256,
+      });
+      assert.strictEqual(fs.readFileSync(p, 'utf8'), want, platform);
+    }
+  } finally { process.env.PATH = saved; }
+});

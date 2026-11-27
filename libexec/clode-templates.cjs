@@ -142,8 +142,8 @@ async function obtainEngine(entry, opts) {
   }
   let buf;
   if (compression === 'gzip') {
-    // Injectable for tests; defaults to the native-CLI-then-DecompressionStream path.
-    const gunzip = opts.gunzip || ((b) => require('./clode-net.cjs').gunzipBuffer(b, opts));
+    // Injectable for tests; defaults to the one gunzip (unpack.cjs: node:zlib, the engine's miniz under tjs).
+    const gunzip = opts.gunzip || ((b) => require('./unpack.cjs').gunzip(b));
     buf = await gunzip(raw);
   } else {
     buf = raw;

@@ -857,7 +857,7 @@ if (tapText) {
 // `ABSENT -> created` on ~/.local/share/clode — and it can only catch that where
 // the store does NOT already exist. On any machine that has ever run clode the
 // store IS there, so a test that provisions into it (e.g. calling the real
-// gunzipBuffer/sha256Of, which cache a resolved host tool there) changes nothing
+// provision(), which caches a resolved host tool there) changes nothing
 // detectable and passes locally, then fails every fresh CI runner.
 // Reproduce the CI condition before blaming CI:
 //     HOME=$(mktemp -d) npm test

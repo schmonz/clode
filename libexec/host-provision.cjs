@@ -1,14 +1,16 @@
 'use strict';
 // host-provision — one KAT-verified resolver for required host tools.
 //
-// (Not sha256: a file's hash is native and in-process, clode-net.cjs sha256Of.)
+// (Not sha256: a file's hash is native and in-process, clode-net.cjs sha256Of. Not tar,
+// gzip or unzip either: every archive is read in process, libexec/unpack.cjs, over node:zlib,
+// which is the engine's miniz under tjs. zstd is the one host tool left.)
 // Every artifact (the clode builder, quaude, naude) resolves host tools the
 // SAME way at runtime: probe PATH for a candidate, RUN it on a known input and
 // verify the exact expected output (the KAT — "does this actually work"), cache
 // the winner to ~/.local/share/clode/hosttools.json, and fail loud with an
 // install hint if none works. The registry is just code: it is consumed at
-// runtime by the clode builder (esbuild-inlined into clode-main.bundle.cjs)
-// and by naude (bundled into naude-entry.bundle.cjs), and rides as a forwarded
+// runtime by the clode builder (esbuild-inlined into clode-main.bundle.cjs;
+// naude no longer carries it, its deps.tar is read by unpack.cjs), and rides as a forwarded
 // member in the builder-role quaude blobulate so a self-blobulated clode-native can
 // re-blobulate targets. The quaude PRODUCT carries no provision consumer
 // (trailer-member deps, bundle-discovered shell, updates are notify-only — a
@@ -21,32 +23,6 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const hosttools = require('./clode-hosttools.cjs');
 const cpaths = require('./clode-paths.cjs');
-
-// A fixed gzip stream of exactly "clode" (produced by zlib). Decompression is
-// deterministic, so ANY conforming decompressor inflates this to "clode" — the
-// KAT proves the resolved tool actually inflates gzip, on any platform.
-const GZIP_KAT = {
-  gz: [31, 139, 8, 0, 0, 0, 0, 0, 0, 3, 75, 206, 201, 79, 73, 5, 0, 82, 5, 130, 22, 5, 0, 0, 0],
-  expected: 'clode',
-};
-
-// A fixed, deterministic ZIP (STORED, no compression, fixed 1980-01-01 DOS
-// timestamp so the bytes never change build to build) containing one entry
-// "ok" whose content is "clode". Built with Python's zlib-free zipfile module:
-//   zipfile.ZipFile(buf, 'w', zipfile.ZIP_STORED).writestr(
-//     zipfile.ZipInfo('ok', date_time=(1980,1,1,0,0,0)), 'clode')
-// Any conforming unzip extracts entry "ok" to exactly "clode" — the KAT proves
-// the resolved tool actually extracts a zip, on any platform.
-const ZIP_KAT = {
-  zip: [
-    80, 75, 3, 4, 20, 0, 0, 0, 0, 0, 0, 0, 33, 0, 82, 5, 130, 22, 5, 0, 0, 0,
-    5, 0, 0, 0, 2, 0, 0, 0, 111, 107, 99, 108, 111, 100, 101, 80, 75, 1, 2, 20,
-    3, 20, 0, 0, 0, 0, 0, 0, 0, 33, 0, 82, 5, 130, 22, 5, 0, 0, 0, 5, 0, 0, 0,
-    2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 128, 1, 0, 0, 0, 0, 111, 107, 80, 75,
-    5, 6, 0, 0, 0, 0, 1, 0, 1, 0, 48, 0, 0, 0, 37, 0, 0, 0, 0, 0,
-  ],
-  expected: 'clode',
-};
 
 // A fixed zstd frame of "clode" repeated 20 times, produced by `zstd -q -c` (1.5.7) from
 // `printf 'clode%.0s' $(seq 1 20)`. 25 bytes in, 100 bytes out.
@@ -73,112 +49,7 @@ const ZSTD_KAT = {
   expected: 'clode'.repeat(20),
 };
 
-// TAR ARGUMENTS: one shape for every tar call (the KAT below, clode-node.cjs, clode-rcodesign.cjs). Under a bash
-// PATH on Windows `tar` is Git for Windows' GNU tar, which misreads two things in a Windows path:
-//   - an archive argument with a colon is a remote host:path (C:\x.tar -> host "C", "Cannot connect to C");
-//   - its -C argument is UNQUOTED, so a backslash escape is a character: the KAT's dir
-//     ...\clode-run-n2gbTv\naude-sea-9gxkv1 reached tar as "...clode-run-n2gbTv<newline>aude-sea-9gxkv1" and every
-//     materializeDeps row failed "Cannot open" (CI 9c655b7, windows-latest). Any user whose path has a segment
-//     starting n, t, r, ... hits the same.
-// So tar runs in the archive's dir with the archive as ./<basename> (a slash before any colon in the name, so GNU
-// tar never reads a host out of it), and -C gets the directory with forward slashes (no escapes; GNU tar, bsdtar and
-// Windows' own tar all take C:/x). Not --force-local: only GNU tar has it.
-// On POSIX the slash form is the path itself. `p` is injectable so a row can hand it Windows paths anywhere.
-function tarPlan(flag, archive, dir, p = path) {
-  return { cwd: p.dirname(archive), args: [flag, `./${p.basename(archive)}`, '-C', dir.split(p.sep).join('/')] };
-}
-
 const REGISTRY = {
-  tar: {
-    id: 'tar',
-    overrideEnv: 'CLODE_TAR',
-    candidates: [
-      { name: 'tar', args: (f) => ['-xf', f] },
-      { name: 'gtar', args: (f) => ['-xf', f] },
-      { name: 'bsdtar', args: (f) => ['-xf', f] },
-    ],
-    // Round-trip KAT: create a tar of a known file with the candidate, extract
-    // it with the candidate, and confirm the byte-exact content. No embedded
-    // archive constant needed, and it proves create+extract actually work.
-    verify({ path: bin, run, fs }) {
-      const base = path.join(os.tmpdir(), `clode-kat-tar-${process.pid}`);
-      const src = base + '.src';
-      const dst = base + '.dst';
-      const arc = base + '.tar';
-      // The arguments are tarPlan's (above): Git for Windows' GNU tar misreads a Windows path otherwise.
-      try {
-        fs.rmSync(src, { recursive: true, force: true });
-        fs.rmSync(dst, { recursive: true, force: true });
-        fs.mkdirSync(src, { recursive: true });
-        fs.mkdirSync(dst, { recursive: true });
-        fs.writeFileSync(path.join(src, 'ok'), 'clode-tar-kat');
-        const cp = tarPlan('-cf', arc, src);
-        const c = run(bin, [...cp.args, 'ok'], { cwd: cp.cwd });
-        if (!c || c.status !== 0) return false;
-        const xp = tarPlan('-xf', arc, dst);
-        const x = run(bin, xp.args, { cwd: xp.cwd });
-        if (!x || x.status !== 0) return false;
-        return fs.readFileSync(path.join(dst, 'ok'), 'utf8') === 'clode-tar-kat';
-      } catch {
-        return false;
-      } finally {
-        for (const p of [src, dst, arc]) { try { fs.rmSync(p, { recursive: true, force: true }); } catch { /* absent */ } }
-      }
-    },
-    installHint: 'install tar (or gtar/bsdtar), or set CLODE_TAR. Needed to unpack downloads.',
-  },
-  gzip: {
-    id: 'gzip',
-    overrideEnv: 'CLODE_GZIP',
-    // Decompressors, most-universal first. Each inflates a file arg to stdout.
-    candidates: [
-      { name: 'gzip', args: (f) => ['-dc', f] },
-      { name: 'gunzip', args: (f) => ['-c', f] },
-      { name: 'zcat', args: (f) => [f] },
-      { name: 'pigz', args: (f) => ['-dc', f] },
-    ],
-    // Inflate the embedded known gzip blob; verify the exact inflated bytes.
-    verify({ candidate, path: bin, run, fs }) {
-      const tmp = path.join(os.tmpdir(), `clode-kat-gzip-${process.pid}.gz`);
-      fs.writeFileSync(tmp, Buffer.from(GZIP_KAT.gz));
-      try {
-        const r = run(bin, candidate.args(tmp));
-        return !!r && r.status === 0 && String(r.stdout).replace(/\s+$/, '') === GZIP_KAT.expected;
-      } finally {
-        try { fs.unlinkSync(tmp); } catch { /* absent */ }
-      }
-    },
-    installHint: 'install gzip (or gunzip/zcat/pigz), or set CLODE_GZIP to a `gzip -dc`-compatible decompressor. Needed to unpack the templates pack.',
-  },
-  unzip: {
-    id: 'unzip',
-    overrideEnv: 'CLODE_UNZIP',
-    candidates: [
-      { name: 'unzip', args: (f, destDir) => ['-o', '-q', f, '-d', destDir] },
-    ],
-    // Extract the embedded known zip to a temp dir; verify the exact content
-    // of its single entry. Round-trip-free (unlike tar) since unzip only
-    // extracts — mirrors GZIP_KAT's embedded-blob shape instead.
-    verify({ candidate, path: bin, run, fs }) {
-      const base = path.join(os.tmpdir(), `clode-kat-unzip-${process.pid}`);
-      const zip = `${base}.zip`;
-      const dest = `${base}.dst`;
-      try {
-        fs.rmSync(dest, { recursive: true, force: true });
-        fs.mkdirSync(dest, { recursive: true });
-        fs.writeFileSync(zip, Buffer.from(ZIP_KAT.zip));
-        const r = run(bin, candidate.args(zip, dest));
-        if (!r || r.status !== 0) return false;
-        return fs.readFileSync(path.join(dest, 'ok'), 'utf8') === ZIP_KAT.expected;
-      } catch {
-        return false;
-      } finally {
-        try { fs.unlinkSync(zip); } catch { /* absent */ }
-        try { fs.rmSync(dest, { recursive: true, force: true }); } catch { /* absent */ }
-      }
-    },
-    installHint: 'install unzip, or set CLODE_UNZIP to an unzip-compatible extractor. Needed to unpack Windows Node downloads.',
-  },
   // REQUIRED TO CARVE UPSTREAM 2.1.251+, on every artifact we publish. Claude Code embeds
   // its text assets as zstd frames; `node:zlib.zstdDecompressSync` arrived in Node 22.15/24
   // and covers the DEV path only — every shipped clode is a blobulated tjs binary, tjs has no
@@ -218,7 +89,7 @@ const REGISTRY = {
     // Exposed so the tests can assert on the constant itself rather than re-deriving it.
     KAT: ZSTD_KAT,
     // Decompress the embedded known frame; verify the exact bytes. EXACT, with no trailing-
-    // whitespace strip — unlike the gzip family above, whose consumer unpacks an archive.
+    // whitespace strip.
     // bun-graph embeds what comes back as the asset's TEXT, so a decoder that appends a newline
     // is not this decoder: on a row with no Frame_Content_Size nothing downstream would notice
     // the extra byte, and the target would carry a corrupted asset. Through the SAME argv
@@ -353,4 +224,4 @@ function provision(id, opts = {}) {
     + (tried.length ? ` [tried: ${tried.join('; ')}]` : ''));
 }
 
-module.exports = { provision, tarPlan, REGISTRY };
+module.exports = { provision, REGISTRY };

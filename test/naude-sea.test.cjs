@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { isSea, materializeAssets, materializeDeps } = require('../libexec/naude-sea.cjs');
+const { packTar } = require('../scripts/tar-pack.cjs');
 
 // A fake SEA: getRawAsset returns ArrayBuffers for a fixed asset map. No real SEA.
 function fakeSea(map) {
@@ -34,30 +35,29 @@ test('materializeAssets writes the named assets to destDir, mtime-stable', () =>
   assert.strictEqual(fs.statSync(path.join(dir, 'cli.cjs')).mtimeMs, m1);
 });
 
-test('materializeDeps resolves tar via provision (uses a real tar binary)', () => {
+test('materializeDeps unpacks deps.tar in process, keeping modes and symlinks, with no tar on PATH', () => {
   const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'naude-sea-'));
-  // Build a real tar payload with a node_modules marker + a sig asset.
   const staging = fs.mkdtempSync(path.join(os.tmpdir(), 'naude-stage-'));
-  fs.mkdirSync(path.join(staging, 'node_modules'), { recursive: true });
+  fs.mkdirSync(path.join(staging, 'node_modules', '.bin'), { recursive: true });
   fs.writeFileSync(path.join(staging, 'node_modules', '.marker'), 'x');
-  const tarBuf = require('node:child_process')
-    .spawnSync('tar', ['-cf', '-', '-C', staging, 'node_modules'], { maxBuffer: 1 << 30 }).stdout;
-  const fakeSea = {}; // matches naude-sea's seaMod() shape used by assetBuffer
+  fs.writeFileSync(path.join(staging, 'node_modules', 'cli.js'), '#!/usr/bin/env node\n');
+  fs.chmodSync(path.join(staging, 'node_modules', 'cli.js'), 0o755);
+  const canLink = process.platform !== 'win32';
+  if (canLink) fs.symlinkSync('../cli.js', path.join(staging, 'node_modules', '.bin', 'cli'));
+  // The SAME packer build-naude.mjs uses for the real deps.tar.
+  const tarBuf = packTar(staging, ['node_modules']);
   const assets = { 'deps.tar': tarBuf, 'deps.sig': Buffer.from('kat-sig\n') };
-  const calls = [];
-  const dir = materializeDeps({
-    sea: fakeSea,
-    cacheDir,
-    assetBuffer: (_sea, name) => assets[name], // injected asset accessor
-    spawn: (bin, args, o) => { calls.push(bin); return require('node:child_process').spawnSync(bin, args, o); },
-    // Isolate provision('tar')'s hosttools.json cache to this test's tmpdir (CLODE_STATE_ROOT),
-    // matching host-provision.test.cjs's dataDir isolation — never read/write the real
-    // ~/.local/share/clode/hosttools.json from a test.
-    env: { ...process.env, CLODE_STATE_ROOT: cacheDir },
-  });
-  assert.ok(fs.existsSync(path.join(dir, 'node_modules', '.marker')), 'deps extracted');
-  assert.ok(calls.some((b) => path.isAbsolute(b) && /tar|gtar|bsdtar/.test(b)),
-    'used a provision-resolved (absolute) tar path');
+  const savedPath = process.env.PATH;
+  process.env.PATH = '';   // no host tar can be what extracts it
+  let dir;
+  try {
+    dir = materializeDeps({ sea: {}, cacheDir, assetBuffer: (_sea, name) => assets[name] });
+  } finally { process.env.PATH = savedPath; }
+  assert.strictEqual(fs.readFileSync(path.join(dir, 'node_modules', '.marker'), 'utf8'), 'x');
+  if (canLink) {
+    assert.strictEqual(fs.statSync(path.join(dir, 'node_modules', 'cli.js')).mode & 0o111, 0o111, 'the executable bit survived');
+    assert.strictEqual(fs.readlinkSync(path.join(dir, 'node_modules', '.bin', 'cli')), '../cli.js', 'the symlink survived');
+  }
 });
 
 // THE OS TEMP CLEANER (measured 2026-09-26). cacheDir defaults to os.tmpdir(), and macOS's
@@ -74,18 +74,13 @@ function unpackFixture() {
     fs.writeFileSync(path.join(staging, 'node_modules', pkg, 'package.json'), `{"name":"${pkg}"}`);
     fs.writeFileSync(path.join(staging, 'node_modules', pkg, 'lib', file), `// ${pkg}`);
   }
-  const tarBuf = require('node:child_process')
-    .spawnSync('tar', ['-cf', '-', '-C', staging, 'node_modules'], { maxBuffer: 1 << 30 }).stdout;
+  const tarBuf = packTar(staging, ['node_modules']);
   fs.rmSync(staging, { recursive: true, force: true });
   const assets = { 'deps.tar': tarBuf, 'deps.sig': Buffer.from('purge-sig\n') };
-  const tars = [];
+  const tars = [];   // one per unpack: the tarball is read only to extract it
   const unpack = () => materializeDeps({
     sea: {}, cacheDir,
-    assetBuffer: (_sea, name) => assets[name],
-    // Only extractions of THIS tarball count: provision('tar') also runs tar, for its
-    // known-answer test.
-    spawn: (bin, args, o) => { if (o && o.input === assets['deps.tar']) tars.push(bin); return require('node:child_process').spawnSync(bin, args, o); },
-    env: { ...process.env, CLODE_STATE_ROOT: cacheDir },
+    assetBuffer: (_sea, name) => { if (name === 'deps.tar') tars.push(name); return assets[name]; },
   });
   return { cacheDir, unpack, tars };
 }
@@ -98,7 +93,7 @@ function purgeFiles(dir) {
   }
 }
 
-test('materializeDeps reuses a whole unpacked tree without running tar again', () => {
+test('materializeDeps reuses a whole unpacked tree without unpacking again', () => {
   const { cacheDir, unpack, tars } = unpackFixture();
   try {
     const dir = unpack();

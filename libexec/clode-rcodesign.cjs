@@ -20,14 +20,17 @@
 // ~/.local/share/clode instead of mutating it.
 //
 // download/verify/extract/log are all injectable seams (default to clode-net's
-// downloadFile/sha256Of + a tar-or-zip extract) so callers — and every test in
-// this suite — never have to hit the real network or a real archive.
+// downloadFile/sha256Of + unpack.cjs's in-process extractArchive, which reads the
+// linux .tar.gz and the win32 .zip alike) so callers — and every test in this
+// suite — never have to hit the real network or a real archive. The fetch ->
+// verify -> extract sequence itself is unpack.cjs's fetchVerifiedArchive.
 
 const fs = require('node:fs');
 const path = require('node:path');
 
 const { depsStore } = require('./clode-paths.cjs');
 const { downloadFile, sha256Of } = require('./clode-net.cjs');
+const { extractArchive, fetchVerifiedArchive } = require('./unpack.cjs');
 
 // The pin (version + trusted sha256s + asset filenames) is INLINED at bundle
 // time: a JSON require esbuild resolves at build. That is load-bearing for the
@@ -70,28 +73,6 @@ function rcodesignAsset(platform, arch) {
 function rcodesignBinPath(env = process.env, platform = process.platform, arch = process.arch) {
   const name = platform === 'win32' ? 'rcodesign.exe' : 'rcodesign';
   return path.join(depsStore(env), 'tools', 'rcodesign', RCODESIGN_VERSION, `${platform}-${arch}`, name);
-}
-
-// Default extract seam: tar.gz (linux assets) via `tar -xzf`, zip (the win32
-// asset) via a `tar -xf` fallback — modern bsdtar/Windows tar.exe (both
-// libarchive-based) read zip archives transparently, so ONE resolved `tar`
-// tool (via host-provision, same as clode-node's tarExtract) covers both
-// archive shapes; branch only on which flag to pass.
-function archiveExtract(archivePath, destDir, opts = {}) {
-  const { provision } = require('./host-provision.cjs');
-  const { spawnSync } = require('node:child_process');
-  const { spawn = spawnSync, env = process.env, dataDir } = opts;
-  fs.mkdirSync(destDir, { recursive: true });
-  const { path: tarBin } = provision('tar', { env, dataDir, spawn });
-  const isZip = archivePath.toLowerCase().endsWith('.zip');
-  const flag = isZip ? '-xf' : '-xzf';
-  // tarPlan (host-provision.cjs): the one tar argument shape, safe for Git for Windows' GNU tar.
-  const plan = require('./host-provision.cjs').tarPlan(flag, archivePath, destDir);
-  const res = spawn(tarBin, plan.args, { stdio: 'inherit', cwd: plan.cwd });
-  if (res.error) throw res.error;
-  if (res.status !== 0) {
-    throw new Error(`clode-rcodesign: ${tarBin} ${flag} ${archivePath} -C ${destDir} exited ${res.status}`);
-  }
 }
 
 // Recursively hunt extractedInto for a file named binName and return its path,
@@ -138,7 +119,7 @@ async function ensureRcodesign(opts = {}) {
     env = process.env,
     download = downloadFile,
     verify = async (p) => sha256Of(p),
-    extract = archiveExtract,
+    extract = extractArchive,
     log = () => {},
     platform = process.platform,
     arch = process.arch,
@@ -151,39 +132,20 @@ async function ensureRcodesign(opts = {}) {
 
   const asset = rcodesignAsset(platform, arch);
   const store = path.join(depsStore(env), 'tools', 'rcodesign');
-  const tmpRoot = path.join(store, '.tmp');
-  fs.mkdirSync(tmpRoot, { recursive: true });
-  const workDir = fs.mkdtempSync(path.join(tmpRoot, 'dl-'));
-  const archivePath = path.join(workDir, asset.filename);
-
-  try {
-    log(`clode-rcodesign: downloading ${asset.url}`);
-    await download(asset.url, archivePath);
-
-    const actualSha = await verify(archivePath);
-    if (actualSha !== asset.sha256) {
-      throw new Error(
-        `clode-rcodesign: pinned rcodesign sha mismatch — refusing to use it (expected ${asset.sha256}, got ${actualSha})`
-      );
-    }
-
-    const extractedInto = path.join(workDir, 'extracted');
-    fs.mkdirSync(extractedInto, { recursive: true });
-    await extract(archivePath, extractedInto);
-
-    const versionDir = path.join(store, RCODESIGN_VERSION, `${platform}-${arch}`);
-    flattenExtractedBinary(extractedInto, versionDir, platform);
-
-    if (!fs.existsSync(binPath)) {
-      throw new Error(`clode-rcodesign: extraction completed but ${binPath} is missing`);
-    }
-    if (platform !== 'win32') {
-      fs.chmodSync(binPath, 0o755);
-    }
-    return binPath;
-  } finally {
-    fs.rmSync(workDir, { recursive: true, force: true });
-  }
+  return fetchVerifiedArchive({
+    label: 'clode-rcodesign', what: 'rcodesign', asset, tmpRoot: path.join(store, '.tmp'),
+    download, verify, extract, log,
+    install: (extractedInto) => {
+      flattenExtractedBinary(extractedInto, path.join(store, RCODESIGN_VERSION, `${platform}-${arch}`), platform);
+      if (!fs.existsSync(binPath)) {
+        throw new Error(`clode-rcodesign: extraction completed but ${binPath} is missing`);
+      }
+      if (platform !== 'win32') {
+        fs.chmodSync(binPath, 0o755);
+      }
+      return binPath;
+    },
+  });
 }
 
-module.exports = { RCODESIGN_VERSION, rcodesignAsset, rcodesignBinPath, ensureRcodesign, archiveExtract };
+module.exports = { RCODESIGN_VERSION, rcodesignAsset, rcodesignBinPath, ensureRcodesign };

@@ -36,6 +36,7 @@ import url from 'node:url';
 
 const require = createRequire(import.meta.url);
 const { artifactDir, seaBin } = require('./platform-tag.cjs');
+const { packTar } = require('./tar-pack.cjs');
 
 const REPO = path.resolve(path.dirname(url.fileURLToPath(import.meta.url)), '..');
 // Two DIFFERENT keys for two different things — see scripts/platform-tag.cjs's
@@ -171,14 +172,10 @@ export function stageDeps(nmdir) {
     console.error('deps: reusing cached deps.tar (nmdir unchanged)');
     return { tar, sigFile };
   }
-  // Archive to STDOUT (`-f -`) with nmdir's PARENT as cwd, instead of passing
-  // OS-native paths as tar arguments. On Windows under a bash PATH `tar`
-  // resolves to GNU tar, which reads an archive path like `D:\…\deps.tar` as a
-  // remote `host:path` (the drive-letter colon) and dies "Cannot connect to
-  // D: resolve failed". With no colon-bearing path args — `-f -` for stdout
-  // and cwd set by the OS, not parsed by tar — this is uniform on GNU tar
-  // (Windows/Linux) and bsdtar (macOS).
-  const archive = execFileSync('tar', ['-cf', '-', 'node_modules'], { cwd: parent, maxBuffer: 1 << 30 });
+  // Packed in process (scripts/tar-pack.cjs: sorted, mtime 0, no owner), not by a host tar: no
+  // tool to find, no Windows path for Git for Windows' GNU tar to misread, and the same tree packs
+  // to the same bytes on every host. naude reads it back with libexec/unpack.cjs's tar reader.
+  const archive = packTar(parent, ['node_modules']);
   fs.writeFileSync(tar, archive);
   const sig = crypto.createHash('sha256').update(archive).digest('hex');
   fs.writeFileSync(sigFile, sig);
