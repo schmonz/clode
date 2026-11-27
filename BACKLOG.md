@@ -8,6 +8,46 @@ Concrete clode-under-Node divergences from native Claude Code, to triage and fix
 That page is GENERATED from `scripts/build-graph.cjs` — the one declaration of the build — so it
 cannot drift from it; it is also where the honest answer to "does this need node?" lives.
 
+## Tiger, first run from the released asset: three walls before quaude exists (2026-11-26)
+
+Driven over ssh on the user's Intel Tiger VM (Mac OS X 10.4.11, Darwin 8.11.1 i386, Virtual Intel Mac, 4 CPUs,
+clean HOME), from the v0.20261125.1 `clode-...-macos` asset, in a throwaway HOME. In order:
+
+1. **The universal asset does not start on a 64-bit Intel Mac running 10.4 (or 10.5, unmeasured).** The kernel
+   picks the x86_64 slice, linked for 10.6 (`LC_DYLD_INFO_ONLY`), and Tiger's dyld refuses it before any of our
+   code runs: `dyld: unknown required load command 0x80000022`, rc 133. The i386 slice is correct (10.4 floor, no
+   new load commands): with the x86_64 entry dropped from the fat header and every byte left in place (the blob
+   is located by absolute file offset, so `lipo -thin` breaks it), Tiger runs `clode --version` in 2 s. Real Core
+   2 Macs that shipped with Tiger are 64-bit, so this is every Intel Tiger and Leopard Mac but the first Core Duos.
+   TO DO: choose between an x86_64 slice that loads on 10.4 (a 10.4 floor link, if Tiger's 64-bit libSystem is
+   enough) and keeping 10.4/10.5 Intel off x86_64 some other way; whichever it is, a gate that reads every
+   slice's load commands against the asset's stated floor.
+2. **Tiger has no SHA-256 tool, so `clode fetch claude` refuses to download.** None of host-provision's list exists or
+   works: no sha256sum/shasum, `cksum` has no `-a`, openssl 0.9.7 has no `-sha256`, perl 5.8.6 has no
+   Digest::SHA, python 2.3 has no hashlib. A scratch sha256sum compiled with Tiger's gcc got past it (366 MB in
+   50 s). TO DO, proposed: the engine already links mbedtls, so a native streaming SHA-256 binding would make the
+   verify work on every platform with no host tool at all (and retire the sha256 zoo, certutil included). Engine
+   change, so the user decides.
+3. **`clode build` stops at "codesign of the embedded template failed:" (empty reason).** Tiger has no codesign
+   and needs none; codesignAdHoc already treats an absent codesign as success, keyed on `error.code === 'ENOENT'`.
+   It never saw one: the engine's pre-10.5 fork/exec `__tjs_spawn_sync` reported a failed execve as a child that
+   exited 127. FIXED in txiki-spawn-sync-fork-errno.patch (the child writes its errno down a close-on-exec pipe),
+   with test/spawn-sync-fork-errno.test.cjs as the source guard. Not yet run on Tiger: needs a darwin-x86 engine
+   built from it (pack.yml, only=darwin-x86).
+
+The class behind 3: code compiled only into no-exec legs (darwin-x86 and darwin-ppc never execute in CI) is never
+run by anything. The Tiger VMs are now the oracle for it. TO DO: a scripted Tiger smoke (engine spawn, ENOENT,
+sha256, `clode --version`) the user's VMs can run on demand.
+
+Also from this session, user's idea: a subcommand that checks every external tool and reports what is missing,
+for clode (sha256, tar, codesign or none, lipo) and for quaude (security, a shell by name, git, rg, and the rest).
+
+Measured: each wall above, on the Intel Tiger VM (2026-11-26). Not measured: the PowerPC Tiger VM (no ssh forward
+from Ptolemy yet), and whether a quaude built there keeps a login. The lead for "login wouldn't stick": upstream
+gives every `security` call a 2000 ms timeout and treats a timed-out keychain write as transient, which SKIPS the
+.credentials.json fallback. On this VM a bare `security` call takes 90 to 650 ms and Tiger's `security` rejects
+-w, -X and -U with a clean rc 2, which does fall back.
+
 ## string-width 9 does not load under tjs: the engine rejects one of its v-flag regexes (2026-11-26)
 
 Renovate PR #82 moves deps/claude's string-width to 9.0.0, which writes its tables as v-flag regexes: class-set

@@ -1,0 +1,51 @@
+--- a/src/mod_spawn_sync.c
++++ b/src/mod_spawn_sync.c
+@@ -405,18 +405,40 @@
+      * copies), chdirs if asked, and execves; every other descriptor is
+      * already close-on-exec. posix_spawn does no PATH search (that is
+      * posix_spawnp), so execve keeps exact parity with the modern path. */
++    /* A launch failure is the SPAWN's error, as posix_spawn returns it (node:
++     * spawnSync's .error ENOENT, status null) -- never a child that "exited
++     * 127", which every caller reads as a tool that ran and failed (Tiger,
++     * 2026-11-26: clode build's absent-codesign check never saw ENOENT). The
++     * child writes the failing errno down a close-on-exec pipe; a successful
++     * execve closes it unwritten, so the parent reads 0 bytes. */
+     pid_t pid = 0;
+     int rc = 0;
+-    pid = fork();
+-    if (pid < 0) {
++    int errp_[2] = { -1, -1 };
++    if (pipe_cloexec(errp_) < 0) {
+         rc = errno;
+-    } else if (pid == 0) {
+-        if (cwd && chdir(cwd) != 0)
+-            _exit(127);
+-        if (dup2(child_fd[0], 0) < 0 || dup2(child_fd[1], 1) < 0 || dup2(child_fd[2], 2) < 0)
++    } else {
++        pid = fork();
++        if (pid < 0) {
++            rc = errno;
++        } else if (pid == 0) {
++            int e = 0;
++            if (cwd && chdir(cwd) != 0) e = errno;
++            else if (dup2(child_fd[0], 0) < 0 || dup2(child_fd[1], 1) < 0 || dup2(child_fd[2], 2) < 0) e = errno;
++            else { execve(file, cargv, cenv ? cenv : environ); e = errno; }
++            while (write(errp_[1], &e, sizeof e) < 0 && errno == EINTR) {}
+             _exit(127);
+-        execve(file, cargv, cenv ? cenv : environ);
+-        _exit(127);
++        }
++        close(errp_[1]);
++        if (pid > 0) {
++            int e = 0; ssize_t n;
++            while ((n = read(errp_[0], &e, sizeof e)) < 0 && errno == EINTR) {}
++            if (n == (ssize_t)sizeof e && e != 0) {
++                int ws;
++                while (waitpid(pid, &ws, 0) < 0 && errno == EINTR) {}
++                rc = e;
++            }
++        }
++        close(errp_[0]);
+     }
+ #endif  /* TJS__SPAWN_SYNC_HAS_POSIX_SPAWN */
+     for (int i = 0; i < 3; i++) { close(child_fd[i]); child_fd[i] = -1; }
