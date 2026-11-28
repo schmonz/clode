@@ -21,8 +21,11 @@ Cases seen on Tiger 2026-11-27:
 1. `grep`: upstream's shell setup shadows grep with a function that calls the embedded search (quaude: the host's
    ugrep). With no ugrep every model `grep` fails "clode: grep needs 'ugrep'" where Tiger's own grep would answer.
    Likely verdict: fall back (do not shadow grep when ugrep is absent).
-2. `security`: too old, so the keychain can never work; verdict fall back to ~/.claude/.credentials.json (the fix
-   is in progress).
+2. `security`: too old, so the keychain can never work. FIXED: fall back. The prelude asks the tool for the usage of
+   every verb upstream runs (one `security -i`, `-h` only) and, when a verb or option upstream passes is missing,
+   upstream's darwin store selection takes its plaintext store, ~/.claude/.credentials.json 0600, as on Linux
+   (libexec/extract-claude-js.cjs KEYCHAIN_PRELUDE + patchKeychainCapability; test/keychain-capability.test.cjs,
+   whose guard requires every `security` verb and option in the carve to be probed).
 3. curl: /doctor's model checked for updates with the host curl and got `tlsv1 alert protocol version`, while
    quaude's own update check (engine TLS) works; the model cannot know that.
 4. jq: absent; the model used perl instead (fine, but the table should say so).

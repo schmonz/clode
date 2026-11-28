@@ -203,7 +203,7 @@ test('transformGraph reports every hook by name, so a silent skip is impossible'
   const keys = report.map((r) => r.key).sort();
   assert.deepStrictEqual(keys, [
     'autoupdater', 'builtin_plugin_bundled', 'doctor', 'embedded_asset_reader',
-    'legacy_autoupdater', 'manual_update',
+    'keychain_capability', 'legacy_autoupdater', 'manual_update',
     'native_autoupdater', 'remote_control', 'snapshot_bridge', 'update_hint', 'update_notice',
   ]);
 });
@@ -225,8 +225,8 @@ test('a real split bundle patches every hook', provOpts, (t) => {
         // A 'benign' non-application is a hook whose anchor CANNOT be present in this provider —
         // embedded_asset_reader only exists from 2.1.251, when assets started being read through
         // the filesystem, builtin_plugin_bundled from the first bundle with built-in plugin
-        // hooks modules (not 2.1.251). Anything else that did not apply is a dead hook, which
-        // is the whole point of this assertion.
+        // hooks modules (not 2.1.251), keychain_capability only in a darwin carve. Anything
+        // else that did not apply is a dead hook, which is the whole point of this assertion.
         if (r.benign) continue;
         assert.strictEqual(r.applied, true, `${bin}: hook ${r.key} did not apply: ${r.why}`);
       }

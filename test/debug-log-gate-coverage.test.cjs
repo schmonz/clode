@@ -51,6 +51,9 @@ const EXEMPT = Object.freeze({
   'test/credential-store-attempted.test.cjs': 'a probe of the credential-store call the bundle makes BEFORE any request, '
     + 'pointed at an unroutable API (127.0.0.1:1) on purpose: its log is connection refusals by design, and the probe '
     + 'runs inside a guard (defineGuard) whose verdict is the security(1) call, not the turn',
+  'test/keychain-capability.test.cjs': 'drives upstream\'s credential STORE from an entry module of its own added to '
+    + 'the staged graph (mutate, then readAsync, with a fake security on PATH): no Claude Code session runs, so no '
+    + 'debug log is written',
   'scripts/probe-run.mjs': 'a profiler: it runs scripts/apicheck.mjs\'s corpus through a TAPPED runner to count shim '
     + 'hits, and apicheck does not judge logs under injected runners; apicheck run as itself reads them (its Axis 4)',
   'test/doctor-cli-parity.test.cjs': '`doctor` and `--version` only (the CLI surface, compared to native as text): no turn',

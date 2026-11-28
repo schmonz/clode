@@ -151,6 +151,77 @@ function describeBundleFormat(data) {
     + 'clode does not. This shape needs an ESM relinker, not a carve.';
 }
 
+// --- KEYCHAIN CAPABILITY: is the host's security(1) one upstream can drive? -----------------
+// On darwin upstream keeps the login in the macOS keychain through security(1), and it needs
+// exactly these from that tool (every spelling measured in the 2.1.332 darwin carve):
+//   find-generic-password -a <acct> -w -s <svc>      every read (-w: print only the secret)
+//   add-generic-password -U -a <acct> -s <svc> -X    every write, sent on `security -i` stdin
+//                                                    (-w instead of -X for an oversized item)
+//   delete-generic-password -a <acct> -s <svc>       logout, and clearing a stale item
+// Every verb and option the carve passes must be in __clodeKeychainNeeds, and
+// test/keychain-capability.test.cjs's guard reads the carve to hold that true.
+// Mac OS X 10.4's security(1) has none of -w, -U, -X or delete-generic-password (measured on a
+// 10.4.11 VM, quaude 2.1.332): every read exits 2, upstream counts exit 2 as a transient read
+// failure, its write path then refuses to write over a store it could not read, and login ends
+// "Couldn't save your login. If your Mac's keychain is locked..." with nothing saved anywhere.
+// A security(1) that lacks any of those makes the keychain UNUSABLE, and the darwin store
+// selection (patchKeychainCapability, below) then takes upstream's own plaintext store —
+// ~/.claude/.credentials.json, 0600 — exactly as Linux does.
+//
+// DECIDED BY CAPABILITY, NOT BY OS VERSION: the tool is asked, once per process, for its own
+// usage of those three verbs (`-h` on each, one `security -i` spawn, which is itself how
+// upstream writes) and every option upstream passes must be in the answer. `-h` touches no
+// keychain, so a LOCKED keychain on a capable Mac cannot read as incapable. Anything that is
+// not an answer — no security on PATH, a spawn error, a signal or timeout, empty output —
+// keeps upstream's keychain path untouched: only a usage text that is missing a verb or an
+// option downgrades to plaintext. Carried as text (not Function#toString) because clode itself
+// runs as bytecode under tjs, where function source is not kept.
+const KEYCHAIN_PRELUDE = String.raw`// security(1) capability for upstream's keychain store (extract-claude-js KEYCHAIN_PRELUDE).
+globalThis.__clodeKeychainNeeds = {
+  'find-generic-password': ['-a', '-s', '-w'],
+  'add-generic-password': ['-a', '-s', '-U', '-w', '-X'],
+  'delete-generic-password': ['-a', '-s'],
+};
+globalThis.__clodeKeychainVerdict = function (text) {
+  var need = globalThis.__clodeKeychainNeeds;
+  text = String(text || '');
+  if (!/\S/.test(text)) return { usable: true, missing: [], why: 'no answer' };
+  var names = Object.keys(need), at = {};
+  names.forEach(function (n) {
+    var m = new RegExp('(^|[^\\w-])' + n + '(?![\\w-])', 'm').exec(text);
+    at[n] = m ? m.index + m[1].length : -1;
+  });
+  var missing = [];
+  names.forEach(function (n) {
+    if (at[n] < 0) { missing.push(n); return; }
+    var end = text.length;
+    names.forEach(function (o) { if (o !== n && at[o] > at[n] && at[o] < end) end = at[o]; });
+    var section = text.slice(at[n], end);
+    need[n].forEach(function (opt) {
+      if (!new RegExp('(^|[\\s\\[|])' + opt + '(?![\\w-])', 'm').test(section)) missing.push(n + ' ' + opt);
+    });
+  });
+  return { usable: missing.length === 0, missing: missing, why: missing.length ? 'missing' : 'all present' };
+};
+globalThis.__clodeKeychainUsable = (function () {
+  var verdict;
+  return function () {
+    if (verdict !== undefined) return verdict;
+    verdict = true;
+    try {
+      var r = require('child_process').spawnSync('security', ['-i'], {
+        input: 'find-generic-password -h\nadd-generic-password -h\ndelete-generic-password -h\n',
+        encoding: 'utf8', timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'],
+      });
+      if (r && !r.error && typeof r.status === 'number') {
+        verdict = globalThis.__clodeKeychainVerdict(String(r.stdout || '') + '\n' + String(r.stderr || '')).usable;
+      }
+    } catch (e) { /* inconclusive: keep upstream's keychain path */ }
+    return verdict;
+  };
+})();
+`;
+
 const PRELUDE =
 `// ---- mavericks node-host prelude (auto-generated) ----
 globalThis.Bun = globalThis.Bun || require(__dirname + '/bun-shim.cjs');
@@ -181,7 +252,7 @@ globalThis.__clodeCheckUpdate = function (current) {
     })
     .catch(function () { return { wasUpdated: false, latestVersion: null, lockFailed: false, __clodeState: 'unknown' }; });
 };
-// ------------------------------------------------------
+` + KEYCHAIN_PRELUDE + `// ------------------------------------------------------
 `;
 
 // --- doctor installation-warnings contribution -------------------------------
@@ -1121,6 +1192,44 @@ function patchBuiltinPluginBundled(body) {
   return [body.replace(m[0], () => `var ${name}=(${folder},${mod},${scan})=>${bundled}(${mod},${scan}(),${folder});`), true];
 }
 
+// --- KEYCHAIN-CAPABILITY: an incapable security(1) gets upstream's plaintext store ----------
+// Upstream picks its credential store per platform, and Bun folds that choice at build time,
+// so each carve holds only its own. Verbatim from the 2.1.332 carves:
+//
+//   darwin: var J;function OAe(){return"keychain"}function Io(){if(J)return J;return ce(L,B,{proveWrites:!0})}
+//   linux:  var k;function gCe(){return"file"}function Or(){if(k)return k;return C}
+//   win32:  var K;function mRe(){return yWr()?"credential-manager":"file"}
+//           function Or(){if(K)return K;if(yWr())return ee(L,T);return T}
+//
+// (OAe names the store for upstream's messages and flows; Io returns it: the keychain with the
+// plaintext store as its fallback leg.) The darwin carve has no "keychain unusable" branch, so a
+// security(1) that cannot do what upstream asks (see KEYCHAIN_PRELUDE) leaves login unable to
+// stick. The rewrite gives darwin the SHAPE upstream already ships for win32 — a capability
+// test choosing between the OS store and the plaintext store, with the name following the same
+// test — and on the incapable side the VALUES upstream ships for linux ("file", the bare
+// plaintext store). A capable Mac takes exactly upstream's darwin path. The seam is here and
+// not process.platform, which must never lie: the platform IS darwin, only its tool is old.
+// Only darwin carves name the store "keychain"; a module that does and that the anchor did not
+// match is a dead hook (KEYCHAIN_STORE_SHAPE).
+const KEYCHAIN_STORE_SELECTION = /var ([\w$]+);function ([\w$]+)\(\)\{return"keychain"\}function ([\w$]+)\(\)\{if\(\1\)return \1;return ([\w$]+)\(([\w$]+),([\w$]+),\{proveWrites:!0\}\)\}/;
+const KEYCHAIN_STORE_SHAPE = /function [\w$]+\(\)\{return"keychain"\}/;
+const KEYCHAIN_USABLE = '(typeof globalThis.__clodeKeychainUsable!=="function"||globalThis.__clodeKeychainUsable())';
+
+function keychainStoreShape(body) {
+  return KEYCHAIN_STORE_SHAPE.test(body);
+}
+
+function patchKeychainCapability(body) {
+  const m = KEYCHAIN_STORE_SELECTION.exec(body);
+  if (!m) return [body, false];
+  const [, override, name, select, compose, keychain, plaintext] = m;
+  const out = `var ${override};function ${name}(){return ${KEYCHAIN_USABLE}?"keychain":"file"}`
+    + `function ${select}(){if(${override})return ${override};if(!${KEYCHAIN_USABLE})return ${plaintext};`
+    + `return ${compose}(${keychain},${plaintext},{proveWrites:!0})}`;
+  // A function, not a replacement string: a minified name like `$1` must be carried literally.
+  return [body.replace(m[0], () => out), true];
+}
+
 // --- LEAD-SCRUB-POSSESSIVE: RETIRED 2026-11-21 ---------------------------------------------------
 // From 2.1.278 the artifact-lead scrub pattern (bracketedLeadScrubPattern) had more capture groups
 // than QuickJS allowed (559 at 2.1.283, 588 at 2.1.327; QuickJS stopped at 254), and this hook
@@ -1144,6 +1253,10 @@ const IF_PRESENT_SHAPES = {
     'a module builds a built-in plugin folder descriptor, but the anchor did not match its '
       + 'decision: upstream changed it',
     'this provider has no built-in plugin hooks modules (2.1.251 had none)'],
+  keychain_capability: [keychainStoreShape,
+    'a module names the credential store "keychain", but the anchor did not match its store '
+      + 'selection: upstream changed it',
+    'this carve keeps no macOS keychain store (not darwin)'],
 };
 
 const GRAPH_HOOKS = [
@@ -1162,6 +1275,8 @@ const GRAPH_HOOKS = [
   // filesystem (everything up to 2.1.250), so it must not warn; two or more still fails loud.
   ['embedded_asset_reader', patchEmbeddedAssetReader, 'if-present'],
   ['builtin_plugin_bundled', patchBuiltinPluginBundled, 'if-present'],
+  // 'if-present': only a darwin carve keeps the keychain store; linux and win32 carves have none.
+  ['keychain_capability', patchKeychainCapability, 'if-present'],
 ];
 
 function transformGraph(sources) {
@@ -1995,6 +2110,8 @@ module.exports = {
   contentChecks,
   patchEmbeddedAssetReader,
   patchBuiltinPluginBundled,
+  patchKeychainCapability,
+  KEYCHAIN_PRELUDE,
   graphReferences,
   unservedReferences,
   assertGraphServesWhatItReferences,
