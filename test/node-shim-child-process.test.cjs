@@ -47,6 +47,30 @@ test('spawnSync: status + stdout + stderr match node', (t) => {
 // nothing, when the truth was "we killed it". Claude Code's Bash tool kills
 // timed-out commands through this same path, so a timed-out command looked
 // successful too.
+// 'close' comes after the child's pipes have drained, not at its exit. The shim emitted 'close' the moment the exit
+// was reaped and cancelled the pipe readers there, so whatever had not been read yet was lost: a collected stderr
+// came back short or empty whenever the event loop happened to reap the exit before the pipe's last read (CI run
+// 46052302754: ExitWorktree remove's "Could not verify worktree state", upstream having read `git config
+// --worktree`'s exit-128 stderr as empty). That ordering is the host's to choose, so this row makes it certain: a
+// grandchild writes to the pipe after the child has exited. Node reads it and closes after; the shim must too.
+test("spawn: 'close' waits for the pipes to drain, so output written after the exit is still collected, as node does", (t) => {
+  if (skipUnlessTjs(t)) return;
+  const body = `
+    const cp = require('node:child_process');
+    const c = cp.spawn('/bin/sh', ['-c', '(sleep 0.3; echo late 1>&2) & echo early; exit 3']);
+    let out = '', err = '', exited = false;
+    c.stdout.on('data', (d) => { out += d; });
+    c.stderr.on('data', (d) => { err += d; });
+    c.on('exit', () => { exited = true; }); // spawn-close: records only that exit came first; output is read at close
+    c.on('close', (code, signal) => { console.log(JSON.stringify({ code, signal, out, err, exitFirst: exited })); });`;
+  const f = prog(body);
+  const node = JSON.parse(require('node:child_process').execFileSync(process.execPath, [f], { encoding: 'utf8' }).trim());
+  assert.deepStrictEqual(node, { code: 3, signal: null, out: 'early\n', err: 'late\n', exitFirst: true }, 'the reference');
+  const r = runLoader(f);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.deepStrictEqual(JSON.parse(r.stdout.trim()), node);
+});
+
 //
 // The oracle existed and this case simply was not in it — it only ever tests what
 // someone thought to compare.

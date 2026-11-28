@@ -76,6 +76,10 @@ function trace() { if (TRACE) { try { console.error('[cp]', ...arguments); } cat
 
 const CP_IS_WIN = (globalThis.process && process.platform === 'win32');
 
+// How long after a child exits its stdio pipes may stay open before the shim stops reading them: only a live
+// grandchild holding a pipe outlasts it (see the wait() handler in spawn).
+const ORPHAN_PIPE_GRACE_MS = 1000;
+
 // Node's child_process OMITS an env key whose value is `undefined` entirely —
 // it does NOT stringify it. Every other primitive IS stringified normally,
 // including null ("null"), 0 ("0"), false ("false"), and '' (kept, empty
@@ -384,8 +388,23 @@ function spawn(file, args = [], opts = {}) {
   // buffering; the shim's old wrapReadable had none of the three. Reusing
   // stream.cjs's Readable gives ALL of them (pipe, asyncIterator, on('data'))
   // for free instead of forking a second stream implementation.
+  // node's 'close' comes after the child has exited AND its stdio has ended, so a caller that collects output and
+  // settles on 'close' (upstream's git helpers do: `git config --worktree` exits 128 and its stderr decides the
+  // answer) has every byte. drainsLeft counts the pipes still being read; 'close' waits for it (closeOnceDrained).
+  let drainsLeft = 0;
+  let closeArgs = null;
+  let closed = false;
+  let orphanTimer = null;
+  const closeOnceDrained = () => {
+    if (closed || closeArgs === null || drainsLeft > 0) return;
+    closed = true;
+    if (orphanTimer) { clearTimeout(orphanTimer); orphanTimer = null; }
+    // after the 'data' and 'end' the last push scheduled, as node orders them
+    setImmediate(() => child.emit('close', closeArgs[0], closeArgs[1]));
+  };
   const wrapReadable = (s, which) => {
     if (!s) return null;
+    drainsLeft++;
     const r = new Readable({ read() {} });
     // .destroy() must ALSO cancel the underlying WHATWG reader (stopping the
     // drain loop below), on top of Readable's own destroyed/'close' contract
@@ -413,6 +432,7 @@ function spawn(file, args = [], opts = {}) {
         trace('stream end', file, which);
         r.push(null);
       } catch (e) { trace('stream error', file, which, String(e)); r.emit('error', e); }
+      finally { drainsLeft--; closeOnceDrained(); }
     })();
     return r;
   };
@@ -517,20 +537,26 @@ function spawn(file, args = [], opts = {}) {
       child.signalCode = signal;
       settleWatchers();
       child.emit('exit', code, signal);
-      child.emit('close', code, signal);
-      // The child is gone, but a FORKED grandchild can inherit and hold the stdio
-      // pipes open: dash (musl/alpine's /bin/sh) runs `sh -c 'sleep 30'` as a
-      // CHILD rather than exec-replacing, so SIGKILLing the sh leaves an orphaned
-      // sleep (reparented to init) still holding the pipe. tjs's eager drain loop
-      // then stays blocked on reader.read() with no EOF, keeping the event loop
-      // alive so the process never exits — the node-shim-oracle SIGKILL hang (musl
-      // only; NetBSD sh exec-replaces, so no orphan and no hang). Node doesn't keep
-      // the loop alive for an unconsumed child stream once the child has exited.
-      // Cancel the SOURCE readers so each drain loop ends with EOF; data already
-      // pushed into the node Readable still flushes to a late consumer.
-      const endReader = (rd) => { try { if (rd && rd._reader) rd._reader.cancel(); } catch { /* already closed */ } };
-      endReader(child.stdout);
-      endReader(child.stderr);
+      // 'close' waits for the pipes to drain (closeOnceDrained). It used to be emitted HERE, and the readers
+      // cancelled at once: whatever the dead child had written that the drain loop had not yet read was thrown
+      // away, and 'close' came before it. Whether a pipe's last bytes or its EOF are read before or after the
+      // exit is reaped is the event loop's ordering, so on a loaded host a collected stderr came back short or
+      // empty. ExitWorktree remove's "Could not verify worktree state" in one CI mode cell (run 46052302754,
+      // linux-x64-pty) is that shape: upstream reads `git config --worktree`'s exit-128 stderr to decide
+      // whether the worktree's config is readable. test/node-shim-child-process.test.cjs holds the differential.
+      //
+      // A FORKED grandchild can inherit and hold the stdio pipes open: dash (musl/alpine's /bin/sh) runs
+      // `sh -c 'sleep 30'` as a CHILD rather than exec-replacing, so SIGKILLing the sh leaves an orphaned sleep
+      // (reparented to init) still holding the pipe, and the drain loop never sees EOF (the node-shim-oracle
+      // SIGKILL hang). Node waits for that orphan; the shim waits ORPHAN_PIPE_GRACE_MS for EOF and then cancels
+      // the SOURCE readers, so each drain loop ends and 'close' follows. A pipe whose writers are all gone reaches
+      // EOF in the next turns of the loop, far inside the grace; only a live orphan ever reaches the cancel.
+      closeArgs = [code, signal];
+      if (drainsLeft > 0) {
+        const endReader = (rd) => { try { if (rd && rd._reader) rd._reader.cancel(); } catch { /* already closed */ } };
+        orphanTimer = setTimeout(() => { orphanTimer = null; endReader(child.stdout); endReader(child.stderr); }, ORPHAN_PIPE_GRACE_MS);
+      }
+      closeOnceDrained();
       // RECIPE G6: a 'pipe' stdin the caller never wrote to and never
       // end()/destroy()ed (the common case — most bundle spawns of git/sh
       // etc. request stdin:'pipe' but have nothing to send) left the
