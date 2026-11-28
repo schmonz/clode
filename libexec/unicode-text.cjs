@@ -1510,5 +1510,145 @@ function wrapAnsi(input, columns, options) {
   }
 }
 
+// ---- SGR-16: 256-colour and 24-bit SGR, for a terminal with 16 colours ---------------------
+// quaude's own, NOT native's (native writes these sequences as they are): node-shim's
+// tty.WriteStream runs this over what quaude draws when the terminal has no 256 colours
+// (internal/term-colors.cjs decides, and says why). Upstream writes `38;5;N` unconditionally
+// on its welcome and theme-picker screens; a 16-colour terminal (Mac OS X 10.4's Terminal.app)
+// reads `38;5;174` as three attributes, 38, 5 (BLINK) and 174, and upstream closes colours with
+// 39/49, never 25 or 0, so everything drawn afterwards blinks too.
+// SGR-16 (rule): in an SGR (a CSI ending `m` whose parameters are digits, `;` and `:` only),
+//   `38;5;N` and `48;5;N` become the 16-colour code nearest palette entry N (30-37 / 90-97
+//   foreground, 40-47 / 100-107 background), `38;2;R;G;B` and `48;2;R;G;B` the code nearest
+//   that colour, and the colon forms the same (`38:5:N`, `38:2::R:G:B`, `38:2:R:G:B`).
+//   Underline colour (58, either form) is dropped: a 16-colour terminal has none. Every other
+//   parameter stays as written, in place. An SGR left with no parameter is dropped, never sent
+//   as `ESC[m` (which resets everything). A 38/48 without all of its parameters is left alone,
+//   as is any sequence that is not an SGR. Nearest: the standard xterm palette (16 system
+//   colours, 6x6x6 cube, 24 greys) to RGB, then the least CIE76 distance (Euclidean in CIELAB) to
+//   the xterm values of the 16, the first on a tie; palette entries 0-15 are themselves. CIE76,
+//   not a weighted-RGB distance: against the saturated 16, "redmean" sent upstream's mid-tone
+//   green (77), red (167) and the diff backgrounds (22, 52) all to grey or black, where CIELAB
+//   keeps each its hue (green, red, green, red).
+const XTERM_16 = [[0, 0, 0], [205, 0, 0], [0, 205, 0], [205, 205, 0], [0, 0, 238], [205, 0, 205], [0, 205, 205],
+  [229, 229, 229], [127, 127, 127], [255, 0, 0], [0, 255, 0], [255, 255, 0], [92, 92, 255], [255, 0, 255],
+  [0, 255, 255], [255, 255, 255]];
+const CUBE_LEVEL = [0, 95, 135, 175, 215, 255];
+function xterm256Rgb(n) {
+  if (n < 16) return XTERM_16[n];
+  if (n < 232) { const k = n - 16; return [CUBE_LEVEL[Math.floor(k / 36)], CUBE_LEVEL[Math.floor(k / 6) % 6], CUBE_LEVEL[k % 6]]; }
+  const g = 8 + 10 * (n - 232);
+  return [g, g, g];
+}
+// CIELAB (sRGB, D65) of an RGB colour: the space in which CIE76's plain Euclidean distance is perceptual.
+function rgbLab(r, g, b) {
+  const lin = (c) => { c /= 255; return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };
+  const R = lin(r), G = lin(g), B = lin(b);
+  const f = (t) => (t > 216 / 24389 ? Math.cbrt(t) : (24389 / 27 * t + 16) / 116);
+  const fx = f((0.4124 * R + 0.3576 * G + 0.1805 * B) / 0.95047), fy = f(0.2126 * R + 0.7152 * G + 0.0722 * B);
+  const fz = f((0.0193 * R + 0.1192 * G + 0.9505 * B) / 1.08883);
+  return [116 * fy - 16, 500 * (fx - fy), 200 * (fy - fz)];
+}
+let LAB_16 = null;
+function nearest16(r, g, b) {
+  if (LAB_16 === null) LAB_16 = XTERM_16.map((c) => rgbLab(c[0], c[1], c[2]));
+  const [L, A, B] = rgbLab(r, g, b);
+  let best = 0, bestD = Infinity;
+  for (let i = 0; i < 16; i++) {
+    const p = LAB_16[i];
+    const d = (p[0] - L) ** 2 + (p[1] - A) ** 2 + (p[2] - B) ** 2;
+    if (d < bestD) { bestD = d; best = i; }
+  }
+  return best;
+}
+// The 16-colour code for palette entry `n` (0-255) or for an RGB colour, as foreground (38) or background (48).
+function ansi16Code(which, idx) { return String((which === 38 ? 30 : 40) + (idx < 8 ? idx : 60 + idx - 8)); }
+const toByte = (s) => { const v = Number(s); return v > 255 ? 255 : v; };
+function color16(which, mode, args) {
+  if (mode === 5) return ansi16Code(which, toByte(args[0]) < 16 ? toByte(args[0]) : nearest16(...xterm256Rgb(toByte(args[0]))));
+  return ansi16Code(which, nearest16(toByte(args[0]), toByte(args[1]), toByte(args[2])));
+}
+
+// SGR-16 over one SGR's parameter string: the rewritten parameters, '' when none are left, or
+// null when there is nothing to rewrite.
+function sgrParamsTo16(params) {
+  for (let i = 0; i < params.length; i++) {
+    const c = params.charCodeAt(i);
+    if (!((c >= 0x30 && c <= 0x39) || c === 0x3b || c === 0x3a)) return null;   // not an SGR's parameters
+  }
+  if (params.indexOf('8') < 0) return null;                                       // no 38, 48 or 58
+  const groups = params.split(';');
+  const out = [];
+  let changed = false;
+  for (let i = 0; i < groups.length;) {
+    const gp = groups[i];
+    if (gp.indexOf(':') >= 0) {                                     // colon form, one group
+      const sub = gp.split(':');
+      const which = Number(sub[0]), mode = Number(sub[1]);
+      if ((which === 38 || which === 48 || which === 58) && (mode === 5 || mode === 2)) {
+        const args = mode === 5 ? sub.slice(2, 3) : sub.length >= 6 ? sub.slice(3, 6) : sub.slice(2, 5);
+        if (args.length === (mode === 5 ? 1 : 3) && args.every((a) => a !== '')) {
+          if (which !== 58) out.push(color16(which, mode, args));
+          changed = true; i++; continue;
+        }
+      }
+      out.push(gp); i++; continue;
+    }
+    const which = Number(gp);
+    if (gp !== '' && (which === 38 || which === 48 || which === 58)) {
+      const mode = Number(groups[i + 1]);
+      const need = groups[i + 1] === '5' ? 1 : groups[i + 1] === '2' ? 3 : -1;
+      if (need > 0 && i + 1 + need < groups.length) {
+        if (which !== 58) out.push(color16(which, mode, groups.slice(i + 2, i + 2 + need)));
+        changed = true; i += 2 + need; continue;
+      }
+    }
+    out.push(gp); i++;
+  }
+  return changed ? out.join(';') : null;
+}
+
+// SGR-16 over a stream of writes: `rewrite(str)` returns what to send for this write. The
+// sequences are found with the escape layer's own reader (readSequence), so this rewrites
+// exactly what that grammar calls an SGR. A CSI the write cuts off (or an ESC at its very end)
+// is held and read again in front of the next write: a sequence split at any character is
+// rewritten whole. Nothing else is held. `flush()` hands back what is held.
+function sgr16Rewriter() {
+  let held = '';
+  const rec = [];
+  function rewrite(input) {
+    const str = held + input;
+    held = '';
+    const n = str.length;
+    let out = '', from = 0;
+    for (let i = 0; i < n;) {
+      const c = str.charCodeAt(i);
+      if (!startsSequence(c)) { i++; continue; }
+      let k = i, csi = c === C1_CSI;
+      if (c === ESC) {
+        while (k + 1 < n && str.charCodeAt(k + 1) === ESC) k++;
+        if (k + 1 >= n) { held = str.slice(i); break; }
+        csi = str.charCodeAt(k + 1) === 0x5b;
+      }
+      rec.length = 0;
+      const end = readSequence(str, i, 0, rec, n);
+      if (csi && end === n && rec.length === 0 && !isCancel(str.charCodeAt(n - 1))) { held = str.slice(i); break; }
+      if (csi && rec.length === 1 && rec[0].final === 'm' && !rec[0].ignored) {
+        const params = rec[0].params;
+        const next = sgrParamsTo16(params);
+        if (next !== null) {
+          out += str.slice(from, i);
+          if (next !== '') out += str.slice(i, end - params.length - 1) + next + 'm';
+          from = end;
+        }
+      }
+      i = end;
+    }
+    const tail = held ? n - held.length : n;
+    return from === 0 && tail === n ? str : out + str.slice(from, tail);
+  }
+  return { rewrite, flush() { const h = held; held = ''; return h; } };
+}
+
 module.exports = { graphemeBoundaries, clusterWidth: cellClusterWidth, codePointWidth, escapeLayer, stripAnsi, textWidth, stringWidth, forEachCell, cellSgr,
-  oscLink, sliceAnsi, wrapAnsi, joinsSpace, UNICODE_DATA };
+  oscLink, sliceAnsi, wrapAnsi, joinsSpace, UNICODE_DATA, sgrParamsTo16, sgr16Rewriter, xterm256Rgb, nearest16 };

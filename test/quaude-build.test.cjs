@@ -421,3 +421,66 @@ test('TUI paint smoke under the blobulated quaude (CLODE_LIVE_RENDER-gated)', as
   assert.ok(boot.settled, `the TUI never painted and settled (${boot.ms} ms):\n${boot.text}`);
   assert.match(boot.text, /Claude Code/);
 });
+
+// THEME PICKER ON A 16-COLOUR TERMINAL (BACKLOG "Tiger's Terminal.app blinks on 256-color text"). Upstream writes
+// `ESC[38;5;Nm` on its welcome and theme-picker screens whatever the terminal; Tiger's Terminal.app (TERM=xterm-color,
+// TERM_PROGRAM=Apple_Terminal) reads `38;5;174` as 38, 5 (BLINK), 174, and the blink stays on. quaude's tty rewrites
+// those colours to the 16 there (node-shim/internal/term-colors.cjs, unicode-text.cjs SGR-16), and must leave a
+// 256-colour terminal's bytes exactly as native's. Both sides boot in a fresh HOME (the onboarding theme picker is the
+// first screen), the `security` stub ahead of /usr/bin (e2e.cjs's sandbox), and are read RAW (output processing off)
+// from a pty until the picker has painted and gone quiet. Mouse/focus suppression (tty.cjs's other output filter) is switched off so the
+// comparison sees colour alone. The control is the quaude built before this rewrite: it draws native's bytes under
+// xterm-color too, 33 wide-colour codes and all.
+const wideColorCodes = (s) => (s.match(/\x1b\[[0-9;:]*m/g) || []).filter((q) => /(?:\[|;)[345]8[;:][25][;:]/.test(q));
+function captureRaw(cmd, env, term) {
+  const { loadPty } = require('./node-shim-tty-helper.cjs');
+  const pty = loadPty();
+  return new Promise((resolve) => {
+    // `stty -opost` first: the program's own bytes, not the pty's ONLCR rewrite of them. With output processing on,
+    // the darwin pty turned one `\r\n` into `\r\r\r\n` in one capture and not in another, by where the kernel's
+    // output queue happened to split a write (measured 2026-11-28: the same quaude's raw bytes equal the rewrite of
+    // native's raw bytes exactly, while the processed captures differed by that one `\r`).
+    const p = pty.spawn('/bin/sh', ['-c', 'stty -opost && exec "$0"', cmd], { name: term, cols: 100, rows: 40, cwd: DIR, env: { ...env, TERM: term } });
+    let out = '', quiet = null, done = false;
+    const finish = (settled) => {
+      if (done) return; done = true;
+      clearTimeout(quiet); clearTimeout(deadline);
+      try { p.kill('SIGKILL'); } catch { /* */ }
+      resolve({ out, settled });
+    };
+    const deadline = setTimeout(() => finish(false), 90000);
+    p.onData((d) => {
+      out += d;
+      clearTimeout(quiet);
+      if (out.includes('Syntax')) quiet = setTimeout(() => finish(true), 2500);
+    });
+    p.onExit(() => finish(out.includes('Syntax')));
+  });
+}
+async function themePicker(t, cmd, term, extra) {
+  const { sandbox } = require('./e2e.cjs');
+  const sbx = sandbox(t);
+  const env = { ...sbx.env, TERM_PROGRAM: 'Apple_Terminal', LANG: 'en_US.UTF-8', CLODE_TTY_MOUSE: '1', CLODE_TTY_FOCUS: '1', ...extra };
+  const r = await captureRaw(cmd, env, term);
+  assert.ok(r.settled, `${cmd} under TERM=${term} never painted the theme picker:\n${JSON.stringify(r.out.slice(-600))}`);
+  return r.out;
+}
+
+test('theme picker under TERM=xterm-color: quaude draws no 256-colour or 24-bit code, native\'s colours mapped to the 16', async (t) => {
+  if (SKIP) { t.skip(SKIP); return; }
+  const { sgr16Rewriter } = require('../libexec/unicode-text.cjs');
+  const native = await themePicker(t, providerBin(), 'xterm-color');
+  assert.ok(wideColorCodes(native).length >= 30, `native writes its 256-colour codes here (${wideColorCodes(native).length})`);
+  const quaude = await themePicker(t, QUAUDE, 'xterm-color');
+  assert.deepStrictEqual(wideColorCodes(quaude), [], 'a 256-colour code reached a 16-colour terminal');
+  const r = sgr16Rewriter();
+  assert.strictEqual(quaude, r.rewrite(native) + r.flush(), 'quaude draws native\'s picker with only its colours rewritten');
+});
+
+test('theme picker under TERM=xterm-256color: quaude draws byte-identical to native', async (t) => {
+  if (SKIP) { t.skip(SKIP); return; }
+  const native = await themePicker(t, providerBin(), 'xterm-256color');
+  const quaude = await themePicker(t, QUAUDE, 'xterm-256color');
+  assert.ok(wideColorCodes(quaude).length >= 30, 'the 256-colour codes reach a 256-colour terminal');
+  assert.strictEqual(quaude, native);
+});

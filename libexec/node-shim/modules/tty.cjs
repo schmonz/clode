@@ -97,6 +97,27 @@ function _filterTrackingEnables(chunk) {
   });
 }
 
+// ---- quaude divergence (NOT upstream fidelity): 256-colour SGR on a 16-colour terminal ----
+// Upstream writes 256-colour SGR whatever the terminal; on one without 256 colours (Tiger's Terminal.app) `38;5;N`
+// reads as BLINK, and stays on. internal/term-colors.cjs decides whether this terminal has 256 colours, and says why it
+// decides differently from upstream; when it has not, every write goes through unicode-text.cjs's SGR-16 rewriter,
+// which turns those colours into the nearest of the 16 and holds a sequence a write cuts off until the next. Decided
+// once per stream, at its first write. A terminal with 256 colours never loads the rewriter, and its bytes are
+// exactly what they were. Only a TTY stream is this class: a pipe or a file gets upstream's bytes untouched (it is
+// not a terminal that can blink).
+const { has256Colors } = require('../internal/term-colors.cjs');
+function _sgr16For() {
+  const env = (typeof tjs !== 'undefined' && tjs.env) || {};
+  const platform = globalThis.process && globalThis.process.platform;
+  if (has256Colors(env, platform)) return null;
+  return require('../../unicode-text.cjs').sgr16Rewriter();
+}
+// Ink and upstream write strings; a Buffer handed in is decoded as it stands (one split inside a UTF-8 character would
+// not reassemble, which a string write never meets).
+function _chunkText(chunk) {
+  return typeof chunk === 'string' ? chunk : (Buffer.isBuffer(chunk) || chunk instanceof Uint8Array) ? Buffer.from(chunk).toString('utf8') : String(chunk);
+}
+
 class ReadStream extends Readable {
   constructor(fd) {
     super();
@@ -229,14 +250,25 @@ class WriteStream extends EventEmitter {
   }
   get columns() { try { return this._tjs.width; } catch { return undefined; } }
   get rows() { try { return this._tjs.height; } catch { return undefined; } }
+  // Every byte this stream sends goes through here: the mouse/focus filter, then (on a 16-colour terminal) SGR-16.
+  _send(chunk) {
+    chunk = _filterTrackingEnables(chunk);   // suppress mouse/focus tracking enables
+    if (this._sgr16 === undefined) this._sgr16 = _sgr16For();
+    if (this._sgr16 !== null) {
+      chunk = this._sgr16.rewrite(_chunkText(chunk));
+      if (chunk === '') return;
+    }
+    writeSyncFd(this.fd, chunk);
+  }
   write(chunk, enc, cb) {
-    writeSyncFd(this.fd, _filterTrackingEnables(chunk));   // suppress mouse/focus tracking enables
+    this._send(chunk);
     if (typeof enc === 'function') enc();
     else if (typeof cb === 'function') cb();
     return true;
   }
   end(chunk, enc, cb) {
-    if (chunk != null && typeof chunk !== 'function') writeSyncFd(this.fd, chunk);
+    if (chunk != null && typeof chunk !== 'function') this._send(chunk);
+    if (this._sgr16) { const held = this._sgr16.flush(); if (held) writeSyncFd(this.fd, held); }
     const done = typeof chunk === 'function' ? chunk : (typeof enc === 'function' ? enc : cb);
     if (typeof done === 'function') done();
     this.emit('finish');
@@ -256,8 +288,8 @@ class WriteStream extends EventEmitter {
   // matching node's signature.
   cursorTo(x, y, cb) {
     if (typeof y === 'function') { cb = y; y = undefined; }
-    if (typeof x === 'number' && typeof y === 'number') writeSyncFd(this.fd, `\x1b[${y + 1};${x + 1}H`);
-    else if (typeof x === 'number') writeSyncFd(this.fd, `\x1b[${x + 1}G`);
+    if (typeof x === 'number' && typeof y === 'number') this._send(`\x1b[${y + 1};${x + 1}H`);
+    else if (typeof x === 'number') this._send(`\x1b[${x + 1}G`);
     if (typeof cb === 'function') cb();
     return true;
   }
@@ -265,18 +297,18 @@ class WriteStream extends EventEmitter {
     let s = '';
     if (dx < 0) s += `\x1b[${-dx}D`; else if (dx > 0) s += `\x1b[${dx}C`;
     if (dy < 0) s += `\x1b[${-dy}A`; else if (dy > 0) s += `\x1b[${dy}B`;
-    if (s) writeSyncFd(this.fd, s);
+    if (s) this._send(s);
     if (typeof cb === 'function') cb();
     return true;
   }
   clearLine(dir, cb) {
     // dir: -1 → left (\x1b[1K), 1 → right (\x1b[0K), 0 → whole line (\x1b[2K)
-    writeSyncFd(this.fd, dir < 0 ? '\x1b[1K' : dir > 0 ? '\x1b[0K' : '\x1b[2K');
+    this._send(dir < 0 ? '\x1b[1K' : dir > 0 ? '\x1b[0K' : '\x1b[2K');
     if (typeof cb === 'function') cb();
     return true;
   }
   clearScreenDown(cb) {
-    writeSyncFd(this.fd, '\x1b[0J');
+    this._send('\x1b[0J');
     if (typeof cb === 'function') cb();
     return true;
   }

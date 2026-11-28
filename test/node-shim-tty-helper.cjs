@@ -28,10 +28,11 @@ function loadPty() {
 // its @@TTY@@ line and exits, so onExit resolves early — a generous default only
 // buys slack for slow boots (loaded boxes, qemu-emulated CI legs) and is free when
 // the test passes. Keep it well above the worst realistic tjs+node boot.
-function ptyRun({ cmd, args = [], cols = 80, rows = 24, input, inputDelayMs = 400, readyMark, ms = 12000, env }) {
+// name: the TERM the child sees (node-pty sets TERM to it, over any TERM in env).
+function ptyRun({ cmd, args = [], cols = 80, rows = 24, input, inputDelayMs = 400, readyMark, ms = 12000, env, name = 'xterm-256color' }) {
   const pty = loadPty();
   return new Promise((resolve) => {
-    const p = pty.spawn(cmd, args, { name: 'xterm-256color', cols, rows, env: env || process.env });
+    const p = pty.spawn(cmd, args, { name, cols, rows, env: env || process.env });
     let out = '';
     let done = false;
     let wrote = false;

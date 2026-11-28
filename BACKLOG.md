@@ -56,18 +56,28 @@ of build-tjs.cjs and platform-tag.cjs, so unrelated edits invalidate all 42 CI e
 Measured: three builds of 25b1727f in scratch clones; the `clode-native` byte diff is only `builtAt` and its
 sha; cold build 2m20s, no-op rebuild 19s (2026-11-27).
 
-## Tiger's Terminal.app blinks on 256-color text (2026-11-27)
+## Tiger's Terminal.app blinks on 256-color text (2026-11-27) -- FIXED 2026-11-28
 
 On the Intel Tiger VM the theme picker blinked continuously. quaude was idle (CPU time frozen) while
 Terminal.app was busy. The picker's bytes are identical to native 2.1.332's, including 33 `ESC[38;5;N m`
 256-color codes that upstream emits even with FORCE_COLOR=1 (NO_COLOR=1 leaves 14). Tiger's Terminal.app
-predates 256-color support and likely parses `38;5;174` as three attributes: 38, **5 (blink)**, 174.
-Fix direction, a written-reason divergence from upstream (on that terminal the code is misread as a different
-attribute, not merely shown in another color): when the terminal lacks 256 colors, rewrite 256-color and
-24-bit SGR to the nearest of the 16 on output. Workaround meanwhile: an "(ANSI colors only)" theme.
+predates 256-color support and parses `38;5;174` as three attributes: 38, **5 (blink)**, 174; upstream closes
+colors with 39/49/22, never 25 or 0, so the blink stays on for everything drawn afterwards, and an
+"(ANSI colors only)" theme does not help.
 
-Unmeasured. The blink is not yet confirmed on Tiger's Terminal: `printf '\033[38;5;174mhello\033[0m\n'`
-there settles it; the user is to run it when they next drive Tiger.
+Measured: the user ran `printf '\033[38;5;174mhello\033[0m\n'` in Tiger's Terminal.app and it blinked (2026-11-27)
+
+FIXED, as a written-reason divergence from upstream: when the terminal lacks 256 colors, node-shim's
+tty.WriteStream rewrites 256-color and 24-bit SGR (either spelling) to the nearest of the 16 on output, and
+drops underline color. libexec/node-shim/internal/term-colors.cjs decides (upstream's supports-color level,
+except that TERM_PROGRAM=Apple_Terminal alone no longer counts as 256 colors, since Tiger's Terminal sets it
+too) and says why; libexec/unicode-text.cjs's SGR-16 rewrites, holding a sequence a write cuts off. A
+256-color terminal never loads the rewriter. Not yet driven on Tiger itself: the next Tiger session
+should see the picker steady.
+
+Measured: test/term-colors.test.cjs and the two "theme picker" tests in test/quaude-build.test.cjs: a built
+quaude under TERM=xterm-color draws native's picker with zero 38;5/48;5/38;2/48;2 codes, and under
+TERM=xterm-256color byte-identical to native; the quaude built before the fix fails the first (2026-11-28)
 
 ## Two ratchets CI taught on 2026-11-27
 
