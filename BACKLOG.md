@@ -8,6 +8,29 @@ Concrete clode-under-Node divergences from native Claude Code, to triage and fix
 That page is GENERATED from `scripts/build-graph.cjs` — the one declaration of the build — so it
 cannot drift from it; it is also where the honest answer to "does this need node?" lives.
 
+## External commands: which fall back and which are fatal when missing (or too old)
+
+quaude and clode lean on host commands (ugrep, bfs, bash/zsh, git, `security`, zstd, and what the model itself
+reaches for: curl, jq, ...), and today a missing one does whatever the code happened to do: fall back, refuse
+with a message, or break silently. Decide it ONCE, per command, in one table: what it is used for, what a missing
+one costs, and the verdict with its reason. The rule: FALL BACK when a system tool can answer correctly, even if
+slower or with less fidelity; FATAL (refused, saying what to install) only when a wrong answer is worse than none.
+Two failure kinds, both in the table: MISSING, and PRESENT BUT TOO OLD (Tiger's curl/OpenSSL 0.9.7 cannot speak
+modern TLS; Tiger's `security` lacks -w/-U/-X and delete-generic-password).
+Cases seen on Tiger 2026-11-27:
+1. `grep`: upstream's shell setup shadows grep with a function that calls the embedded search (quaude: the host's
+   ugrep). With no ugrep every model `grep` fails "clode: grep needs 'ugrep'" where Tiger's own grep would answer.
+   Likely verdict: fall back (do not shadow grep when ugrep is absent).
+2. `security`: too old, so the keychain can never work; verdict fall back to ~/.claude/.credentials.json (the fix
+   is in progress).
+3. curl: /doctor's model checked for updates with the host curl and got `tlsv1 alert protocol version`, while
+   quaude's own update check (engine TLS) works; the model cannot know that.
+4. jq: absent; the model used perl instead (fine, but the table should say so).
+The "check all external tools" subcommand the user asked for (for clode, quaude, or both) reports this same table,
+so the two share ONE source.
+
+Measured: each of the four cases above, in quaude-2.1.332 on the Intel Tiger VM (2026-11-27).
+
 ## Build process: three fixes from the 2026-11-27 review
 
 The review is docs/superpowers/findings/2026-11-27-build-process-review.md (untracked). Queued after the
