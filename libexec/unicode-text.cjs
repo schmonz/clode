@@ -1518,55 +1518,45 @@ function wrapAnsi(input, columns, options) {
 // reads `38;5;174` as three attributes, 38, 5 (BLINK) and 174, and upstream closes colours with
 // 39/49, never 25 or 0, so everything drawn afterwards blinks too.
 // SGR-16 (rule): in an SGR (a CSI ending `m` whose parameters are digits, `;` and `:` only),
-//   `38;5;N` and `48;5;N` become the 16-colour code nearest palette entry N (30-37 / 90-97
-//   foreground, 40-47 / 100-107 background), `38;2;R;G;B` and `48;2;R;G;B` the code nearest
-//   that colour, and the colon forms the same (`38:5:N`, `38:2::R:G:B`, `38:2:R:G:B`).
+//   `38;5;N` and `48;5;N` become the 16-colour code for palette entry N (30-37 / 90-97
+//   foreground, 40-47 / 100-107 background), `38;2;R;G;B` and `48;2;R;G;B` the code for that
+//   colour, and the colon forms the same (`38:5:N`, `38:2::R:G:B`, `38:2:R:G:B`).
 //   Underline colour (58, either form) is dropped: a 16-colour terminal has none. Every other
 //   parameter stays as written, in place. An SGR left with no parameter is dropped, never sent
 //   as `ESC[m` (which resets everything). A 38/48 without all of its parameters is left alone,
-//   as is any sequence that is not an SGR. Nearest: the standard xterm palette (16 system
-//   colours, 6x6x6 cube, 24 greys) to RGB, then the least CIE76 distance (Euclidean in CIELAB) to
-//   the xterm values of the 16, the first on a tie; palette entries 0-15 are themselves. CIE76,
-//   not a weighted-RGB distance: against the saturated 16, "redmean" sent upstream's mid-tone
-//   green (77), red (167) and the diff backgrounds (22, 52) all to grey or black, where CIELAB
-//   keeps each its hue (green, red, green, red).
-const XTERM_16 = [[0, 0, 0], [205, 0, 0], [0, 205, 0], [205, 205, 0], [0, 0, 238], [205, 0, 205], [0, 205, 205],
-  [229, 229, 229], [127, 127, 127], [255, 0, 0], [0, 255, 0], [255, 255, 0], [92, 92, 255], [255, 0, 255],
-  [0, 255, 255], [255, 255, 255]];
-const CUBE_LEVEL = [0, 95, 135, 175, 215, 255];
-function xterm256Rgb(n) {
-  if (n < 16) return XTERM_16[n];
-  if (n < 232) { const k = n - 16; return [CUBE_LEVEL[Math.floor(k / 36)], CUBE_LEVEL[Math.floor(k / 6) % 6], CUBE_LEVEL[k % 6]]; }
-  const g = 8 + 10 * (n - 232);
-  return [g, g, g];
-}
-// CIELAB (sRGB, D65) of an RGB colour: the space in which CIE76's plain Euclidean distance is perceptual.
-function rgbLab(r, g, b) {
-  const lin = (c) => { c /= 255; return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };
-  const R = lin(r), G = lin(g), B = lin(b);
-  const f = (t) => (t > 216 / 24389 ? Math.cbrt(t) : (24389 / 27 * t + 16) / 116);
-  const fx = f((0.4124 * R + 0.3576 * G + 0.1805 * B) / 0.95047), fy = f(0.2126 * R + 0.7152 * G + 0.0722 * B);
-  const fz = f((0.0193 * R + 0.1192 * G + 0.9505 * B) / 1.08883);
-  return [116 * fy - 16, 500 * (fx - fy), 200 * (fy - fz)];
-}
-let LAB_16 = null;
-function nearest16(r, g, b) {
-  if (LAB_16 === null) LAB_16 = XTERM_16.map((c) => rgbLab(c[0], c[1], c[2]));
-  const [L, A, B] = rgbLab(r, g, b);
-  let best = 0, bestD = Infinity;
-  for (let i = 0; i < 16; i++) {
-    const p = LAB_16[i];
-    const d = (p[0] - L) ** 2 + (p[1] - A) ** 2 + (p[2] - B) ** 2;
-    if (d < bestD) { bestD = d; best = i; }
-  }
-  return best;
-}
-// The 16-colour code for palette entry `n` (0-255) or for an RGB colour, as foreground (38) or background (48).
-function ansi16Code(which, idx) { return String((which === 38 ? 30 : 40) + (idx < 8 ? idx : 60 + idx - 8)); }
+//   as is any sequence that is not an SGR.
+// SGR-16-COLOUR (rule): WHICH of the 16 is UPSTREAM's own choice, not ours: the conversion its
+//   colour library makes when its level is 1. In 2.1.332 that library is the chalk-shaped class
+//   in /$bunfs/root/chunk-3d163xan.js (`class C2r`, level from supports-color's `I(...)`); its
+//   `rgb()`/`bgRgb()` go through `function R(e,n,t,i,r)`, which at level 1 takes the colour to a
+//   palette entry (ansi-styles' rgbToAnsi256: the 6x6x6 cube by `Math.round(c/255*5)`, a grey
+//   by `232+Math.round((t-8)*24/247)`, 16 below 8, 231 above 248) and the entry to the 16
+//   (ansi-styles' ansi256ToAnsi: a grey is black or white by
+//   `Math.round(((c-232)*10+8)/255)`; a cube entry sets red, green, blue for each level of 3 or
+//   more, bright when any level is 5). Copied below as R does it. So a quaude on a 16-colour
+//   terminal prints what upstream prints there for the colours it does downsample; that its
+//   `ansi256()` does not downsample at all is the one fault this rule corrects. Entries 0-15
+//   (which R never produces) are themselves, as ansi-styles' ansi256ToAnsi has them.
+//   Measured 2026-11-28 against the 2.1.332 carve's graph.json.
 const toByte = (s) => { const v = Number(s); return v > 255 ? 255 : v; };
+function rgbToAnsi256(t, i, r) {
+  let c = 16 + 36 * Math.round(t / 255 * 5) + 6 * Math.round(i / 255 * 5) + Math.round(r / 255 * 5);
+  if (t === i && i === r) c = t < 8 ? 16 : t > 248 ? 231 : 232 + Math.round((t - 8) * 24 / 247);
+  return c;
+}
+// Palette entry c as a 16-colour code on base n (30 foreground, 40 background).
+function ansi256ToAnsi(c, n) {
+  if (c < 8) return n + c;
+  if (c < 16) return n + 60 + (c - 8);
+  if (c >= 232) { const u = Math.round(((c - 232) * 10 + 8) / 255); return n + (u | u << 1 | u << 2); }
+  let f = n, p = false;
+  for (let u = 0; u < 3; u++) { const h = Math.floor((c - 16) / 6 ** (2 - u)) % 6; f += h >= 3 ? 1 << u : 0; p ||= h === 5; }
+  return p ? f + 60 : f;
+}
 function color16(which, mode, args) {
-  if (mode === 5) return ansi16Code(which, toByte(args[0]) < 16 ? toByte(args[0]) : nearest16(...xterm256Rgb(toByte(args[0]))));
-  return ansi16Code(which, nearest16(toByte(args[0]), toByte(args[1]), toByte(args[2])));
+  const base = which === 38 ? 30 : 40;
+  const entry = mode === 5 ? toByte(args[0]) : rgbToAnsi256(toByte(args[0]), toByte(args[1]), toByte(args[2]));
+  return String(ansi256ToAnsi(entry, base));
 }
 
 // SGR-16 over one SGR's parameter string: the rewritten parameters, '' when none are left, or
@@ -1651,4 +1641,4 @@ function sgr16Rewriter() {
 }
 
 module.exports = { graphemeBoundaries, clusterWidth: cellClusterWidth, codePointWidth, escapeLayer, stripAnsi, textWidth, stringWidth, forEachCell, cellSgr,
-  oscLink, sliceAnsi, wrapAnsi, joinsSpace, UNICODE_DATA, sgrParamsTo16, sgr16Rewriter, xterm256Rgb, nearest16 };
+  oscLink, sliceAnsi, wrapAnsi, joinsSpace, UNICODE_DATA, sgrParamsTo16, sgr16Rewriter, rgbToAnsi256, ansi256ToAnsi };

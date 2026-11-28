@@ -257,9 +257,10 @@ function discoverTestFiles(dir) {
 const GUARD_EXCLUSIONS = [
   {
     file: 'term-colors.test.cjs',
-    because: 'behavioural tests of the SGR-16 rewriter and the 256-colour decision, not a scan: the one file it reads, '
-      + 'test/fixtures/theme-picker-native-2.1.332.bin (native\'s theme picker, captured once), is an INPUT handed to '
-      + 'the rewriter and to host node and tjs writers under a pty, never searched for a class of finding; the regular '
+    because: 'behavioural tests of the SGR-16 rewriter and the 256-colour decision, not a scan: the files it reads are '
+      + 'INPUTS -- test/fixtures/theme-picker-native-2.1.332.bin (native\'s theme picker, captured once), handed to the '
+      + 'rewriter and to host node and tjs writers under a pty, and test/fixtures/color-level1-native-2.1.332.js '
+      + '(upstream\'s colour conversion, run as a differential oracle) -- never searched for a class of finding; the regular '
       + 'expressions count colour codes in what THOSE RUNS wrote. REPO_ROOTED fires on the writer requiring '
       + 'libexec/unicode-text.cjs by path.',
   },

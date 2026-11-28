@@ -1,10 +1,11 @@
 'use strict';
 // 256-colour SGR on a 16-colour terminal (BACKLOG "Tiger's Terminal.app blinks on 256-color text"). Upstream writes
 // `ESC[38;5;Nm` whatever the terminal; Tiger's Terminal.app reads `38;5;174` as 38, 5 (BLINK), 174, and the blink
-// stays on. quaude's tty.WriteStream rewrites those colours to the nearest of the 16 when the terminal lacks 256
+// stays on. quaude's tty.WriteStream rewrites those colours to the 16, as upstream's own colour library converts them
+// at level 1, when the terminal lacks 256
 // (libexec/node-shim/internal/term-colors.cjs decides; libexec/unicode-text.cjs's SGR-16 rewrites).
 //   (a) the capability decision, as a table;
-//   (b) the rewriter: one SGR's parameters, the nearest-colour table over the codes native's theme picker really
+//   (b) the rewriter: one SGR's parameters, the colour table over the codes native's theme picker really
 //       writes (test/fixtures/theme-picker-native-2.1.332.bin, captured from native 2.1.332 in a pty under
 //       TERM=xterm-color, fresh HOME: byte-identical under TERM=xterm-256color), and a stream split at every byte;
 //   (c) the shim under tjs in a real pty: a 256-colour TERM gets the bytes host node writes, exactly; xterm-color
@@ -16,7 +17,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { colorLevel, has256Colors } = require('../libexec/node-shim/internal/term-colors.cjs');
-const { sgrParamsTo16, sgr16Rewriter, xterm256Rgb, nearest16 } = require('../libexec/unicode-text.cjs');
+const { sgrParamsTo16, sgr16Rewriter, rgbToAnsi256, ansi256ToAnsi } = require('../libexec/unicode-text.cjs');
 const { skipUnlessTjs, tjsPath, LOADER } = require('./node-shim-helper.cjs');
 const { ptyRun } = require('./node-shim-tty-helper.cjs');
 
@@ -67,8 +68,8 @@ test('(a) the capability decision: which terminals keep 256-colour SGR', () => {
 
 test('(b) one SGR: the 256-colour and 24-bit parameters become 16-colour ones, nothing else moves', () => {
   const rows = [
-    ['38;5;174', '90'], ['48;5;174', '100'], ['38;5;1', '31'], ['38;5;9', '91'], ['48;5;15', '107'],
-    ['1;38;5;231;48;5;52', '1;97;41'], ['38;5;77;1', '32;1'], ['0;38;2;255;0;0', '0;91'], ['48;2;0;0;238', '44'],
+    ['38;5;174', '31'], ['48;5;174', '41'], ['38;5;1', '31'], ['38;5;9', '91'], ['48;5;15', '107'],
+    ['1;38;5;231;48;5;52', '1;97;40'], ['38;5;77;1', '32;1'], ['0;38;2;255;0;0', '0;91'], ['48;2;0;0;238', '104'],
     ['38:5:196', '91'], ['38:2::0:255:0', '92'], ['38:2:0:255:0', '92'], ['48:2:1:0:0:0', '40'],
     ['58;5;3', ''], ['4;58;2;1;2;3', '4'], ['4:3;58:5:9', '4:3'],
     ['38;5;999', '37'],                               // over 255 reads as 255, the lightest grey
@@ -80,28 +81,44 @@ test('(b) one SGR: the 256-colour and 24-bit parameters become 16-colour ones, n
   }
 });
 
-test('(b) nearest of the 16, over every code native 2.1.332\'s theme picker writes', () => {
+test('(b) the 16 for every code native 2.1.332\'s theme picker writes: upstream\'s own level-1 conversion', () => {
   const s = fs.readFileSync(FIXTURE, 'latin1');
   const fg = new Set(), bg = new Set();
   for (const m of s.matchAll(/\x1b\[(38|48);5;(\d+)m/g)) (m[1] === '38' ? fg : bg).add(Number(m[2]));
   assert.deepStrictEqual([...fg].sort((a, b) => a - b), [16, 77, 81, 114, 148, 153, 167, 174, 186, 231, 239, 246]);
   assert.deepStrictEqual([...bg].sort((a, b) => a - b), [22, 28, 52, 174]);
-  // [palette entry, its xterm RGB, nearest of the 16]: each checked by eye against what the picker means
-  // (the diff's added/removed backgrounds stay green/red, success green, error red, greys grey).
+  // [palette entry, foreground code]; the background is the same plus 10. Upstream's choice, kept even where it is
+  // not pretty: the diff's dark green/red backgrounds (22, 28, 52) and the dark grey 239 go black, 246 white.
   const table = [
-    [16, [0, 0, 0], 0], [22, [0, 95, 0], 2], [28, [0, 135, 0], 2], [52, [95, 0, 0], 1], [77, [95, 215, 95], 2],
-    [81, [95, 215, 255], 6], [114, [135, 215, 135], 6], [148, [175, 215, 0], 3], [153, [175, 215, 255], 7],
-    [167, [215, 95, 95], 1], [174, [215, 135, 135], 8], [186, [215, 215, 135], 3], [231, [255, 255, 255], 15],
-    [239, [78, 78, 78], 8], [246, [148, 148, 148], 8],
-    // and the corners of the cube and ramp
-    [196, [255, 0, 0], 9], [46, [0, 255, 0], 10], [21, [0, 0, 255], 4], [226, [255, 255, 0], 11],
-    [201, [255, 0, 255], 13], [51, [0, 255, 255], 14], [232, [8, 8, 8], 0], [255, [238, 238, 238], 7],
+    [16, 30], [22, 30], [28, 30], [52, 30], [77, 32], [81, 96], [114, 32], [148, 33], [153, 97], [167, 31], [174, 31],
+    [186, 33], [231, 97], [239, 30], [246, 37],
+    [196, 91], [46, 92], [21, 94], [226, 93], [201, 95], [51, 96], [232, 30], [255, 37],
+    [0, 30], [7, 37], [8, 90], [15, 97],
   ];
-  for (const [n, rgb, want] of table) {
-    assert.deepStrictEqual(xterm256Rgb(n), rgb, `palette ${n}`);
-    assert.strictEqual(nearest16(...rgb), want, `nearest of ${n}`);
+  for (const [n, want] of table) {
+    assert.strictEqual(ansi256ToAnsi(n, 30), want, `foreground of ${n}`);
+    assert.strictEqual(ansi256ToAnsi(n, 40), want + 10, `background of ${n}`);
   }
-  for (let n = 0; n < 16; n++) assert.strictEqual(nearest16(...xterm256Rgb(n)), n, `system colour ${n} is itself`);
+});
+
+// UPSTREAM'S OWN CONVERSION, run: test/fixtures/color-level1-native-2.1.332.js is `function R` from the 2.1.332 carve's
+// /$bunfs/root/chunk-3d163xan.js, verbatim (its colour library's rgb()/bgRgb()). Evaluated with its two free
+// constants as that chunk defines them (v=30, y=60) and C returning the opening it is handed, it must agree with
+// rgbToAnsi256 + ansi256ToAnsi at level 1, and with rgbToAnsi256 at level 2, over a grid of colours and every grey.
+test('(b) rgbToAnsi256 + ansi256ToAnsi are upstream\'s function R, at levels 1 and 2', () => {
+  const src = fs.readFileSync(path.join(__dirname, 'fixtures', 'color-level1-native-2.1.332.js'), 'utf8');
+  const R = new Function('C', 'v', 'y', `return ${src}`)((_e, opening) => opening, 30, 60);
+  let n = 0;
+  const check = (r, g, b) => {
+    n++;
+    for (const base of [30, 40]) {
+      assert.strictEqual(R({ level: 1 }, base, r, g, b), `\x1b[${ansi256ToAnsi(rgbToAnsi256(r, g, b), base)}m`, `${base} ${r},${g},${b}`);
+      assert.strictEqual(R({ level: 2 }, base, r, g, b), `\x1b[${base + 8};5;${rgbToAnsi256(r, g, b)}m`, `256 ${r},${g},${b}`);
+    }
+  };
+  for (let r = 0; r < 256; r += 15) for (let g = 0; g < 256; g += 15) for (let b = 0; b < 256; b += 15) check(r, g, b);
+  for (let x = 0; x < 256; x++) check(x, x, x);
+  assert.ok(n > 5000, `${n} colours`);
 });
 
 test('(b) a stream split at every byte rewrites as the whole does, holding only a cut-off CSI', () => {
@@ -123,7 +140,7 @@ test('(b) a stream split at every byte rewrites as the whole does, holding only 
   const r = sgr16Rewriter();
   assert.strictEqual(r.rewrite('ab\x1b'), 'ab');
   assert.strictEqual(r.rewrite('[38;5'), '');
-  assert.strictEqual(r.rewrite(';174mX'), '\x1b[90mX');
+  assert.strictEqual(r.rewrite(';174mX'), '\x1b[31mX');
   assert.strictEqual(r.rewrite('\x1b]0;title'), '\x1b]0;title', 'an OSC is not held');
   assert.strictEqual(r.rewrite('\x1b[3'), '');
   assert.strictEqual(r.flush(), '\x1b[3');
@@ -134,7 +151,7 @@ test('(b) mixed SGRs and other sequences: only the wide colours change, introduc
   const s = 'x\x1b[1m\x1b[38;5;167;1m\x1b[?25l\x1b[2J\x9b48;5;22m\x1b[38;2;255;255;0mY\x1b[39;49;22m\x1b[58;5;4m\x1b[4:3m'
     + '\x1b]8;;http://a/38;5;1\x07z\x1b[>4;2m';
   assert.strictEqual(r.rewrite(s),
-    'x\x1b[1m\x1b[31;1m\x1b[?25l\x1b[2J\x9b42m\x1b[93mY\x1b[39;49;22m\x1b[4:3m\x1b]8;;http://a/38;5;1\x07z\x1b[>4;2m');
+    'x\x1b[1m\x1b[31;1m\x1b[?25l\x1b[2J\x9b40m\x1b[93mY\x1b[39;49;22m\x1b[4:3m\x1b]8;;http://a/38;5;1\x07z\x1b[>4;2m');
   // a string with nothing to rewrite is handed back as the same string
   const plain = 'hello \x1b[1mworld\x1b[22m';
   assert.strictEqual(sgr16Rewriter().rewrite(plain), plain);

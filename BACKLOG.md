@@ -68,10 +68,12 @@ colors with 39/49/22, never 25 or 0, so the blink stays on for everything drawn 
 Measured: the user ran `printf '\033[38;5;174mhello\033[0m\n'` in Tiger's Terminal.app and it blinked (2026-11-27)
 
 FIXED, as a written-reason divergence from upstream: when the terminal lacks 256 colors, node-shim's
-tty.WriteStream rewrites 256-color and 24-bit SGR (either spelling) to the nearest of the 16 on output, and
-drops underline color. libexec/node-shim/internal/term-colors.cjs decides (upstream's supports-color level,
-except that TERM_PROGRAM=Apple_Terminal alone no longer counts as 256 colors, since Tiger's Terminal sets it
-too) and says why; libexec/unicode-text.cjs's SGR-16 rewrites, holding a sequence a write cuts off. A
+tty.WriteStream rewrites 256-color and 24-bit SGR (either spelling) to the 16 on output, and drops
+underline color. Which of the 16 is upstream's own choice: the conversion its colour library (2.1.332's
+chunk-3d163xan.js, `function R`) makes at level 1, so 174 is red, and the diff's dark green/red backgrounds
+go black (the "(ANSI colors only)" themes are upstream's answer for diffs on 16 colours).
+libexec/node-shim/internal/term-colors.cjs decides (upstream's supports-color level, except that
+TERM_PROGRAM=Apple_Terminal alone no longer counts as 256 colors, since Tiger's Terminal sets it too) and says why; libexec/unicode-text.cjs's SGR-16 rewrites, holding a sequence a write cuts off. A
 256-color terminal never loads the rewriter. Not yet driven on Tiger itself: the next Tiger session
 should see the picker steady.
 

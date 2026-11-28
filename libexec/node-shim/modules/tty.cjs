@@ -101,7 +101,7 @@ function _filterTrackingEnables(chunk) {
 // Upstream writes 256-colour SGR whatever the terminal; on one without 256 colours (Tiger's Terminal.app) `38;5;N`
 // reads as BLINK, and stays on. internal/term-colors.cjs decides whether this terminal has 256 colours, and says why it
 // decides differently from upstream; when it has not, every write goes through unicode-text.cjs's SGR-16 rewriter,
-// which turns those colours into the nearest of the 16 and holds a sequence a write cuts off until the next. Decided
+// which turns those colours into the 16 as upstream's own colour library does at level 1, and holds a sequence a write cuts off until the next. Decided
 // once per stream, at its first write. A terminal with 256 colours never loads the rewriter, and its bytes are
 // exactly what they were. Only a TTY stream is this class: a pipe or a file gets upstream's bytes untouched (it is
 // not a terminal that can blink).
